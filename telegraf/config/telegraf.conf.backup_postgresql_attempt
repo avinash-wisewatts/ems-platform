@@ -1,0 +1,87 @@
+# ============================================================================
+# WiseWatts EMS - Telegraf Configuration
+#
+# Phase:
+#   MQTT ingestion foundation
+#
+# Responsibility:
+#   MQTT broker -> raw telemetry capture
+#
+# Design principle:
+#   Telegraf stores raw payloads.
+#   Semantic interpretation happens later through metadata mappings.
+#
+# ============================================================================
+
+
+[agent]
+
+  # Collect frequently but do not create excessive overhead.
+  interval = "10s"
+
+  # Ensure timestamps are UTC internally.
+  precision = "1s"
+
+  # Buffer messages during database/network interruptions.
+  metric_buffer_limit = 10000
+
+  # Do not drop data silently.
+  flush_interval = "10s"
+
+
+###############################################################################
+# MQTT INPUT
+###############################################################################
+[[inputs.mqtt_consumer]]
+
+  servers = [
+    "ssl://${MQTT_HOST}:${MQTT_PORT}"
+  ]
+
+  topics = [
+    "${MQTT_TOPIC}"
+  ]
+
+  qos = 1
+
+  connection_timeout = "30s"
+
+  username = "${MQTT_USERNAME}"
+  password = "${MQTT_PASSWORD}"
+
+  data_format = "value"
+  data_type = "string"
+
+###############################################################################
+# OUTPUT
+###############################################################################
+
+#[[outputs.file]]
+
+  ## Temporary validation output.
+  ##
+  ## We intentionally start here.
+  ## Database output will be added after MQTT connectivity is proven.
+
+ # files = [
+  #  "/tmp/telegraf-output.log"
+  #]
+
+###############################################################################
+# PostgreSQL Output
+#
+# Purpose:
+#   Store raw MQTT messages before semantic processing.
+#
+# Destination:
+#   telemetry.telegraf_ingest
+#
+###############################################################################
+
+[[outputs.postgresql]]
+
+  connection = "postgres://ems_admin:${POSTGRES_PASSWORD}@timescaledb:5432/ems?sslmode=disable"
+
+  schema = "telemetry"
+
+  table = "telegraf_ingest"

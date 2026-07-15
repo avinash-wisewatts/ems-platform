@@ -1,0 +1,40 @@
+services:
+
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+
+    container_name: ems-timescaledb
+
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    ports:
+      - "127.0.0.1:5432:5432"
+
+    volumes:
+      - ./postgres/data:/var/lib/postgresql/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
+    shm_size: 512m
+
+
+  telegraf:
+    image: telegraf:1.36
+
+    container_name: ems-telegraf
+
+    restart: unless-stopped
+
+    env_file:
+      - ./telegraf/.env
+
+    volumes:
+      - ./telegraf/config/telegraf.conf:/etc/telegraf/telegraf.conf:ro
+      - ./telegraf/logs:/var/log/telegraf
