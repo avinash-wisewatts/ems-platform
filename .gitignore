@@ -1,0 +1,12 @@
+# environment variables (keeps your passwords safe)
+.env
+
+# TimescaleDB persistent storage volumes
+postgres/data/
+
+# Grafana persistent storage volumes
+grafana/data/
+
+# log directories and log files
+logs/
+*.log
