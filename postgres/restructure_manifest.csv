@@ -1,0 +1,86 @@
+source_file,target_category,target_path,notes
+00_extensions.sql,canonical,postgres/ddl/00_extensions.sql,Required extensions
+01_schemas.sql,canonical,postgres/ddl/01_schemas.sql,Schema creation
+02_roles.sql,canonical,postgres/ddl/02_roles.sql,Database roles
+03_platform.sql,canonical,postgres/ddl/03_platform.sql,Platform metadata
+03_01_reference_schema.sql,canonical,postgres/ddl/03_01_reference_schema.sql,Canonical configuration and reference table schema
+04_metadata.sql,canonical,postgres/ddl/04_metadata.sql,Canonical metadata schema
+04_01_device_identifiers.sql,canonical,postgres/ddl/04_01_device_identifiers.sql,External device identifier mapping
+05_01_engineering_units_extension.sql,reference,postgres/seeds/reference/05_01_engineering_units_extension.sql,Engineering unit seed extension
+05_lookup_tables.sql,reference,postgres/seeds/reference/05_lookup_tables.sql,Reference and lookup data
+06_device_profiles.sql,canonical,postgres/ddl/06_device_profiles.sql,Device profile schema
+07_01_telegraf_mqtt_staging.sql,canonical,postgres/ddl/07_01_telegraf_mqtt_staging.sql,Canonical Telegraf MQTT landing table
+07_02_mqtt_staging.sql,canonical,postgres/ddl/07_02_mqtt_staging.sql,MQTT staging schema
+07_03_telegraf_ingest.sql,canonical,postgres/ddl/07_03_telegraf_ingest.sql,Telegraf ingest schema
+07_telemetry_archive.sql,canonical,postgres/ddl/07_telemetry_archive.sql,Raw telemetry archive schema
+08_energy_measurements.sql,canonical,postgres/ddl/08_energy_measurements.sql,Energy measurement schema
+09_environment_measurements.sql,canonical,postgres/ddl/09_environment_measurements.sql,Environment measurement schema
+10_water_measurements.sql,canonical,postgres/ddl/10_water_measurements.sql,Water measurement schema
+11_asset_health.sql,canonical,postgres/ddl/11_asset_health.sql,Asset health schema
+12_device_status.sql,canonical,postgres/ddl/12_device_status.sql,Device status schema
+13_logical_points.sql,reference,postgres/seeds/reference/13_logical_points.sql,Logical point catalog
+13_01_logical_points_energy_extension.sql,reference,postgres/seeds/reference/13_01_logical_points_energy_extension.sql,Energy logical point extension
+13_02_logical_points_power_factor.sql,reference,postgres/seeds/reference/13_02_logical_points_power_factor.sql,Power factor logical points
+20_indexes.sql,canonical,postgres/ddl/20_indexes.sql,Canonical indexes
+21_constraints.sql,canonical,postgres/ddl/21_constraints.sql,Canonical constraints
+22_functions.sql,canonical,postgres/ddl/22_functions.sql,Canonical functions
+23_views.sql,canonical,postgres/ddl/23_views.sql,Canonical views
+24_continuous_aggregates.sql,canonical,postgres/ddl/24_continuous_aggregates.sql,Canonical continuous aggregates
+25_retention.sql,jobs,postgres/jobs/25_retention.sql,Retention policies
+26_compression.sql,jobs,postgres/jobs/26_compression.sql,Compression policies
+27_device_profiles.sql,reference,postgres/seeds/reference/27_device_profiles.sql,Device profile reference data
+28_profile_field_mapping.sql,reference,postgres/seeds/reference/28_profile_field_mapping.sql,Profile field mappings
+29_device_profile_assignment.sql,migration,postgres/migrations/29_device_profile_assignment.sql,Historical schema migration
+30_device_profile_code.sql,migration,postgres/migrations/30_device_profile_code.sql,Historical schema and data migration
+31_update_get_logical_point.sql,migration,postgres/migrations/31_update_get_logical_point.sql,Historical function replacement
+32_fix_v_rtdata.sql,migration,postgres/migrations/32_fix_v_rtdata.sql,Historical view fix
+33_device_identifiers.sql,migration,postgres/migrations/33_device_identifiers.sql,Historical schema migration
+34_fix_v_rtdata_json_validation.sql,migration,postgres/migrations/34_fix_v_rtdata_json_validation.sql,Historical view fix
+35_seed_eniscope_device_identifiers.sql,demo,postgres/seeds/demo/35_seed_eniscope_device_identifiers.sql,Environment-specific Eniscope identifiers
+36_update_get_logical_point_identity.sql,migration,postgres/migrations/36_update_get_logical_point_identity.sql,Historical function replacement
+29_device_profile_assignment.sql,canonical,postgres/ddl/29_device_profile_assignment.sql,Canonical device-to-profile relationship
+37_telemetry_normalization_view.sql,canonical,postgres/ddl/37_telemetry_normalization_view.sql,Normalization routing view
+38_normalized_points_hypertable.sql,canonical,postgres/ddl/38_normalized_points_hypertable.sql,Normalized points storage
+39_load_normalized_points.sql,maintenance,postgres/maintenance/39_load_normalized_points.sql,One-time historical backfill
+40_normalized_points_uniqueness.sql,canonical,postgres/ddl/40_normalized_points_uniqueness.sql,Uniqueness contract
+41_incremental_normalization_loader.sql,canonical,postgres/ddl/41_incremental_normalization_loader.sql,Incremental loader procedure
+42_normalization_background_job.sql,jobs,postgres/jobs/42_normalization_background_job.sql,Normalization job registration
+43_energy_routing_view.sql,legacy,postgres/ddl/43_energy_routing_view.sql,Superseded preliminary energy routing view; canonical contract is 46_energy_routing_contract.sql
+44_split_eniscope_devices.sql,migration,postgres/migrations/44_split_eniscope_devices.sql,Environment-specific data migration
+45_rebuild_normalized_history.sql,maintenance,postgres/maintenance/45_rebuild_normalized_history.sql,Destructive normalized history rebuild
+46_energy_routing_contract.sql,canonical,postgres/ddl/46_energy_routing_contract.sql,Energy routing contract
+47_incremental_energy_loader.sql,canonical,postgres/ddl/47_incremental_energy_loader.sql,Incremental energy loader
+48_energy_background_job.sql,jobs,postgres/jobs/48_energy_background_job.sql,Energy job registration
+49_remove_legacy_energy_test_row.sql,maintenance,postgres/maintenance/49_remove_legacy_energy_test_row.sql,One-time cleanup
+50_energy_storage_lifecycle.sql,jobs,postgres/jobs/50_energy_storage_lifecycle.sql,Energy compression and retention
+51_energy_15min_continuous_aggregate.sql,canonical,postgres/ddl/51_energy_15min_continuous_aggregate.sql,15-minute aggregate
+52_energy_hourly_continuous_aggregate.sql,canonical,postgres/ddl/52_energy_hourly_continuous_aggregate.sql,Hourly aggregate
+53_energy_daily_continuous_aggregate.sql,canonical,postgres/ddl/53_energy_daily_continuous_aggregate.sql,Daily aggregate
+54_energy_aggregate_lifecycle.sql,jobs,postgres/jobs/54_energy_aggregate_lifecycle.sql,Aggregate lifecycle policies
+55_grafana_tenant_analytics.sql,canonical,postgres/ddl/55_grafana_tenant_analytics.sql,Grafana tenant analytics
+56_energy_consumption_15min_view.sql,canonical,postgres/ddl/56_energy_consumption_15min_view.sql,Consumption reporting view
+57_energy_consumption_reporting_views.sql,canonical,postgres/ddl/57_energy_consumption_reporting_views.sql,Reporting views
+58_peak_demand_load_profile_views.sql,canonical,postgres/ddl/58_peak_demand_load_profile_views.sql,Peak demand analytics
+59_demo_asset_hierarchy.sql,demo,postgres/seeds/demo/59_demo_asset_hierarchy.sql,Demo hierarchy
+60_asset_device_assignments.sql,demo,postgres/seeds/demo/60_asset_device_assignments.sql,Environment-specific assignments
+60_asset_analytics_base.sql,canonical,postgres/ddl/60_asset_analytics_base.sql,Canonical tenant-safe asset hierarchy and asset-device views
+61_metadata_integrity_indexes.sql,canonical,postgres/ddl/61_metadata_integrity_indexes.sql,Canonical metadata integrity constraints and identifier lookup index
+61_energy_asset_identity.sql,canonical,postgres/ddl/61_energy_asset_identity.sql,Energy asset identity
+62_asset_centric_analytics.sql,canonical,postgres/ddl/62_asset_centric_analytics.sql,Asset analytics
+63_environment_logical_points.sql,reference,postgres/seeds/reference/63_environment_logical_points.sql,Environment logical points
+64_environment_sensor_extensions.sql,reference,postgres/seeds/reference/64_environment_sensor_extensions.sql,Environment units and logical points
+65_environment_sensor_profile.sql,reference,postgres/seeds/reference/65_environment_sensor_profile.sql,Environment profile mappings
+66_environment_routing_contract.sql,canonical,postgres/ddl/66_environment_routing_contract.sql,Environment routing contract
+67_environment_pipeline_state.sql,reference,postgres/seeds/reference/67_environment_pipeline_state.sql,Environment pipeline state seed
+68_incremental_environment_loader.sql,canonical,postgres/ddl/68_incremental_environment_loader.sql,Incremental environment loader
+69_environment_routing_job.sql,jobs,postgres/jobs/69_environment_routing_job.sql,Environment job registration
+70_environment_storage_lifecycle.sql,jobs,postgres/jobs/70_environment_storage_lifecycle.sql,Environment lifecycle policies
+71_environment_15min_continuous_aggregate.sql,canonical,postgres/ddl/71_environment_15min_continuous_aggregate.sql,15-minute environment aggregate
+72_environment_hourly_continuous_aggregate.sql,canonical,postgres/ddl/72_environment_hourly_continuous_aggregate.sql,Hourly environment aggregate
+73_payload_profile_catalog_cleanup.sql,migration,postgres/migrations/73_payload_profile_catalog_cleanup.sql,Historical profile cleanup
+74_environment_aggregate_lifecycle.sql,jobs,postgres/jobs/74_environment_aggregate_lifecycle.sql,Environment aggregate lifecycle
+75_environment_analytics_views.sql,canonical,postgres/ddl/75_environment_analytics_views.sql,Environment analytics views
+99_seed_demo.sql,demo,postgres/seeds/demo/99_seed_demo.sql,Demo seed
+99_01_seed_eniscope_demo.sql,demo,postgres/seeds/demo/99_01_seed_eniscope_demo.sql,Eniscope demo seed
+99_02_seed_eniscope_mapping.sql,demo,postgres/seeds/demo/99_02_seed_eniscope_mapping.sql,Eniscope demo mapping
+99_03_test_eniscope_ingestion.sql,demo,postgres/seeds/demo/99_03_test_eniscope_ingestion.sql,Ingestion test
