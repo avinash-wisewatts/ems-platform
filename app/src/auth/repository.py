@@ -25,6 +25,8 @@ async def get_portal_user_for_authentication(
                     password_hash,
                     role_code,
                     organization_id,
+                    access_scope_mode,
+                    site_ids,
                     is_active,
                     failed_login_count,
                     locked_until
@@ -49,6 +51,11 @@ async def get_portal_user_for_authentication(
             str(row["organization_id"])
             if row["organization_id"] is not None
             else None
+        ),
+        access_scope_mode=row["access_scope_mode"],
+        site_ids=tuple(
+            str(site_id)
+            for site_id in (row["site_ids"] or [])
         ),
         failed_login_count=row["failed_login_count"],
         locked_until=row["locked_until"],

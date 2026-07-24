@@ -1,4 +1,5 @@
 import re
+import pytest
 
 from src.admin_navigation import administration_navigation
 from src.auth.authorization import (
@@ -482,3 +483,18 @@ def test_user_rows_include_role_and_status_controls(
     )
     assert 'value="OPERATOR"' in response.text
     assert 'value="false"' in response.text
+
+
+@pytest.fixture(autouse=True)
+def install_user_management_site_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Prevent user-management route tests from using a live database."""
+
+    async def fake_list_sites_for_request(request) -> list[dict]:
+        return []
+
+    monkeypatch.setattr(
+        "src.main.list_sites_for_request",
+        fake_list_sites_for_request,
+    )

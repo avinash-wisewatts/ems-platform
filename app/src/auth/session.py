@@ -23,6 +23,8 @@ def serialize_authenticated_user(
         "display_name": user.display_name,
         "role_code": user.role_code,
         "organization_id": user.organization_id,
+        "access_scope_mode": user.access_scope_mode,
+        "site_ids": list(user.site_ids),
     }
 
 
@@ -43,6 +45,8 @@ def deserialize_authenticated_user(
     display_name = payload.get("display_name")
     role_code = payload.get("role_code")
     organization_id = payload.get("organization_id")
+    access_scope_mode = payload.get("access_scope_mode")
+    site_ids = payload.get("site_ids", [])
 
     if (
         type(portal_user_id) is not int
@@ -69,8 +73,50 @@ def deserialize_authenticated_user(
         except ValueError:
             return None
 
-    if role_code == "ORG_ADMIN" and organization_id is None:
+    if role_code == "PLATFORM_ADMIN":
+        if organization_id is not None:
+            return None
+    elif organization_id is None:
         return None
+
+    if access_scope_mode is None and organization_id is not None:
+        access_scope_mode = "ORGANIZATION"
+
+    if access_scope_mode not in {
+        None,
+        "ORGANIZATION",
+        "SELECTED_SITES",
+    }:
+        return None
+
+    if not isinstance(site_ids, (list, tuple)):
+        return None
+
+    normalized_site_ids: list[str] = []
+
+    for site_id in site_ids:
+        if not isinstance(site_id, str):
+            return None
+
+        try:
+            normalized_site_id = str(UUID(site_id))
+        except ValueError:
+            return None
+
+        if normalized_site_id not in normalized_site_ids:
+            normalized_site_ids.append(normalized_site_id)
+
+    if access_scope_mode is None:
+        if normalized_site_ids:
+            return None
+    elif organization_id is None:
+        return None
+    elif access_scope_mode == "ORGANIZATION":
+        if normalized_site_ids:
+            return None
+    elif access_scope_mode == "SELECTED_SITES":
+        if not normalized_site_ids:
+            return None
 
     return AuthenticatedPortalUser(
         portal_user_id=portal_user_id,
@@ -78,4 +124,6 @@ def deserialize_authenticated_user(
         display_name=display_name,
         role_code=role_code,
         organization_id=organization_id,
+        access_scope_mode=access_scope_mode,
+        site_ids=tuple(normalized_site_ids),
     )

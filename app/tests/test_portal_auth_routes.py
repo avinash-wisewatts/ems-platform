@@ -18,6 +18,17 @@ def successful_result(
             username="operator@example.com",
             display_name="Test Operator",
             role_code=role_code,
+            organization_id=(
+                None
+                if role_code == "PLATFORM_ADMIN"
+                else "11111111-1111-1111-1111-111111111111"
+            ),
+            access_scope_mode=(
+                None
+                if role_code == "PLATFORM_ADMIN"
+                else "ORGANIZATION"
+            ),
+            site_ids=(),
         ),
         status=AuthenticationStatus.AUTHENTICATED,
     )

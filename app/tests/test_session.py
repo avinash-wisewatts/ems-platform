@@ -19,7 +19,11 @@ def test_serialize_authenticated_user_contains_only_safe_fields(
         "username": "operator@example.com",
         "display_name": "Test Operator",
         "role_code": "OPERATOR",
-        "organization_id": None,
+        "organization_id": (
+            "11111111-1111-1111-1111-111111111111"
+        ),
+        "access_scope_mode": "ORGANIZATION",
+        "site_ids": [],
     }
 
     assert "password_hash" not in payload
@@ -106,10 +110,16 @@ def test_deserializer_accepts_only_controlled_roles(
             "display_name": "Test User",
             "role_code": role_code,
             "organization_id": (
-                "11111111-1111-1111-1111-111111111111"
-                if role_code == "ORG_ADMIN"
-                else None
+                None
+                if role_code == "PLATFORM_ADMIN"
+                else "11111111-1111-1111-1111-111111111111"
             ),
+            "access_scope_mode": (
+                None
+                if role_code == "PLATFORM_ADMIN"
+                else "ORGANIZATION"
+            ),
+            "site_ids": [],
         }
     )
 
@@ -124,6 +134,8 @@ def test_session_round_trip_preserves_organization_scope() -> None:
         display_name="Organization Administrator",
         role_code="ORG_ADMIN",
         organization_id="11111111-1111-1111-1111-111111111111",
+        access_scope_mode="ORGANIZATION",
+        site_ids=(),
     )
 
     payload = serialize_authenticated_user(user)
@@ -173,3 +185,135 @@ def test_session_rejects_invalid_organization_identifier() -> None:
     }
 
     assert deserialize_authenticated_user(payload) is None
+
+
+def test_session_round_trip_preserves_selected_site_scope() -> None:
+    user = AuthenticatedPortalUser(
+        portal_user_id=20,
+        username="operator@example.com",
+        display_name="Scoped Operator",
+        role_code="OPERATOR",
+        organization_id=(
+            "11111111-1111-1111-1111-111111111111"
+        ),
+        access_scope_mode="SELECTED_SITES",
+        site_ids=(
+            "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        ),
+    )
+
+    result = deserialize_authenticated_user(
+        serialize_authenticated_user(user)
+    )
+
+    assert result is not None
+    assert result.access_scope_mode == "SELECTED_SITES"
+    assert result.site_ids == (
+        "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+    )
+
+
+def test_session_round_trip_preserves_organization_scope_mode() -> None:
+    user = AuthenticatedPortalUser(
+        portal_user_id=21,
+        username="org-admin@example.com",
+        display_name="Organization Admin",
+        role_code="ORG_ADMIN",
+        organization_id=(
+            "11111111-1111-1111-1111-111111111111"
+        ),
+        access_scope_mode="ORGANIZATION",
+        site_ids=(),
+    )
+
+    result = deserialize_authenticated_user(
+        serialize_authenticated_user(user)
+    )
+
+    assert result is not None
+    assert result.access_scope_mode == "ORGANIZATION"
+    assert result.site_ids == ()
+
+
+def test_selected_site_scope_requires_site_ids() -> None:
+    result = deserialize_authenticated_user(
+        {
+            "portal_user_id": 22,
+            "username": "operator@example.com",
+            "display_name": "Scoped Operator",
+            "role_code": "OPERATOR",
+            "organization_id": (
+                "11111111-1111-1111-1111-111111111111"
+            ),
+            "access_scope_mode": "SELECTED_SITES",
+            "site_ids": [],
+        }
+    )
+
+    assert result is None
+
+
+def test_organization_scope_rejects_site_ids() -> None:
+    result = deserialize_authenticated_user(
+        {
+            "portal_user_id": 23,
+            "username": "org-admin@example.com",
+            "display_name": "Organization Admin",
+            "role_code": "ORG_ADMIN",
+            "organization_id": (
+                "11111111-1111-1111-1111-111111111111"
+            ),
+            "access_scope_mode": "ORGANIZATION",
+            "site_ids": [
+                "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+            ],
+        }
+    )
+
+    assert result is None
+
+
+@pytest.mark.parametrize(
+    "role_code",
+    [
+        "ORG_ADMIN",
+        "OPERATOR",
+        "VIEWER",
+    ],
+)
+def test_tenant_roles_require_organization(
+    role_code: str,
+) -> None:
+    result = deserialize_authenticated_user(
+        {
+            "portal_user_id": 30,
+            "username": "tenant-user@example.com",
+            "display_name": "Tenant User",
+            "role_code": role_code,
+            "organization_id": None,
+            "access_scope_mode": None,
+            "site_ids": [],
+        }
+    )
+
+    assert result is None
+
+
+def test_platform_admin_rejects_tenant_scope() -> None:
+    result = deserialize_authenticated_user(
+        {
+            "portal_user_id": 31,
+            "username": "platform-admin@example.com",
+            "display_name": "Platform Admin",
+            "role_code": "PLATFORM_ADMIN",
+            "organization_id": (
+                "11111111-1111-1111-1111-111111111111"
+            ),
+            "access_scope_mode": "ORGANIZATION",
+            "site_ids": [],
+        }
+    )
+
+    assert result is None

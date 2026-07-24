@@ -34,6 +34,11 @@ def successful_result() -> AuthenticationResult:
             username="location.operator@example.com",
             display_name="Location Test Operator",
             role_code="OPERATOR",
+            organization_id=(
+                "11111111-1111-1111-1111-111111111111"
+            ),
+            access_scope_mode="ORGANIZATION",
+            site_ids=(),
         ),
         status=AuthenticationStatus.AUTHENTICATED,
     )
@@ -158,7 +163,7 @@ def install_visible_draft(
 def install_location_lists(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def fake_list_sites() -> list[dict]:
+    async def fake_list_sites(request) -> list[dict]:
         return [
             {
                 "id": SITE_ID,
@@ -222,7 +227,7 @@ def install_location_lists(
     async def fake_list_floors() -> list[dict]:
         return []
 
-    monkeypatch.setattr("src.main.list_sites", fake_list_sites)
+    monkeypatch.setattr("src.main.list_sites_for_request", fake_list_sites)
     monkeypatch.setattr("src.main.list_spaces", fake_list_spaces)
     monkeypatch.setattr("src.main.list_buildings", fake_list_buildings)
     monkeypatch.setattr("src.main.list_floors", fake_list_floors)

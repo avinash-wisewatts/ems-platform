@@ -6,6 +6,7 @@ from src.user_management_service import (
     change_managed_user_role,
     create_managed_user,
     list_manageable_users,
+    set_managed_user_access_scope,
     set_managed_user_active,
 )
 
@@ -187,3 +188,39 @@ async def test_set_managed_user_active_commits(
     assert "admin.set_managed_portal_user_active" in cursor.statement
     assert cursor.parameters == (10, 42, False)
     assert connection.committed is True
+
+
+
+@pytest.mark.asyncio
+async def test_set_managed_user_access_scope_commits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cursor = FakeCursor()
+    connection = FakeConnection(cursor)
+    install_connection(monkeypatch, connection)
+
+    await set_managed_user_access_scope(
+        actor_portal_user_id=10,
+        target_portal_user_id=42,
+        access_scope_mode="SELECTED_SITES",
+        site_ids=(
+            "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        ),
+    )
+
+    assert (
+        "admin.set_managed_portal_user_access_scope"
+        in cursor.statement
+    )
+    assert cursor.parameters == (
+        10,
+        42,
+        "SELECTED_SITES",
+        [
+            "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        ],
+    )
+    assert connection.committed is True
+    assert connection.rolled_back is False

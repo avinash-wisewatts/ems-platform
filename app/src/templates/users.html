@@ -60,6 +60,7 @@ User management | WiseWatts EMS
                         <th scope="col">User</th>
                         <th scope="col">Username</th>
                         <th scope="col">Role</th>
+                        <th scope="col">Access scope</th>
                         <th scope="col">Status</th>
                         <th scope="col">Actions</th>
                     </tr>
@@ -70,6 +71,87 @@ User management | WiseWatts EMS
                         <td>{{ portal_user.display_name }}</td>
                         <td>{{ portal_user.username }}</td>
                         <td>{{ portal_user.role_code }}</td>
+                        <td>
+                            {% if portal_user.role_code == "PLATFORM_ADMIN" %}
+                            <strong>Entire platform</strong>
+                            {% else %}
+                            {% set user_sites = sites
+                                | selectattr(
+                                    "organization_id",
+                                    "equalto",
+                                    portal_user.organization_id
+                                )
+                                | list
+                            %}
+
+                            <p>
+                                <strong>
+                                    {% if portal_user.access_scope_mode
+                                          == "SELECTED_SITES" %}
+                                    Selected sites
+                                    {% else %}
+                                    Entire organization
+                                    {% endif %}
+                                </strong>
+                            </p>
+
+                            <form
+                                method="post"
+                                action="/administration/users/{{ portal_user.portal_user_id }}/scope"
+                            >
+                                <input
+                                    type="hidden"
+                                    name="access_scope_mode"
+                                    value="ORGANIZATION"
+                                >
+                                <button type="submit">
+                                    Use entire organization
+                                </button>
+                            </form>
+
+                            <form
+                                method="post"
+                                action="/administration/users/{{ portal_user.portal_user_id }}/scope"
+                            >
+                                <input
+                                    type="hidden"
+                                    name="access_scope_mode"
+                                    value="SELECTED_SITES"
+                                >
+
+                                <fieldset>
+                                    <legend>Restrict to selected sites</legend>
+
+                                    {% for site in user_sites %}
+                                    <label>
+                                        <input
+                                            type="checkbox"
+                                            name="site_ids"
+                                            value="{{ site.id }}"
+                                            {% if site.id
+                                                  in portal_user.site_ids %}
+                                            checked
+                                            {% endif %}
+                                        >
+                                        {{ site.site_name }}
+                                        — {{ site.site_code }}
+                                    </label>
+                                    {% endfor %}
+
+                                    {% if user_sites %}
+                                    <button type="submit">
+                                        Save selected sites
+                                    </button>
+                                    {% else %}
+                                    <p>
+                                        No active sites are available for this
+                                        organization.
+                                    </p>
+                                    {% endif %}
+                                </fieldset>
+                            </form>
+                            {% endif %}
+                        </td>
                         <td>
                             {% if portal_user.is_active %}
                             Active

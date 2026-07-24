@@ -136,3 +136,36 @@ async def set_managed_user_active(
         except Exception:
             await connection.rollback()
             raise
+
+
+async def set_managed_user_access_scope(
+    *,
+    actor_portal_user_id: int,
+    target_portal_user_id: int,
+    access_scope_mode: str,
+    site_ids: tuple[str, ...],
+) -> None:
+    async with database_connection() as connection:
+        try:
+            async with connection.cursor() as cursor:
+                await cursor.execute(
+                    """
+                    SELECT admin.set_managed_portal_user_access_scope(
+                        %s,
+                        %s,
+                        %s,
+                        %s
+                    )
+                    """,
+                    (
+                        actor_portal_user_id,
+                        target_portal_user_id,
+                        access_scope_mode,
+                        list(site_ids),
+                    ),
+                )
+
+            await connection.commit()
+        except Exception:
+            await connection.rollback()
+            raise

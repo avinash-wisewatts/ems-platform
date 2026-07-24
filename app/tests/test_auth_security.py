@@ -165,3 +165,28 @@ def test_hash_portal_password_creates_verifiable_argon2id_hash() -> None:
         password_hash,
         "WrongPassword123!",
     )
+
+
+def test_safe_authenticated_user_preserves_selected_site_scope(
+    active_authentication_record: PortalUserAuthenticationRecord,
+) -> None:
+    scoped_record = replace(
+        active_authentication_record,
+        role_code="OPERATOR",
+        organization_id=(
+            "11111111-1111-1111-1111-111111111111"
+        ),
+        access_scope_mode="SELECTED_SITES",
+        site_ids=(
+            "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        ),
+    )
+
+    safe_user = safe_authenticated_user(scoped_record)
+
+    assert safe_user.access_scope_mode == "SELECTED_SITES"
+    assert safe_user.site_ids == (
+        "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+    )

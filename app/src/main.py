@@ -27,6 +27,9 @@ from src.auth.authorization import (
     PortalPermission,
     has_permission,
 )
+from src.auth.access_scope import (
+    normalize_portal_access_scope_submission,
+)
 from src.auth.middleware import PortalAuthenticationMiddleware
 from src.auth.security import hash_portal_password
 from src.auth.service import authenticate_portal_user
@@ -41,6 +44,7 @@ from src.user_management_service import (
     change_managed_user_role,
     create_managed_user,
     list_manageable_users,
+    set_managed_user_access_scope,
     set_managed_user_active,
 )
 from src.onboarding.forms import (
@@ -59,6 +63,7 @@ from src.onboarding.repository import (
     list_gateway_models,
     list_gateways,
     list_organizations,
+    list_accessible_sites,
     list_sites,
     list_spaces,
 )
@@ -194,6 +199,66 @@ app.mount(
 )
 
 
+async def validate_existing_site_access(
+    *,
+    request: Request,
+    payload: dict,
+) -> None:
+    """Reject existing-site selections outside the actor's access scope."""
+
+    organization = payload.get("organization", {})
+    site = payload.get("site", {})
+
+    if (site.get("mode") or "").upper() != "USE_EXISTING":
+        return
+
+    selected_site_id = str(
+        site.get("existing_site_id") or ""
+    )
+    selected_organization_id = str(
+        organization.get("existing_organization_id") or ""
+    )
+
+    accessible_sites = await list_sites_for_request(request)
+
+    selected_site = next(
+        (
+            candidate
+            for candidate in accessible_sites
+            if str(candidate["id"]) == selected_site_id
+        ),
+        None,
+    )
+
+    if selected_site is None:
+        raise OnboardingValidationError(
+            "Existing site is not available to your account.",
+            field_name="existing_site_id",
+        )
+
+    if (
+        selected_organization_id
+        and str(selected_site["organization_id"])
+        != selected_organization_id
+    ):
+        raise OnboardingValidationError(
+            "Existing site does not belong to the selected organization.",
+            field_name="existing_site_id",
+        )
+
+
+async def list_sites_for_request(
+    request: Request,
+) -> list[dict]:
+    """Return only sites accessible to the signed-in portal identity."""
+
+    user = require_authenticated_portal_user(request)
+
+    return await list_accessible_sites(
+        portal_user_id=user.portal_user_id,
+    )
+
+
 async def render_onboarding_page(
     request: Request,
     error: str | None = None,
@@ -203,7 +268,7 @@ async def render_onboarding_page(
     field_error_message: str | None = None,
 ) -> HTMLResponse:
     organizations = await list_organizations()
-    sites = await list_sites()
+    sites = await list_sites_for_request(request)
     gateways = await list_gateways()
     devices = await list_devices()
     profiles = await list_device_profiles()
@@ -453,6 +518,8 @@ async def render_user_administration(
         actor_portal_user_id=user.portal_user_id,
     )
 
+    sites = await list_sites_for_request(request)
+
     organizations = (
         await list_organizations()
         if user.role_code == "PLATFORM_ADMIN"
@@ -466,6 +533,7 @@ async def render_user_administration(
             "environment": settings.app_env,
             "page_title": "User management",
             "users": users,
+            "sites": sites,
             "organizations": organizations,
             "actor_role_code": user.role_code,
             "actor_organization_id": user.organization_id,
@@ -640,6 +708,64 @@ async def change_user_role_administration(
             "portal_user_id": portal_user_id,
             "role_code": role_code,
             "action": "role_changed",
+        },
+    )
+
+
+@app.post(
+    "/administration/users/{portal_user_id}/scope",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def change_user_scope_administration(
+    request: Request,
+    portal_user_id: int,
+    access_scope_mode: Annotated[str, Form()],
+    site_ids: Annotated[list[str], Form()] = [],
+) -> HTMLResponse:
+    """Change a managed portal user's access scope independently."""
+
+    user = require_authenticated_portal_user(request)
+
+    try:
+        normalized_mode, normalized_site_ids = (
+            normalize_portal_access_scope_submission(
+                access_scope_mode=access_scope_mode,
+                site_ids=site_ids,
+            )
+        )
+    except ValueError as exc:
+        return await render_user_administration(
+            request,
+            error=str(exc),
+            status_code=400,
+        )
+
+    try:
+        await set_managed_user_access_scope(
+            actor_portal_user_id=user.portal_user_id,
+            target_portal_user_id=portal_user_id,
+            access_scope_mode=normalized_mode.value,
+            site_ids=normalized_site_ids,
+        )
+    except DatabaseError as exc:
+        return await render_user_administration(
+            request,
+            error=user_facing_database_error(
+                exc,
+                fallback=(
+                    "The database rejected the access-scope change."
+                ),
+            ),
+            status_code=409,
+        )
+
+    return await render_user_administration(
+        request,
+        result={
+            "portal_user_id": portal_user_id,
+            "access_scope_mode": normalized_mode.value,
+            "action": "scope_changed",
         },
     )
 
@@ -1224,7 +1350,7 @@ async def render_site_step(
             "existing_organization_id"
         )
 
-        all_sites = await list_sites()
+        all_sites = await list_sites_for_request(request)
 
         sites = [
             site
@@ -1426,7 +1552,7 @@ async def save_site_step(
         )
 
         if site_payload["mode"] == "USE_EXISTING":
-            all_sites = await list_sites()
+            all_sites = await list_sites_for_request(request)
 
             selected_site = next(
                 (
@@ -1574,7 +1700,7 @@ async def render_location_step(
         ]
 
     if site_mode == "USE_EXISTING":
-        all_sites = await list_sites()
+        all_sites = await list_sites_for_request(request)
 
         selected_site = next(
             (
@@ -1967,7 +2093,7 @@ async def render_gateway_step(
     allow_existing_gateway = bool(gateways)
 
     if site_mode == "USE_EXISTING":
-        all_sites = await list_sites()
+        all_sites = await list_sites_for_request(request)
 
         selected_site = next(
             (
@@ -3084,6 +3210,7 @@ async def save_asset_step(
 
 
 async def build_review_context(
+    request: Request,
     draft_record: dict,
 ) -> dict:
     """Resolve human-readable labels for the final review."""
@@ -3129,7 +3256,7 @@ async def build_review_context(
     )
 
     if site.get("mode") == "USE_EXISTING":
-        sites = await list_sites()
+        sites = await list_sites_for_request(request)
         selected = next(
             (
                 item
@@ -3299,7 +3426,10 @@ async def render_review_step(
 
     if submission_result is None:
         context.update(
-            await build_review_context(draft_record)
+            await build_review_context(
+                request,
+                draft_record,
+            )
         )
 
     return templates.TemplateResponse(
@@ -3697,6 +3827,11 @@ async def submit_onboarding(
 
     try:
         payload = form.to_request_payload()
+
+        await validate_existing_site_access(
+            request=request,
+            payload=payload,
+        )
 
         result = await onboard_energy_asset(
             request_payload=payload,

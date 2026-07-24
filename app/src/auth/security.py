@@ -97,4 +97,6 @@ def safe_authenticated_user(
         display_name=user.display_name,
         role_code=user.role_code,
         organization_id=user.organization_id,
+        access_scope_mode=user.access_scope_mode,
+        site_ids=user.site_ids,
     )

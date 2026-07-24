@@ -15,6 +15,17 @@ async def authenticate_as(
             username=f"{role_code.lower()}@example.com",
             display_name=f"Test {role_code}",
             role_code=role_code,
+            organization_id=(
+                None
+                if role_code == "PLATFORM_ADMIN"
+                else "11111111-1111-1111-1111-111111111111"
+            ),
+            access_scope_mode=(
+                None
+                if role_code == "PLATFORM_ADMIN"
+                else "ORGANIZATION"
+            ),
+            site_ids=(),
         ),
         status=AuthenticationStatus.AUTHENTICATED,
     )

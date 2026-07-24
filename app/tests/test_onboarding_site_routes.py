@@ -31,6 +31,11 @@ def successful_result() -> AuthenticationResult:
             username="site.operator@example.com",
             display_name="Site Test Operator",
             role_code="OPERATOR",
+            organization_id=(
+                "11111111-1111-1111-1111-111111111111"
+            ),
+            access_scope_mode="ORGANIZATION",
+            site_ids=(),
         ),
         status=AuthenticationStatus.AUTHENTICATED,
     )
@@ -163,7 +168,7 @@ def install_repository_lists(
             },
         ]
 
-    async def fake_list_sites() -> list[dict]:
+    async def fake_list_sites(request) -> list[dict]:
         return [
             {
                 "id": SITE_ID,
@@ -194,7 +199,7 @@ def install_repository_lists(
         fake_list_organizations,
     )
     monkeypatch.setattr(
-        "src.main.list_sites",
+        "src.main.list_sites_for_request",
         fake_list_sites,
     )
 

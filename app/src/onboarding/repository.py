@@ -183,6 +183,33 @@ async def list_sites() -> list[dict[str, Any]]:
             return await cursor.fetchall()
 
 
+async def list_accessible_sites(
+    *,
+    portal_user_id: int,
+) -> list[dict[str, Any]]:
+    """Return only sites accessible to one active portal identity."""
+
+    async with database_connection() as connection:
+        async with connection.cursor() as cursor:
+            await cursor.execute(
+                """
+                SELECT
+                    id,
+                    organization_id,
+                    organization_code,
+                    organization_name,
+                    site_code,
+                    site_name,
+                    timezone,
+                    address,
+                    is_active
+                FROM admin.list_accessible_sites(%s)
+                """,
+                (portal_user_id,),
+            )
+            return await cursor.fetchall()
+
+
 async def list_gateways() -> list[dict[str, Any]]:
     """Return gateways with organization, site, and location ownership."""
     async with database_connection() as connection:

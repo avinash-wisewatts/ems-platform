@@ -110,6 +110,19 @@ source_file,target_category,target_path,notes
 99_01_seed_eniscope_demo.sql,demo,postgres/seeds/demo/99_01_seed_eniscope_demo.sql,Eniscope demo seed
 99_02_seed_eniscope_mapping.sql,demo,postgres/seeds/demo/99_02_seed_eniscope_mapping.sql,Eniscope demo mapping
 99_03_test_eniscope_ingestion.sql,demo,postgres/seeds/demo/99_03_test_eniscope_ingestion.sql,Ingestion test
+84_onboarding_drafts.sql,migration,postgres/migrations/84_onboarding_drafts.sql,Add persistent onboarding drafts
+85_submit_onboarding_draft.sql,migration,postgres/migrations/85_submit_onboarding_draft.sql,Add atomic onboarding draft submission
+86_get_submitted_onboarding_result.sql,migration,postgres/migrations/86_get_submitted_onboarding_result.sql,Expose submitted onboarding results
+87_onboarding_event_audit.sql,migration,postgres/migrations/87_onboarding_event_audit.sql,Add onboarding event audit
+88_audit_draft_step_events.sql,migration,postgres/migrations/88_audit_draft_step_events.sql,Audit onboarding draft step changes
+89_audit_submission_success.sql,migration,postgres/migrations/89_audit_submission_success.sql,Audit successful onboarding submissions
+90_clarify_draft_audit_context.sql,migration,postgres/migrations/90_clarify_draft_audit_context.sql,Clarify onboarding draft audit context
+91_portal_users.sql,migration,postgres/migrations/91_portal_users.sql,Add portal users and authentication contract
+92_onboarding_draft_ownership.sql,migration,postgres/migrations/92_onboarding_draft_ownership.sql,Add onboarding draft ownership
+93_ownership_aware_draft_reads.sql,migration,postgres/migrations/93_ownership_aware_draft_reads.sql,Add ownership-aware onboarding draft reads
+94_remove_legacy_draft_reads.sql,migration,postgres/migrations/94_remove_legacy_draft_reads.sql,Remove legacy onboarding draft reads
+95_ownership_aware_draft_writes.sql,migration,postgres/migrations/95_ownership_aware_draft_writes.sql,Add ownership-aware onboarding draft writes
+96_remove_legacy_draft_writes.sql,migration,postgres/migrations/96_remove_legacy_draft_writes.sql,Remove legacy onboarding draft writes
 93_retire_telegraf_ingest_bridge.sql,migration,postgres/migrations/93_retire_telegraf_ingest_bridge.sql,Retire superseded Telegraf ingest bridge without deleting staging tables
 97_mqtt_staging_timestamptz.sql,migration,postgres/migrations/97_mqtt_staging_timestamptz.sql,Convert Telegraf MQTT landing timestamps from naive UTC to TIMESTAMPTZ
 98_asset_meter_coverage.sql,migration,postgres/migrations/98_asset_meter_coverage.sql,Add asset metering requirements and configuration coverage analytics
@@ -122,3 +135,5 @@ source_file,target_category,target_path,notes
 105_canonical_permission_mapping.sql,migration,postgres/migrations/105_canonical_permission_mapping.sql,Add the canonical permission catalog and declarative role mappings
 106_portal_user_organization_scope.sql,migration,postgres/migrations/106_portal_user_organization_scope.sql,Add organization scope and audit history to portal users
 107_organization_user_management.sql,migration,postgres/migrations/107_organization_user_management.sql,Add controlled organization user management functions
+108_site_scoped_user_access.sql,migration,postgres/migrations/108_site_scoped_user_access.sql,Add organization-wide and selected-site portal access scopes
+109_portal_user_site_scope_controls.sql,migration,postgres/migrations/109_portal_user_site_scope_controls.sql,Add controlled portal site-scope assignment and integrity

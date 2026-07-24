@@ -21,6 +21,8 @@ class PortalUserAuthenticationRecord:
     failed_login_count: int
     locked_until: datetime | None
     organization_id: str | None = None
+    access_scope_mode: str | None = None
+    site_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,3 +38,5 @@ class AuthenticatedPortalUser:
     display_name: str
     role_code: str
     organization_id: str | None = None
+    access_scope_mode: str | None = None
+    site_ids: tuple[str, ...] = ()

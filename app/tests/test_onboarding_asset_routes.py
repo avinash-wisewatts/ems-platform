@@ -41,6 +41,11 @@ def successful_result() -> AuthenticationResult:
             username="asset.operator@example.com",
             display_name="Asset Test Operator",
             role_code="OPERATOR",
+            organization_id=(
+                "11111111-1111-1111-1111-111111111111"
+            ),
+            access_scope_mode="ORGANIZATION",
+            site_ids=(),
         ),
         status=AuthenticationStatus.AUTHENTICATED,
     )

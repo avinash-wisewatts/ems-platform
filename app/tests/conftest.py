@@ -45,6 +45,11 @@ def authenticated_operator() -> AuthenticatedPortalUser:
         username="operator@example.com",
         display_name="Test Operator",
         role_code="OPERATOR",
+        organization_id=(
+            "11111111-1111-1111-1111-111111111111"
+        ),
+        access_scope_mode="ORGANIZATION",
+        site_ids=(),
     )
 
 
@@ -61,6 +66,11 @@ def active_authentication_record() -> PortalUserAuthenticationRecord:
         is_active=True,
         failed_login_count=0,
         locked_until=None,
+        organization_id=(
+            "11111111-1111-1111-1111-111111111111"
+        ),
+        access_scope_mode="ORGANIZATION",
+        site_ids=(),
     )
 
 

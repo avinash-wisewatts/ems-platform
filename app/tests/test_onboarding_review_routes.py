@@ -34,6 +34,11 @@ def successful_result() -> AuthenticationResult:
             username="review.operator@example.com",
             display_name="Review Test Operator",
             role_code="OPERATOR",
+            organization_id=(
+                "11111111-1111-1111-1111-111111111111"
+            ),
+            access_scope_mode="ORGANIZATION",
+            site_ids=(),
         ),
         status=AuthenticationStatus.AUTHENTICATED,
     )
@@ -226,7 +231,7 @@ def install_review_catalogs(
             }
         ]
 
-    async def fake_list_sites() -> list[dict]:
+    async def fake_list_sites(request) -> list[dict]:
         if not include_existing:
             return []
 
@@ -348,7 +353,7 @@ def install_review_catalogs(
         "src.main.list_organizations",
         fake_list_organizations,
     )
-    monkeypatch.setattr("src.main.list_sites", fake_list_sites)
+    monkeypatch.setattr("src.main.list_sites_for_request", fake_list_sites)
     monkeypatch.setattr("src.main.list_spaces", fake_list_spaces)
     monkeypatch.setattr(
         "src.main.list_gateways",
