@@ -130,9 +130,12 @@ class PortalAuthenticationMiddleware:
             path,
         )
 
-        if not has_permission(
-            identity,
-            required_permission,
+        if (
+            required_permission is None
+            or not has_permission(
+                identity,
+                required_permission,
+            )
         ):
             await self.redirect(
                 send,

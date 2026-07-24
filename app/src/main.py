@@ -415,7 +415,7 @@ async def render_organization_administration(
 
     can_retry_grafana = has_permission(
         user,
-        PortalPermission.RETRY_GRAFANA_PROVISIONING,
+        PortalPermission.ORGANIZATION_MANAGE,
     )
 
     return templates.TemplateResponse(

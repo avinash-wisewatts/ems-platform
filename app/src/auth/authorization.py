@@ -13,44 +13,50 @@ class PortalRole(str, Enum):
 
 
 class PortalPermission(str, Enum):
-    """Stable application permissions independent of route implementation."""
+    """Canonical application permissions independent of route implementation."""
 
-    MANAGE_ORGANIZATIONS = "MANAGE_ORGANIZATIONS"
-    RETRY_GRAFANA_PROVISIONING = "RETRY_GRAFANA_PROVISIONING"
-    VIEW_ADMIN_PORTAL = "VIEW_ADMIN_PORTAL"
-    EDIT_ONBOARDING_DRAFT = "EDIT_ONBOARDING_DRAFT"
-    SUBMIT_ONBOARDING_DRAFT = "SUBMIT_ONBOARDING_DRAFT"
-    MANAGE_PORTAL_USERS = "MANAGE_PORTAL_USERS"
+    ORGANIZATION_MANAGE = "organization.manage"
+    USER_MANAGE = "user.manage"
+    SITE_MANAGE = "site.manage"
+    LOCATION_MANAGE = "location.manage"
+    ASSET_MANAGE = "asset.manage"
+    GATEWAY_MANAGE = "gateway.manage"
+    DEVICE_MANAGE = "device.manage"
+    RELATIONSHIP_MANAGE = "relationship.manage"
+    METERING_POLICY_MANAGE = "metering_policy.manage"
+    COMMISSIONING_EXECUTE = "commissioning.execute"
+    ALERT_ACKNOWLEDGE = "alert.acknowledge"
+    DASHBOARD_VIEW = "dashboard.view"
+    REPORT_EXPORT = "report.export"
+    AUDIT_VIEW = "audit.view"
 
 
 ROLE_PERMISSIONS: dict[PortalRole, frozenset[PortalPermission]] = {
-    PortalRole.PLATFORM_ADMIN: frozenset(
-        {
-            PortalPermission.RETRY_GRAFANA_PROVISIONING,
-            PortalPermission.MANAGE_ORGANIZATIONS,
-            PortalPermission.VIEW_ADMIN_PORTAL,
-            PortalPermission.EDIT_ONBOARDING_DRAFT,
-            PortalPermission.SUBMIT_ONBOARDING_DRAFT,
-            PortalPermission.MANAGE_PORTAL_USERS,
-        }
-    ),
+    PortalRole.PLATFORM_ADMIN: frozenset(PortalPermission),
     PortalRole.ORG_ADMIN: frozenset(
-        {
-            PortalPermission.VIEW_ADMIN_PORTAL,
-            PortalPermission.EDIT_ONBOARDING_DRAFT,
-            PortalPermission.SUBMIT_ONBOARDING_DRAFT,
-        }
+        permission
+        for permission in PortalPermission
+        if permission is not PortalPermission.ORGANIZATION_MANAGE
     ),
     PortalRole.OPERATOR: frozenset(
         {
-            PortalPermission.VIEW_ADMIN_PORTAL,
-            PortalPermission.EDIT_ONBOARDING_DRAFT,
-            PortalPermission.SUBMIT_ONBOARDING_DRAFT,
+            PortalPermission.SITE_MANAGE,
+            PortalPermission.LOCATION_MANAGE,
+            PortalPermission.ASSET_MANAGE,
+            PortalPermission.GATEWAY_MANAGE,
+            PortalPermission.DEVICE_MANAGE,
+            PortalPermission.RELATIONSHIP_MANAGE,
+            PortalPermission.METERING_POLICY_MANAGE,
+            PortalPermission.COMMISSIONING_EXECUTE,
+            PortalPermission.ALERT_ACKNOWLEDGE,
+            PortalPermission.DASHBOARD_VIEW,
+            PortalPermission.REPORT_EXPORT,
         }
     ),
     PortalRole.VIEWER: frozenset(
         {
-            PortalPermission.VIEW_ADMIN_PORTAL,
+            PortalPermission.DASHBOARD_VIEW,
+            PortalPermission.REPORT_EXPORT,
         }
     ),
 }
@@ -88,7 +94,7 @@ def has_permission(
 def required_permission_for_request(
     method: str,
     path: str,
-) -> PortalPermission:
+) -> PortalPermission | None:
     """
     Resolve the permission required for a protected HTTP request.
 
@@ -101,16 +107,16 @@ def required_permission_for_request(
     # Logging out is an authenticated self-service action, not an
     # administrative user-management operation.
     if method.upper() == "POST" and path.rstrip("/") == "/logout":
-        return PortalPermission.VIEW_ADMIN_PORTAL
+        return PortalPermission.DASHBOARD_VIEW
 
     if normalized_method in {"GET", "HEAD", "OPTIONS"}:
-        return PortalPermission.VIEW_ADMIN_PORTAL
+        return PortalPermission.DASHBOARD_VIEW
 
     if (
         normalized_method == "POST"
         and path == "/onboarding/review"
     ):
-        return PortalPermission.SUBMIT_ONBOARDING_DRAFT
+        return PortalPermission.COMMISSIONING_EXECUTE
 
     if (
         normalized_method == "POST"
@@ -119,21 +125,21 @@ def required_permission_for_request(
             or path.startswith("/onboarding/")
         )
     ):
-        return PortalPermission.EDIT_ONBOARDING_DRAFT
+        return PortalPermission.COMMISSIONING_EXECUTE
 
     if (
         normalized_method == "POST"
         and path.startswith("/administration/organizations/")
         and path.endswith("/grafana/retry")
     ):
-        return PortalPermission.RETRY_GRAFANA_PROVISIONING
+        return PortalPermission.ORGANIZATION_MANAGE
 
     if (
         normalized_method in {"POST", "PUT", "PATCH", "DELETE"}
         and path.rstrip("/") == "/administration/organizations"
     ):
-        return PortalPermission.MANAGE_ORGANIZATIONS
+        return PortalPermission.ORGANIZATION_MANAGE
 
-    # Any future protected write route must be explicitly granted rather than
-    # inheriting view permission.
-    return PortalPermission.MANAGE_PORTAL_USERS
+    # Any future protected write route must be explicitly mapped.
+    # Returning no permission causes middleware to reject it fail-closed.
+    return None

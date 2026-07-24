@@ -111,12 +111,12 @@ def test_operator_unknown_write_route_fails_closed(
     )
 
     # Authorization fails before route resolution because unknown writes
-    # require MANAGE_PORTAL_USERS.
+    # are rejected because no permission is explicitly mapped.
     assert response.status_code == 303
     assert response.headers["location"] == "/forbidden"
 
 
-def test_super_admin_unknown_route_reaches_router(
+def test_platform_admin_unknown_write_route_is_rejected(
     portal_client,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -130,8 +130,8 @@ def test_super_admin_unknown_route_reaches_router(
         "/not-a-real-admin-route"
     )
 
-    # PLATFORM_ADMIN passes authorization; FastAPI then reports no such route.
-    assert response.status_code == 404
+    assert response.status_code == 303
+    assert response.headers["location"] == "/forbidden"
 
 @pytest.mark.parametrize(
     "role_code",

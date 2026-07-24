@@ -3,6 +3,7 @@ import pytest
 from src.auth.authorization import (
     PortalPermission,
     PortalRole,
+    ROLE_PERMISSIONS,
     has_permission,
     portal_role,
     required_permission_for_request,
@@ -52,107 +53,107 @@ def test_unknown_portal_role_fails_closed() -> None:
     [
         (
             "PLATFORM_ADMIN",
-            PortalPermission.VIEW_ADMIN_PORTAL,
+            PortalPermission.DASHBOARD_VIEW,
             True,
         ),
         (
             "PLATFORM_ADMIN",
-            PortalPermission.EDIT_ONBOARDING_DRAFT,
+            PortalPermission.COMMISSIONING_EXECUTE,
             True,
         ),
         (
             "PLATFORM_ADMIN",
-            PortalPermission.SUBMIT_ONBOARDING_DRAFT,
+            PortalPermission.COMMISSIONING_EXECUTE,
             True,
         ),
         (
             "PLATFORM_ADMIN",
-            PortalPermission.MANAGE_PORTAL_USERS,
+            PortalPermission.USER_MANAGE,
             True,
         ),
         (
             "ORG_ADMIN",
-            PortalPermission.VIEW_ADMIN_PORTAL,
+            PortalPermission.DASHBOARD_VIEW,
             True,
         ),
         (
             "ORG_ADMIN",
-            PortalPermission.EDIT_ONBOARDING_DRAFT,
+            PortalPermission.COMMISSIONING_EXECUTE,
             True,
         ),
         (
             "ORG_ADMIN",
-            PortalPermission.SUBMIT_ONBOARDING_DRAFT,
+            PortalPermission.COMMISSIONING_EXECUTE,
             True,
         ),
         (
             "ORG_ADMIN",
-            PortalPermission.MANAGE_ORGANIZATIONS,
+            PortalPermission.ORGANIZATION_MANAGE,
             False,
         ),
         (
             "ORG_ADMIN",
-            PortalPermission.MANAGE_PORTAL_USERS,
-            False,
+            PortalPermission.USER_MANAGE,
+            True,
         ),
         (
             "ORG_ADMIN",
-            PortalPermission.RETRY_GRAFANA_PROVISIONING,
+            PortalPermission.ORGANIZATION_MANAGE,
             False,
         ),
         (
             "OPERATOR",
-            PortalPermission.VIEW_ADMIN_PORTAL,
+            PortalPermission.DASHBOARD_VIEW,
             True,
         ),
         (
             "OPERATOR",
-            PortalPermission.EDIT_ONBOARDING_DRAFT,
+            PortalPermission.COMMISSIONING_EXECUTE,
             True,
         ),
         (
             "OPERATOR",
-            PortalPermission.SUBMIT_ONBOARDING_DRAFT,
+            PortalPermission.COMMISSIONING_EXECUTE,
             True,
         ),
         (
             "OPERATOR",
-            PortalPermission.MANAGE_PORTAL_USERS,
+            PortalPermission.USER_MANAGE,
             False,
         ),
         (
             "VIEWER",
-            PortalPermission.VIEW_ADMIN_PORTAL,
+            PortalPermission.DASHBOARD_VIEW,
             True,
         ),
         (
             "VIEWER",
-            PortalPermission.EDIT_ONBOARDING_DRAFT,
+            PortalPermission.COMMISSIONING_EXECUTE,
             False,
         ),
         (
             "VIEWER",
-            PortalPermission.SUBMIT_ONBOARDING_DRAFT,
+            PortalPermission.COMMISSIONING_EXECUTE,
             False,
         ),
         (
             "VIEWER",
-            PortalPermission.MANAGE_PORTAL_USERS,
+            PortalPermission.USER_MANAGE,
             False,
         ),
         (
             "PLATFORM_ADMIN",
-            PortalPermission.RETRY_GRAFANA_PROVISIONING,
+            PortalPermission.ORGANIZATION_MANAGE,
             True,
         ),
         (
             "OPERATOR",
-            PortalPermission.RETRY_GRAFANA_PROVISIONING,
+            PortalPermission.ORGANIZATION_MANAGE,
             False,
         ),
         (
             "VIEWER",
-            PortalPermission.RETRY_GRAFANA_PROVISIONING,
+            PortalPermission.ORGANIZATION_MANAGE,
             False,
         ),
     ],
@@ -184,7 +185,7 @@ def test_safe_request_methods_require_view_permission(
             method,
             "/onboarding/device",
         )
-        is PortalPermission.VIEW_ADMIN_PORTAL
+        is PortalPermission.DASHBOARD_VIEW
     )
 
 
@@ -194,7 +195,7 @@ def test_review_submission_requires_submit_permission() -> None:
             "POST",
             "/onboarding/review",
         )
-        is PortalPermission.SUBMIT_ONBOARDING_DRAFT
+        is PortalPermission.COMMISSIONING_EXECUTE
     )
 
 
@@ -213,7 +214,7 @@ def test_onboarding_writes_require_edit_permission(
 ) -> None:
     assert (
         required_permission_for_request("POST", path)
-        is PortalPermission.EDIT_ONBOARDING_DRAFT
+        is PortalPermission.COMMISSIONING_EXECUTE
     )
 
 def test_grafana_retry_requires_dedicated_permission() -> None:
@@ -226,7 +227,7 @@ def test_grafana_retry_requires_dedicated_permission() -> None:
                 "grafana/retry"
             ),
         )
-        is PortalPermission.RETRY_GRAFANA_PROVISIONING
+        is PortalPermission.ORGANIZATION_MANAGE
     )
 
 @pytest.mark.parametrize(
@@ -238,11 +239,80 @@ def test_grafana_retry_requires_dedicated_permission() -> None:
         ("PATCH", "/anything"),
     ],
 )
-def test_unknown_write_routes_fail_closed_to_manage_users(
+def test_unknown_write_routes_have_no_implicit_permission(
     method: str,
     path: str,
 ) -> None:
-    assert (
-        required_permission_for_request(method, path)
-        is PortalPermission.MANAGE_PORTAL_USERS
-    )
+    assert required_permission_for_request(method, path) is None
+
+
+CANONICAL_PERMISSION_CODES = {
+    "organization.manage",
+    "user.manage",
+    "site.manage",
+    "location.manage",
+    "asset.manage",
+    "gateway.manage",
+    "device.manage",
+    "relationship.manage",
+    "metering_policy.manage",
+    "commissioning.execute",
+    "alert.acknowledge",
+    "dashboard.view",
+    "report.export",
+    "audit.view",
+}
+
+
+def test_story_3_2_exposes_all_canonical_permissions() -> None:
+    assert {
+        permission.value
+        for permission in PortalPermission
+    } == CANONICAL_PERMISSION_CODES
+
+
+@pytest.mark.parametrize(
+    ("role", "expected_codes"),
+    [
+        (
+            PortalRole.PLATFORM_ADMIN,
+            CANONICAL_PERMISSION_CODES,
+        ),
+        (
+            PortalRole.ORG_ADMIN,
+            CANONICAL_PERMISSION_CODES
+            - {"organization.manage"},
+        ),
+        (
+            PortalRole.OPERATOR,
+            {
+                "site.manage",
+                "location.manage",
+                "asset.manage",
+                "gateway.manage",
+                "device.manage",
+                "relationship.manage",
+                "metering_policy.manage",
+                "commissioning.execute",
+                "alert.acknowledge",
+                "dashboard.view",
+                "report.export",
+            },
+        ),
+        (
+            PortalRole.VIEWER,
+            {
+                "dashboard.view",
+                "report.export",
+            },
+        ),
+    ],
+)
+def test_story_3_2_role_permission_mapping_is_declarative(
+    role: PortalRole,
+    expected_codes: set[str],
+) -> None:
+    assert {
+        permission.value
+        for permission in ROLE_PERMISSIONS[role]
+    } == expected_codes
