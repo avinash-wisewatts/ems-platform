@@ -1,0 +1,35 @@
+{% extends "onboarding/layout.html" %}
+
+{% block onboarding_content %}
+<section class="form-card">
+    <div class="section-heading">
+        <span class="step-number">6</span>
+
+        <div>
+            <h3>Device saved</h3>
+            <p>
+                The device and identifier configuration are stored in the
+                onboarding draft.
+            </p>
+        </div>
+    </div>
+
+    <div class="alert success-card">
+        <strong>Device saved successfully.</strong>
+        Asset configuration is the next onboarding module.
+    </div>
+
+    <div class="wizard-step-actions">
+        <a
+            class="button-link secondary"
+            href="/onboarding/device?draft={{ draft_token }}"
+        >
+            Back to device
+        </a>
+
+        <button type="button" disabled>
+            Asset module next
+        </button>
+    </div>
+</section>
+{% endblock %}

@@ -1,0 +1,380 @@
+{% extends "onboarding/layout.html" %}
+
+{% macro display_value(value, fallback='Not provided') %}
+    {% if value is not none and value != '' %}
+        {{ value }}
+    {% else %}
+        {{ fallback }}
+    {% endif %}
+{% endmacro %}
+
+{% block onboarding_content %}
+<section class="form-card">
+    <div class="section-heading">
+        <span class="step-number">7</span>
+
+        <div>
+            <h3>Review and submit</h3>
+            <p>
+                Confirm the complete onboarding configuration before creating
+                production metadata.
+            </p>
+        </div>
+    </div>
+
+    {% if submission_result %}
+    <div class="alert success-card">
+        <strong>Onboarding completed successfully.</strong>
+        The production organization, site, gateway, device, and asset records
+        have been created or linked.
+    </div>
+
+    <div class="review-result-grid">
+        <div>
+            <span>Organization ID</span>
+            <strong>{{ submission_result.organization_id }}</strong>
+        </div>
+
+        <div>
+            <span>Site ID</span>
+            <strong>{{ submission_result.site_id }}</strong>
+        </div>
+
+        <div>
+            <span>Gateway ID</span>
+            <strong>{{ submission_result.gateway_id }}</strong>
+        </div>
+
+        <div>
+            <span>Device ID</span>
+            <strong>{{ submission_result.device_id }}</strong>
+        </div>
+
+        <div>
+            <span>Asset ID</span>
+            <strong>{{ submission_result.asset_id }}</strong>
+        </div>
+
+        <div>
+            <span>Relationship</span>
+            <strong>{{ submission_result.relationship_type }}</strong>
+        </div>
+    </div>
+
+    <div class="wizard-step-actions">
+        <a
+            class="button-link secondary"
+            href="/onboarding/organization"
+        >
+            Start another onboarding
+        </a>
+    </div>
+
+    {% else %}
+
+    <div class="review-section">
+        <div class="review-section-heading">
+            <div>
+                <h4>Organization</h4>
+                <p>{{ organization.mode.replace('_', ' ') | title }}</p>
+            </div>
+
+            <a href="/onboarding/organization?draft={{ draft_token }}">
+                Edit
+            </a>
+        </div>
+
+        <dl class="review-details">
+            {% if organization.mode == 'USE_EXISTING' %}
+            <div>
+                <dt>Existing organization</dt>
+                <dd>{{ organization_label }}</dd>
+            </div>
+            {% else %}
+            <div>
+                <dt>Name</dt>
+                <dd>{{ organization.name }}</dd>
+            </div>
+
+            <div>
+                <dt>Code</dt>
+                <dd>{{ organization.code }}</dd>
+            </div>
+
+            <div>
+                <dt>Description</dt>
+                <dd>{{ display_value(organization.description) }}</dd>
+            </div>
+            {% endif %}
+        </dl>
+    </div>
+
+    <div class="review-section">
+        <div class="review-section-heading">
+            <div>
+                <h4>Site</h4>
+                <p>{{ site.mode.replace('_', ' ') | title }}</p>
+            </div>
+
+            <a href="/onboarding/site?draft={{ draft_token }}">
+                Edit
+            </a>
+        </div>
+
+        <dl class="review-details">
+            {% if site.mode == 'USE_EXISTING' %}
+            <div>
+                <dt>Existing site</dt>
+                <dd>{{ site_label }}</dd>
+            </div>
+            {% else %}
+            <div>
+                <dt>Name</dt>
+                <dd>{{ site.name }}</dd>
+            </div>
+
+            <div>
+                <dt>Code</dt>
+                <dd>{{ site.code }}</dd>
+            </div>
+
+            <div>
+                <dt>Timezone</dt>
+                <dd>{{ site.timezone }}</dd>
+            </div>
+            {% endif %}
+        </dl>
+    </div>
+
+    <div class="review-section">
+        <div class="review-section-heading">
+            <div>
+                <h4>Physical location</h4>
+                <p>{{ location.mode.replace('_', ' ') | title }}</p>
+            </div>
+
+            <a href="/onboarding/location?draft={{ draft_token }}">
+                Edit
+            </a>
+        </div>
+
+        <dl class="review-details">
+            {% if location.mode == 'SITE_ONLY' %}
+            <div>
+                <dt>Assignment</dt>
+                <dd>Site level</dd>
+            </div>
+            {% elif location.mode == 'USE_EXISTING_SPACE' %}
+            <div>
+                <dt>Existing space</dt>
+                <dd>{{ location_label }}</dd>
+            </div>
+            {% else %}
+            <div>
+                <dt>Building</dt>
+                <dd>
+                    {{ location.building_name }}
+                    — {{ location.building_code }}
+                </dd>
+            </div>
+
+            <div>
+                <dt>Floor</dt>
+                <dd>
+                    {{ location.floor_name }}
+                    — {{ location.floor_code }}
+                </dd>
+            </div>
+
+            <div>
+                <dt>Space</dt>
+                <dd>
+                    {{ location.space_name }}
+                    — {{ location.space_code }}
+                </dd>
+            </div>
+            {% endif %}
+        </dl>
+    </div>
+
+    <div class="review-section">
+        <div class="review-section-heading">
+            <div>
+                <h4>Gateway</h4>
+                <p>{{ gateway.mode.replace('_', ' ') | title }}</p>
+            </div>
+
+            <a href="/onboarding/gateway?draft={{ draft_token }}">
+                Edit
+            </a>
+        </div>
+
+        <dl class="review-details">
+            {% if gateway.mode == 'USE_EXISTING' %}
+            <div>
+                <dt>Existing gateway</dt>
+                <dd>{{ gateway_label }}</dd>
+            </div>
+            {% else %}
+            <div>
+                <dt>Name</dt>
+                <dd>{{ gateway.name }}</dd>
+            </div>
+
+            <div>
+                <dt>External ID</dt>
+                <dd>{{ gateway.external_id }}</dd>
+            </div>
+
+            <div>
+                <dt>Model</dt>
+                <dd>{{ gateway.vendor }} {{ gateway.model }}</dd>
+            </div>
+
+            <div>
+                <dt>Cloud uplink</dt>
+                <dd>{{ gateway.protocol }}</dd>
+            </div>
+            {% endif %}
+        </dl>
+    </div>
+
+    <div class="review-section">
+        <div class="review-section-heading">
+            <div>
+                <h4>Device</h4>
+                <p>{{ device.mode.replace('_', ' ') | title }}</p>
+            </div>
+
+            <a href="/onboarding/device?draft={{ draft_token }}">
+                Edit
+            </a>
+        </div>
+
+        <dl class="review-details">
+            {% if device.mode == 'USE_EXISTING' %}
+            <div>
+                <dt>Existing device</dt>
+                <dd>{{ device_label }}</dd>
+            </div>
+            {% else %}
+            <div>
+                <dt>Name</dt>
+                <dd>{{ device.name }}</dd>
+            </div>
+
+            <div>
+                <dt>External ID</dt>
+                <dd>{{ device.external_id }}</dd>
+            </div>
+
+            <div>
+                <dt>Category</dt>
+                <dd>{{ device_category_name }}</dd>
+            </div>
+
+            <div>
+                <dt>Model</dt>
+                <dd>{{ device.model_vendor }} {{ device.model }}</dd>
+            </div>
+
+            <div>
+                <dt>Communication protocol</dt>
+                <dd>{{ device.protocol }}</dd>
+            </div>
+
+            <div>
+                <dt>Telemetry profile</dt>
+                <dd>{{ device.profile_code }}</dd>
+            </div>
+
+            <div>
+                <dt>Identifier</dt>
+                <dd>
+                    {{ device.identifier.type }}
+                    — {{ device.identifier.value }}
+                </dd>
+            </div>
+            {% endif %}
+        </dl>
+    </div>
+
+    <div class="review-section">
+        <div class="review-section-heading">
+            <div>
+                <h4>Asset</h4>
+                <p>{{ asset.mode.replace('_', ' ') | title }}</p>
+            </div>
+
+            <a href="/onboarding/asset?draft={{ draft_token }}">
+                Edit
+            </a>
+        </div>
+
+        <dl class="review-details">
+            {% if asset.mode == 'USE_EXISTING' %}
+            <div>
+                <dt>Existing asset</dt>
+                <dd>{{ asset_label }}</dd>
+            </div>
+            {% else %}
+            <div>
+                <dt>Name</dt>
+                <dd>{{ asset.name }}</dd>
+            </div>
+
+            <div>
+                <dt>Type</dt>
+                <dd>{{ asset_type_name }}</dd>
+            </div>
+
+            <div>
+                <dt>Metering requirement</dt>
+                <dd>
+                    {{ asset.metering_requirement.replace('_', ' ') | title }}
+                </dd>
+            </div>
+            {% endif %}
+
+            <div>
+                <dt>Device relationship</dt>
+                <dd>
+                    {{ asset.relationship_type.replace('_', ' ') | title }}
+                </dd>
+            </div>
+        </dl>
+    </div>
+
+    <div class="information-card review-warning">
+        <strong>Final production operation</strong>
+        <p>
+            Submit performs one atomic database transaction. Production
+            metadata is created only if every validation succeeds.
+        </p>
+    </div>
+
+    <form
+        method="post"
+        action="/onboarding/review"
+        class="wizard-step-actions"
+    >
+        <input
+            type="hidden"
+            name="draft_token"
+            value="{{ draft_token }}"
+        >
+
+        <a
+            class="button-link secondary"
+            href="/onboarding/asset?draft={{ draft_token }}"
+        >
+            Back
+        </a>
+
+        <button type="submit">
+            Submit onboarding
+        </button>
+    </form>
+    {% endif %}
+</section>
+{% endblock %}

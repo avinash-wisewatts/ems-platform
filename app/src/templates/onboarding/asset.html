@@ -1,0 +1,318 @@
+{% extends "onboarding/layout.html" %}
+
+{% block onboarding_content %}
+<form
+    method="post"
+    action="/onboarding/asset"
+    class="form-card"
+    id="asset_form"
+    novalidate
+>
+    <input
+        type="hidden"
+        name="draft_token"
+        value="{{ draft_token }}"
+    >
+
+    <div class="section-heading">
+        <span class="step-number">6</span>
+
+        <div>
+            <h3>Asset</h3>
+            <p>
+                Select or create the physical equipment monitored by the
+                selected device.
+            </p>
+        </div>
+    </div>
+
+    <div class="context-summary">
+        <span class="context-summary-label">
+            Device
+        </span>
+
+        <strong>{{ device_label }}</strong>
+
+        <a href="/onboarding/device?draft={{ draft_token }}">
+            Change
+        </a>
+    </div>
+
+    <div class="information-card">
+        <strong>Device category: {{ device_category_name }}</strong>
+        <p>
+            Relationship choices are restricted to those permitted for this
+            controlled device category.
+        </p>
+    </div>
+
+    {% if allow_existing_asset %}
+    <div class="choice-cards">
+        <label class="choice-card">
+            <input
+                type="radio"
+                name="asset_mode"
+                value="USE_EXISTING"
+                {% if form_data.get('asset_mode') == 'USE_EXISTING' %}
+                checked
+                {% endif %}
+            >
+
+            <span>
+                <strong>Use existing asset</strong>
+                <small>
+                    Attach the device to equipment already registered at this
+                    site.
+                </small>
+            </span>
+        </label>
+
+        <label class="choice-card">
+            <input
+                type="radio"
+                name="asset_mode"
+                value="CREATE_NEW"
+                {% if form_data.get(
+                    'asset_mode',
+                    'CREATE_NEW'
+                ) == 'CREATE_NEW' %}
+                checked
+                {% endif %}
+            >
+
+            <span>
+                <strong>Create new asset</strong>
+                <small>
+                    Register new equipment and attach the device.
+                </small>
+            </span>
+        </label>
+    </div>
+    {% else %}
+    <input
+        type="hidden"
+        name="asset_mode"
+        value="CREATE_NEW"
+    >
+
+    <div class="information-card">
+        <strong>New site or no existing assets</strong>
+        <p>
+            Create a new asset for this onboarding workflow.
+        </p>
+    </div>
+    {% endif %}
+
+    <div
+        id="existing_asset_fields"
+        class="conditional-section"
+        hidden
+    >
+        <div class="form-grid">
+            <label class="full-width">
+                Existing asset
+
+                <span class="field-help">
+                    Only active root assets belonging to the selected
+                    organization and site are shown.
+                </span>
+
+                <select
+                    id="existing_asset_id"
+                    name="existing_asset_id"
+                >
+                    <option value="">
+                        Select an asset
+                    </option>
+
+                    {% for asset in assets %}
+                    <option
+                        value="{{ asset.id }}"
+                        {% if form_data.get(
+                            'existing_asset_id'
+                        ) == asset.id|string %}
+                        selected
+                        {% endif %}
+                    >
+                        {{ asset.asset_name }}
+                        {% if asset.asset_type_name %}
+                        — {{ asset.asset_type_name }}
+                        {% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+        </div>
+    </div>
+
+    <div
+        id="create_asset_fields"
+        class="conditional-section"
+    >
+        <div class="form-grid">
+            <label>
+                Asset name
+
+                <span class="field-help">
+                    Physical equipment name used in dashboards and reports.
+                </span>
+
+                <input
+                    id="asset_name"
+                    name="asset_name"
+                    type="text"
+                    maxlength="200"
+                    placeholder="Chiller 1"
+                    value="{{ form_data.get('asset_name', '') }}"
+                >
+            </label>
+
+            <label>
+                Asset type
+
+                <select
+                    id="asset_type_id"
+                    name="asset_type_id"
+                >
+                    <option value="">
+                        Select an asset type
+                    </option>
+
+                    {% for asset_type in asset_types %}
+                    <option
+                        value="{{ asset_type.id }}"
+                        {% if form_data.get(
+                            'asset_type_id'
+                        ) == asset_type.id|string %}
+                        selected
+                        {% endif %}
+                    >
+                        {{ asset_type.name }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+
+            <label>
+                Metering requirement
+
+                <span class="field-help">
+                    Defines whether this asset needs its own meter, may use
+                    descendant meters, or is intentionally excluded from
+                    energy-meter coverage.
+                </span>
+
+                <select
+                    id="metering_requirement"
+                    name="metering_requirement"
+                >
+                    <option value="">
+                        Select a metering requirement
+                    </option>
+
+                    {% for requirement in metering_requirements %}
+                    <option
+                        value="{{ requirement.code }}"
+                        {% if form_data.get(
+                            'metering_requirement'
+                        ) == requirement.code %}
+                        selected
+                        {% endif %}
+                        title="{{ requirement.description }}"
+                    >
+                        {{ requirement.label }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+
+            <label class="full-width">
+                Operational notes
+
+                <span class="field-help">
+                    Optional installation or operating context stored as
+                    structured asset metadata.
+                </span>
+
+                <textarea
+                    id="operational_notes"
+                    name="operational_notes"
+                    rows="4"
+                    maxlength="2000"
+                    placeholder="270 TR water-cooled chiller serving guest-room HVAC."
+                >{{ form_data.get('operational_notes', '') }}</textarea>
+            </label>
+        </div>
+    </div>
+
+    <div class="form-subsection-heading">
+        <h4>Device relationship</h4>
+        <p>
+            Defines how this device measures, senses, or controls the asset.
+        </p>
+    </div>
+
+    <div class="form-grid">
+        <label class="full-width">
+            Relationship type
+
+            <select
+                id="relationship_type"
+                name="relationship_type"
+                required
+            >
+                <option value="">
+                    Select a relationship
+                </option>
+
+                {% for relationship in relationships %}
+                <option
+                    value="{{ relationship }}"
+                    {% if form_data.get(
+                        'relationship_type'
+                    ) == relationship %}
+                    selected
+                    {% endif %}
+                >
+                    {{ relationship.replace('_', ' ') | title }}
+                </option>
+                {% endfor %}
+            </select>
+        </label>
+    </div>
+
+    {% if 'PRIMARY_METER' in relationships %}
+    <div class="information-card">
+        <strong>Primary-meter constraint</strong>
+        <p>
+            An asset can have only one primary meter, and a device can be the
+            primary meter for only one asset. Final submission validates both
+            constraints atomically.
+        </p>
+    </div>
+    {% endif %}
+
+    <div class="wizard-step-actions">
+        <a
+            class="button-link secondary"
+            href="/onboarding/device?draft={{ draft_token }}"
+        >
+            Back
+        </a>
+
+        <button type="submit">
+            Save &amp; Continue
+        </button>
+    </div>
+</form>
+{% endblock %}
+
+{% block onboarding_scripts %}
+<script
+    src="{{ url_for(
+        'static',
+        path='/js/onboarding-asset.js'
+    ) }}"
+    defer
+></script>
+{% endblock %}

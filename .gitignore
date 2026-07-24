@@ -64,3 +64,16 @@ postgres/archive/
 # Environment
 .env
 **/.env
+grafana/.env
+*.bak
+*.backup
+*.before-*
+*.failed-*
+*~
+grafana/plugins/
+grafana/dashboard-backups/
+
+# Test artifacts
+.venv-test/
+.coverage
+*.bak-*

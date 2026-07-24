@@ -1,0 +1,425 @@
+{% extends "onboarding/layout.html" %}
+
+{% block onboarding_content %}
+<form
+    method="post"
+    action="/onboarding/device"
+    class="form-card"
+    id="device_form"
+    novalidate
+>
+    <input
+        type="hidden"
+        name="draft_token"
+        value="{{ draft_token }}"
+    >
+
+    <div class="section-heading">
+        <span class="step-number">5</span>
+
+        <div>
+            <h3>Device</h3>
+            <p>
+                Select or register the field device that produces telemetry.
+            </p>
+        </div>
+    </div>
+
+    <div class="context-summary">
+        <span class="context-summary-label">
+            Gateway
+        </span>
+
+        <strong>{{ gateway_label }}</strong>
+
+        <a href="/onboarding/gateway?draft={{ draft_token }}">
+            Change
+        </a>
+    </div>
+
+    {% if allow_existing_device %}
+    <div class="choice-cards">
+        <label class="choice-card">
+            <input
+                type="radio"
+                name="device_mode"
+                value="USE_EXISTING"
+                {% if form_data.get('device_mode') == 'USE_EXISTING' %}
+                checked
+                {% endif %}
+            >
+
+            <span>
+                <strong>Use existing device</strong>
+                <small>
+                    Select a device already registered under this gateway.
+                </small>
+            </span>
+        </label>
+
+        <label class="choice-card">
+            <input
+                type="radio"
+                name="device_mode"
+                value="CREATE_NEW"
+                {% if form_data.get(
+                    'device_mode',
+                    'CREATE_NEW'
+                ) == 'CREATE_NEW' %}
+                checked
+                {% endif %}
+            >
+
+            <span>
+                <strong>Create new device</strong>
+                <small>
+                    Register a new field device and telemetry identity.
+                </small>
+            </span>
+        </label>
+    </div>
+    {% else %}
+    <input
+        type="hidden"
+        name="device_mode"
+        value="CREATE_NEW"
+    >
+
+    <div class="information-card">
+        <strong>New gateway or no existing devices</strong>
+        <p>
+            Create a new device for this workflow. Existing devices are
+            available only for gateways already stored in production.
+        </p>
+    </div>
+    {% endif %}
+
+    <div
+        id="existing_device_fields"
+        class="conditional-section"
+        hidden
+    >
+        <div class="form-grid">
+            <label class="full-width">
+                Existing device
+
+                <select
+                    id="existing_device_id"
+                    name="existing_device_id"
+                >
+                    <option value="">
+                        Select a device
+                    </option>
+
+                    {% for device in devices %}
+                    <option
+                        value="{{ device.id }}"
+                        {% if form_data.get(
+                            'existing_device_id'
+                        ) == device.id|string %}
+                        selected
+                        {% endif %}
+                    >
+                        {{ device.device_name }}
+                        — {{ device.external_id }}
+                        {% if device.device_category_name %}
+                        — {{ device.device_category_name }}
+                        {% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+
+            <label>
+                Optional identifier verification type
+
+                <select
+                    id="existing_identifier_type"
+                    name="identifier_type"
+                >
+                    <option value="">
+                        Do not verify an identifier
+                    </option>
+
+                    <option
+                        value="MQTT_UID"
+                        {% if form_data.get(
+                            'identifier_type'
+                        ) == 'MQTT_UID' %}
+                        selected
+                        {% endif %}
+                    >
+                        MQTT UID
+                    </option>
+                </select>
+            </label>
+
+            <label>
+                Optional identifier value
+
+                <input
+                    id="existing_identifier_value"
+                    name="identifier_value"
+                    type="text"
+                    maxlength="255"
+                    placeholder="80:34:28:16:09:eb:00:01"
+                    value="{{ form_data.get(
+                        'identifier_value',
+                        ''
+                    ) }}"
+                >
+            </label>
+        </div>
+    </div>
+
+    <div
+        id="create_device_fields"
+        class="conditional-section"
+    >
+        <div class="form-grid">
+            <label>
+                Device name
+                <input
+                    id="device_name"
+                    name="device_name"
+                    type="text"
+                    maxlength="200"
+                    placeholder="Chiller 1 Energy Meter"
+                    value="{{ form_data.get('device_name', '') }}"
+                >
+            </label>
+
+            <label>
+                Recommended external ID
+                <input
+                    id="device_external_id"
+                    name="device_external_id"
+                    type="text"
+                    maxlength="100"
+                    pattern="[A-Za-z0-9_]+"
+                    placeholder="CHILLER_1_ENERGY_METER"
+                    value="{{ form_data.get(
+                        'device_external_id',
+                        ''
+                    ) }}"
+                >
+            </label>
+
+            <label>
+                Device category
+
+                <select
+                    id="device_category_id"
+                    name="device_category_id"
+                >
+                    <option value="">
+                        Select a category
+                    </option>
+
+                    {% for category in device_categories %}
+                    {% if category.name != 'Gateway' %}
+                    <option
+                        value="{{ category.id }}"
+                        {% if form_data.get(
+                            'device_category_id'
+                        ) == category.id|string %}
+                        selected
+                        {% endif %}
+                    >
+                        {{ category.name }}
+                    </option>
+                    {% endif %}
+                    {% endfor %}
+                </select>
+            </label>
+
+            <label>
+                Manufacturer
+
+                <input
+                    id="device_vendor"
+                    name="device_vendor"
+                    type="text"
+                    maxlength="200"
+                    list="device_vendor_catalog"
+                    placeholder="ENISCOPE"
+                    value="{{ form_data.get('device_vendor', '') }}"
+                >
+
+                <datalist id="device_vendor_catalog">
+                    {% for model in device_models %}
+                    {% if model.vendor %}
+                    <option value="{{ model.vendor }}"></option>
+                    {% endif %}
+                    {% endfor %}
+                </datalist>
+            </label>
+
+            <label>
+                Model
+
+                <input
+                    id="device_model"
+                    name="device_model"
+                    type="text"
+                    maxlength="200"
+                    list="device_model_catalog"
+                    placeholder="Eniscope Energy Meter"
+                    value="{{ form_data.get('device_model', '') }}"
+                >
+
+                <datalist id="device_model_catalog">
+                    {% for model in device_models %}
+                    <option
+                        value="{{ model.model }}"
+                        data-vendor="{{ model.vendor or '' }}"
+                        data-category-id="{{ model.device_category_id or '' }}"
+                    ></option>
+                    {% endfor %}
+                </datalist>
+            </label>
+
+            <label>
+                Device communication protocol
+
+                <select
+                    id="device_protocol"
+                    name="device_protocol"
+                >
+                    {% set selected_protocol = form_data.get(
+                        'device_protocol',
+                        'MQTT'
+                    ) %}
+
+                    {% for protocol in [
+                        'MQTT',
+                        'MODBUS TCP',
+                        'MODBUS RTU',
+                        'BACNET IP',
+                        'BACNET MS/TP',
+                        'OPC-UA',
+                        'HTTP API'
+                    ] %}
+                    <option
+                        value="{{ protocol }}"
+                        {% if selected_protocol == protocol %}
+                        selected
+                        {% endif %}
+                    >
+                        {{ protocol }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+
+            <label class="full-width">
+                Compatible telemetry profile
+
+                <select
+                    id="profile_code"
+                    name="profile_code"
+                >
+                    <option value="">
+                        Select a compatible profile
+                    </option>
+
+                    {% for profile in device_profiles %}
+                    <option
+                        value="{{ profile.profile_code }}"
+                        data-category-ids="{{ profile.device_category_ids | join(',') }}"
+                        {% if form_data.get(
+                            'profile_code'
+                        ) == profile.profile_code %}
+                        selected
+                        {% endif %}
+                    >
+                        {{ profile.profile_name }}
+                        — {{ profile.profile_code }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+
+            <label>
+                Firmware version
+
+                <input
+                    id="firmware_version"
+                    name="firmware_version"
+                    type="text"
+                    maxlength="100"
+                    placeholder="1.5"
+                    value="{{ form_data.get(
+                        'firmware_version',
+                        ''
+                    ) }}"
+                >
+            </label>
+
+            <label>
+                Identifier type
+
+                <select
+                    id="new_identifier_type"
+                    name="identifier_type"
+                >
+                    <option
+                        value="MQTT_UID"
+                        {% if form_data.get(
+                            'identifier_type',
+                            'MQTT_UID'
+                        ) == 'MQTT_UID' %}
+                        selected
+                        {% endif %}
+                    >
+                        MQTT UID
+                    </option>
+                </select>
+            </label>
+
+            <label class="full-width">
+                MQTT UID
+
+                <span class="field-help">
+                    Eight hexadecimal byte pairs separated by colons.
+                </span>
+
+                <input
+                    id="new_identifier_value"
+                    name="identifier_value"
+                    type="text"
+                    maxlength="255"
+                    placeholder="80:34:28:16:09:eb:00:01"
+                    value="{{ form_data.get(
+                        'identifier_value',
+                        ''
+                    ) }}"
+                >
+            </label>
+        </div>
+    </div>
+
+    <div class="wizard-step-actions">
+        <a
+            class="button-link secondary"
+            href="/onboarding/gateway?draft={{ draft_token }}"
+        >
+            Back
+        </a>
+
+        <button type="submit">
+            Save &amp; Continue
+        </button>
+    </div>
+</form>
+{% endblock %}
+
+{% block onboarding_scripts %}
+<script
+    src="{{ url_for(
+        'static',
+        path='/js/onboarding-device.js'
+    ) }}"
+    defer
+></script>
+{% endblock %}

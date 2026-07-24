@@ -1,0 +1,276 @@
+{% extends "onboarding/layout.html" %}
+
+{% block onboarding_content %}
+<form
+    method="post"
+    action="/onboarding/site"
+    class="form-card"
+    id="site_form"
+    novalidate
+>
+    <input
+        type="hidden"
+        name="draft_token"
+        value="{{ draft_token }}"
+    >
+
+    <div class="section-heading">
+        <span class="step-number">2</span>
+
+        <div>
+            <h3>Site</h3>
+            <p>
+                Configure the customer facility under the selected
+                organization.
+            </p>
+        </div>
+    </div>
+
+    <div class="context-summary">
+        <span class="context-summary-label">
+            Organization
+        </span>
+
+        <strong>{{ organization_label }}</strong>
+
+        <a
+            href="/onboarding/organization?draft={{ draft_token }}"
+        >
+            Change
+        </a>
+    </div>
+
+    {% if organization_mode == "USE_EXISTING" %}
+    <div class="choice-cards">
+        <label class="choice-card">
+            <input
+                type="radio"
+                name="site_mode"
+                value="USE_EXISTING"
+                {% if form_data.get('site_mode') == 'USE_EXISTING' %}
+                checked
+                {% endif %}
+            >
+
+            <span>
+                <strong>Use existing site</strong>
+                <small>
+                    Select a site already belonging to this organization.
+                </small>
+            </span>
+        </label>
+
+        <label class="choice-card">
+            <input
+                type="radio"
+                name="site_mode"
+                value="CREATE_NEW"
+                {% if form_data.get(
+                    'site_mode',
+                    'CREATE_NEW'
+                ) == 'CREATE_NEW' %}
+                checked
+                {% endif %}
+            >
+
+            <span>
+                <strong>Create new site</strong>
+                <small>
+                    Add a new facility under the selected organization.
+                </small>
+            </span>
+        </label>
+    </div>
+    {% else %}
+    <input
+        type="hidden"
+        name="site_mode"
+        value="CREATE_NEW"
+    >
+
+    <div class="information-card">
+        <strong>New organization selected</strong>
+        <p>
+            Create the first site for this organization. Existing sites are
+            unavailable because the organization has not yet been submitted.
+        </p>
+    </div>
+    {% endif %}
+
+    <div
+        id="existing_site_fields"
+        class="conditional-section"
+        hidden
+    >
+        <div class="form-grid">
+            <label class="full-width">
+                Existing site
+
+                <span class="field-help">
+                    Only active sites belonging to the selected organization
+                    are shown.
+                </span>
+
+                <select
+                    id="existing_site_id"
+                    name="existing_site_id"
+                >
+                    <option value="">
+                        Select a site
+                    </option>
+
+                    {% for site in sites %}
+                    <option
+                        value="{{ site.id }}"
+                        {% if form_data.get(
+                            'existing_site_id'
+                        ) == site.id|string %}
+                        selected
+                        {% endif %}
+                    >
+                        {{ site.site_name }}
+                        — {{ site.site_code }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+        </div>
+    </div>
+
+    <div
+        id="create_site_fields"
+        class="conditional-section"
+    >
+        <div class="form-grid">
+            <label>
+                Site name
+
+                <span class="field-help">
+                    Facility, campus, hotel, hospital, or plant name.
+                </span>
+
+                <input
+                    id="site_name"
+                    name="site_name"
+                    type="text"
+                    maxlength="200"
+                    placeholder="Hotel Hyderabad"
+                    value="{{ form_data.get('site_name', '') }}"
+                >
+            </label>
+
+            <label>
+                Recommended site code
+
+                <span class="field-help">
+                    Generated from the site name and editable before saving.
+                </span>
+
+                <input
+                    id="site_code"
+                    name="site_code"
+                    type="text"
+                    maxlength="100"
+                    pattern="[A-Za-z0-9_]+"
+                    placeholder="HOTEL_HYDERABAD"
+                    value="{{ form_data.get('site_code', '') }}"
+                >
+            </label>
+
+            <label>
+                Timezone
+
+                <span class="field-help">
+                    IANA timezone used for dashboards and reporting.
+                </span>
+
+                <select
+                    id="site_timezone"
+                    name="site_timezone"
+                >
+                    {% set selected_timezone = form_data.get(
+                        'site_timezone',
+                        'Asia/Kolkata'
+                    ) %}
+
+                    <option
+                        value="Asia/Kolkata"
+                        {% if selected_timezone == 'Asia/Kolkata' %}
+                        selected
+                        {% endif %}
+                    >
+                        Asia/Kolkata
+                    </option>
+
+                    <option
+                        value="Asia/Dubai"
+                        {% if selected_timezone == 'Asia/Dubai' %}
+                        selected
+                        {% endif %}
+                    >
+                        Asia/Dubai
+                    </option>
+
+                    <option
+                        value="Asia/Singapore"
+                        {% if selected_timezone == 'Asia/Singapore' %}
+                        selected
+                        {% endif %}
+                    >
+                        Asia/Singapore
+                    </option>
+
+                    <option
+                        value="UTC"
+                        {% if selected_timezone == 'UTC' %}
+                        selected
+                        {% endif %}
+                    >
+                        UTC
+                    </option>
+                </select>
+            </label>
+
+            <label class="full-width">
+                Site address
+
+                <span class="field-help">
+                    Optional physical address used in reports and site
+                    administration.
+                </span>
+
+                <textarea
+                    id="site_address"
+                    name="site_address"
+                    rows="4"
+                    maxlength="1000"
+                    placeholder="Full site address"
+                >{{ form_data.get('site_address', '') }}</textarea>
+            </label>
+        </div>
+    </div>
+
+    <div class="wizard-step-actions">
+        <a
+            class="button-link secondary"
+            href="/onboarding/organization?draft={{ draft_token }}"
+        >
+            Back
+        </a>
+
+        <button type="submit">
+            Save &amp; Continue
+        </button>
+    </div>
+</form>
+{% endblock %}
+
+{% block onboarding_scripts %}
+<script
+    src="{{ url_for(
+        'static',
+        path='/js/onboarding-site.js'
+    ) }}"
+    defer
+></script>
+{% endblock %}

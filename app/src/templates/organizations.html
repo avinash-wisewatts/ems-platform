@@ -1,0 +1,197 @@
+{% extends "base.html" %}
+
+{% block title %}
+Organizations | WiseWatts EMS
+{% endblock %}
+
+{% block breadcrumb %}
+<nav class="breadcrumb" aria-label="Breadcrumb">
+    <a href="/administration">Administration</a>
+    <span aria-hidden="true">/</span>
+    <span class="breadcrumb-current">Organizations</span>
+</nav>
+{% endblock %}
+
+{% block content %}
+<section class="administration-page">
+    <header class="administration-page-header">
+        <div>
+            <p class="eyebrow">PLATFORM ADMINISTRATION</p>
+            <h2>{{ page_title }}</h2>
+            <p>
+                Create an EMS organization independently of sites, assets,
+                gateways, and devices.
+            </p>
+        </div>
+
+        <a class="button-link" href="/administration">
+            Back to administration
+        </a>
+    </header>
+
+    {% if error %}
+    <div class="form-error" role="alert">
+        {{ error }}
+    </div>
+    {% endif %}
+
+    {% if result %}
+    <section class="form-card">
+        <div class="section-heading">
+            <div>
+                <h3>Organization created</h3>
+                <p>
+                    The EMS organization was created successfully.
+                </p>
+            </div>
+        </div>
+
+        <dl>
+            <dt>Name</dt>
+            <dd>{{ result.organization_name }}</dd>
+
+            <dt>Code</dt>
+            <dd>{{ result.organization_code }}</dd>
+
+            <dt>Timezone</dt>
+            <dd>{{ result.timezone }}</dd>
+
+            <dt>Lifecycle status</dt>
+            <dd>{{ result.lifecycle_status }}</dd>
+
+            <dt>Organization ID</dt>
+            <dd>{{ result.organization_id }}</dd>
+
+            <dt>Audit transaction ID</dt>
+            <dd>{{ result.audit_transaction_id }}</dd>
+            {% if result.grafana_provisioning %}
+            <dt>Grafana provisioning</dt>
+            <dd>
+                {{ result.grafana_provisioning.provisioning_status }}
+            </dd>
+
+            {% if result.grafana_provisioning.grafana_org_id %}
+            <dt>Grafana organization ID</dt>
+            <dd>
+                {{ result.grafana_provisioning.grafana_org_id }}
+            </dd>
+            {% endif %}
+
+            {% if result.grafana_provisioning.last_error %}
+            <dt>Grafana provisioning error</dt>
+            <dd>
+                {{ result.grafana_provisioning.last_error }}
+            </dd>
+            {% endif %}
+            {% endif %}
+        </dl>
+    </section>
+    {% endif %}
+
+    <form
+        method="post"
+        action="/administration/organizations"
+        class="form-card"
+        novalidate
+    >
+        <div class="section-heading">
+            <div>
+                <h3>Create organization</h3>
+                <p>
+                    This creates only the tenant boundary. Downstream entities
+                    remain separate.
+                </p>
+            </div>
+        </div>
+
+        <div class="form-grid">
+            <label>
+                Organization name
+
+                <span class="field-help">
+                    Customer or legal operating name.
+                </span>
+
+                <input
+                    name="organization_name"
+                    type="text"
+                    maxlength="200"
+                    autocomplete="organization"
+                    required
+                    value="{{ form_data.get('organization_name', '') }}"
+                >
+            </label>
+
+            <label>
+                Organization code
+
+                <span class="field-help">
+                    Use only A-Z, 0-9, and underscore.
+                </span>
+
+                <input
+                    name="organization_code"
+                    type="text"
+                    maxlength="100"
+                    pattern="[A-Za-z0-9_]+"
+                    required
+                    value="{{ form_data.get('organization_code', '') }}"
+                >
+            </label>
+
+            <label>
+                IANA timezone
+
+                <span class="field-help">
+                    Example: Asia/Kolkata
+                </span>
+
+                <input
+                    name="organization_timezone"
+                    type="text"
+                    maxlength="100"
+                    required
+                    value="{{ form_data.get(
+                        'organization_timezone',
+                        'Asia/Kolkata'
+                    ) }}"
+                >
+            </label>
+
+            <label>
+                Lifecycle status
+
+                <select
+                    name="organization_lifecycle_status"
+                    required
+                >
+                    {% for lifecycle_status in lifecycle_statuses %}
+                    <option
+                        value="{{ lifecycle_status }}"
+                        {% if form_data.get(
+                            'organization_lifecycle_status',
+                            'ACTIVE'
+                        ) == lifecycle_status %}
+                        selected
+                        {% endif %}
+                    >
+                        {{ lifecycle_status }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+        </div>
+
+        <div class="wizard-step-actions">
+            <span class="field-help">
+                Grafana provisioning will be added immediately after EMS
+                organization creation in Story 2.2.
+            </span>
+
+            <button type="submit">
+                Create organization
+            </button>
+        </div>
+    </form>
+</section>
+{% endblock %}

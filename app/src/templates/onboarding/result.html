@@ -1,0 +1,166 @@
+{% extends "onboarding/layout.html" %}
+
+{% block onboarding_content %}
+<section class="form-card">
+    <div class="section-heading">
+        <span class="step-number">✓</span>
+
+        <div>
+            <h3>Onboarding completed</h3>
+            <p>
+                The production metadata transaction completed successfully.
+            </p>
+        </div>
+    </div>
+
+    <div class="alert success-card">
+        <strong>Submission successful.</strong>
+        This onboarding record is read-only and cannot be edited or submitted
+        again.
+    </div>
+
+    <div class="submission-metadata">
+        <div>
+            <span>Draft token</span>
+            <strong>{{ draft_token }}</strong>
+        </div>
+
+        <div>
+            <span>Status</span>
+            <strong>{{ record.status }}</strong>
+        </div>
+
+        <div>
+            <span>Submitted by</span>
+            <strong>{{ record.requested_by }}</strong>
+        </div>
+
+        <div>
+            <span>Submitted at</span>
+            <strong>{{ record.submitted_at }}</strong>
+        </div>
+    </div>
+
+    <div class="review-result-grid">
+        <div>
+            <span>Organization</span>
+            <strong>
+                {{ result.organization_code }}
+                <br>
+                {{ result.organization_id }}
+            </strong>
+        </div>
+
+        <div>
+            <span>Site</span>
+            <strong>
+                {{ result.site_code }}
+                <br>
+                {{ result.site_id }}
+            </strong>
+        </div>
+
+        <div>
+            <span>Gateway ID</span>
+            <strong>{{ result.gateway_id }}</strong>
+        </div>
+
+        <div>
+            <span>Device</span>
+            <strong>
+                {{ result.device_external_id }}
+                <br>
+                {{ result.device_id }}
+            </strong>
+        </div>
+
+        <div>
+            <span>Device category</span>
+            <strong>{{ result.device_category_name }}</strong>
+        </div>
+
+        <div>
+            <span>Profile</span>
+            <strong>{{ result.profile_code }}</strong>
+        </div>
+
+        <div>
+            <span>Identifier</span>
+            <strong>
+                {{ result.identifier_type }}
+                <br>
+                {{ result.identifier_value }}
+            </strong>
+        </div>
+
+        <div>
+            <span>Asset</span>
+            <strong>
+                {{ result.asset_name }}
+                <br>
+                {{ result.asset_id }}
+            </strong>
+        </div>
+
+        <div>
+            <span>Metering requirement</span>
+            <strong>
+                {{ result.metering_requirement.replace('_', ' ') | title }}
+            </strong>
+        </div>
+
+        <div>
+            <span>Relationship</span>
+            <strong>
+                {{ result.relationship_type.replace('_', ' ') | title }}
+            </strong>
+        </div>
+
+        <div>
+            <span>Location mode</span>
+            <strong>
+                {{ result.location_mode.replace('_', ' ') | title }}
+            </strong>
+        </div>
+
+        {% if result.building_id %}
+        <div>
+            <span>Building ID</span>
+            <strong>{{ result.building_id }}</strong>
+        </div>
+        {% endif %}
+
+        {% if result.floor_id %}
+        <div>
+            <span>Floor ID</span>
+            <strong>{{ result.floor_id }}</strong>
+        </div>
+        {% endif %}
+
+        {% if result.space_id %}
+        <div>
+            <span>Space ID</span>
+            <strong>{{ result.space_id }}</strong>
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="information-card">
+        <strong>Immutable submission record</strong>
+        <p>
+            Editing links are intentionally unavailable after submission.
+            Production records must be managed through controlled
+            administration workflows rather than by reopening this draft.
+        </p>
+    </div>
+
+    <div class="wizard-step-actions">
+        <a
+            class="button-link secondary"
+            href="/onboarding/organization"
+        >
+            Start another onboarding
+        </a>
+    </div>
+</section>
+{% endblock %}

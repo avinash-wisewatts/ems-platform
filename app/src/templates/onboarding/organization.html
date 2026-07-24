@@ -1,0 +1,194 @@
+{% extends "onboarding/layout.html" %}
+
+{% block onboarding_content %}
+<form
+    method="post"
+    action="/onboarding/organization"
+    class="form-card"
+    id="organization_form"
+    novalidate
+>
+    {% if draft_token %}
+    <input
+        type="hidden"
+        name="draft_token"
+        value="{{ draft_token }}"
+    >
+    {% endif %}
+
+    <div class="section-heading">
+        <span class="step-number">1</span>
+
+        <div>
+            <h3>Organization</h3>
+            <p>
+                Select an existing EMS tenant or create a new organization.
+            </p>
+        </div>
+    </div>
+
+    <div class="choice-cards">
+        <label class="choice-card">
+            <input
+                type="radio"
+                name="organization_mode"
+                value="USE_EXISTING"
+                {% if form_data.get('organization_mode') == 'USE_EXISTING' %}
+                checked
+                {% endif %}
+            >
+
+            <span>
+                <strong>Use existing organization</strong>
+                <small>
+                    Continue onboarding under an active organization already
+                    configured in EMS.
+                </small>
+            </span>
+        </label>
+
+        <label class="choice-card">
+            <input
+                type="radio"
+                name="organization_mode"
+                value="CREATE_NEW"
+                {% if form_data.get(
+                    'organization_mode',
+                    'CREATE_NEW'
+                ) == 'CREATE_NEW' %}
+                checked
+                {% endif %}
+            >
+
+            <span>
+                <strong>Create new organization</strong>
+                <small>
+                    Create a new tenant boundary during final submission.
+                </small>
+            </span>
+        </label>
+    </div>
+
+    <div
+        id="existing_organization_fields"
+        class="conditional-section"
+        hidden
+    >
+        <div class="form-grid">
+            <label class="full-width">
+                Existing organization
+
+                <span class="field-help">
+                    Search by organization name or organization code.
+                </span>
+
+                <select
+                    id="existing_organization_id"
+                    name="existing_organization_id"
+                >
+                    <option value="">
+                        Select an organization
+                    </option>
+
+                    {% for organization in organizations %}
+                    <option
+                        value="{{ organization.id }}"
+                        {% if form_data.get(
+                            'existing_organization_id'
+                        ) == organization.id|string %}
+                        selected
+                        {% endif %}
+                    >
+                        {{ organization.organization_name }}
+                        — {{ organization.organization_code }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+        </div>
+    </div>
+
+    <div
+        id="create_organization_fields"
+        class="conditional-section"
+    >
+        <div class="form-grid">
+            <label>
+                Organization name
+
+                <span class="field-help">
+                    Customer or legal operating name.
+                </span>
+
+                <input
+                    id="organization_name"
+                    name="organization_name"
+                    type="text"
+                    maxlength="200"
+                    autocomplete="organization"
+                    placeholder="Good Luck Inc"
+                    value="{{ form_data.get('organization_name', '') }}"
+                >
+            </label>
+
+            <label>
+                Recommended organization code
+
+                <span class="field-help">
+                    Generated from the name and editable before saving.
+                </span>
+
+                <input
+                    id="organization_code"
+                    name="organization_code"
+                    type="text"
+                    maxlength="100"
+                    pattern="[A-Za-z0-9_]+"
+                    placeholder="GOOD_LUCK_INC"
+                    value="{{ form_data.get('organization_code', '') }}"
+                >
+            </label>
+
+            <label class="full-width">
+                Description
+
+                <span class="field-help">
+                    Optional internal description for this EMS tenant.
+                </span>
+
+                <textarea
+                    id="organization_description"
+                    name="organization_description"
+                    rows="4"
+                    maxlength="1000"
+                    placeholder="Production EMS tenant"
+                >{{ form_data.get(
+                    'organization_description',
+                    ''
+                ) }}</textarea>
+            </label>
+        </div>
+    </div>
+
+    <div class="wizard-step-actions">
+        <span class="field-help">
+            This saves an onboarding draft. Production records are created
+            only after final review.
+        </span>
+
+        <button type="submit">
+            Save &amp; Continue
+        </button>
+    </div>
+</form>
+{% endblock %}
+
+{% block onboarding_scripts %}
+<script
+    src="{{ url_for(
+        'static',
+        path='/js/onboarding-organization.js'
+    ) }}"
+    defer
+></script>
+{% endblock %}

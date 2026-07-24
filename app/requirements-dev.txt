@@ -1,0 +1,10 @@
+-r requirements.txt
+
+# Python test framework.
+pytest==8.3.5
+
+# Async test support for authentication-service tests added later.
+pytest-asyncio==0.25.3
+
+# Coverage reporting for production quality gates.
+pytest-cov==6.0.0

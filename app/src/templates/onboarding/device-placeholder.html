@@ -1,0 +1,35 @@
+{% extends "onboarding/layout.html" %}
+
+{% block onboarding_content %}
+<section class="form-card">
+    <div class="section-heading">
+        <span class="step-number">5</span>
+
+        <div>
+            <h3>Gateway saved</h3>
+            <p>
+                The gateway configuration is stored in the onboarding draft.
+                No production gateway has been created yet.
+            </p>
+        </div>
+    </div>
+
+    <div class="alert success-card">
+        <strong>Gateway saved successfully.</strong>
+        Device configuration is the next onboarding module.
+    </div>
+
+    <div class="wizard-step-actions">
+        <a
+            class="button-link secondary"
+            href="/onboarding/gateway?draft={{ draft_token }}"
+        >
+            Back to gateway
+        </a>
+
+        <button type="button" disabled>
+            Device module next
+        </button>
+    </div>
+</section>
+{% endblock %}

@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+
+{% block title %}
+{{ page_title }} | WiseWatts EMS
+{% endblock %}
+
+{% block nav_onboarding %}is-active{% endblock %}
+
+{% block breadcrumb %}
+<nav
+    class="breadcrumb"
+    aria-label="Breadcrumb"
+>
+    <a href="/onboarding">Onboarding</a>
+
+    {% if current_step %}
+    <span class="breadcrumb-separator">›</span>
+    <span class="breadcrumb-current">
+        {{ current_step }}
+    </span>
+    {% endif %}
+</nav>
+{% endblock %}
+
+{% block content %}
+<section class="onboarding-page">
+    <header class="onboarding-page-header">
+        <div>
+            <p class="eyebrow">CONTROLLED PROVISIONING</p>
+            <h2>{{ page_title }}</h2>
+
+            {% if page_description %}
+            <p>{{ page_description }}</p>
+            {% endif %}
+        </div>
+    </header>
+
+    <nav
+        class="onboarding-progress"
+        aria-label="Onboarding progress"
+    >
+        {% set steps = [
+            ("organization", "Organization"),
+            ("site", "Site"),
+            ("location", "Location"),
+            ("gateway", "Gateway"),
+            ("device", "Device"),
+            ("asset", "Asset"),
+            ("review", "Review")
+        ] %}
+
+        {% for step_key, step_label in steps %}
+        <div
+            class="progress-step
+            {% if step_key == active_step %}is-current{% endif %}
+            {% if step_key in completed_steps %}is-complete{% endif %}"
+        >
+            <span class="progress-indicator">
+                {% if step_key in completed_steps %}
+                ✓
+                {% else %}
+                {{ loop.index }}
+                {% endif %}
+            </span>
+
+            <span class="progress-label">
+                {{ step_label }}
+            </span>
+        </div>
+        {% endfor %}
+    </nav>
+
+    {% if error %}
+    <div class="alert" role="alert">
+        <strong>Unable to continue.</strong>
+        {{ error }}
+    </div>
+    {% endif %}
+
+    <section class="onboarding-stage">
+        {% block onboarding_content %}{% endblock %}
+    </section>
+</section>
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+{% block onboarding_scripts %}{% endblock %}
+{% endblock %}

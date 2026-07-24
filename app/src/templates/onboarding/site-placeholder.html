@@ -1,0 +1,35 @@
+{% extends "onboarding/layout.html" %}
+
+{% block onboarding_content %}
+<section class="form-card">
+    <div class="section-heading">
+        <span class="step-number">2</span>
+
+        <div>
+            <h3>Organization saved</h3>
+            <p>
+                The onboarding draft is active. No production organization
+                record has been created yet.
+            </p>
+        </div>
+    </div>
+
+    <div class="alert success-card">
+        <strong>Draft saved successfully.</strong>
+        Continue with the Site module after it is implemented.
+    </div>
+
+    <div class="wizard-step-actions">
+        <a
+            class="button-link secondary"
+            href="/onboarding/organization?draft={{ draft_token }}"
+        >
+            Back to organization
+        </a>
+
+        <button type="button" disabled>
+            Site module next
+        </button>
+    </div>
+</section>
+{% endblock %}

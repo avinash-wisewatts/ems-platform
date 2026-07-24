@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+
+{% block title %}
+Administration workspace | WiseWatts EMS
+{% endblock %}
+
+{% block breadcrumb %}
+<nav class="breadcrumb" aria-label="Breadcrumb">
+    <span class="breadcrumb-current">Administration</span>
+</nav>
+{% endblock %}
+
+{% block content %}
+<section class="administration-page">
+    <header class="administration-page-header">
+        <div>
+            <p class="eyebrow">SHARED ADMINISTRATION</p>
+            <h2>{{ page_title }}</h2>
+            <p>
+                Use the guided onboarding workflow today. Independent
+                administration areas will become available here as their
+                database contracts and authorization checks are completed.
+            </p>
+        </div>
+
+        <a class="button-link" href="/onboarding">
+            Open onboarding
+        </a>
+    </header>
+
+    {% for section in administration_navigation %}
+    <section class="administration-section">
+        <div class="administration-section-heading">
+            <h3>{{ section.label }}</h3>
+        </div>
+
+        <div class="administration-card-grid">
+            {% for item in section.items %}
+            {% if item.key != "overview" %}
+            <article class="administration-card">
+                <div class="administration-card-icon">{{ item.icon }}</div>
+                <div>
+                    <h4>{{ item.label }}</h4>
+                    <p>{{ item.description }}</p>
+                </div>
+
+                {% if item.href %}
+                <a href="{{ item.href }}">Open</a>
+                {% else %}
+                <span class="administration-card-status">Planned</span>
+                {% endif %}
+            </article>
+            {% endif %}
+            {% endfor %}
+        </div>
+    </section>
+    {% endfor %}
+</section>
+{% endblock %}

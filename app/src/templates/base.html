@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1"
+    >
+
+    <title>
+        {% block title %}
+        WiseWatts EMS Administration
+        {% endblock %}
+    </title>
+
+    <link
+        rel="stylesheet"
+        href="{{ url_for('static', path='/css/app.css') }}"
+    >
+
+    {% block head %}{% endblock %}
+</head>
+
+<body>
+    <div class="admin-shell">
+        <aside class="admin-sidebar">
+            <div class="sidebar-brand">
+                <div class="sidebar-brand-mark">
+                    WW
+                </div>
+
+                <div>
+                    <p class="eyebrow">WISEWATTS EMS</p>
+                    <h1>Administration</h1>
+                </div>
+            </div>
+
+            <nav
+                class="sidebar-navigation"
+                aria-label="Administration navigation"
+            >
+                {% for section in administration_navigation %}
+                <div class="sidebar-section-label">
+                    {{ section.label }}
+                </div>
+
+                {% for item in section.items %}
+                {% if item.href %}
+                <a
+                    class="sidebar-link
+                    {% if active_navigation_key == item.key %}is-active{% endif %}"
+                    href="{{ item.href }}"
+                >
+                    <span class="sidebar-icon">{{ item.icon }}</span>
+                    <span>{{ item.label }}</span>
+                </a>
+                {% else %}
+                <span
+                    class="sidebar-link"
+                    aria-disabled="true"
+                    title="{{ item.description }}"
+                >
+                    <span class="sidebar-icon">{{ item.icon }}</span>
+                    <span>{{ item.label }}</span>
+                    <span class="sidebar-badge">Planned</span>
+                </span>
+                {% endif %}
+                {% endfor %}
+                {% endfor %}
+            </nav>
+
+            <div class="sidebar-footer">
+                <span class="status-dot"></span>
+
+                <div>
+                    <strong>Environment</strong>
+                    <span>{{ environment }}</span>
+                </div>
+            </div>
+        </aside>
+
+        <div class="admin-workspace">
+            <header class="workspace-header">
+                <div>
+                    {% block breadcrumb %}
+                    <nav
+                        class="breadcrumb"
+                        aria-label="Breadcrumb"
+                    >
+                        <span>Administration</span>
+                    </nav>
+                    {% endblock %}
+                </div>
+
+                <div class="workspace-header-actions">
+                    <div class="workspace-status">
+                        <span class="status-dot"></span>
+                        Database connected
+                    </div>
+
+                    {% if current_portal_user %}
+                    <div
+                        class="portal-user"
+                        aria-label="Signed-in portal user"
+                    >
+                        <div class="portal-user-identity">
+                            <strong>
+                                {{ current_portal_user.display_name }}
+                            </strong>
+
+                            <span>
+                                {{ current_portal_user.role_code }}
+                            </span>
+                        </div>
+
+                        <form
+                            method="post"
+                            action="/logout"
+                            class="portal-logout-form"
+                        >
+                            <button
+                                type="submit"
+                                class="portal-logout-button"
+                            >
+                                Sign out
+                            </button>
+                        </form>
+                    </div>
+                    {% endif %}
+                </div>
+            </header>
+
+            <main class="workspace-content">
+                {% block content %}{% endblock %}
+            </main>
+        </div>
+    </div>
+
+    {% block scripts %}{% endblock %}
+</body>
+</html>

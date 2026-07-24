@@ -1,0 +1,312 @@
+{% extends "onboarding/layout.html" %}
+
+{% block onboarding_content %}
+<form
+    method="post"
+    action="/onboarding/gateway"
+    class="form-card"
+    id="gateway_form"
+    novalidate
+>
+    <input
+        type="hidden"
+        name="draft_token"
+        value="{{ draft_token }}"
+    >
+
+    <div class="section-heading">
+        <span class="step-number">4</span>
+
+        <div>
+            <h3>Gateway</h3>
+            <p>
+                Select an existing gateway or define the communications
+                gateway that will deliver telemetry to the EMS platform.
+            </p>
+        </div>
+    </div>
+
+    <div class="context-summary">
+        <span class="context-summary-label">
+            Site
+        </span>
+
+        <strong>{{ site_label }}</strong>
+
+        <a href="/onboarding/location?draft={{ draft_token }}">
+            Change location
+        </a>
+    </div>
+
+    {% if allow_existing_gateway %}
+    <div class="choice-cards">
+        <label class="choice-card">
+            <input
+                type="radio"
+                name="gateway_mode"
+                value="USE_EXISTING"
+                {% if form_data.get(
+                    'gateway_mode'
+                ) == 'USE_EXISTING' %}
+                checked
+                {% endif %}
+            >
+
+            <span>
+                <strong>Use existing gateway</strong>
+                <small>
+                    Select a gateway already registered under this site.
+                </small>
+            </span>
+        </label>
+
+        <label class="choice-card">
+            <input
+                type="radio"
+                name="gateway_mode"
+                value="CREATE_NEW"
+                {% if form_data.get(
+                    'gateway_mode',
+                    'CREATE_NEW'
+                ) == 'CREATE_NEW' %}
+                checked
+                {% endif %}
+            >
+
+            <span>
+                <strong>Create new gateway</strong>
+                <small>
+                    Register a new communications gateway.
+                </small>
+            </span>
+        </label>
+    </div>
+    {% else %}
+    <input
+        type="hidden"
+        name="gateway_mode"
+        value="CREATE_NEW"
+    >
+
+    <div class="information-card">
+        <strong>New site or no existing gateways</strong>
+        <p>
+            Create a gateway for this onboarding workflow. Existing gateways
+            are available only for production sites that already have one.
+        </p>
+    </div>
+    {% endif %}
+
+    <div
+        id="existing_gateway_fields"
+        class="conditional-section"
+        hidden
+    >
+        <div class="form-grid">
+            <label class="full-width">
+                Existing gateway
+
+                <span class="field-help">
+                    Only gateways belonging to the selected organization and
+                    site are shown.
+                </span>
+
+                <select
+                    id="existing_gateway_id"
+                    name="existing_gateway_id"
+                >
+                    <option value="">
+                        Select a gateway
+                    </option>
+
+                    {% for gateway in gateways %}
+                    <option
+                        value="{{ gateway.id }}"
+                        {% if form_data.get(
+                            'existing_gateway_id'
+                        ) == gateway.id|string %}
+                        selected
+                        {% endif %}
+                    >
+                        {{ gateway.gateway_name }}
+                        — {{ gateway.external_id }}
+                        {% if gateway.gateway_vendor or gateway.gateway_model %}
+                        — {{ gateway.gateway_vendor or '' }}
+                        {{ gateway.gateway_model or '' }}
+                        {% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+        </div>
+    </div>
+
+    <div
+        id="create_gateway_fields"
+        class="conditional-section"
+    >
+        <div class="form-grid">
+            <label>
+                Gateway name
+
+                <span class="field-help">
+                    Friendly operational name for the gateway.
+                </span>
+
+                <input
+                    id="gateway_name"
+                    name="gateway_name"
+                    type="text"
+                    maxlength="200"
+                    placeholder="Eniscope Chiller Plant"
+                    value="{{ form_data.get('gateway_name', '') }}"
+                >
+            </label>
+
+            <label>
+                Recommended external ID
+
+                <span class="field-help">
+                    Generated from the gateway name and editable before saving.
+                </span>
+
+                <input
+                    id="gateway_external_id"
+                    name="gateway_external_id"
+                    type="text"
+                    maxlength="100"
+                    pattern="[A-Za-z0-9_]+"
+                    placeholder="ENISCOPE_CHILLER_PLANT"
+                    value="{{ form_data.get(
+                        'gateway_external_id',
+                        ''
+                    ) }}"
+                >
+            </label>
+
+            <label>
+                Gateway manufacturer
+
+                <span class="field-help">
+                    Select a known manufacturer or enter a new one.
+                </span>
+
+                <input
+                    id="gateway_vendor"
+                    name="gateway_vendor"
+                    type="text"
+                    maxlength="200"
+                    list="gateway_vendor_catalog"
+                    placeholder="ENISCOPE"
+                    value="{{ form_data.get('gateway_vendor', '') }}"
+                >
+
+                <datalist id="gateway_vendor_catalog">
+                    {% for model in gateway_models %}
+                    {% if model.vendor %}
+                    <option value="{{ model.vendor }}"></option>
+                    {% endif %}
+                    {% endfor %}
+                </datalist>
+            </label>
+
+            <label>
+                Gateway model
+
+                <span class="field-help">
+                    Existing model suggestions are shown from the catalog.
+                </span>
+
+                <input
+                    id="gateway_model"
+                    name="gateway_model"
+                    type="text"
+                    maxlength="200"
+                    list="gateway_model_catalog"
+                    placeholder="Eniscope Gateway"
+                    value="{{ form_data.get('gateway_model', '') }}"
+                >
+
+                <datalist id="gateway_model_catalog">
+                    {% for model in gateway_models %}
+                    <option
+                        value="{{ model.model }}"
+                        data-vendor="{{ model.vendor or '' }}"
+                        data-protocol="{{ model.protocol or '' }}"
+                    ></option>
+                    {% endfor %}
+                </datalist>
+            </label>
+
+            <label class="full-width">
+                Cloud uplink protocol
+
+                <span class="field-help">
+                    Protocol used by the gateway to deliver telemetry to the
+                    cloud EMS platform.
+                </span>
+
+                <select
+                    id="gateway_protocol"
+                    name="gateway_protocol"
+                >
+                    {% set selected_protocol = form_data.get(
+                        'gateway_protocol',
+                        'MQTT'
+                    ) %}
+
+                    <option
+                        value="MQTT"
+                        {% if selected_protocol == 'MQTT' %}
+                        selected
+                        {% endif %}
+                    >
+                        MQTT over TLS
+                    </option>
+
+                    <option
+                        value="HTTP API"
+                        {% if selected_protocol == 'HTTP API' %}
+                        selected
+                        {% endif %}
+                    >
+                        HTTPS API
+                    </option>
+
+                    <option
+                        value="OPC-UA"
+                        {% if selected_protocol == 'OPC-UA' %}
+                        selected
+                        {% endif %}
+                    >
+                        OPC-UA
+                    </option>
+                </select>
+            </label>
+        </div>
+    </div>
+
+    <div class="wizard-step-actions">
+        <a
+            class="button-link secondary"
+            href="/onboarding/location?draft={{ draft_token }}"
+        >
+            Back
+        </a>
+
+        <button type="submit">
+            Save &amp; Continue
+        </button>
+    </div>
+</form>
+{% endblock %}
+
+{% block onboarding_scripts %}
+<script
+    src="{{ url_for(
+        'static',
+        path='/js/onboarding-gateway.js'
+    ) }}"
+    defer
+></script>
+{% endblock %}

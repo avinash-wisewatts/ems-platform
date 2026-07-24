@@ -1,0 +1,291 @@
+{% extends "onboarding/layout.html" %}
+
+{% block onboarding_content %}
+<form
+    method="post"
+    action="/onboarding/location"
+    class="form-card"
+    id="location_form"
+    novalidate
+>
+    <input
+        type="hidden"
+        name="draft_token"
+        value="{{ draft_token }}"
+    >
+
+    <div class="section-heading">
+        <span class="step-number">3</span>
+
+        <div>
+            <h3>Physical location</h3>
+            <p>
+                Define where the gateway and operational asset are installed.
+            </p>
+        </div>
+    </div>
+
+    <div class="context-summary">
+        <span class="context-summary-label">Site</span>
+        <strong>{{ site_label }}</strong>
+
+        <a href="/onboarding/site?draft={{ draft_token }}">
+            Change
+        </a>
+    </div>
+
+    <div class="choice-cards location-choice-cards">
+        <label class="choice-card">
+            <input
+                type="radio"
+                name="location_mode"
+                value="SITE_ONLY"
+                {% if form_data.get(
+                    'location_mode',
+                    'SITE_ONLY'
+                ) == 'SITE_ONLY' %}
+                checked
+                {% endif %}
+            >
+
+            <span>
+                <strong>Site level</strong>
+                <small>
+                    No building, floor, or room assignment is required.
+                </small>
+            </span>
+        </label>
+
+        <label class="choice-card">
+            <input
+                type="radio"
+                name="location_mode"
+                value="CREATE_LOCATION"
+                {% if form_data.get(
+                    'location_mode'
+                ) == 'CREATE_LOCATION' %}
+                checked
+                {% endif %}
+            >
+
+            <span>
+                <strong>Create location hierarchy</strong>
+                <small>
+                    Create a building, floor, and space for this installation.
+                </small>
+            </span>
+        </label>
+
+        <label
+            class="choice-card
+            {% if not spaces %}is-unavailable{% endif %}"
+        >
+            <input
+                type="radio"
+                name="location_mode"
+                value="USE_EXISTING_SPACE"
+                {% if not spaces %}disabled{% endif %}
+                {% if form_data.get(
+                    'location_mode'
+                ) == 'USE_EXISTING_SPACE' %}
+                checked
+                {% endif %}
+            >
+
+            <span>
+                <strong>Use existing space</strong>
+                <small>
+                    {% if spaces %}
+                    Select a configured building, floor, and space.
+                    {% else %}
+                    No spaces currently exist for this site.
+                    {% endif %}
+                </small>
+            </span>
+        </label>
+    </div>
+
+    <div
+        id="site_only_fields"
+        class="information-card"
+    >
+        <strong>Site-level installation</strong>
+        <p>
+            The new gateway and asset will be associated with the site but
+            will not have a building, floor, or room assignment.
+        </p>
+    </div>
+
+    <div
+        id="create_location_fields"
+        class="conditional-section"
+        hidden
+    >
+        <div class="form-subsection-heading">
+            <h4>Building</h4>
+            <p>
+                Create the top-level physical structure.
+            </p>
+        </div>
+
+        <div class="form-grid">
+            <label>
+                Building name
+                <input
+                    id="building_name"
+                    name="building_name"
+                    type="text"
+                    maxlength="200"
+                    placeholder="Main Hotel Building"
+                    value="{{ form_data.get('building_name', '') }}"
+                >
+            </label>
+
+            <label>
+                Recommended building code
+                <input
+                    id="building_code"
+                    name="building_code"
+                    type="text"
+                    maxlength="100"
+                    pattern="[A-Za-z][A-Za-z0-9_]*"
+                    placeholder="MAIN_HOTEL_BUILDING"
+                    value="{{ form_data.get('building_code', '') }}"
+                >
+            </label>
+        </div>
+
+        <div class="form-subsection-heading">
+            <h4>Floor</h4>
+            <p>
+                Create the floor within the building.
+            </p>
+        </div>
+
+        <div class="form-grid">
+            <label>
+                Floor name
+                <input
+                    id="floor_name"
+                    name="floor_name"
+                    type="text"
+                    maxlength="200"
+                    placeholder="Basement"
+                    value="{{ form_data.get('floor_name', '') }}"
+                >
+            </label>
+
+            <label>
+                Recommended floor code
+                <input
+                    id="floor_code"
+                    name="floor_code"
+                    type="text"
+                    maxlength="100"
+                    pattern="[A-Za-z][A-Za-z0-9_]*"
+                    placeholder="BASEMENT"
+                    value="{{ form_data.get('floor_code', '') }}"
+                >
+            </label>
+        </div>
+
+        <div class="form-subsection-heading">
+            <h4>Space</h4>
+            <p>
+                Create the room or operational area.
+            </p>
+        </div>
+
+        <div class="form-grid">
+            <label>
+                Space name
+                <input
+                    id="space_name"
+                    name="space_name"
+                    type="text"
+                    maxlength="200"
+                    placeholder="Chiller Plant Room"
+                    value="{{ form_data.get('space_name', '') }}"
+                >
+            </label>
+
+            <label>
+                Recommended space code
+                <input
+                    id="space_code"
+                    name="space_code"
+                    type="text"
+                    maxlength="100"
+                    pattern="[A-Za-z][A-Za-z0-9_]*"
+                    placeholder="CHILLER_PLANT_ROOM"
+                    value="{{ form_data.get('space_code', '') }}"
+                >
+            </label>
+        </div>
+    </div>
+
+    <div
+        id="existing_space_fields"
+        class="conditional-section"
+        hidden
+    >
+        <div class="form-grid">
+            <label class="full-width">
+                Existing space
+
+                <span class="field-help">
+                    Only spaces belonging to the selected organization and
+                    site are shown.
+                </span>
+
+                <select
+                    id="existing_space_id"
+                    name="existing_space_id"
+                >
+                    <option value="">
+                        Select a physical space
+                    </option>
+
+                    {% for space in spaces %}
+                    <option
+                        value="{{ space.id }}"
+                        {% if form_data.get(
+                            'existing_space_id'
+                        ) == space.id|string %}
+                        selected
+                        {% endif %}
+                    >
+                        {{ space.building_name }}
+                        / {{ space.floor_name }}
+                        / {{ space.space_name }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+        </div>
+    </div>
+
+    <div class="wizard-step-actions">
+        <a
+            class="button-link secondary"
+            href="/onboarding/site?draft={{ draft_token }}"
+        >
+            Back
+        </a>
+
+        <button type="submit">
+            Save &amp; Continue
+        </button>
+    </div>
+</form>
+{% endblock %}
+
+{% block onboarding_scripts %}
+<script
+    src="{{ url_for(
+        'static',
+        path='/js/onboarding-location.js'
+    ) }}"
+    defer
+></script>
+{% endblock %}
