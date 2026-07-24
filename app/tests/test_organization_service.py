@@ -307,3 +307,68 @@ async def test_mark_grafana_provisioning_complete_commits_mapping(
     assert connection.rolled_back is False
     assert result["provisioning_status"] == "PROVISIONED"
     assert result["grafana_org_id"] == 7
+
+@pytest.mark.asyncio
+async def test_list_organizations_with_grafana_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ListCursor(FakeCursor):
+        async def fetchall(self) -> list[dict]:
+            return [
+                {
+                    "organization_id": "org-1",
+                    "organization_code": "ORG_1",
+                    "organization_name": "Organization One",
+                    "timezone": "Asia/Kolkata",
+                    "lifecycle_status": "ACTIVE",
+                    "provisioning_status": "NOT_STARTED",
+                    "grafana_org_id": None,
+                    "attempt_count": 0,
+                    "last_attempt_at": None,
+                    "provisioned_at": None,
+                    "last_error": None,
+                },
+                {
+                    "organization_id": "org-2",
+                    "organization_code": "ORG_2",
+                    "organization_name": "Organization Two",
+                    "timezone": "Asia/Kolkata",
+                    "lifecycle_status": "ACTIVE",
+                    "provisioning_status": "FAILED",
+                    "grafana_org_id": None,
+                    "attempt_count": 2,
+                    "last_attempt_at": None,
+                    "provisioned_at": None,
+                    "last_error": "Grafana unavailable",
+                },
+            ]
+
+    cursor = ListCursor({})
+    connection = FakeConnection(cursor)
+
+    @asynccontextmanager
+    async def fake_database_connection():
+        yield connection
+
+    monkeypatch.setattr(
+        "src.onboarding.organization_service.database_connection",
+        fake_database_connection,
+    )
+
+    from src.onboarding.organization_service import (
+        list_organizations_with_grafana_status,
+    )
+
+    result = await list_organizations_with_grafana_status()
+
+    assert (
+        "FROM admin.list_grafana_provisioning_status()"
+        in cursor.statement
+    )
+    assert "metadata.organizations" not in cursor.statement
+    assert cursor.parameters == ()
+    assert connection.committed is False
+    assert connection.rolled_back is True
+    assert result[0]["provisioning_status"] == "NOT_STARTED"
+    assert result[1]["provisioning_status"] == "FAILED"
+    assert result[1]["last_error"] == "Grafana unavailable"

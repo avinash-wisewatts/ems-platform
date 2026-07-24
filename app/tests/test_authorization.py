@@ -109,6 +109,21 @@ def test_unknown_portal_role_fails_closed() -> None:
             PortalPermission.MANAGE_PORTAL_USERS,
             False,
         ),
+        (
+            "SUPER_ADMIN",
+            PortalPermission.RETRY_GRAFANA_PROVISIONING,
+            True,
+        ),
+        (
+            "OPERATOR",
+            PortalPermission.RETRY_GRAFANA_PROVISIONING,
+            False,
+        ),
+        (
+            "VIEWER",
+            PortalPermission.RETRY_GRAFANA_PROVISIONING,
+            False,
+        ),
     ],
 )
 def test_role_permission_matrix(
@@ -170,6 +185,18 @@ def test_onboarding_writes_require_edit_permission(
         is PortalPermission.EDIT_ONBOARDING_DRAFT
     )
 
+def test_grafana_retry_requires_dedicated_permission() -> None:
+    assert (
+        required_permission_for_request(
+            "POST",
+            (
+                "/administration/organizations/"
+                "33333333-3333-4333-8333-333333333333/"
+                "grafana/retry"
+            ),
+        )
+        is PortalPermission.RETRY_GRAFANA_PROVISIONING
+    )
 
 @pytest.mark.parametrize(
     ("method", "path"),

@@ -23,6 +23,10 @@ from src.auth.dependencies import (
     require_authenticated_portal_user,
     set_authenticated_portal_user,
 )
+from src.auth.authorization import (
+    PortalPermission,
+    has_permission,
+)
 from src.auth.middleware import PortalAuthenticationMiddleware
 from src.auth.service import authenticate_portal_user
 from src.admin_navigation import administration_navigation
@@ -86,7 +90,10 @@ from src.onboarding.site import (
 from src.onboarding.statuses import status_options
 from src.onboarding.database_errors import user_facing_database_error
 from src.onboarding.service import onboard_energy_asset
-from src.onboarding.organization_service import create_organization
+from src.onboarding.organization_service import (
+    create_organization,
+    list_organizations_with_grafana_status,
+)
 from src.onboarding.grafana_provisioning_service import (
     provision_grafana_for_organization,
 )
@@ -400,6 +407,17 @@ async def render_organization_administration(
 ) -> HTMLResponse:
     """Render the independent organization administration page."""
 
+    user = require_authenticated_portal_user(request)
+
+    organizations = (
+        await list_organizations_with_grafana_status()
+    )
+
+    can_retry_grafana = has_permission(
+        user,
+        PortalPermission.RETRY_GRAFANA_PROVISIONING,
+    )
+
     return templates.TemplateResponse(
         request=request,
         name="organizations.html",
@@ -409,6 +427,9 @@ async def render_organization_administration(
             "form_data": form_data or {},
             "result": result,
             "error": error,
+            "can_retry_grafana": can_retry_grafana,
+            "show_grafana_internal_details": can_retry_grafana,
+            "organizations": organizations,
             "lifecycle_statuses": (
                 "DRAFT",
                 "ACTIVE",
@@ -502,6 +523,74 @@ async def create_organization_administration(
         },
         result=result,
         status_code=201,
+    )
+
+
+@app.post(
+    (
+        "/administration/organizations/"
+        "{organization_id}/grafana/retry"
+    ),
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def retry_organization_grafana_provisioning(
+    request: Request,
+    organization_id: UUID,
+) -> HTMLResponse:
+    """Retry Grafana provisioning for one existing EMS organization."""
+
+    require_authenticated_portal_user(request)
+
+    organizations = await list_organizations()
+
+    organization = next(
+        (
+            item
+            for item in organizations
+            if str(item["id"]) == str(organization_id)
+        ),
+        None,
+    )
+
+    if organization is None:
+        return await render_organization_administration(
+            request,
+            error="The requested EMS organization was not found.",
+            status_code=404,
+        )
+
+    try:
+        provisioning = await provision_grafana_for_organization(
+            organization_id=str(organization_id),
+            organization_name=organization["organization_name"],
+        )
+
+    except DatabaseError as exc:
+        database_message = user_facing_database_error(
+            exc,
+            fallback=(
+                "The database rejected the Grafana provisioning retry."
+            ),
+        )
+
+        return await render_organization_administration(
+            request,
+            error=database_message,
+            status_code=409,
+        )
+
+    result = {
+        "organization_id": str(organization_id),
+        "organization_name": organization["organization_name"],
+        "organization_code": organization["organization_code"],
+        "grafana_provisioning": provisioning,
+    }
+
+    return await render_organization_administration(
+        request,
+        result=result,
+        status_code=200,
     )
 
 @app.get("/", include_in_schema=False)

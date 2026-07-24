@@ -117,3 +117,4 @@ source_file,target_category,target_path,notes
 100_shared_tenant_site_validation.sql,migration,postgres/migrations/100_shared_tenant_site_validation.sql,Reject cross-tenant and cross-site metadata relationships
 101_independent_organization_creation.sql,migration,postgres/migrations/101_independent_organization_creation.sql,Add organization timezone and controlled independent organization creation
 102_grafana_organization_provisioning.sql,migration,postgres/migrations/102_grafana_organization_provisioning.sql,Track and control automatic Grafana organization provisioning
+103_list_grafana_provisioning_status.sql,migration,postgres/migrations/103_list_grafana_provisioning_status.sql,Expose organization Grafana provisioning status through a least-privilege function

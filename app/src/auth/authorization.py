@@ -15,6 +15,7 @@ class PortalPermission(str, Enum):
     """Stable application permissions independent of route implementation."""
 
     MANAGE_ORGANIZATIONS = "MANAGE_ORGANIZATIONS"
+    RETRY_GRAFANA_PROVISIONING = "RETRY_GRAFANA_PROVISIONING"
     VIEW_ADMIN_PORTAL = "VIEW_ADMIN_PORTAL"
     EDIT_ONBOARDING_DRAFT = "EDIT_ONBOARDING_DRAFT"
     SUBMIT_ONBOARDING_DRAFT = "SUBMIT_ONBOARDING_DRAFT"
@@ -24,6 +25,7 @@ class PortalPermission(str, Enum):
 ROLE_PERMISSIONS: dict[PortalRole, frozenset[PortalPermission]] = {
     PortalRole.SUPER_ADMIN: frozenset(
         {
+            PortalPermission.RETRY_GRAFANA_PROVISIONING,
             PortalPermission.MANAGE_ORGANIZATIONS,
             PortalPermission.VIEW_ADMIN_PORTAL,
             PortalPermission.EDIT_ONBOARDING_DRAFT,
@@ -110,6 +112,27 @@ def required_permission_for_request(
         )
     ):
         return PortalPermission.EDIT_ONBOARDING_DRAFT
+    if (
+        normalized_method == "POST"
+        and (
+            path == "/onboarding"
+            or path.startswith("/onboarding/")
+        )
+    ):
+        return PortalPermission.EDIT_ONBOARDING_DRAFT
+
+    if (
+        normalized_method == "POST"
+        and path.startswith("/administration/organizations/")
+        and path.endswith("/grafana/retry")
+    ):
+        return PortalPermission.RETRY_GRAFANA_PROVISIONING
+
+    if (
+        normalized_method in {"POST", "PUT", "PATCH", "DELETE"}
+        and path.rstrip("/") == "/administration/organizations"
+    ):
+        return PortalPermission.MANAGE_ORGANIZATIONS
     if (
         normalized_method in {"POST", "PUT", "PATCH", "DELETE"}
         and path.rstrip("/") == "/administration/organizations"

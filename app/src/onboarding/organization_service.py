@@ -50,6 +50,37 @@ async def create_organization(
         row["organization_result"]
     )
 
+async def list_organizations_with_grafana_status() -> list[dict[str, Any]]:
+    """Return organizations with their current Grafana provisioning state."""
+
+    async with database_connection() as connection:
+        async with connection.cursor() as cursor:
+            await cursor.execute(
+                """
+                SELECT
+                    organization_id,
+                    organization_code,
+                    organization_name,
+                    timezone,
+                    lifecycle_status,
+                    provisioning_status,
+                    grafana_org_id,
+                    attempt_count,
+                    last_attempt_at,
+                    provisioned_at,
+                    last_error
+                FROM admin.list_grafana_provisioning_status()
+                """,
+                (),
+            )
+
+            rows = await cursor.fetchall()
+
+        await connection.rollback()
+
+    return rows
+
+
 async def get_grafana_provisioning(
     organization_id: str,
 ) -> dict[str, Any] | None:
