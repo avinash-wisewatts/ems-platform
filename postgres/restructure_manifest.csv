@@ -2,6 +2,7 @@ source_file,target_category,target_path,notes
 00_extensions.sql,canonical,postgres/ddl/00_extensions.sql,Required extensions
 01_schemas.sql,canonical,postgres/ddl/01_schemas.sql,Schema creation
 02_roles.sql,canonical,postgres/ddl/02_roles.sql,Database roles
+01_01_schema_migrations.sql,canonical,postgres/ddl/01_01_schema_migrations.sql,Immutable forward-migration checksum and execution ledger
 03_platform.sql,canonical,postgres/ddl/03_platform.sql,Platform metadata
 03_01_reference_schema.sql,canonical,postgres/ddl/03_01_reference_schema.sql,Canonical configuration and reference table schema
 04_metadata.sql,canonical,postgres/ddl/04_metadata.sql,Canonical metadata schema
@@ -12,6 +13,8 @@ source_file,target_category,target_path,notes
 07_01_telegraf_mqtt_staging.sql,canonical,postgres/ddl/07_01_telegraf_mqtt_staging.sql,Canonical Telegraf MQTT landing table
 07_02_mqtt_staging.sql,canonical,postgres/ddl/07_02_mqtt_staging.sql,MQTT staging schema
 07_03_telegraf_ingest.sql,canonical,postgres/ddl/07_03_telegraf_ingest.sql,Telegraf ingest schema
+07_04_telegraf_writer_grants.sql,canonical,postgres/ddl/07_04_telegraf_writer_grants.sql,Least-privilege Telegraf landing-table grants
+07_05_telegraf_ingest_bridge.sql,legacy,postgres/legacy/07_05_telegraf_ingest_bridge.sql,Superseded experimental Telegraf landing-to-MQTT staging trigger
 07_telemetry_archive.sql,canonical,postgres/ddl/07_telemetry_archive.sql,Raw telemetry archive schema
 08_energy_measurements.sql,canonical,postgres/ddl/08_energy_measurements.sql,Energy measurement schema
 09_environment_measurements.sql,canonical,postgres/ddl/09_environment_measurements.sql,Environment measurement schema
@@ -65,6 +68,7 @@ source_file,target_category,target_path,notes
 60_asset_device_assignments.sql,demo,postgres/seeds/demo/60_asset_device_assignments.sql,Environment-specific assignments
 60_asset_analytics_base.sql,canonical,postgres/ddl/60_asset_analytics_base.sql,Canonical tenant-safe asset hierarchy and asset-device views
 61_metadata_integrity_indexes.sql,canonical,postgres/ddl/61_metadata_integrity_indexes.sql,Canonical metadata integrity constraints and identifier lookup index
+61_01_tenant_site_validation.sql,canonical,postgres/ddl/61_01_tenant_site_validation.sql,Shared organization and site ownership validation triggers
 61_energy_asset_identity.sql,canonical,postgres/ddl/61_energy_asset_identity.sql,Energy asset identity
 62_asset_centric_analytics.sql,canonical,postgres/ddl/62_asset_centric_analytics.sql,Asset analytics
 63_environment_logical_points.sql,reference,postgres/seeds/reference/63_environment_logical_points.sql,Environment logical points
@@ -80,7 +84,36 @@ source_file,target_category,target_path,notes
 73_payload_profile_catalog_cleanup.sql,migration,postgres/migrations/73_payload_profile_catalog_cleanup.sql,Historical profile cleanup
 74_environment_aggregate_lifecycle.sql,jobs,postgres/jobs/74_environment_aggregate_lifecycle.sql,Environment aggregate lifecycle
 75_environment_analytics_views.sql,canonical,postgres/ddl/75_environment_analytics_views.sql,Environment analytics views
+80_device_profile_categories.sql,canonical,postgres/ddl/80_device_profile_categories.sql,Controlled profile-to-device-category compatibility schema
+76_admin_onboarding_contract.sql,canonical,postgres/ddl/76_admin_onboarding_contract.sql,Least-privilege EMS Administration Portal onboarding contract
+76_01_independent_organization_contract.sql,canonical,postgres/ddl/76_01_independent_organization_contract.sql,Independent organization creation contract
+77_energy_register_semantics.sql,canonical,postgres/ddl/77_energy_register_semantics.sql,Profile-aware cumulative energy register semantics
+78_eniscope_total_current_thd.sql,canonical,postgres/ddl/78_eniscope_total_current_thd.sql,Eniscope total current THD logical point and profile mapping
+79_profile_aware_energy_routing.sql,canonical,postgres/ddl/79_profile_aware_energy_routing.sql,Profile-aware energy routing and native Eniscope unit handling
+80_semantic_energy_consumption.sql,canonical,postgres/ddl/80_semantic_energy_consumption.sql,Semantic-aware interval energy consumption classifications
+81_energy_register_delta_classifier.sql,canonical,postgres/ddl/81_energy_register_delta_classifier.sql,Authoritative cumulative energy register delta classifier
+82_refactor_energy_consumption_to_classifier.sql,canonical,postgres/ddl/82_refactor_energy_consumption_to_classifier.sql,Refactor interval consumption view to use register classifier
+83_interval_quality_rules.sql,canonical,postgres/ddl/83_interval_quality_rules.sql,Effective-dated hierarchical interval-quality configuration and resolver
+84_apply_interval_quality_rules.sql,canonical,postgres/ddl/84_apply_interval_quality_rules.sql,Apply effective hierarchical gap thresholds to interval consumption
+85_site_energy_meter_roles.sql,canonical,postgres/ddl/85_site_energy_meter_roles.sql,Effective-dated site energy balance meter-role contract
+86_site_energy_balance_daily.sql,canonical,postgres/ddl/86_site_energy_balance_daily.sql,Tenant-safe daily site energy balance analytics
+87_asset_hierarchy_closure.sql,canonical,postgres/ddl/87_asset_hierarchy_closure.sql,Asset hierarchy integrity enforcement and recursive closure
+88_asset_hierarchy_rollup_daily.sql,canonical,postgres/ddl/88_asset_hierarchy_rollup_daily.sql,Daily recursive asset energy rollups with direct-preferred reporting
+90_asset_meter_coverage.sql,canonical,postgres/ddl/90_asset_meter_coverage.sql,Tenant-safe asset meter configuration coverage analytics
+77_asset_and_device_catalog_cleanup.sql,migration,postgres/migrations/77_asset_and_device_catalog_cleanup.sql,Clean asset-type duplicates and expand device categories
+78_device_model_category.sql,migration,postgres/migrations/78_device_model_category.sql,Enforce controlled device categories on device models
+79_primary_meter_integrity.sql,migration,postgres/migrations/79_primary_meter_integrity.sql,Enforce one primary meter per asset and device
+80_device_profile_categories.sql,migration,postgres/migrations/80_device_profile_categories.sql,Create and seed profile-to-device-category compatibility
+81_gateway_device_identity.sql,migration,postgres/migrations/81_gateway_device_identity.sql,Enforce organization-scoped gateway and device external IDs
+83_onboarding_explicit_hierarchy_modes.sql,migration,postgres/migrations/83_onboarding_explicit_hierarchy_modes.sql,Add explicit create or select modes to the onboarding hierarchy
 99_seed_demo.sql,demo,postgres/seeds/demo/99_seed_demo.sql,Demo seed
 99_01_seed_eniscope_demo.sql,demo,postgres/seeds/demo/99_01_seed_eniscope_demo.sql,Eniscope demo seed
 99_02_seed_eniscope_mapping.sql,demo,postgres/seeds/demo/99_02_seed_eniscope_mapping.sql,Eniscope demo mapping
 99_03_test_eniscope_ingestion.sql,demo,postgres/seeds/demo/99_03_test_eniscope_ingestion.sql,Ingestion test
+93_retire_telegraf_ingest_bridge.sql,migration,postgres/migrations/93_retire_telegraf_ingest_bridge.sql,Retire superseded Telegraf ingest bridge without deleting staging tables
+97_mqtt_staging_timestamptz.sql,migration,postgres/migrations/97_mqtt_staging_timestamptz.sql,Convert Telegraf MQTT landing timestamps from naive UTC to TIMESTAMPTZ
+98_asset_meter_coverage.sql,migration,postgres/migrations/98_asset_meter_coverage.sql,Add asset metering requirements and configuration coverage analytics
+99_controlled_lifecycle_statuses.sql,migration,postgres/migrations/99_controlled_lifecycle_statuses.sql,Add canonical administration status definitions and lifecycle columns
+100_shared_tenant_site_validation.sql,migration,postgres/migrations/100_shared_tenant_site_validation.sql,Reject cross-tenant and cross-site metadata relationships
+101_independent_organization_creation.sql,migration,postgres/migrations/101_independent_organization_creation.sql,Add organization timezone and controlled independent organization creation
+102_grafana_organization_provisioning.sql,migration,postgres/migrations/102_grafana_organization_provisioning.sql,Track and control automatic Grafana organization provisioning
