@@ -22,9 +22,16 @@ def test_super_admin_sees_platform_navigation() -> None:
     assert "Onboarding" in labels
 
 
+def test_org_admin_sees_user_management_but_not_platform_management() -> None:
+    labels = item_labels("ORG_ADMIN")
+
+    assert "Users" in labels
+    assert "Organizations" not in labels
+
+
 @pytest.mark.parametrize(
     "role_code",
-    ["ORG_ADMIN", "OPERATOR", "VIEWER", "UNKNOWN"],
+    ["OPERATOR", "VIEWER", "UNKNOWN"],
 )
 def test_non_platform_roles_do_not_see_platform_navigation(
     role_code: str,
@@ -53,6 +60,11 @@ def login_as(
                 username=f"{role_code.lower()}@example.com",
                 display_name=f"Test {role_code}",
                 role_code=role_code,
+                organization_id=(
+                    "11111111-1111-1111-1111-111111111111"
+                    if role_code == "ORG_ADMIN"
+                    else None
+                ),
             ),
             status=AuthenticationStatus.AUTHENTICATED,
         )
@@ -115,5 +127,5 @@ def test_org_admin_workspace_hides_platform_items(
 
     assert response.status_code == 200
     assert "Organizations" not in response.text
-    assert "Users" not in response.text
+    assert "Users" in response.text
     assert "Open onboarding" in response.text

@@ -31,10 +31,18 @@ _ONBOARDING = NavigationItem(
     description="Continue using the guided onboarding wizard.",
 )
 
+_USER_MANAGEMENT = NavigationItem(
+    "users",
+    "Users",
+    "♙",
+    "/administration/users",
+    "Manage platform and tenant users.",
+)
+
 _PLATFORM_ITEMS = (
     NavigationItem("organizations","Organizations","◉","/administration/organizations","Manage EMS tenants.",
 ),
-    NavigationItem("users", "Users", "♙", None, "Manage platform and tenant users."),
+    _USER_MANAGEMENT,
 )
 
 _TENANT_ITEMS = (
@@ -61,6 +69,13 @@ def administration_navigation(role_code: str | None) -> tuple[NavigationSection,
 
     if role_code == "PLATFORM_ADMIN":
         sections.append(NavigationSection("Platform", _PLATFORM_ITEMS))
+    elif role_code == "ORG_ADMIN":
+        sections.append(
+            NavigationSection(
+                "Organization administration",
+                (_USER_MANAGEMENT,),
+            )
+        )
 
     sections.extend(
         (

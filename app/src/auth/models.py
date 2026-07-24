@@ -20,6 +20,7 @@ class PortalUserAuthenticationRecord:
     is_active: bool
     failed_login_count: int
     locked_until: datetime | None
+    organization_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,3 +35,4 @@ class AuthenticatedPortalUser:
     username: str
     display_name: str
     role_code: str
+    organization_id: str | None = None

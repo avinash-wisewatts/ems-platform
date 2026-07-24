@@ -28,6 +28,17 @@ _password_hasher = PasswordHasher(
 )
 
 
+def hash_portal_password(
+    password: str,
+) -> str:
+    """Create an Argon2id hash for a portal password."""
+
+    if not password:
+        raise ValueError("Portal password must not be empty.")
+
+    return _password_hasher.hash(password)
+
+
 def verify_portal_password(
     password_hash: str,
     submitted_password: str,
@@ -85,4 +96,5 @@ def safe_authenticated_user(
         username=user.username,
         display_name=user.display_name,
         role_code=user.role_code,
+        organization_id=user.organization_id,
     )

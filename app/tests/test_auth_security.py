@@ -5,6 +5,7 @@ from argon2 import PasswordHasher
 
 from src.auth.models import PortalUserAuthenticationRecord
 from src.auth.security import (
+    hash_portal_password,
     AuthenticationStatus,
     portal_account_status,
     safe_authenticated_user,
@@ -133,4 +134,34 @@ def test_verify_portal_password_rejects_corrupt_hash() -> None:
     assert not verify_portal_password(
         "not-an-argon2-hash",
         "submitted-password",
+    )
+
+
+def test_safe_authenticated_user_preserves_organization_scope(
+    active_authentication_record: PortalUserAuthenticationRecord,
+) -> None:
+    scoped_record = replace(
+        active_authentication_record,
+        role_code="ORG_ADMIN",
+        organization_id="11111111-1111-1111-1111-111111111111",
+    )
+
+    safe_user = safe_authenticated_user(scoped_record)
+
+    assert safe_user.organization_id == (
+        "11111111-1111-1111-1111-111111111111"
+    )
+
+
+def test_hash_portal_password_creates_verifiable_argon2id_hash() -> None:
+    password_hash = hash_portal_password("ValidPassword123!")
+
+    assert password_hash.startswith("$argon2id$")
+    assert verify_portal_password(
+        password_hash,
+        "ValidPassword123!",
+    )
+    assert not verify_portal_password(
+        password_hash,
+        "WrongPassword123!",
     )

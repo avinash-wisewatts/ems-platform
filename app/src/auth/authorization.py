@@ -140,6 +140,73 @@ def required_permission_for_request(
     ):
         return PortalPermission.ORGANIZATION_MANAGE
 
+    if (
+        normalized_method in {"POST", "PUT", "PATCH", "DELETE"}
+        and (
+            path.rstrip("/") == "/administration/users"
+            or path.startswith("/administration/users/")
+        )
+    ):
+        return PortalPermission.USER_MANAGE
+
     # Any future protected write route must be explicitly mapped.
     # Returning no permission causes middleware to reject it fail-closed.
     return None
+
+
+ROLE_ASSIGNMENT_POLICY: dict[PortalRole, frozenset[PortalRole]] = {
+    PortalRole.PLATFORM_ADMIN: frozenset(PortalRole),
+    PortalRole.ORG_ADMIN: frozenset(
+        {
+            PortalRole.ORG_ADMIN,
+            PortalRole.OPERATOR,
+            PortalRole.VIEWER,
+        }
+    ),
+    PortalRole.OPERATOR: frozenset(),
+    PortalRole.VIEWER: frozenset(),
+}
+
+
+def assignable_portal_roles(
+    actor_role: PortalRole,
+) -> set[PortalRole]:
+    """Return the canonical roles one actor role may assign."""
+
+    return set(ROLE_ASSIGNMENT_POLICY[actor_role])
+
+
+def can_assign_portal_role(
+    actor_role: PortalRole,
+    target_role: PortalRole,
+) -> bool:
+    """Return whether one role may assign the requested target role."""
+
+    return target_role in ROLE_ASSIGNMENT_POLICY[actor_role]
+
+
+def can_manage_user_in_organization(
+    *,
+    actor_role: PortalRole,
+    actor_organization_id: str | None,
+    target_organization_id: str | None,
+) -> bool:
+    """
+    Return whether an actor may manage a user in the target organization.
+
+    Platform administrators are global. Organization administrators are
+    restricted to their own non-null organization. Other roles cannot manage
+    users.
+    """
+
+    if actor_role is PortalRole.PLATFORM_ADMIN:
+        return True
+
+    if actor_role is not PortalRole.ORG_ADMIN:
+        return False
+
+    return (
+        actor_organization_id is not None
+        and target_organization_id is not None
+        and actor_organization_id == target_organization_id
+    )

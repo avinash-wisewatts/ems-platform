@@ -28,6 +28,7 @@ from src.auth.authorization import (
     has_permission,
 )
 from src.auth.middleware import PortalAuthenticationMiddleware
+from src.auth.security import hash_portal_password
 from src.auth.service import authenticate_portal_user
 from src.admin_navigation import administration_navigation
 from src.config import get_settings
@@ -35,6 +36,12 @@ from src.database import (
     close_database_pool,
     database_connection,
     open_database_pool,
+)
+from src.user_management_service import (
+    change_managed_user_role,
+    create_managed_user,
+    list_manageable_users,
+    set_managed_user_active,
 )
 from src.onboarding.forms import (
     OnboardingForm,
@@ -114,13 +121,23 @@ def portal_template_context(request: Request) -> dict:
     current_user = get_authenticated_portal_user(request)
 
     path = request.url.path
-    active_navigation_key = (
-        "onboarding"
-        if path == "/onboarding" or path.startswith("/onboarding/")
-        else "overview"
-        if path == "/administration"
-        else None
-    )
+
+    if path == "/onboarding" or path.startswith("/onboarding/"):
+        active_navigation_key = "onboarding"
+    elif path == "/administration":
+        active_navigation_key = "overview"
+    elif (
+        path == "/administration/organizations"
+        or path.startswith("/administration/organizations/")
+    ):
+        active_navigation_key = "organizations"
+    elif (
+        path == "/administration/users"
+        or path.startswith("/administration/users/")
+    ):
+        active_navigation_key = "users"
+    else:
+        active_navigation_key = None
 
     return {
         "current_portal_user": current_user,
@@ -396,6 +413,285 @@ async def administration_workspace(
             "active_navigation_key": "overview",
         },
     )
+
+def user_manager_assignable_roles(
+    role_code: str,
+) -> tuple[str, ...]:
+    """Return roles assignable by one user-management actor."""
+
+    if role_code == "PLATFORM_ADMIN":
+        return (
+            "PLATFORM_ADMIN",
+            "ORG_ADMIN",
+            "OPERATOR",
+            "VIEWER",
+        )
+
+    if role_code == "ORG_ADMIN":
+        return (
+            "ORG_ADMIN",
+            "OPERATOR",
+            "VIEWER",
+        )
+
+    return ()
+
+
+async def render_user_administration(
+    request: Request,
+    *,
+    form_data: dict | None = None,
+    result: dict | None = None,
+    error: str | None = None,
+    status_code: int = 200,
+) -> HTMLResponse:
+    """Render organization-scoped portal user management."""
+
+    user = require_authenticated_portal_user(request)
+
+    users = await list_manageable_users(
+        actor_portal_user_id=user.portal_user_id,
+    )
+
+    organizations = (
+        await list_organizations()
+        if user.role_code == "PLATFORM_ADMIN"
+        else []
+    )
+
+    return templates.TemplateResponse(
+        request=request,
+        name="users.html",
+        context={
+            "environment": settings.app_env,
+            "page_title": "User management",
+            "users": users,
+            "organizations": organizations,
+            "actor_role_code": user.role_code,
+            "actor_organization_id": user.organization_id,
+            "assignable_roles": user_manager_assignable_roles(
+                user.role_code
+            ),
+            "form_data": form_data or {},
+            "result": result,
+            "error": error,
+            "active_navigation_key": "users",
+        },
+        status_code=status_code,
+    )
+
+
+@app.get(
+    "/administration/users",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def user_administration(
+    request: Request,
+) -> HTMLResponse:
+    """Display organization-scoped portal user management."""
+
+    return await render_user_administration(request)
+
+
+@app.post(
+    "/administration/users",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def create_user_administration(
+    request: Request,
+    display_name: Annotated[str, Form()],
+    username: Annotated[str, Form()],
+    email: Annotated[str, Form()],
+    password: Annotated[str, Form()],
+    role_code: Annotated[str, Form()],
+    organization_id: Annotated[str, Form()] = "",
+) -> HTMLResponse:
+    """Create a portal user within the actor's authorized scope."""
+
+    user = require_authenticated_portal_user(request)
+
+    submitted_form_data = {
+        "display_name": display_name,
+        "username": username,
+        "email": email,
+        "role_code": role_code,
+        "organization_id": organization_id,
+    }
+
+    if role_code not in user_manager_assignable_roles(user.role_code):
+        return await render_user_administration(
+            request,
+            form_data=submitted_form_data,
+            error=(
+                f"{user.role_code} cannot assign the requested "
+                f"{role_code} role."
+            ),
+            status_code=400,
+        )
+
+    if not display_name.strip() or not username.strip():
+        return await render_user_administration(
+            request,
+            form_data=submitted_form_data,
+            error="Display name and username are required.",
+            status_code=400,
+        )
+
+    if len(password) < 12:
+        return await render_user_administration(
+            request,
+            form_data=submitted_form_data,
+            error="Temporary passwords must contain at least 12 characters.",
+            status_code=400,
+        )
+
+    target_organization_id = (
+        user.organization_id
+        if user.role_code == "ORG_ADMIN"
+        else organization_id.strip() or None
+    )
+
+    try:
+        portal_user_id = await create_managed_user(
+            actor_portal_user_id=user.portal_user_id,
+            username=username.strip(),
+            display_name=display_name.strip(),
+            email=email.strip(),
+            password_hash=hash_portal_password(password),
+            role_code=role_code,
+            organization_id=target_organization_id,
+        )
+    except DatabaseError as exc:
+        return await render_user_administration(
+            request,
+            form_data=submitted_form_data,
+            error=user_facing_database_error(
+                exc,
+                fallback="The database rejected the user request.",
+            ),
+            status_code=409,
+        )
+
+    return await render_user_administration(
+        request,
+        result={
+            "portal_user_id": portal_user_id,
+            "display_name": display_name.strip(),
+            "username": username.strip(),
+            "role_code": role_code,
+        },
+        status_code=201,
+    )
+
+
+@app.post(
+    "/administration/users/{portal_user_id}/role",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def change_user_role_administration(
+    request: Request,
+    portal_user_id: int,
+    role_code: Annotated[str, Form()],
+    organization_id: Annotated[str, Form()] = "",
+) -> HTMLResponse:
+    """Change a managed portal user's role and audit the change."""
+
+    user = require_authenticated_portal_user(request)
+
+    if role_code not in user_manager_assignable_roles(user.role_code):
+        return await render_user_administration(
+            request,
+            error=(
+                f"{user.role_code} cannot assign the requested "
+                f"{role_code} role."
+            ),
+            status_code=400,
+        )
+
+    target_organization_id = (
+        user.organization_id
+        if user.role_code == "ORG_ADMIN"
+        else organization_id.strip() or None
+    )
+
+    try:
+        await change_managed_user_role(
+            actor_portal_user_id=user.portal_user_id,
+            target_portal_user_id=portal_user_id,
+            role_code=role_code,
+            organization_id=target_organization_id,
+        )
+    except DatabaseError as exc:
+        return await render_user_administration(
+            request,
+            error=user_facing_database_error(
+                exc,
+                fallback="The database rejected the role change.",
+            ),
+            status_code=409,
+        )
+
+    return await render_user_administration(
+        request,
+        result={
+            "portal_user_id": portal_user_id,
+            "role_code": role_code,
+            "action": "role_changed",
+        },
+    )
+
+
+@app.post(
+    "/administration/users/{portal_user_id}/status",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def change_user_status_administration(
+    request: Request,
+    portal_user_id: int,
+    is_active: Annotated[str, Form()],
+) -> HTMLResponse:
+    """Activate or deactivate a managed portal user."""
+
+    user = require_authenticated_portal_user(request)
+
+    normalized_status = is_active.strip().lower()
+
+    if normalized_status not in {"true", "false"}:
+        return await render_user_administration(
+            request,
+            error="Invalid user status.",
+            status_code=400,
+        )
+
+    try:
+        await set_managed_user_active(
+            actor_portal_user_id=user.portal_user_id,
+            target_portal_user_id=portal_user_id,
+            is_active=normalized_status == "true",
+        )
+    except DatabaseError as exc:
+        return await render_user_administration(
+            request,
+            error=user_facing_database_error(
+                exc,
+                fallback="The database rejected the status change.",
+            ),
+            status_code=409,
+        )
+
+    return await render_user_administration(
+        request,
+        result={
+            "portal_user_id": portal_user_id,
+            "is_active": normalized_status == "true",
+            "action": "status_changed",
+        },
+    )
+
 
 async def render_organization_administration(
     request: Request,
