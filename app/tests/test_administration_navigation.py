@@ -15,14 +15,17 @@ def item_labels(role_code: str) -> set[str]:
 
 
 def test_super_admin_sees_platform_navigation() -> None:
-    labels = item_labels("SUPER_ADMIN")
+    labels = item_labels("PLATFORM_ADMIN")
 
     assert "Organizations" in labels
     assert "Users" in labels
     assert "Onboarding" in labels
 
 
-@pytest.mark.parametrize("role_code", ["OPERATOR", "VIEWER", "UNKNOWN"])
+@pytest.mark.parametrize(
+    "role_code",
+    ["ORG_ADMIN", "OPERATOR", "VIEWER", "UNKNOWN"],
+)
 def test_non_platform_roles_do_not_see_platform_navigation(
     role_code: str,
 ) -> None:
@@ -91,7 +94,7 @@ def test_super_admin_workspace_shows_platform_items(
     portal_client,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    login_as(portal_client, monkeypatch, "SUPER_ADMIN")
+    login_as(portal_client, monkeypatch, "PLATFORM_ADMIN")
 
     response = portal_client.get("/administration")
 
@@ -99,3 +102,18 @@ def test_super_admin_workspace_shows_platform_items(
     assert "Organizations" in response.text
     assert "Users" in response.text
     assert 'href="/onboarding"' in response.text
+
+
+
+def test_org_admin_workspace_hides_platform_items(
+    portal_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login_as(portal_client, monkeypatch, "ORG_ADMIN")
+
+    response = portal_client.get("/administration")
+
+    assert response.status_code == 200
+    assert "Organizations" not in response.text
+    assert "Users" not in response.text
+    assert "Open onboarding" in response.text

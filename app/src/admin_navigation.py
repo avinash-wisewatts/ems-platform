@@ -59,7 +59,7 @@ def administration_navigation(role_code: str | None) -> tuple[NavigationSection,
         NavigationSection("Workspace", (_OVERVIEW, _ONBOARDING)),
     ]
 
-    if role_code == "SUPER_ADMIN":
+    if role_code == "PLATFORM_ADMIN":
         sections.append(NavigationSection("Platform", _PLATFORM_ITEMS))
 
     sections.extend(

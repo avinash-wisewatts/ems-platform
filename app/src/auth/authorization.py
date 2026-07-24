@@ -4,9 +4,10 @@ from src.auth.models import AuthenticatedPortalUser
 
 
 class PortalRole(str, Enum):
-    """Controlled portal authorization roles."""
+    """Canonical controlled portal authorization roles."""
 
-    SUPER_ADMIN = "SUPER_ADMIN"
+    PLATFORM_ADMIN = "PLATFORM_ADMIN"
+    ORG_ADMIN = "ORG_ADMIN"
     OPERATOR = "OPERATOR"
     VIEWER = "VIEWER"
 
@@ -23,7 +24,7 @@ class PortalPermission(str, Enum):
 
 
 ROLE_PERMISSIONS: dict[PortalRole, frozenset[PortalPermission]] = {
-    PortalRole.SUPER_ADMIN: frozenset(
+    PortalRole.PLATFORM_ADMIN: frozenset(
         {
             PortalPermission.RETRY_GRAFANA_PROVISIONING,
             PortalPermission.MANAGE_ORGANIZATIONS,
@@ -31,6 +32,13 @@ ROLE_PERMISSIONS: dict[PortalRole, frozenset[PortalPermission]] = {
             PortalPermission.EDIT_ONBOARDING_DRAFT,
             PortalPermission.SUBMIT_ONBOARDING_DRAFT,
             PortalPermission.MANAGE_PORTAL_USERS,
+        }
+    ),
+    PortalRole.ORG_ADMIN: frozenset(
+        {
+            PortalPermission.VIEW_ADMIN_PORTAL,
+            PortalPermission.EDIT_ONBOARDING_DRAFT,
+            PortalPermission.SUBMIT_ONBOARDING_DRAFT,
         }
     ),
     PortalRole.OPERATOR: frozenset(
@@ -112,14 +120,6 @@ def required_permission_for_request(
         )
     ):
         return PortalPermission.EDIT_ONBOARDING_DRAFT
-    if (
-        normalized_method == "POST"
-        and (
-            path == "/onboarding"
-            or path.startswith("/onboarding/")
-        )
-    ):
-        return PortalPermission.EDIT_ONBOARDING_DRAFT
 
     if (
         normalized_method == "POST"
@@ -128,11 +128,6 @@ def required_permission_for_request(
     ):
         return PortalPermission.RETRY_GRAFANA_PROVISIONING
 
-    if (
-        normalized_method in {"POST", "PUT", "PATCH", "DELETE"}
-        and path.rstrip("/") == "/administration/organizations"
-    ):
-        return PortalPermission.MANAGE_ORGANIZATIONS
     if (
         normalized_method in {"POST", "PUT", "PATCH", "DELETE"}
         and path.rstrip("/") == "/administration/organizations"

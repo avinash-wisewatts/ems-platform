@@ -16,7 +16,7 @@ async def get_onboarding_draft(
     """
     Return one active, unexpired draft visible to the authenticated user.
 
-    PostgreSQL remains authoritative for ownership and SUPER_ADMIN access.
+    PostgreSQL remains authoritative for ownership and PLATFORM_ADMIN access.
     """
 
     async with database_connection() as connection:
@@ -160,7 +160,7 @@ async def get_submitted_onboarding_result(
     """
     Return one submitted result visible to the authenticated portal user.
 
-    PostgreSQL enforces ownership, current account state, and SUPER_ADMIN
+    PostgreSQL enforces ownership, current account state, and PLATFORM_ADMIN
     override. The application role has no direct table access.
     """
 

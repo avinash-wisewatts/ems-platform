@@ -118,3 +118,4 @@ source_file,target_category,target_path,notes
 101_independent_organization_creation.sql,migration,postgres/migrations/101_independent_organization_creation.sql,Add organization timezone and controlled independent organization creation
 102_grafana_organization_provisioning.sql,migration,postgres/migrations/102_grafana_organization_provisioning.sql,Track and control automatic Grafana organization provisioning
 103_list_grafana_provisioning_status.sql,migration,postgres/migrations/103_list_grafana_provisioning_status.sql,Expose organization Grafana provisioning status through a least-privilege function
+104_canonical_four_role_model.sql,migration,postgres/migrations/104_canonical_four_role_model.sql,Establish the canonical four-role portal authorization model

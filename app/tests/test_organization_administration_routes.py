@@ -20,7 +20,7 @@ def successful_super_admin_result() -> AuthenticationResult:
             portal_user_id=500,
             username="superadmin@example.com",
             display_name="Test Super Admin",
-            role_code="SUPER_ADMIN",
+            role_code="PLATFORM_ADMIN",
         ),
         status=AuthenticationStatus.AUTHENTICATED,
     )

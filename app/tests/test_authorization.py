@@ -13,7 +13,8 @@ from src.auth.models import AuthenticatedPortalUser
 @pytest.mark.parametrize(
     ("role_code", "expected_role"),
     [
-        ("SUPER_ADMIN", PortalRole.SUPER_ADMIN),
+        ("PLATFORM_ADMIN", PortalRole.PLATFORM_ADMIN),
+        ("ORG_ADMIN", PortalRole.ORG_ADMIN),
         ("OPERATOR", PortalRole.OPERATOR),
         ("VIEWER", PortalRole.VIEWER),
     ],
@@ -50,24 +51,54 @@ def test_unknown_portal_role_fails_closed() -> None:
     ("role_code", "permission", "expected"),
     [
         (
-            "SUPER_ADMIN",
+            "PLATFORM_ADMIN",
             PortalPermission.VIEW_ADMIN_PORTAL,
             True,
         ),
         (
-            "SUPER_ADMIN",
+            "PLATFORM_ADMIN",
             PortalPermission.EDIT_ONBOARDING_DRAFT,
             True,
         ),
         (
-            "SUPER_ADMIN",
+            "PLATFORM_ADMIN",
             PortalPermission.SUBMIT_ONBOARDING_DRAFT,
             True,
         ),
         (
-            "SUPER_ADMIN",
+            "PLATFORM_ADMIN",
             PortalPermission.MANAGE_PORTAL_USERS,
             True,
+        ),
+        (
+            "ORG_ADMIN",
+            PortalPermission.VIEW_ADMIN_PORTAL,
+            True,
+        ),
+        (
+            "ORG_ADMIN",
+            PortalPermission.EDIT_ONBOARDING_DRAFT,
+            True,
+        ),
+        (
+            "ORG_ADMIN",
+            PortalPermission.SUBMIT_ONBOARDING_DRAFT,
+            True,
+        ),
+        (
+            "ORG_ADMIN",
+            PortalPermission.MANAGE_ORGANIZATIONS,
+            False,
+        ),
+        (
+            "ORG_ADMIN",
+            PortalPermission.MANAGE_PORTAL_USERS,
+            False,
+        ),
+        (
+            "ORG_ADMIN",
+            PortalPermission.RETRY_GRAFANA_PROVISIONING,
+            False,
         ),
         (
             "OPERATOR",
@@ -110,7 +141,7 @@ def test_unknown_portal_role_fails_closed() -> None:
             False,
         ),
         (
-            "SUPER_ADMIN",
+            "PLATFORM_ADMIN",
             PortalPermission.RETRY_GRAFANA_PROVISIONING,
             True,
         ),

@@ -49,7 +49,8 @@ def deserialize_authenticated_user(
         or not isinstance(display_name, str)
         or not display_name.strip()
         or role_code not in {
-            "SUPER_ADMIN",
+            "PLATFORM_ADMIN",
+            "ORG_ADMIN",
             "OPERATOR",
             "VIEWER",
         }

@@ -666,7 +666,7 @@ async def get_visible_onboarding_draft(
     """
     Return one active draft visible to the authenticated portal user.
 
-    PostgreSQL enforces ownership and SUPER_ADMIN override. This helper keeps
+    PostgreSQL enforces ownership and PLATFORM_ADMIN override. This helper keeps
     identity propagation consistent across every onboarding route.
     """
 

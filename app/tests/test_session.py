@@ -93,7 +93,7 @@ def test_invalid_session_payloads_fail_closed(
 
 @pytest.mark.parametrize(
     "role_code",
-    ["SUPER_ADMIN", "OPERATOR", "VIEWER"],
+    ["PLATFORM_ADMIN", "ORG_ADMIN", "OPERATOR", "VIEWER"],
 )
 def test_deserializer_accepts_only_controlled_roles(
     role_code: str,

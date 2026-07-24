@@ -123,14 +123,14 @@ def test_super_admin_unknown_route_reaches_router(
     login_as(
         portal_client,
         monkeypatch,
-        "SUPER_ADMIN",
+        "PLATFORM_ADMIN",
     )
 
     response = portal_client.patch(
         "/not-a-real-admin-route"
     )
 
-    # SUPER_ADMIN passes authorization; FastAPI then reports no such route.
+    # PLATFORM_ADMIN passes authorization; FastAPI then reports no such route.
     assert response.status_code == 404
 
 @pytest.mark.parametrize(
@@ -167,7 +167,7 @@ def test_super_admin_organization_write_reaches_router(
     login_as(
         portal_client,
         monkeypatch,
-        "SUPER_ADMIN",
+        "PLATFORM_ADMIN",
     )
 
     response = portal_client.post(
@@ -175,6 +175,6 @@ def test_super_admin_organization_write_reaches_router(
         data={},
     )
 
-    # SUPER_ADMIN passes authorization and reaches the real route.
+    # PLATFORM_ADMIN passes authorization and reaches the real route.
     # FastAPI rejects the empty form because required fields are missing.
     assert response.status_code == 422
