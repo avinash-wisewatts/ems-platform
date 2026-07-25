@@ -124,6 +124,16 @@ from src.location_management_service import (
     create_space,
     list_accessible_physical_locations,
 )
+from src.asset_management import (
+    ASSET_LIFECYCLE_STATUSES,
+    METERING_REQUIREMENTS,
+    AssetManagementValidationError,
+    validate_asset_submission,
+)
+from src.asset_management_service import (
+    create_asset,
+    list_accessible_assets,
+)
 
 settings = get_settings()
 
@@ -166,6 +176,11 @@ def portal_template_context(request: Request) -> dict:
         or path.startswith("/administration/locations/")
     ):
         active_navigation_key = "locations"
+    elif (
+        path == "/administration/assets"
+        or path.startswith("/administration/assets/")
+    ):
+        active_navigation_key = "assets"
     else:
         active_navigation_key = None
 
@@ -1190,6 +1205,174 @@ async def create_location_administration(
 
     return await render_location_administration(
         request,
+        result=result,
+        status_code=201,
+    )
+
+
+async def render_asset_administration(
+    request: Request,
+    *,
+    form_data: dict | None = None,
+    result: dict | None = None,
+    error: str | None = None,
+    status_code: int = 200,
+) -> HTMLResponse:
+    """Render independent asset inventory administration."""
+
+    user = require_authenticated_portal_user(request)
+
+    organization_rows = await list_organizations()
+    organizations = [
+        organization
+        for organization in organization_rows
+        if (
+            user.role_code == "PLATFORM_ADMIN"
+            or str(organization["id"])
+            == str(user.organization_id)
+        )
+    ]
+
+    hierarchy_rows = await list_accessible_physical_locations(
+        portal_user_id=user.portal_user_id,
+    )
+    assets = await list_accessible_assets(
+        portal_user_id=user.portal_user_id,
+    )
+    asset_types = await list_asset_types()
+
+    serializable_hierarchy_rows = [
+        {
+            key: str(value) if isinstance(value, UUID) else value
+            for key, value in row.items()
+        }
+        for row in hierarchy_rows
+    ]
+
+    return templates.TemplateResponse(
+        request=request,
+        name="assets.html",
+        context={
+            "environment": settings.app_env,
+            "page_title": "Assets",
+            "organizations": organizations,
+            "hierarchy_rows": serializable_hierarchy_rows,
+            "assets": assets,
+            "asset_types": asset_types,
+            "asset_lifecycle_statuses": (
+                ASSET_LIFECYCLE_STATUSES
+            ),
+            "metering_requirements": METERING_REQUIREMENTS,
+            "form_data": form_data or {},
+            "result": result,
+            "error": error,
+            "active_navigation_key": "assets",
+        },
+        status_code=status_code,
+    )
+
+
+@app.get(
+    "/administration/assets",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def asset_administration(
+    request: Request,
+) -> HTMLResponse:
+    """Display independent asset inventory administration."""
+
+    return await render_asset_administration(
+        request,
+        form_data={
+            "lifecycle_status": "ACTIVE",
+            "metering_requirement": "NOT_REQUIRED",
+        },
+    )
+
+
+@app.post(
+    "/administration/assets",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def create_asset_administration(
+    request: Request,
+    organization_id: Annotated[str, Form()],
+    asset_location_site_id: Annotated[str, Form()],
+    asset_name: Annotated[str, Form()],
+    asset_type_id: Annotated[str, Form()] = "",
+    lifecycle_status: Annotated[str, Form()] = "ACTIVE",
+    metering_requirement: Annotated[str, Form()] = (
+        "NOT_REQUIRED"
+    ),
+    parent_asset_id: Annotated[str, Form()] = "",
+    asset_location_building_id: Annotated[str, Form()] = "",
+    asset_location_floor_id: Annotated[str, Form()] = "",
+    asset_location_space_id: Annotated[str, Form()] = "",
+) -> HTMLResponse:
+    """Create one independent asset without requiring a device."""
+
+    user = require_authenticated_portal_user(request)
+
+    submitted_form_data = {
+        "organization_id": organization_id,
+        "site_id": asset_location_site_id,
+        "asset_name": asset_name,
+        "asset_type_id": asset_type_id,
+        "lifecycle_status": lifecycle_status,
+        "metering_requirement": metering_requirement,
+        "parent_asset_id": parent_asset_id,
+        "building_id": asset_location_building_id,
+        "floor_id": asset_location_floor_id,
+        "space_id": asset_location_space_id,
+    }
+
+    try:
+        validated = validate_asset_submission(
+            organization_id=organization_id,
+            site_id=asset_location_site_id,
+            asset_name=asset_name,
+            asset_type_id=asset_type_id,
+            lifecycle_status=lifecycle_status,
+            metering_requirement=metering_requirement,
+            parent_asset_id=parent_asset_id,
+            building_id=asset_location_building_id,
+            floor_id=asset_location_floor_id,
+            space_id=asset_location_space_id,
+        )
+    except AssetManagementValidationError as exc:
+        return await render_asset_administration(
+            request,
+            form_data=submitted_form_data,
+            error=str(exc),
+            status_code=400,
+        )
+
+    try:
+        result = await create_asset(
+            portal_user_id=user.portal_user_id,
+            **validated,
+        )
+    except DatabaseError as exc:
+        return await render_asset_administration(
+            request,
+            form_data=submitted_form_data,
+            error=user_facing_database_error(
+                exc,
+                fallback=(
+                    "The database rejected the asset request."
+                ),
+            ),
+            status_code=409,
+        )
+
+    return await render_asset_administration(
+        request,
+        form_data={
+            "lifecycle_status": "ACTIVE",
+            "metering_requirement": "NOT_REQUIRED",
+        },
         result=result,
         status_code=201,
     )

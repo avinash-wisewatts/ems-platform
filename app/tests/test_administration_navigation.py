@@ -155,3 +155,13 @@ def test_epic_four_navigation_items_are_enabled(
     }
 
     assert items[item_key].href == expected_href
+
+
+def test_assets_navigation_item_is_enabled() -> None:
+    items = {
+        item.key: item
+        for section in administration_navigation("ORG_ADMIN")
+        for item in section.items
+    }
+
+    assert items["assets"].href == "/administration/assets"

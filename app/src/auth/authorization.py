@@ -154,6 +154,12 @@ def required_permission_for_request(
 
     if (
         normalized_method in {"POST", "PUT", "PATCH", "DELETE"}
+        and path.rstrip("/") == "/administration/assets"
+    ):
+        return PortalPermission.ASSET_MANAGE
+
+    if (
+        normalized_method in {"POST", "PUT", "PATCH", "DELETE"}
         and (
             path.rstrip("/") == "/administration/users"
             or path.startswith("/administration/users/")

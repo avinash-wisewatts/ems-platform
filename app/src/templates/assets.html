@@ -1,0 +1,277 @@
+{% extends "base.html" %}
+
+{% from
+    "components/physical_location_selector.html"
+    import physical_location_selector
+%}
+
+{% block title %}
+Assets | WiseWatts EMS
+{% endblock %}
+
+{% block breadcrumb %}
+<nav class="breadcrumb" aria-label="Breadcrumb">
+    <a href="/administration">Administration</a>
+    <span aria-hidden="true">/</span>
+    <span class="breadcrumb-current">Assets</span>
+</nav>
+{% endblock %}
+
+{% block content %}
+<section class="administration-page">
+    <header class="administration-page-header">
+        <div>
+            <p class="eyebrow">TENANT ADMINISTRATION</p>
+            <h2>{{ page_title }}</h2>
+            <p>
+                Create and organize asset inventory independently
+                of gateways, devices, and meter assignments.
+            </p>
+        </div>
+
+        <a class="button-link" href="/administration">
+            Back to administration
+        </a>
+    </header>
+
+    {% if error %}
+    <div class="form-error" role="alert">
+        {{ error }}
+    </div>
+    {% endif %}
+
+    {% if result %}
+    <section class="form-card">
+        <div class="section-heading">
+            <div>
+                <h3>Asset created</h3>
+                <p>
+                    The asset exists independently of commissioning.
+                </p>
+            </div>
+        </div>
+
+        <dl>
+            <dt>Asset ID</dt>
+            <dd>{{ result.asset_id }}</dd>
+
+            {% if result.lifecycle_status %}
+            <dt>Lifecycle status</dt>
+            <dd>{{ result.lifecycle_status }}</dd>
+            {% endif %}
+
+            {% if result.commissioning_status %}
+            <dt>Commissioning status</dt>
+            <dd>{{ result.commissioning_status }}</dd>
+            {% endif %}
+
+            {% if result.blocking_conditions %}
+            <dt>Blocking conditions</dt>
+            <dd>
+                {{ result.blocking_conditions|join(", ") }}
+            </dd>
+            {% endif %}
+
+            {% if result.audit_transaction_id %}
+            <dt>Audit transaction ID</dt>
+            <dd>{{ result.audit_transaction_id }}</dd>
+            {% endif %}
+        </dl>
+    </section>
+    {% endif %}
+
+    <section class="form-card">
+        <div class="section-heading">
+            <div>
+                <h3>Accessible assets</h3>
+                <p>
+                    Inventory visible within your tenant and site
+                    access scope.
+                </p>
+            </div>
+        </div>
+
+        {% if assets %}
+        <div class="table-scroll">
+            <table>
+                <thead>
+                    <tr>
+                        <th scope="col">Site</th>
+                        <th scope="col">Asset</th>
+                        <th scope="col">Type</th>
+                        <th scope="col">Parent</th>
+                        <th scope="col">Lifecycle</th>
+                        <th scope="col">Metering</th>
+                        <th scope="col">Coverage</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for asset in assets %}
+                    <tr>
+                        <td>
+                            {{ asset.site_name }}
+                            ({{ asset.site_code }})
+                        </td>
+                        <td>{{ asset.asset_name }}</td>
+                        <td>{{ asset.asset_type_name or "—" }}</td>
+                        <td>{{ asset.parent_asset_name or "—" }}</td>
+                        <td>{{ asset.lifecycle_status }}</td>
+                        <td>{{ asset.metering_requirement }}</td>
+                        <td>{{ asset.coverage_status }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p>No accessible assets are available.</p>
+        {% endif %}
+    </section>
+
+    <form
+        method="post"
+        action="/administration/assets"
+        class="form-card"
+        novalidate
+    >
+        <div class="section-heading">
+            <div>
+                <h3>Create asset</h3>
+                <p>
+                    Parent asset and detailed physical location
+                    are optional.
+                </p>
+            </div>
+        </div>
+
+        <div class="form-grid">
+            <label>
+                Organization
+                <select name="organization_id" required>
+                    <option value="">Select organization</option>
+                    {% for organization in organizations %}
+                    <option
+                        value="{{ organization.id }}"
+                        {% if (
+                            form_data.get('organization_id')
+                            == organization.id|string
+                        ) %}selected{% endif %}
+                    >
+                        {{ organization.organization_name }}
+                        ({{ organization.organization_code }})
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+
+            <label>
+                Asset name
+                <input
+                    name="asset_name"
+                    type="text"
+                    maxlength="200"
+                    required
+                    value="{{ form_data.get('asset_name', '') }}"
+                >
+            </label>
+
+            <label>
+                Asset type
+                <select name="asset_type_id" required>
+                    <option value="">Select asset type</option>
+                    {% for asset_type in asset_types %}
+                    <option
+                        value="{{ asset_type.id }}"
+                        {% if (
+                            form_data.get('asset_type_id')
+                            == asset_type.id|string
+                        ) %}selected{% endif %}
+                    >
+                        {{ asset_type.name }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+
+            <label>
+                Parent asset
+                <select name="parent_asset_id">
+                    <option value="">No parent asset</option>
+                    {% for asset in assets %}
+                    <option
+                        value="{{ asset.asset_id }}"
+                        {% if (
+                            form_data.get('parent_asset_id')
+                            == asset.asset_id|string
+                        ) %}selected{% endif %}
+                    >
+                        {{ asset.site_name }} /
+                        {{ asset.asset_name }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+
+            <label>
+                Lifecycle status
+                <select name="lifecycle_status" required>
+                    {% for status in asset_lifecycle_statuses %}
+                    <option
+                        value="{{ status }}"
+                        {% if (
+                            form_data.get(
+                                'lifecycle_status',
+                                'ACTIVE'
+                            ) == status
+                        ) %}selected{% endif %}
+                    >
+                        {{ status }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+
+            <label>
+                Metering requirement
+                <select name="metering_requirement" required>
+                    {% for requirement in metering_requirements %}
+                    <option
+                        value="{{ requirement }}"
+                        {% if (
+                            form_data.get(
+                                'metering_requirement',
+                                'NOT_REQUIRED'
+                            ) == requirement
+                        ) %}selected{% endif %}
+                    >
+                        {{ requirement }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+        </div>
+
+        {{ physical_location_selector(
+            "asset_location",
+            hierarchy_rows,
+            form_data.get('site_id', ''),
+            form_data.get('building_id', ''),
+            form_data.get('floor_id', ''),
+            form_data.get('space_id', ''),
+            true
+        ) }}
+
+        <button type="submit">Create asset</button>
+    </form>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script
+    src="{{ url_for(
+        'static',
+        path='/js/physical-location-selector.js'
+    ) }}"
+    defer
+></script>
+{% endblock %}

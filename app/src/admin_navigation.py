@@ -48,7 +48,13 @@ _PLATFORM_ITEMS = (
 _TENANT_ITEMS = (
     NavigationItem("sites", "Sites", "⌖", "/administration/sites", "Manage organization sites."),
     NavigationItem("locations", "Locations", "⌗", "/administration/locations", "Manage buildings, floors, and spaces."),
-    NavigationItem("assets", "Assets", "◆", None, "Manage independent asset inventory."),
+    NavigationItem(
+        "assets",
+        "Assets",
+        "◆",
+        "/administration/assets",
+        "Manage independent asset inventory.",
+    ),
     NavigationItem("gateways", "Gateways", "◇", None, "Register and manage gateways."),
     NavigationItem("devices", "Devices", "▣", None, "Register and manage devices."),
     NavigationItem("relationships", "Relationships", "⇄", None, "Manage asset-device assignments."),

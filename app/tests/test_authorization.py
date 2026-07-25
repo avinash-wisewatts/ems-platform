@@ -355,3 +355,23 @@ def test_epic_four_reads_require_dashboard_access(
         required_permission_for_request("GET", path)
         is PortalPermission.DASHBOARD_VIEW
     )
+
+
+def test_asset_administration_write_requires_asset_manage() -> None:
+    assert (
+        required_permission_for_request(
+            "POST",
+            "/administration/assets",
+        )
+        is PortalPermission.ASSET_MANAGE
+    )
+
+
+def test_asset_administration_read_requires_dashboard_access() -> None:
+    assert (
+        required_permission_for_request(
+            "GET",
+            "/administration/assets",
+        )
+        is PortalPermission.DASHBOARD_VIEW
+    )
