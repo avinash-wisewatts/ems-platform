@@ -316,3 +316,42 @@ def test_story_3_2_role_permission_mapping_is_declarative(
         permission.value
         for permission in ROLE_PERMISSIONS[role]
     } == expected_codes
+
+
+@pytest.mark.parametrize(
+    ("path", "permission"),
+    [
+        (
+            "/administration/sites",
+            PortalPermission.SITE_MANAGE,
+        ),
+        (
+            "/administration/locations",
+            PortalPermission.LOCATION_MANAGE,
+        ),
+    ],
+)
+def test_epic_four_writes_require_explicit_permissions(
+    path: str,
+    permission: PortalPermission,
+) -> None:
+    assert (
+        required_permission_for_request("POST", path)
+        is permission
+    )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/administration/sites",
+        "/administration/locations",
+    ],
+)
+def test_epic_four_reads_require_dashboard_access(
+    path: str,
+) -> None:
+    assert (
+        required_permission_for_request("GET", path)
+        is PortalPermission.DASHBOARD_VIEW
+    )

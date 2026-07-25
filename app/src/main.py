@@ -109,6 +109,21 @@ from src.onboarding.organization_service import (
 from src.onboarding.grafana_provisioning_service import (
     provision_grafana_for_organization,
 )
+from src.location_management import (
+    LIFECYCLE_STATUSES,
+    LocationManagementValidationError,
+    validate_building_submission,
+    validate_floor_submission,
+    validate_site_submission,
+    validate_space_submission,
+)
+from src.location_management_service import (
+    create_building,
+    create_floor,
+    create_site,
+    create_space,
+    list_accessible_physical_locations,
+)
 
 settings = get_settings()
 
@@ -141,6 +156,16 @@ def portal_template_context(request: Request) -> dict:
         or path.startswith("/administration/users/")
     ):
         active_navigation_key = "users"
+    elif (
+        path == "/administration/sites"
+        or path.startswith("/administration/sites/")
+    ):
+        active_navigation_key = "sites"
+    elif (
+        path == "/administration/locations"
+        or path.startswith("/administration/locations/")
+    ):
+        active_navigation_key = "locations"
     else:
         active_navigation_key = None
 
@@ -816,6 +841,357 @@ async def change_user_status_administration(
             "is_active": normalized_status == "true",
             "action": "status_changed",
         },
+    )
+
+
+async def render_site_administration(
+    request: Request,
+    *,
+    form_data: dict | None = None,
+    result: dict | None = None,
+    error: str | None = None,
+    status_code: int = 200,
+) -> HTMLResponse:
+    """Render independent site administration."""
+
+    user = require_authenticated_portal_user(request)
+
+    organization_rows = await list_organizations()
+    organizations = [
+        organization
+        for organization in organization_rows
+        if (
+            user.role_code == "PLATFORM_ADMIN"
+            or str(organization["id"]) == str(user.organization_id)
+        )
+    ]
+
+    hierarchy_rows = await list_accessible_physical_locations(
+        portal_user_id=user.portal_user_id,
+    )
+
+    sites_by_id: dict[str, dict] = {}
+
+    for row in hierarchy_rows:
+        site_id = row.get("site_id")
+
+        if site_id is None:
+            continue
+
+        sites_by_id.setdefault(
+            str(site_id),
+            {
+                "site_id": site_id,
+                "site_code": row.get("site_code"),
+                "site_name": row.get("site_name"),
+                "organization_id": row.get("organization_id"),
+                "organization_code": row.get("organization_code"),
+                "organization_name": row.get("organization_name"),
+            },
+        )
+
+    return templates.TemplateResponse(
+        request=request,
+        name="sites.html",
+        context={
+            "environment": settings.app_env,
+            "page_title": "Sites",
+            "organizations": organizations,
+            "sites": list(sites_by_id.values()),
+            "lifecycle_statuses": LIFECYCLE_STATUSES,
+            "form_data": form_data or {},
+            "result": result,
+            "error": error,
+            "active_navigation_key": "sites",
+        },
+        status_code=status_code,
+    )
+
+
+@app.get(
+    "/administration/sites",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def site_administration(
+    request: Request,
+) -> HTMLResponse:
+    """Display independent site administration."""
+
+    return await render_site_administration(
+        request,
+        form_data={
+            "site_timezone": "Asia/Kolkata",
+            "lifecycle_status": "ACTIVE",
+        },
+    )
+
+
+@app.post(
+    "/administration/sites",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def create_site_administration(
+    request: Request,
+    organization_id: Annotated[str, Form()],
+    site_name: Annotated[str, Form()],
+    site_code: Annotated[str, Form()],
+    site_timezone: Annotated[str, Form()],
+    lifecycle_status: Annotated[str, Form()],
+) -> HTMLResponse:
+    """Create one site independently under an accessible organization."""
+
+    user = require_authenticated_portal_user(request)
+
+    submitted_form_data = {
+        "organization_id": organization_id,
+        "site_name": site_name,
+        "site_code": site_code,
+        "site_timezone": site_timezone,
+        "lifecycle_status": lifecycle_status,
+    }
+
+    try:
+        validated = validate_site_submission(
+            organization_id=organization_id,
+            site_name=site_name,
+            site_code=site_code,
+            site_timezone=site_timezone,
+            lifecycle_status=lifecycle_status,
+        )
+    except LocationManagementValidationError as exc:
+        return await render_site_administration(
+            request,
+            form_data=submitted_form_data,
+            error=str(exc),
+            status_code=400,
+        )
+
+    try:
+        result = await create_site(
+            portal_user_id=user.portal_user_id,
+            organization_id=validated["organization_id"],
+            name=validated["name"],
+            code=validated["code"],
+            timezone=validated["timezone"],
+            lifecycle_status=validated["lifecycle_status"],
+        )
+    except DatabaseError as exc:
+        return await render_site_administration(
+            request,
+            form_data=submitted_form_data,
+            error=user_facing_database_error(
+                exc,
+                fallback="The database rejected the site request.",
+            ),
+            status_code=409,
+        )
+
+    return await render_site_administration(
+        request,
+        form_data={
+            "site_timezone": validated["timezone"],
+            "lifecycle_status": "ACTIVE",
+        },
+        result=result,
+        status_code=201,
+    )
+
+
+async def render_location_administration(
+    request: Request,
+    *,
+    form_data: dict | None = None,
+    result: dict | None = None,
+    error: str | None = None,
+    status_code: int = 200,
+) -> HTMLResponse:
+    """Render building, floor, and space administration."""
+
+    user = require_authenticated_portal_user(request)
+
+    hierarchy_rows = await list_accessible_physical_locations(
+        portal_user_id=user.portal_user_id,
+    )
+
+    serializable_hierarchy_rows = [
+        {
+            key: str(value) if isinstance(value, UUID) else value
+            for key, value in row.items()
+        }
+        for row in hierarchy_rows
+    ]
+
+    sites_by_id: dict[str, dict] = {}
+    buildings_by_id: dict[str, dict] = {}
+    floors_by_id: dict[str, dict] = {}
+
+    for row in hierarchy_rows:
+        site_id = row.get("site_id")
+        building_id = row.get("building_id")
+        floor_id = row.get("floor_id")
+
+        if site_id is not None:
+            sites_by_id.setdefault(
+                str(site_id),
+                {
+                    "site_id": site_id,
+                    "site_code": row.get("site_code"),
+                    "site_name": row.get("site_name"),
+                    "organization_name": row.get(
+                        "organization_name"
+                    ),
+                },
+            )
+
+        if building_id is not None:
+            buildings_by_id.setdefault(
+                str(building_id),
+                {
+                    "building_id": building_id,
+                    "building_code": row.get("building_code"),
+                    "building_name": row.get("building_name"),
+                    "site_id": site_id,
+                    "site_name": row.get("site_name"),
+                },
+            )
+
+        if floor_id is not None:
+            floors_by_id.setdefault(
+                str(floor_id),
+                {
+                    "floor_id": floor_id,
+                    "floor_code": row.get("floor_code"),
+                    "floor_name": row.get("floor_name"),
+                    "building_id": building_id,
+                    "building_name": row.get(
+                        "building_name"
+                    ),
+                    "site_name": row.get("site_name"),
+                },
+            )
+
+    return templates.TemplateResponse(
+        request=request,
+        name="locations.html",
+        context={
+            "environment": settings.app_env,
+            "page_title": "Locations",
+            "hierarchy_rows": serializable_hierarchy_rows,
+            "sites": list(sites_by_id.values()),
+            "buildings": list(buildings_by_id.values()),
+            "floors": list(floors_by_id.values()),
+            "form_data": form_data or {},
+            "result": result,
+            "error": error,
+            "active_navigation_key": "locations",
+        },
+        status_code=status_code,
+    )
+
+
+@app.get(
+    "/administration/locations",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def location_administration(
+    request: Request,
+) -> HTMLResponse:
+    """Display independent physical-location administration."""
+
+    return await render_location_administration(request)
+
+
+@app.post(
+    "/administration/locations",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def create_location_administration(
+    request: Request,
+    location_type: Annotated[str, Form()],
+    parent_id: Annotated[str, Form()],
+    location_name: Annotated[str, Form()],
+    location_code: Annotated[str, Form()],
+) -> HTMLResponse:
+    """Create one building, floor, or space."""
+
+    user = require_authenticated_portal_user(request)
+    normalized_type = location_type.strip().upper()
+
+    submitted_form_data = {
+        "location_type": normalized_type,
+        "parent_id": parent_id,
+        "location_name": location_name,
+        "location_code": location_code,
+    }
+
+    try:
+        if normalized_type == "BUILDING":
+            validated = validate_building_submission(
+                site_id=parent_id,
+                building_name=location_name,
+                building_code=location_code,
+            )
+            result = await create_building(
+                portal_user_id=user.portal_user_id,
+                **validated,
+            )
+
+        elif normalized_type == "FLOOR":
+            validated = validate_floor_submission(
+                building_id=parent_id,
+                floor_name=location_name,
+                floor_code=location_code,
+            )
+            result = await create_floor(
+                portal_user_id=user.portal_user_id,
+                **validated,
+            )
+
+        elif normalized_type == "SPACE":
+            validated = validate_space_submission(
+                floor_id=parent_id,
+                space_name=location_name,
+                space_code=location_code,
+            )
+            result = await create_space(
+                portal_user_id=user.portal_user_id,
+                **validated,
+            )
+
+        else:
+            raise LocationManagementValidationError(
+                "Select a valid location type."
+            )
+
+    except LocationManagementValidationError as exc:
+        return await render_location_administration(
+            request,
+            form_data=submitted_form_data,
+            error=str(exc),
+            status_code=400,
+        )
+
+    except DatabaseError as exc:
+        return await render_location_administration(
+            request,
+            form_data=submitted_form_data,
+            error=user_facing_database_error(
+                exc,
+                fallback=(
+                    "The database rejected the location request."
+                ),
+            ),
+            status_code=409,
+        )
+
+    return await render_location_administration(
+        request,
+        result=result,
+        status_code=201,
     )
 
 

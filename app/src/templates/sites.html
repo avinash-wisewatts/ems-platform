@@ -1,0 +1,198 @@
+{% extends "base.html" %}
+
+{% block title %}
+Sites | WiseWatts EMS
+{% endblock %}
+
+{% block breadcrumb %}
+<nav class="breadcrumb" aria-label="Breadcrumb">
+    <a href="/administration">Administration</a>
+    <span aria-hidden="true">/</span>
+    <span class="breadcrumb-current">Sites</span>
+</nav>
+{% endblock %}
+
+{% block content %}
+<section class="administration-page">
+    <header class="administration-page-header">
+        <div>
+            <p class="eyebrow">TENANT ADMINISTRATION</p>
+            <h2>{{ page_title }}</h2>
+            <p>
+                Create a site independently under an existing organization.
+                Buildings, assets, gateways, and devices remain optional.
+            </p>
+        </div>
+
+        <a class="button-link" href="/administration">
+            Back to administration
+        </a>
+    </header>
+
+    {% if error %}
+    <div class="form-error" role="alert">
+        {{ error }}
+    </div>
+    {% endif %}
+
+    {% if result %}
+    <section class="form-card">
+        <div class="section-heading">
+            <div>
+                <h3>Site created</h3>
+                <p>The EMS site was created successfully.</p>
+            </div>
+        </div>
+
+        <dl>
+            <dt>Site ID</dt>
+            <dd>{{ result.site_id }}</dd>
+
+            {% if result.lifecycle_status %}
+            <dt>Lifecycle status</dt>
+            <dd>{{ result.lifecycle_status }}</dd>
+            {% endif %}
+
+            {% if result.audit_transaction_id %}
+            <dt>Audit transaction ID</dt>
+            <dd>{{ result.audit_transaction_id }}</dd>
+            {% endif %}
+        </dl>
+    </section>
+    {% endif %}
+
+    <section class="form-card">
+        <div class="section-heading">
+            <div>
+                <h3>Accessible sites</h3>
+                <p>Sites currently visible within your access scope.</p>
+            </div>
+        </div>
+
+        {% if sites %}
+        <div class="table-scroll">
+            <table>
+                <thead>
+                    <tr>
+                        <th scope="col">Organization</th>
+                        <th scope="col">Site</th>
+                        <th scope="col">Code</th>
+                        <th scope="col">Site ID</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for site in sites %}
+                    <tr>
+                        <td>{{ site.organization_name }}</td>
+                        <td>{{ site.site_name }}</td>
+                        <td>{{ site.site_code }}</td>
+                        <td>{{ site.site_id }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p>No accessible sites are available.</p>
+        {% endif %}
+    </section>
+
+    <form
+        method="post"
+        action="/administration/sites"
+        class="form-card"
+        novalidate
+    >
+        <div class="section-heading">
+            <div>
+                <h3>Create site</h3>
+                <p>
+                    The organization owner is permanent after creation.
+                </p>
+            </div>
+        </div>
+
+        <div class="form-grid">
+            <label>
+                Organization
+                <select name="organization_id" required>
+                    <option value="">Select organization</option>
+                    {% for organization in organizations %}
+                    <option
+                        value="{{ organization.id }}"
+                        {% if (
+                            form_data.get('organization_id')
+                            == organization.id|string
+                        ) %}selected{% endif %}
+                    >
+                        {{ organization.organization_name }}
+                        ({{ organization.organization_code }})
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+
+            <label>
+                Site name
+                <input
+                    name="site_name"
+                    type="text"
+                    maxlength="200"
+                    required
+                    value="{{ form_data.get('site_name', '') }}"
+                >
+            </label>
+
+            <label>
+                Site code
+                <span class="field-help">
+                    Use A-Z, 0-9, and underscore.
+                </span>
+                <input
+                    name="site_code"
+                    type="text"
+                    maxlength="100"
+                    pattern="[A-Za-z][A-Za-z0-9_]*"
+                    required
+                    value="{{ form_data.get('site_code', '') }}"
+                >
+            </label>
+
+            <label>
+                IANA timezone
+                <input
+                    name="site_timezone"
+                    type="text"
+                    maxlength="100"
+                    required
+                    value="{{ form_data.get(
+                        'site_timezone',
+                        'Asia/Kolkata'
+                    ) }}"
+                >
+            </label>
+
+            <label>
+                Lifecycle status
+                <select name="lifecycle_status" required>
+                    {% for status in lifecycle_statuses %}
+                    <option
+                        value="{{ status }}"
+                        {% if (
+                            form_data.get(
+                                'lifecycle_status',
+                                'ACTIVE'
+                            ) == status
+                        ) %}selected{% endif %}
+                    >
+                        {{ status }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+        </div>
+
+        <button type="submit">Create site</button>
+    </form>
+</section>
+{% endblock %}

@@ -135,3 +135,23 @@ def test_org_admin_workspace_hides_platform_items(
     assert "Organizations" not in response.text
     assert "Users" in response.text
     assert "Open onboarding" in response.text
+
+
+@pytest.mark.parametrize(
+    ("item_key", "expected_href"),
+    [
+        ("sites", "/administration/sites"),
+        ("locations", "/administration/locations"),
+    ],
+)
+def test_epic_four_navigation_items_are_enabled(
+    item_key: str,
+    expected_href: str,
+) -> None:
+    items = {
+        item.key: item
+        for section in administration_navigation("ORG_ADMIN")
+        for item in section.items
+    }
+
+    assert items[item_key].href == expected_href

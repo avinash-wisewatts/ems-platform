@@ -1,0 +1,329 @@
+{% extends "base.html" %}
+
+{% from
+    "components/physical_location_selector.html"
+    import physical_location_selector
+%}
+
+{% block title %}
+Locations | WiseWatts EMS
+{% endblock %}
+
+{% block breadcrumb %}
+<nav class="breadcrumb" aria-label="Breadcrumb">
+    <a href="/administration">Administration</a>
+    <span aria-hidden="true">/</span>
+    <span class="breadcrumb-current">Locations</span>
+</nav>
+{% endblock %}
+
+{% block content %}
+<section class="administration-page">
+    <header class="administration-page-header">
+        <div>
+            <p class="eyebrow">TENANT ADMINISTRATION</p>
+            <h2>{{ page_title }}</h2>
+            <p>
+                Manage the optional physical hierarchy of buildings,
+                floors, and spaces beneath accessible sites.
+            </p>
+        </div>
+
+        <a class="button-link" href="/administration">
+            Back to administration
+        </a>
+    </header>
+
+    {% if error %}
+    <div class="form-error" role="alert">
+        {{ error }}
+    </div>
+    {% endif %}
+
+    {% if result %}
+    <section class="form-card">
+        <div class="section-heading">
+            <div>
+                <h3>{{ result.entity_type|title }} created</h3>
+                <p>The physical location was created successfully.</p>
+            </div>
+        </div>
+
+        <dl>
+            <dt>Entity ID</dt>
+            <dd>{{ result.entity_id }}</dd>
+
+            {% if result.audit_transaction_id %}
+            <dt>Audit transaction ID</dt>
+            <dd>{{ result.audit_transaction_id }}</dd>
+            {% endif %}
+        </dl>
+    </section>
+    {% endif %}
+
+    <section class="form-card">
+        <div class="section-heading">
+            <div>
+                <h3>Accessible hierarchy</h3>
+                <p>
+                    The most detailed available location is shown
+                    on each row.
+                </p>
+            </div>
+        </div>
+
+        {% if hierarchy_rows %}
+        <div class="table-scroll">
+            <table>
+                <thead>
+                    <tr>
+                        <th scope="col">Organization</th>
+                        <th scope="col">Site</th>
+                        <th scope="col">Building</th>
+                        <th scope="col">Floor</th>
+                        <th scope="col">Space</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in hierarchy_rows %}
+                    <tr>
+                        <td>{{ row.organization_name }}</td>
+                        <td>
+                            {{ row.site_name }}
+                            {% if row.site_code %}
+                            ({{ row.site_code }})
+                            {% endif %}
+                        </td>
+                        <td>
+                            {{ row.building_name or "—" }}
+                            {% if row.building_code %}
+                            ({{ row.building_code }})
+                            {% endif %}
+                        </td>
+                        <td>
+                            {{ row.floor_name or "—" }}
+                            {% if row.floor_code %}
+                            ({{ row.floor_code }})
+                            {% endif %}
+                        </td>
+                        <td>
+                            {{ row.space_name or "—" }}
+                            {% if row.space_code %}
+                            ({{ row.space_code }})
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p>
+            No accessible sites exist yet. Create a site before
+            adding buildings, floors, or spaces.
+        </p>
+        {% endif %}
+    </section>
+
+    <section class="form-card">
+        <div class="section-heading">
+            <div>
+                <h3>Shared physical-location selector</h3>
+                <p>
+                    This reusable selector stores the most-specific
+                    selected site, building, floor, or space.
+                </p>
+            </div>
+        </div>
+
+        {{ physical_location_selector(
+            "physical_location",
+            hierarchy_rows
+        ) }}
+    </section>
+
+    <div class="administration-grid">
+        <form
+            method="post"
+            action="/administration/locations"
+            class="form-card"
+            novalidate
+        >
+            <input
+                type="hidden"
+                name="location_type"
+                value="BUILDING"
+            >
+
+            <div class="section-heading">
+                <div>
+                    <h3>Create building</h3>
+                    <p>A building belongs directly to a site.</p>
+                </div>
+            </div>
+
+            <label>
+                Site
+                <select name="parent_id" required>
+                    <option value="">Select site</option>
+                    {% for site in sites %}
+                    <option value="{{ site.site_id }}">
+                        {{ site.organization_name }} /
+                        {{ site.site_name }}
+                        ({{ site.site_code }})
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+
+            <label>
+                Building name
+                <input
+                    name="location_name"
+                    type="text"
+                    maxlength="200"
+                    required
+                >
+            </label>
+
+            <label>
+                Building code
+                <input
+                    name="location_code"
+                    type="text"
+                    maxlength="100"
+                    pattern="[A-Za-z][A-Za-z0-9_]*"
+                    required
+                >
+            </label>
+
+            <button type="submit">Create building</button>
+        </form>
+
+        <form
+            method="post"
+            action="/administration/locations"
+            class="form-card"
+            novalidate
+        >
+            <input
+                type="hidden"
+                name="location_type"
+                value="FLOOR"
+            >
+
+            <div class="section-heading">
+                <div>
+                    <h3>Create floor</h3>
+                    <p>A floor belongs directly to a building.</p>
+                </div>
+            </div>
+
+            <label>
+                Building
+                <select name="parent_id" required>
+                    <option value="">Select building</option>
+                    {% for building in buildings %}
+                    <option value="{{ building.building_id }}">
+                        {{ building.site_name }} /
+                        {{ building.building_name }}
+                        ({{ building.building_code }})
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+
+            <label>
+                Floor name
+                <input
+                    name="location_name"
+                    type="text"
+                    maxlength="200"
+                    required
+                >
+            </label>
+
+            <label>
+                Floor code
+                <input
+                    name="location_code"
+                    type="text"
+                    maxlength="100"
+                    pattern="[A-Za-z][A-Za-z0-9_]*"
+                    required
+                >
+            </label>
+
+            <button type="submit">Create floor</button>
+        </form>
+
+        <form
+            method="post"
+            action="/administration/locations"
+            class="form-card"
+            novalidate
+        >
+            <input
+                type="hidden"
+                name="location_type"
+                value="SPACE"
+            >
+
+            <div class="section-heading">
+                <div>
+                    <h3>Create space</h3>
+                    <p>A space belongs directly to a floor.</p>
+                </div>
+            </div>
+
+            <label>
+                Floor
+                <select name="parent_id" required>
+                    <option value="">Select floor</option>
+                    {% for floor in floors %}
+                    <option value="{{ floor.floor_id }}">
+                        {{ floor.site_name }} /
+                        {{ floor.building_name }} /
+                        {{ floor.floor_name }}
+                        ({{ floor.floor_code }})
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+
+            <label>
+                Space name
+                <input
+                    name="location_name"
+                    type="text"
+                    maxlength="200"
+                    required
+                >
+            </label>
+
+            <label>
+                Space code
+                <input
+                    name="location_code"
+                    type="text"
+                    maxlength="100"
+                    pattern="[A-Za-z][A-Za-z0-9_]*"
+                    required
+                >
+            </label>
+
+            <button type="submit">Create space</button>
+        </form>
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script
+    src="{{ url_for(
+        'static',
+        path='/js/physical-location-selector.js'
+    ) }}"
+    defer
+></script>
+{% endblock %}

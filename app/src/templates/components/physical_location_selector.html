@@ -1,0 +1,105 @@
+{% macro physical_location_selector(
+    field_prefix,
+    hierarchy_rows,
+    selected_site_id="",
+    selected_building_id="",
+    selected_floor_id="",
+    selected_space_id="",
+    required_site=true
+) %}
+<fieldset
+    class="physical-location-selector"
+    data-physical-location-selector
+>
+    <legend>Physical location</legend>
+
+    <p class="field-help">
+        Select the most specific known location. Building, floor,
+        and space are optional.
+    </p>
+
+    <label>
+        Site
+        <select
+            name="{{ field_prefix }}_site_id"
+            data-location-level="site"
+            {% if required_site %}required{% endif %}
+        >
+            <option value="">Select site</option>
+            {% set seen_sites = namespace(ids=[]) %}
+            {% for row in hierarchy_rows %}
+                {% set site_key = row.site_id|string %}
+                {% if (
+                    row.site_id
+                    and site_key not in seen_sites.ids
+                ) %}
+                    {% set seen_sites.ids = seen_sites.ids + [site_key] %}
+                    <option
+                        value="{{ row.site_id }}"
+                        {% if site_key == selected_site_id|string %}
+                        selected
+                        {% endif %}
+                    >
+                        {{ row.organization_name }} /
+                        {{ row.site_name }} ({{ row.site_code }})
+                    </option>
+                {% endif %}
+            {% endfor %}
+        </select>
+    </label>
+
+    <label>
+        Building
+        <select
+            name="{{ field_prefix }}_building_id"
+            data-location-level="building"
+            data-selected-value="{{ selected_building_id }}"
+        >
+            <option value="">Site level only</option>
+        </select>
+    </label>
+
+    <label>
+        Floor
+        <select
+            name="{{ field_prefix }}_floor_id"
+            data-location-level="floor"
+            data-selected-value="{{ selected_floor_id }}"
+        >
+            <option value="">Building level only</option>
+        </select>
+    </label>
+
+    <label>
+        Space
+        <select
+            name="{{ field_prefix }}_space_id"
+            data-location-level="space"
+            data-selected-value="{{ selected_space_id }}"
+        >
+            <option value="">Floor level only</option>
+        </select>
+    </label>
+
+    <input
+        type="hidden"
+        name="{{ field_prefix }}_location_id"
+        data-location-result
+        value="{{
+            selected_space_id
+            or selected_floor_id
+            or selected_building_id
+            or selected_site_id
+        }}"
+    >
+
+    <p class="field-help" data-location-path>
+        No location selected.
+    </p>
+
+    <script
+        type="application/json"
+        data-location-options
+    >{{ hierarchy_rows|tojson }}</script>
+</fieldset>
+{% endmacro %}

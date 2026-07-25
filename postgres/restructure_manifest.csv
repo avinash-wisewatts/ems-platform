@@ -137,3 +137,5 @@ source_file,target_category,target_path,notes
 107_organization_user_management.sql,migration,postgres/migrations/107_organization_user_management.sql,Add controlled organization user management functions
 108_site_scoped_user_access.sql,migration,postgres/migrations/108_site_scoped_user_access.sql,Add organization-wide and selected-site portal access scopes
 109_portal_user_site_scope_controls.sql,migration,postgres/migrations/109_portal_user_site_scope_controls.sql,Add controlled portal site-scope assignment and integrity
+110_independent_site_location_management.sql,migration,postgres/migrations/110_independent_site_location_management.sql,Add controlled independent site and physical-location management
+111_site_location_contract_corrections.sql,migration,postgres/migrations/111_site_location_contract_corrections.sql,Align site codes and support draft site location hierarchies
