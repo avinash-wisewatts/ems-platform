@@ -382,3 +382,204 @@ def test_asset_administration_preserves_form_on_database_error(
     assert "Main Chiller" in response.text
     assert "DIRECT_METER_REQUIRED" in response.text
     assert "database rejected the asset request" in response.text.lower()
+
+
+def test_asset_administration_updates_asset(
+    portal_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login_platform_admin(portal_client, monkeypatch)
+
+    captured: dict = {}
+
+    async def fake_update_asset(**kwargs) -> dict:
+        captured.update(kwargs)
+
+        return {
+            "success": True,
+            "entity_type": "ASSET",
+            "entity_id": str(NEW_ASSET_ID),
+            "asset_id": str(NEW_ASSET_ID),
+            "lifecycle_status": "INACTIVE",
+            "commissioning_status": "NOT_STARTED",
+            "validation_warnings": [],
+            "blocking_conditions": [],
+            "audit_transaction_id": (
+                "99999999-9999-4999-8999-999999999999"
+            ),
+        }
+
+    monkeypatch.setattr(
+        "src.main.update_asset",
+        fake_update_asset,
+    )
+
+    response = portal_client.post(
+        f"/administration/assets/{PARENT_ASSET_ID}",
+        data={
+            "asset_name": "Updated Plant",
+            "asset_type_id": str(ASSET_TYPE_ID),
+            "lifecycle_status": "INACTIVE",
+            "metering_requirement": "DIRECT_METER_REQUIRED",
+            "parent_asset_id": "",
+            "asset_location_site_id": str(SITE_ID),
+            "asset_location_building_id": str(BUILDING_ID),
+            "asset_location_floor_id": str(FLOOR_ID),
+            "asset_location_space_id": str(SPACE_ID),
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured == {
+        "portal_user_id": 500,
+        "asset_id": str(PARENT_ASSET_ID),
+        "asset_name": "Updated Plant",
+        "asset_type_id": str(ASSET_TYPE_ID),
+        "lifecycle_status": "INACTIVE",
+        "metering_requirement": "DIRECT_METER_REQUIRED",
+        "parent_asset_id": None,
+        "building_id": str(BUILDING_ID),
+        "floor_id": str(FLOOR_ID),
+        "space_id": str(SPACE_ID),
+    }
+
+
+def test_asset_administration_derives_immutable_ownership(
+    portal_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login_platform_admin(portal_client, monkeypatch)
+
+    captured: dict = {}
+
+    async def fake_update_asset(**kwargs) -> dict:
+        captured.update(kwargs)
+
+        return {
+            "success": True,
+            "entity_type": "ASSET",
+            "entity_id": str(PARENT_ASSET_ID),
+            "asset_id": str(PARENT_ASSET_ID),
+            "lifecycle_status": "ACTIVE",
+            "commissioning_status": "COMMISSIONED",
+            "validation_warnings": [],
+            "blocking_conditions": [],
+            "audit_transaction_id": (
+                "99999999-9999-4999-8999-999999999999"
+            ),
+        }
+
+    monkeypatch.setattr(
+        "src.main.update_asset",
+        fake_update_asset,
+    )
+
+    response = portal_client.post(
+        f"/administration/assets/{PARENT_ASSET_ID}",
+        data={
+            "organization_id": (
+                "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+            ),
+            "site_id": (
+                "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+            ),
+            "asset_name": "Plant",
+            "asset_type_id": str(ASSET_TYPE_ID),
+            "lifecycle_status": "ACTIVE",
+            "metering_requirement": "NOT_REQUIRED",
+            "parent_asset_id": "",
+            "asset_location_site_id": str(SITE_ID),
+            "asset_location_building_id": "",
+            "asset_location_floor_id": "",
+            "asset_location_space_id": "",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "organization_id" not in captured
+    assert "site_id" not in captured
+
+
+def test_asset_administration_rejects_self_parent(
+    portal_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login_platform_admin(portal_client, monkeypatch)
+
+    response = portal_client.post(
+        f"/administration/assets/{PARENT_ASSET_ID}",
+        data={
+            "asset_name": "Plant",
+            "asset_type_id": str(ASSET_TYPE_ID),
+            "lifecycle_status": "ACTIVE",
+            "metering_requirement": "NOT_REQUIRED",
+            "parent_asset_id": str(PARENT_ASSET_ID),
+            "asset_location_site_id": str(SITE_ID),
+            "asset_location_building_id": "",
+            "asset_location_floor_id": "",
+            "asset_location_space_id": "",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "cannot be its own parent" in response.text.lower()
+
+
+def test_asset_administration_surfaces_activation_block(
+    portal_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login_platform_admin(portal_client, monkeypatch)
+
+    async def fake_update_asset(**kwargs):
+        raise UniqueViolation(
+            "Use the controlled commissioning action to activate an asset."
+        )
+
+    monkeypatch.setattr(
+        "src.main.update_asset",
+        fake_update_asset,
+    )
+
+    response = portal_client.post(
+        f"/administration/assets/{PARENT_ASSET_ID}",
+        data={
+            "asset_name": "Plant",
+            "asset_type_id": str(ASSET_TYPE_ID),
+            "lifecycle_status": "ACTIVE",
+            "metering_requirement": "NOT_REQUIRED",
+            "parent_asset_id": "",
+            "asset_location_site_id": str(SITE_ID),
+            "asset_location_building_id": "",
+            "asset_location_floor_id": "",
+            "asset_location_space_id": "",
+        },
+    )
+
+    assert response.status_code == 409
+    assert "database rejected the asset update" in response.text.lower()
+
+
+def test_asset_administration_returns_404_for_inaccessible_asset(
+    portal_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login_platform_admin(portal_client, monkeypatch)
+
+    response = portal_client.post(
+        "/administration/assets/"
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        data={
+            "asset_name": "Hidden Asset",
+            "asset_type_id": str(ASSET_TYPE_ID),
+            "lifecycle_status": "INACTIVE",
+            "metering_requirement": "NOT_REQUIRED",
+            "parent_asset_id": "",
+            "asset_location_site_id": str(SITE_ID),
+            "asset_location_building_id": "",
+            "asset_location_floor_id": "",
+            "asset_location_space_id": "",
+        },
+    )
+
+    assert response.status_code == 404

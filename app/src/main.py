@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Annotated, AsyncIterator
 from uuid import UUID
 
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
@@ -133,6 +133,7 @@ from src.asset_management import (
 from src.asset_management_service import (
     create_asset,
     list_accessible_assets,
+    update_asset,
 )
 
 settings = get_settings()
@@ -1375,6 +1376,128 @@ async def create_asset_administration(
         },
         result=result,
         status_code=201,
+    )
+
+
+@app.post(
+    "/administration/assets/{asset_id}",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def update_asset_administration(
+    request: Request,
+    asset_id: UUID,
+    asset_name: Annotated[str, Form()],
+    asset_type_id: Annotated[str, Form()],
+    lifecycle_status: Annotated[str, Form()],
+    metering_requirement: Annotated[str, Form()],
+    parent_asset_id: Annotated[str, Form()] = "",
+    asset_location_building_id: Annotated[str, Form()] = "",
+    asset_location_floor_id: Annotated[str, Form()] = "",
+    asset_location_space_id: Annotated[str, Form()] = "",
+) -> HTMLResponse:
+    """Update one accessible asset without changing ownership."""
+
+    user = require_authenticated_portal_user(request)
+
+    accessible_assets = await list_accessible_assets(
+        portal_user_id=user.portal_user_id,
+    )
+
+    selected_asset = next(
+        (
+            asset
+            for asset in accessible_assets
+            if str(asset["asset_id"]) == str(asset_id)
+        ),
+        None,
+    )
+
+    if selected_asset is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Asset was not found.",
+        )
+
+    submitted_form_data = {
+        "organization_id": str(
+            selected_asset["organization_id"]
+        ),
+        "site_id": str(selected_asset["site_id"]),
+        "asset_id": str(asset_id),
+        "asset_name": asset_name,
+        "asset_type_id": asset_type_id,
+        "lifecycle_status": lifecycle_status,
+        "metering_requirement": metering_requirement,
+        "parent_asset_id": parent_asset_id,
+        "building_id": asset_location_building_id,
+        "floor_id": asset_location_floor_id,
+        "space_id": asset_location_space_id,
+    }
+
+    try:
+        validated = validate_asset_submission(
+            organization_id=submitted_form_data[
+                "organization_id"
+            ],
+            site_id=submitted_form_data["site_id"],
+            asset_name=asset_name,
+            asset_type_id=asset_type_id,
+            lifecycle_status=lifecycle_status,
+            metering_requirement=metering_requirement,
+            parent_asset_id=parent_asset_id,
+            building_id=asset_location_building_id,
+            floor_id=asset_location_floor_id,
+            space_id=asset_location_space_id,
+        )
+    except AssetManagementValidationError as exc:
+        return await render_asset_administration(
+            request,
+            form_data=submitted_form_data,
+            error=str(exc),
+            status_code=400,
+        )
+
+    if validated["parent_asset_id"] == str(asset_id):
+        return await render_asset_administration(
+            request,
+            form_data=submitted_form_data,
+            error="An asset cannot be its own parent.",
+            status_code=400,
+        )
+
+    try:
+        result = await update_asset(
+            portal_user_id=user.portal_user_id,
+            asset_id=str(asset_id),
+            asset_name=validated["asset_name"],
+            asset_type_id=validated["asset_type_id"],
+            lifecycle_status=validated["lifecycle_status"],
+            metering_requirement=validated[
+                "metering_requirement"
+            ],
+            parent_asset_id=validated["parent_asset_id"],
+            building_id=validated["building_id"],
+            floor_id=validated["floor_id"],
+            space_id=validated["space_id"],
+        )
+    except DatabaseError as exc:
+        return await render_asset_administration(
+            request,
+            form_data=submitted_form_data,
+            error=user_facing_database_error(
+                exc,
+                fallback=(
+                    "The database rejected the asset update."
+                ),
+            ),
+            status_code=409,
+        )
+
+    return await render_asset_administration(
+        request,
+        result=result,
+        status_code=200,
     )
 
 

@@ -230,3 +230,114 @@ async def test_create_asset_rolls_back_database_error(
 
     assert connection.committed is False
     assert connection.rolled_back is True
+
+
+@pytest.mark.asyncio
+async def test_update_asset_calls_controlled_function_and_commits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cursor = FakeCursor(
+        row={
+            "asset_result": {
+                "success": True,
+                "entity_type": "ASSET",
+                "entity_id": (
+                    "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+                ),
+                "asset_id": (
+                    "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+                ),
+                "lifecycle_status": "INACTIVE",
+                "commissioning_status": "NOT_STARTED",
+                "validation_warnings": [],
+                "blocking_conditions": [],
+                "audit_transaction_id": (
+                    "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+                ),
+            }
+        }
+    )
+    connection = FakeConnection(cursor)
+    install_connection(monkeypatch, connection)
+
+    from src.asset_management_service import update_asset
+
+    result = await update_asset(
+        portal_user_id=10,
+        asset_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        asset_name="Updated Chiller",
+        asset_type_id=(
+            "33333333-3333-4333-8333-333333333333"
+        ),
+        lifecycle_status="INACTIVE",
+        metering_requirement="DIRECT_METER_REQUIRED",
+        parent_asset_id=(
+            "44444444-4444-4444-8444-444444444444"
+        ),
+        building_id=(
+            "55555555-5555-4555-8555-555555555555"
+        ),
+        floor_id=(
+            "66666666-6666-4666-8666-666666666666"
+        ),
+        space_id=(
+            "77777777-7777-4777-8777-777777777777"
+        ),
+    )
+
+    assert "admin.update_asset" in cursor.statement
+    assert cursor.parameters == (
+        10,
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "Updated Chiller",
+        "33333333-3333-4333-8333-333333333333",
+        "INACTIVE",
+        "DIRECT_METER_REQUIRED",
+        "55555555-5555-4555-8555-555555555555",
+        "66666666-6666-4666-8666-666666666666",
+        "77777777-7777-4777-8777-777777777777",
+        "44444444-4444-4444-8444-444444444444",
+    )
+    assert connection.committed is True
+    assert connection.rolled_back is False
+    assert result["entity_type"] == "ASSET"
+    assert result["lifecycle_status"] == "INACTIVE"
+
+
+@pytest.mark.asyncio
+async def test_update_asset_rolls_back_database_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailingCursor(FakeCursor):
+        async def execute(
+            self,
+            statement: str,
+            parameters: tuple,
+        ) -> None:
+            raise OperationalError("database unavailable")
+
+    connection = FakeConnection(FailingCursor())
+    install_connection(monkeypatch, connection)
+
+    from src.asset_management_service import update_asset
+
+    with pytest.raises(OperationalError):
+        await update_asset(
+            portal_user_id=10,
+            asset_id=(
+                "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+            ),
+            asset_name="Updated Chiller",
+            asset_type_id=(
+                "33333333-3333-4333-8333-333333333333"
+            ),
+            lifecycle_status="INACTIVE",
+            metering_requirement="NOT_REQUIRED",
+            parent_asset_id=None,
+            building_id=None,
+            floor_id=None,
+            space_id=None,
+        )
+
+    assert connection.committed is False
+    assert connection.rolled_back is True

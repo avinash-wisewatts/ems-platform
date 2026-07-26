@@ -119,6 +119,145 @@ Assets | WiseWatts EMS
                         <td>{{ asset.metering_requirement }}</td>
                         <td>{{ asset.coverage_status }}</td>
                     </tr>
+                    <tr>
+                        <td colspan="7">
+                            <details>
+                                <summary>
+                                    Edit {{ asset.asset_name }}
+                                </summary>
+
+                                <form
+                                    method="post"
+                                    action="/administration/assets/{{ asset.asset_id }}"
+                                    class="form-card"
+                                    novalidate
+                                >
+                                    <div class="form-grid">
+                                        <label>
+                                            Asset name
+                                            <input
+                                                name="asset_name"
+                                                type="text"
+                                                maxlength="200"
+                                                required
+                                                value="{{ asset.asset_name }}"
+                                            >
+                                        </label>
+
+                                        <label>
+                                            Asset type
+                                            <select
+                                                name="asset_type_id"
+                                                required
+                                            >
+                                                {% for asset_type in asset_types %}
+                                                <option
+                                                    value="{{ asset_type.id }}"
+                                                    {% if (
+                                                        asset.asset_type_id|string
+                                                        == asset_type.id|string
+                                                    ) %}selected{% endif %}
+                                                >
+                                                    {{ asset_type.name }}
+                                                </option>
+                                                {% endfor %}
+                                            </select>
+                                        </label>
+
+                                        <label>
+                                            Parent asset
+                                            <select name="parent_asset_id">
+                                                <option value="">
+                                                    No parent asset
+                                                </option>
+                                                {% for candidate in assets %}
+                                                {% if (
+                                                    candidate.asset_id|string
+                                                    != asset.asset_id|string
+                                                    and
+                                                    candidate.organization_id|string
+                                                    == asset.organization_id|string
+                                                    and
+                                                    candidate.site_id|string
+                                                    == asset.site_id|string
+                                                ) %}
+                                                <option
+                                                    value="{{ candidate.asset_id }}"
+                                                    {% if (
+                                                        asset.parent_asset_id
+                                                        and
+                                                        asset.parent_asset_id|string
+                                                        == candidate.asset_id|string
+                                                    ) %}selected{% endif %}
+                                                >
+                                                    {{ candidate.asset_name }}
+                                                </option>
+                                                {% endif %}
+                                                {% endfor %}
+                                            </select>
+                                        </label>
+
+                                        <label>
+                                            Lifecycle status
+                                            <select
+                                                name="lifecycle_status"
+                                                required
+                                            >
+                                                {% for status in asset_lifecycle_statuses %}
+                                                <option
+                                                    value="{{ status }}"
+                                                    {% if (
+                                                        asset.lifecycle_status
+                                                        == status
+                                                    ) %}selected{% endif %}
+                                                >
+                                                    {{ status }}
+                                                </option>
+                                                {% endfor %}
+                                            </select>
+                                        </label>
+
+                                        <label>
+                                            Metering requirement
+                                            <select
+                                                name="metering_requirement"
+                                                required
+                                            >
+                                                {% for requirement in metering_requirements %}
+                                                <option
+                                                    value="{{ requirement }}"
+                                                    {% if (
+                                                        asset.metering_requirement
+                                                        == requirement
+                                                    ) %}selected{% endif %}
+                                                >
+                                                    {{ requirement }}
+                                                </option>
+                                                {% endfor %}
+                                            </select>
+                                        </label>
+                                    </div>
+
+                                    {{ physical_location_selector(
+                                        "asset_location",
+                                        hierarchy_rows,
+                                        asset.site_id|string,
+                                        asset.building_id|string
+                                            if asset.building_id else '',
+                                        asset.floor_id|string
+                                            if asset.floor_id else '',
+                                        asset.space_id|string
+                                            if asset.space_id else '',
+                                        true
+                                    ) }}
+
+                                    <button type="submit">
+                                        Save asset changes
+                                    </button>
+                                </form>
+                            </details>
+                        </td>
+                    </tr>
                     {% endfor %}
                 </tbody>
             </table>

@@ -375,3 +375,16 @@ def test_asset_administration_read_requires_dashboard_access() -> None:
         )
         is PortalPermission.DASHBOARD_VIEW
     )
+
+
+def test_asset_detail_write_requires_asset_manage() -> None:
+    assert (
+        required_permission_for_request(
+            "POST",
+            (
+                "/administration/assets/"
+                "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+            ),
+        )
+        is PortalPermission.ASSET_MANAGE
+    )

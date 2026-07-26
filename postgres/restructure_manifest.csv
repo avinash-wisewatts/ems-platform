@@ -141,3 +141,4 @@ source_file,target_category,target_path,notes
 111_site_location_contract_corrections.sql,migration,postgres/migrations/111_site_location_contract_corrections.sql,Align site codes and support draft site location hierarchies
 112_independent_asset_inventory.sql,migration,postgres/migrations/112_independent_asset_inventory.sql,Add controlled independent asset inventory creation
 113_independent_asset_contract_corrections.sql,migration,postgres/migrations/113_independent_asset_contract_corrections.sql,Correct independent asset commissioning and coverage result semantics
+114_asset_edit_lifecycle.sql,migration,postgres/migrations/114_asset_edit_lifecycle.sql,Add controlled asset editing and lifecycle management
