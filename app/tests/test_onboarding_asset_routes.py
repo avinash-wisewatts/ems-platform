@@ -1046,6 +1046,52 @@ def test_relationship_validation_reports_primary_meter_conflict(
     assert response.json()["code"] == "PRIMARY_METER_EXISTS"
 
 
+def test_relationship_validation_reports_exact_duplicate(
+    portal_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login_operator(portal_client, monkeypatch)
+    install_visible_draft(monkeypatch, existing_device_draft())
+
+    async def fake_validate(**kwargs):
+        assert kwargs["actor_portal_user_id"] == 305
+        assert kwargs["asset_id"] == str(ASSET_ID)
+        assert kwargs["relationship_type"] == "PRIMARY_METER"
+        assert kwargs["device_id"] == str(DEVICE_ID)
+        return {
+            "valid": False,
+            "code": "RELATIONSHIP_ALREADY_EXISTS",
+            "message": (
+                "The selected device already has this relationship "
+                "with the selected asset."
+            ),
+        }
+
+    monkeypatch.setattr(
+        "src.main.validate_asset_relationship_availability",
+        fake_validate,
+    )
+
+    response = portal_client.get(
+        "/onboarding/asset/relationship-validation",
+        params={
+            "draft": str(DRAFT_TOKEN),
+            "asset_id": str(ASSET_ID),
+            "relationship_type": "PRIMARY_METER",
+        },
+    )
+
+    assert response.status_code == 409
+    assert (
+        response.json()["code"]
+        == "RELATIONSHIP_ALREADY_EXISTS"
+    )
+    assert "already has this relationship" in (
+        response.json()["message"]
+    )
+
+
+
 def test_relationship_validation_accepts_available_relationship(
     portal_client,
     monkeypatch: pytest.MonkeyPatch,
