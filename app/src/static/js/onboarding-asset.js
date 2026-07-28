@@ -106,11 +106,13 @@ document.addEventListener("DOMContentLoaded", () => {
     relationship?.addEventListener("change", validateRelationship);
 
     form.addEventListener("submit", (event) => {
-        updateMode();
         if (!form.checkValidity() || validationPending || !relationshipValid) {
             event.preventDefault();
             form.reportValidity();
-            if (!relationshipValid) relationship.focus();
+
+            if (!relationshipValid) {
+                relationship.focus();
+            }
         }
     });
 
