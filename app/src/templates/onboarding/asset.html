@@ -102,7 +102,9 @@
     <div
         id="existing_asset_fields"
         class="conditional-section"
+        {% if form_data.get('asset_mode', 'CREATE_NEW') != 'USE_EXISTING' %}
         hidden
+        {% endif %}
     >
         <div class="form-grid">
             <label class="full-width">
@@ -144,6 +146,9 @@
     <div
         id="create_asset_fields"
         class="conditional-section"
+        {% if form_data.get('asset_mode', 'CREATE_NEW') == 'USE_EXISTING' %}
+        hidden
+        {% endif %}
     >
         <div class="form-grid">
             <label>
@@ -324,7 +329,7 @@
     src="{{ url_for(
         'static',
         path='/js/onboarding-asset.js'
-    ) }}"
+    ) }}?v=20260728-selector-fix"
     defer
 ></script>
 {% endblock %}

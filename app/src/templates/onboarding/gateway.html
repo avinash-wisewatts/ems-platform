@@ -98,7 +98,9 @@
     <div
         id="existing_gateway_fields"
         class="conditional-section"
+        {% if form_data.get('gateway_mode', 'CREATE_NEW') != 'USE_EXISTING' %}
         hidden
+        {% endif %}
     >
         <div class="form-grid">
             <label class="full-width">
@@ -142,6 +144,9 @@
     <div
         id="create_gateway_fields"
         class="conditional-section"
+        {% if form_data.get('gateway_mode', 'CREATE_NEW') == 'USE_EXISTING' %}
+        hidden
+        {% endif %}
     >
         <div class="form-grid">
             <label>
@@ -283,7 +288,7 @@
     src="{{ url_for(
         'static',
         path='/js/onboarding-gateway.js'
-    ) }}"
+    ) }}?v=20260728-selector-fix"
     defer
 ></script>
 {% endblock %}
