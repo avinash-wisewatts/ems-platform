@@ -391,6 +391,7 @@ def test_gateway_get_filters_existing_gateways_by_tenant_and_site(
     assert "OTHER_GATEWAY" not in response.text
 
 
+
 def test_gateway_get_restores_saved_values(
     portal_client,
     monkeypatch: pytest.MonkeyPatch,
@@ -408,11 +409,10 @@ def test_gateway_get_restores_saved_values(
 
     assert response.status_code == 200
     assert "Restored Gateway" in response.text
-    assert "RESTORED_GATEWAY" in response.text
     assert "Restored Vendor" in response.text
     assert "Restored Model" in response.text
     assert "HTTP API" in response.text
-
+    assert 'name="gateway_external_id"' not in response.text
 
 def test_gateway_post_create_new_saves_and_redirects(
     portal_client,
@@ -627,6 +627,7 @@ def test_gateway_post_rejects_cross_tenant_gateway(
     )
 
 
+
 def test_gateway_post_validation_error_preserves_form(
     portal_client,
     monkeypatch: pytest.MonkeyPatch,
@@ -645,20 +646,20 @@ def test_gateway_post_validation_error_preserves_form(
             "gateway_mode": "CREATE_NEW",
             "existing_gateway_id": "",
             "gateway_name": "Preserved Gateway",
-            "gateway_external_id": "INVALID-ID",
+            "gateway_external_id": "FORGED-CLIENT-ID",
             "gateway_vendor": "Preserved Vendor",
             "gateway_model": "Preserved Model",
-            "gateway_protocol": "MQTT",
+            "gateway_protocol": "COAP",
         },
     )
 
     assert response.status_code == 422
     assert "Preserved Gateway" in response.text
-    assert "INVALID-ID" in response.text
     assert "Preserved Vendor" in response.text
     assert "Preserved Model" in response.text
-    assert "Gateway external ID" in response.text
-
+    assert "supported cloud uplink protocol" in response.text
+    assert "FORGED-CLIENT-ID" not in response.text
+    assert 'name="gateway_external_id"' not in response.text
 
 def test_gateway_post_database_failure_returns_controlled_conflict(
     portal_client,
@@ -699,4 +700,5 @@ def test_gateway_post_database_failure_returns_controlled_conflict(
         in response.text
     )
     assert "Database Failure Gateway" in response.text
-    assert "DATABASE_FAILURE_GATEWAY" in response.text
+    assert "DATABASE_FAILURE_GATEWAY" not in response.text
+    assert 'name="gateway_external_id"' not in response.text

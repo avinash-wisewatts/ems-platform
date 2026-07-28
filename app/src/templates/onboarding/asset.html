@@ -164,27 +164,6 @@
             </label>
 
             <label>
-                Asset external ID
-
-                <span class="field-help">
-                    System-generated machine identifier. Duplicate asset
-                    names are allowed; this identifier remains unique within
-                    the organization and site.
-                </span>
-
-                <input
-                    id="asset_external_id"
-                    name="asset_external_id"
-                    type="text"
-                    maxlength="100"
-                    pattern="[A-Z0-9][A-Z0-9_]*"
-                    placeholder="CHILLER_1"
-                    data-generated-code-from="asset_name"
-                    value="{{ form_data.get('asset_external_id', '') }}"
-                >
-            </label>
-
-            <label>
                 Asset type
 
                 <select

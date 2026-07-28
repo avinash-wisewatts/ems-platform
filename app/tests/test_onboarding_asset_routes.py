@@ -649,7 +649,7 @@ def test_asset_post_create_new_saves_and_redirects(
             "mode": "CREATE_NEW",
             "existing_asset_id": None,
             "name": "Chiller 1",
-            "external_id": "TEST_ASSET",
+            "external_id": "CHILLER_1",
             "asset_type_id": str(ASSET_TYPE_ID),
 
             "metering_requirement": "DIRECT_METER_REQUIRED",

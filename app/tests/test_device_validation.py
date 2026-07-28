@@ -26,15 +26,16 @@ def valid_create_device_input() -> dict[str, str]:
     }
 
 
+
 def test_create_device_normalizes_controlled_values() -> None:
     values = valid_create_device_input()
-    values["device_external_id"] = "eni_demo_001"
+    values["device_external_id"] = "FORGED_CLIENT_VALUE"
 
     payload = validate_device_step(**values)
 
     assert payload["mode"] == "CREATE_NEW"
     assert payload["name"] == "Chiller Meter 1"
-    assert payload["external_id"] == "ENI_DEMO_001"
+    assert payload["external_id"] == "CHILLER_METER_1"
     assert payload["protocol"] == "MQTT"
     assert payload["profile_code"] == "ENISCOPE_V4"
     assert payload["firmware_version"] == "4.2.1"
@@ -42,7 +43,6 @@ def test_create_device_normalizes_controlled_values() -> None:
         "type": "MQTT_UID",
         "value": "80:34:28:16:09:eb:00:01",
     }
-
 
 def test_blank_firmware_becomes_none() -> None:
     values = valid_create_device_input()
@@ -54,16 +54,14 @@ def test_blank_firmware_becomes_none() -> None:
     assert payload["firmware_version"] is None
 
 
-def test_invalid_external_id_is_rejected() -> None:
+
+def test_client_device_external_id_is_ignored() -> None:
     values = valid_create_device_input()
-    values["device_external_id"] = "eni demo 001"
+    values["device_external_id"] = "FORGED-CLIENT VALUE"
 
-    with pytest.raises(
-        DeviceStepValidationError,
-        match="may contain only",
-    ):
-        validate_device_step(**values)
+    payload = validate_device_step(**values)
 
+    assert payload["external_id"] == "CHILLER_METER_1"
 
 @pytest.mark.parametrize(
     "protocol",

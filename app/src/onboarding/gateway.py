@@ -2,6 +2,8 @@ import re
 from typing import Any
 from uuid import UUID
 
+from src.code_generation import generate_entity_code
+
 
 GATEWAY_EXTERNAL_ID_PATTERN = re.compile(
     r"^[A-Z0-9_]+$"
@@ -76,7 +78,6 @@ def validate_gateway_step(
         }
 
     name = gateway_name.strip()
-    external_id = gateway_external_id.strip().upper()
     vendor = gateway_vendor.strip()
     model = gateway_model.strip()
     protocol = gateway_protocol.strip().upper()
@@ -91,22 +92,11 @@ def validate_gateway_step(
             "Gateway name must not exceed 200 characters."
         )
 
+    external_id = generate_entity_code(name)
+
     if not external_id:
         raise GatewayStepValidationError(
-            "Gateway external ID is required."
-        )
-
-    if len(external_id) > 100:
-        raise GatewayStepValidationError(
-            "Gateway external ID must not exceed 100 characters."
-        )
-
-    if not GATEWAY_EXTERNAL_ID_PATTERN.fullmatch(
-        external_id
-    ):
-        raise GatewayStepValidationError(
-            "Gateway external ID may contain only A-Z, 0-9, "
-            "and underscore."
+            "Gateway name must contain at least one letter or number."
         )
 
     if not vendor:

@@ -2,6 +2,8 @@ import re
 from typing import Any
 from uuid import UUID
 
+from src.code_generation import generate_entity_code
+
 from src.onboarding.statuses import status_codes
 
 
@@ -189,22 +191,11 @@ def validate_asset_step(
             "Asset name must not exceed 200 characters."
         )
 
-    external_id = asset_external_id.strip().upper()
+    external_id = generate_entity_code(name)
 
     if not external_id:
         raise AssetStepValidationError(
-            "Asset external ID is required."
-        )
-
-    if len(external_id) > 100:
-        raise AssetStepValidationError(
-            "Asset external ID must not exceed 100 characters."
-        )
-
-    if not ASSET_EXTERNAL_ID_PATTERN.fullmatch(external_id):
-        raise AssetStepValidationError(
-            "Asset external ID may contain only uppercase letters, "
-            "numbers, and underscores."
+            "Asset name must contain at least one letter or number."
         )
 
     try:

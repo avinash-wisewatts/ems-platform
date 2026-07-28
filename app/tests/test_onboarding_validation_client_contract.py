@@ -49,33 +49,19 @@ def test_validation_runs_while_fields_change() -> None:
     assert "void validateNow(field)" in script
 
 
-def test_gateway_and_device_external_ids_are_generated() -> None:
-    project_root = Path(__file__).resolve().parents[2]
 
-    gateway_template = (
-        project_root
-        / "app/src/templates/onboarding/gateway.html"
+def test_gateway_device_and_asset_external_ids_are_not_editable() -> None:
+    gateway = Path(
+        "app/src/templates/onboarding/gateway.html"
+    ).read_text()
+    device = Path(
+        "app/src/templates/onboarding/device.html"
+    ).read_text()
+    asset = Path(
+        "app/src/templates/onboarding/asset.html"
     ).read_text()
 
-    device_template = (
-        project_root
-        / "app/src/templates/onboarding/device.html"
-    ).read_text()
+    assert 'name="gateway_external_id"' not in gateway
+    assert 'name="device_external_id"' not in device
+    assert 'name="asset_external_id"' not in asset
 
-    asset_template = (
-        project_root
-        / "app/src/templates/onboarding/asset.html"
-    ).read_text()
-
-    assert (
-        'data-generated-code-from="gateway_name"'
-        in gateway_template
-    )
-    assert (
-        'data-generated-code-from="device_name"'
-        in device_template
-    )
-    assert (
-        'data-generated-code-from="asset_name"'
-        in asset_template
-    )

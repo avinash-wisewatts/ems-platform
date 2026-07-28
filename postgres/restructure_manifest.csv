@@ -191,3 +191,4 @@ source_file,target_category,target_path,notes
 142_onboarding_asset_external_identity.sql,migration,postgres/migrations/142_onboarding_asset_external_identity.sql,Carry Asset External ID through onboarding and allow duplicate display names
 143_scoped_identifier_recommendations.sql,migration,postgres/migrations/143_scoped_identifier_recommendations.sql,Allow duplicate Asset names and recommend scoped identifiers
 144_onboarding_identifier_recommendations.sql,migration,postgres/migrations/144_onboarding_identifier_recommendations.sql,Return unique scoped identifier recommendations during live onboarding validation
+145_onboarding_system_identities_and_asset_metering.sql,migration,postgres/migrations/145_onboarding_system_identities_and_asset_metering.sql,Generate Gateway Device and Asset identities internally and persist Asset metering policy

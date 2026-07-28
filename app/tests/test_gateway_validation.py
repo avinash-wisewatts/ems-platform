@@ -22,21 +22,22 @@ def valid_gateway_values() -> dict[str, str]:
     }
 
 
+
 def test_create_gateway_normalizes_values() -> None:
-    payload = validate_gateway_step(
-        **valid_gateway_values()
-    )
+    values = valid_gateway_values()
+    values["gateway_external_id"] = "FORGED_CLIENT_VALUE"
+
+    payload = validate_gateway_step(**values)
 
     assert payload == {
         "mode": "CREATE_NEW",
         "existing_gateway_id": None,
         "name": "Eniscope Gateway 1",
-        "external_id": "GATEWAY_001",
+        "external_id": "ENISCOPE_GATEWAY_1",
         "vendor": "Best Energy",
         "model": "Eniscope Hybrid",
         "protocol": "MQTT",
     }
-
 
 @pytest.mark.parametrize(
     "protocol",
@@ -120,22 +121,12 @@ def test_existing_gateway_is_accepted_for_existing_parents() -> None:
     }
 
 
-@pytest.mark.parametrize(
-    "external_id",
-    [
-        "GATEWAY-001",
-        "GATEWAY 001",
-        "GATEWAY.001",
-    ],
-)
-def test_invalid_gateway_external_id_is_rejected(
-    external_id: str,
-) -> None:
-    values = valid_gateway_values()
-    values["gateway_external_id"] = external_id
 
-    with pytest.raises(
-        GatewayStepValidationError,
-        match="may contain only",
-    ):
-        validate_gateway_step(**values)
+def test_client_gateway_external_id_is_ignored() -> None:
+    values = valid_gateway_values()
+    values["gateway_external_id"] = "FORGED-CLIENT VALUE"
+
+    payload = validate_gateway_step(**values)
+
+    assert payload["external_id"] == "ENISCOPE_GATEWAY_1"
+

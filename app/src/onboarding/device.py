@@ -2,6 +2,8 @@ import re
 from typing import Any
 from uuid import UUID
 
+from src.code_generation import generate_entity_code
+
 
 DEVICE_EXTERNAL_ID_PATTERN = re.compile(r"^[A-Z0-9_]+$")
 
@@ -88,7 +90,6 @@ def validate_device_step(
         }
 
     name = device_name.strip()
-    external_id = device_external_id.strip().upper()
     vendor = device_vendor.strip()
     model = device_model.strip()
     protocol = device_protocol.strip().upper()
@@ -109,20 +110,11 @@ def validate_device_step(
             "Device name must not exceed 200 characters."
         )
 
+    external_id = generate_entity_code(name)
+
     if not external_id:
         raise DeviceStepValidationError(
-            "Device external ID is required."
-        )
-
-    if len(external_id) > 100:
-        raise DeviceStepValidationError(
-            "Device external ID must not exceed 100 characters."
-        )
-
-    if not DEVICE_EXTERNAL_ID_PATTERN.fullmatch(external_id):
-        raise DeviceStepValidationError(
-            "Device external ID may contain only A-Z, 0-9, "
-            "and underscore."
+            "Device name must contain at least one letter or number."
         )
 
     try:

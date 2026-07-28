@@ -540,6 +540,7 @@ def test_device_get_filters_incomplete_and_other_gateway_devices(
     )[1].split('id="create_device_fields"', 1)[0]
 
 
+
 def test_device_get_restores_saved_device_values(
     portal_client,
     monkeypatch: pytest.MonkeyPatch,
@@ -557,12 +558,11 @@ def test_device_get_restores_saved_device_values(
 
     assert response.status_code == 200
     assert "Restored Energy Meter" in response.text
-    assert "RESTORED_ENERGY_METER" in response.text
     assert "Eniscope Energy Meter" in response.text
     assert "ENISCOPE_V4" in response.text
     assert "4.2" in response.text
     assert "80:34:28:16:09:eb:00:01" in response.text
-
+    assert 'name="device_external_id"' not in response.text
 
 def test_device_post_create_new_saves_and_redirects(
     portal_client,
@@ -906,6 +906,7 @@ def test_device_post_rejects_incompatible_profile(
     )
 
 
+
 def test_device_post_validation_error_preserves_form(
     portal_client,
     monkeypatch: pytest.MonkeyPatch,
@@ -923,11 +924,11 @@ def test_device_post_validation_error_preserves_form(
             "draft_token": str(DRAFT_TOKEN),
             "device_mode": "CREATE_NEW",
             "device_name": "Preserved Device",
-            "device_external_id": "INVALID-ID",
+            "device_external_id": "FORGED-CLIENT-ID",
             "device_category_id": str(CATEGORY_ID),
             "device_vendor": "Preserved Vendor",
             "device_model": "Preserved Model",
-            "device_protocol": "MQTT",
+            "device_protocol": "COAP",
             "profile_code": "ENISCOPE_V4",
             "firmware_version": "4.5",
             "identifier_type": "MQTT_UID",
@@ -937,12 +938,12 @@ def test_device_post_validation_error_preserves_form(
 
     assert response.status_code == 422
     assert "Preserved Device" in response.text
-    assert "INVALID-ID" in response.text
     assert "Preserved Vendor" in response.text
     assert "Preserved Model" in response.text
     assert "4.5" in response.text
-    assert "Device external ID" in response.text
-
+    assert "supported device communication protocol" in response.text
+    assert "FORGED-CLIENT-ID" not in response.text
+    assert 'name="device_external_id"' not in response.text
 
 def test_device_post_database_failure_returns_controlled_conflict(
     portal_client,
@@ -987,4 +988,5 @@ def test_device_post_database_failure_returns_controlled_conflict(
         in response.text
     )
     assert "Database Failure Device" in response.text
-    assert "DATABASE_FAILURE_DEVICE" in response.text
+    assert "DATABASE_FAILURE_DEVICE" not in response.text
+    assert 'name="device_external_id"' not in response.text
