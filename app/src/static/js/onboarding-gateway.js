@@ -29,10 +29,6 @@ document.addEventListener("DOMContentLoaded", () => {
         "gateway_name"
     );
 
-    const gatewayExternalId = document.getElementById(
-        "gateway_external_id"
-    );
-
     const gatewayVendor = document.getElementById(
         "gateway_vendor"
     );
@@ -44,19 +40,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const gatewayProtocol = document.getElementById(
         "gateway_protocol"
     );
-
-    let externalIdWasManuallyEdited =
-        gatewayExternalId.value.trim().length > 0;
-
-    const generateCode = (value) => {
-        return value
-            .trim()
-            .toUpperCase()
-            .replace(/[^A-Z0-9]+/g, "_")
-            .replace(/^_+|_+$/g, "")
-            .replace(/_+/g, "_")
-            .slice(0, 100);
-    };
 
     const setSectionEnabled = (
         section,
@@ -98,29 +81,10 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         gatewayName.required = !useExisting;
-        gatewayExternalId.required = !useExisting;
         gatewayVendor.required = !useExisting;
         gatewayModel.required = !useExisting;
         gatewayProtocol.required = !useExisting;
     };
-
-    gatewayName.addEventListener("input", () => {
-        if (!externalIdWasManuallyEdited) {
-            gatewayExternalId.value = generateCode(
-                gatewayName.value
-            );
-        }
-    });
-
-    gatewayExternalId.addEventListener(
-        "input",
-        () => {
-            externalIdWasManuallyEdited = true;
-            gatewayExternalId.value = generateCode(
-                gatewayExternalId.value
-            );
-        }
-    );
 
     gatewayModel.addEventListener("change", () => {
         const modelOptions = Array.from(

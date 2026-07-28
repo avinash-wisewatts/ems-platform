@@ -50,10 +50,6 @@ document.addEventListener("DOMContentLoaded", () => {
     };
 
     const deviceName = document.getElementById("device_name");
-    const externalId = document.getElementById(
-        "device_external_id"
-    );
-
     const category = document.getElementById(
         "device_category_id"
     );
@@ -68,19 +64,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const newIdentifier = document.getElementById(
         "new_identifier_value"
     );
-
-    let externalIdEdited =
-        externalId.value.trim().length > 0;
-
-    const generateCode = (value) => {
-        return value
-            .trim()
-            .toUpperCase()
-            .replace(/[^A-Z0-9]+/g, "_")
-            .replace(/^_+|_+$/g, "")
-            .replace(/_+/g, "_")
-            .slice(0, 100);
-    };
 
     const setSectionEnabled = (section, enabled) => {
         if (!section) {
@@ -154,7 +137,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
         [
             deviceName,
-            externalId,
             category,
             vendor,
             model,
@@ -165,21 +147,6 @@ document.addEventListener("DOMContentLoaded", () => {
             field.required = !useExisting;
         });
     };
-
-    deviceName.addEventListener("input", () => {
-        if (!externalIdEdited) {
-            externalId.value = generateCode(
-                deviceName.value
-            );
-        }
-    });
-
-    externalId.addEventListener("input", () => {
-        externalIdEdited = true;
-        externalId.value = generateCode(
-            externalId.value
-        );
-    });
 
     category.addEventListener("change", filterProfiles);
 
