@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+
+{% block title %}Commissioning dashboard | WiseWatts EMS{% endblock %}
+
+{% block breadcrumb %}
+<nav class="breadcrumb" aria-label="Breadcrumb">
+    <span>Administration</span><span>/</span><span class="breadcrumb-current">Commissioning</span>
+</nav>
+{% endblock %}
+
+{% block content %}
+<section class="administration-page">
+    <header class="administration-page-header">
+        <div>
+            <p class="eyebrow">OPERATIONAL READINESS</p>
+            <h2>{{ page_title }}</h2>
+            <p>Review tenant-scoped readiness, resolve actionable blockers, and continue commissioning from the owning administration page.</p>
+        </div>
+    </header>
+
+    <section class="form-card">
+        <h3>Filters</h3>
+        <form method="get" action="/administration/commissioning" class="form-grid">
+            <label>Organization
+                <select name="organization_id">
+                    <option value="">All accessible organizations</option>
+                    {% for organization in organizations %}
+                    <option value="{{ organization.organization_id }}" {% if selected_organization_id == organization.organization_id|string %}selected{% endif %}>{{ organization.organization_name }} ({{ organization.organization_code }})</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>Site
+                <select name="site_id">
+                    <option value="">All accessible sites</option>
+                    {% for site in sites %}
+                    <option value="{{ site.id }}" {% if selected_site_id == site.id|string %}selected{% endif %}>{{ site.organization_name }} / {{ site.site_name }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>Entity type
+                <select name="entity_type">
+                    <option value="">All entity types</option>
+                    {% for type in entity_types %}<option value="{{ type }}" {% if selected_entity_type == type %}selected{% endif %}>{{ type }}</option>{% endfor %}
+                </select>
+            </label>
+            <div><button type="submit">Apply filters</button> <a href="/administration/commissioning">Clear</a></div>
+        </form>
+    </section>
+
+    <section class="administration-section">
+        <div class="administration-card-grid">
+            {% for status in commissioning_statuses %}
+            <article class="administration-card"><div><h3>{{ status }}</h3><p>{{ dashboard.counts[status] }} entities</p></div></article>
+            {% endfor %}
+        </div>
+    </section>
+
+    {% for status in commissioning_statuses %}
+    <section class="form-card" id="status-{{ status|lower }}">
+        <h3>{{ status }} <span class="field-help">({{ dashboard.counts[status] }})</span></h3>
+        {% set rows = dashboard.groups[status] %}
+        {% if rows %}
+        <div class="table-scroll"><table>
+            <thead><tr><th>Entity</th><th>Lifecycle</th><th>Blocking reasons</th><th>Warnings</th><th>Correction</th></tr></thead>
+            <tbody>
+            {% for row in rows %}
+            <tr>
+                <td><strong>{{ row.entity_name }}</strong><br><span class="field-help">{{ row.entity_type }} · {{ row.entity_id }}</span></td>
+                <td>{{ row.lifecycle_status }}</td>
+                <td>{% if row.actionable_blockers %}<ul>{% for blocker in row.actionable_blockers %}<li><strong>{{ blocker.code }}</strong>: {{ blocker.guidance }}</li>{% endfor %}</ul>{% else %}—{% endif %}</td>
+                <td>{% if row.warning_reason_codes %}{{ row.warning_reason_codes|join(', ') }}{% else %}—{% endif %}</td>
+                <td><a href="{{ row.correction_href }}">Open {{ row.entity_type|lower }} administration</a></td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table></div>
+        {% else %}<p>No entities in this status for the selected filters.</p>{% endif %}
+    </section>
+    {% endfor %}
+</section>
+{% endblock %}

@@ -103,6 +103,7 @@ Assets | WiseWatts EMS
                         <th scope="col">Lifecycle</th>
                         <th scope="col">Metering</th>
                         <th scope="col">Coverage</th>
+                        <th scope="col">Commissioning</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -118,9 +119,26 @@ Assets | WiseWatts EMS
                         <td>{{ asset.lifecycle_status }}</td>
                         <td>{{ asset.metering_requirement }}</td>
                         <td>{{ asset.coverage_status }}</td>
+                        {% set readiness = asset_readiness.get(asset.asset_id|string) %}
+                        <td>
+                            {% if readiness %}
+                            <strong>{{ readiness.commissioning_status }}</strong><br>
+                            {% if readiness.blocking_reason_codes %}
+                            <span class="field-help">Blocked: {{ readiness.blocking_reason_codes|join(", ") }}</span><br>
+                            {% endif %}
+                            {% if readiness.warning_reason_codes %}
+                            <span class="field-help">Warnings: {{ readiness.warning_reason_codes|join(", ") }}</span><br>
+                            {% endif %}
+                            {% if readiness.is_ready and asset.lifecycle_status != 'ACTIVE' %}
+                            <form method="post" action="/administration/assets/{{ asset.asset_id }}/commission">
+                                <button type="submit">Commission asset</button>
+                            </form>
+                            {% endif %}
+                            {% else %}—{% endif %}
+                        </td>
                     </tr>
                     <tr>
-                        <td colspan="7">
+                        <td colspan="8">
                             <details>
                                 <summary>
                                     Edit {{ asset.asset_name }}

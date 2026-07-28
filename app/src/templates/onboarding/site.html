@@ -32,12 +32,6 @@
         </span>
 
         <strong>{{ organization_label }}</strong>
-
-        <a
-            href="/onboarding/organization?draft={{ draft_token }}"
-        >
-            Change
-        </a>
     </div>
 
     {% if organization_mode == "USE_EXISTING" %}
@@ -160,14 +154,17 @@
             </label>
 
             <label>
-                Recommended site code
+                System-generated site code
 
                 <span class="field-help">
-                    Generated from the site name and editable before saving.
+                    Generated automatically from the site name.
                 </span>
 
                 <input
                     id="site_code"
+                    data-generated-code-from="site_name"
+                    readonly
+                    aria-readonly="true"
                     name="site_code"
                     type="text"
                     maxlength="100"

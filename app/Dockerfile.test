@@ -2,18 +2,21 @@ FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
-ENV PYTHONPATH=/app
+ENV PYTHONPATH=/workspace/app
 
-WORKDIR /app
+WORKDIR /workspace
 
-COPY requirements.txt /app/requirements.txt
-COPY requirements-dev.txt /app/requirements-dev.txt
+COPY app/requirements.txt /workspace/app/requirements.txt
+COPY app/requirements-dev.txt /workspace/app/requirements-dev.txt
 
 RUN pip install \
     --no-cache-dir \
-    --requirement /app/requirements-dev.txt
+    --requirement /workspace/app/requirements-dev.txt
 
-COPY src /app/src
-COPY tests /app/tests
+COPY pytest.ini /workspace/pytest.ini
+COPY app/src /workspace/app/src
+COPY app/tests /workspace/app/tests
+COPY postgres/ddl /workspace/postgres/ddl
+COPY postgres/migrations /workspace/postgres/migrations
 
-CMD ["pytest", "-q"]
+CMD ["pytest", "-q", "-p", "no:cacheprovider", "app/tests"]

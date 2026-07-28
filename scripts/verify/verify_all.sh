@@ -12,13 +12,22 @@
 #   2. Metadata integrity
 #   3. Telemetry pipeline
 #   4. TimescaleDB jobs and lifecycle policies
+#   5. Optional live MQTT energy smoke test
+#   6. Optional live MQTT environment smoke test
+#
+# Live smoke tests:
+#   Disabled by default because they publish telemetry and create test rows.
+#
+#   Enable both explicitly with:
+#       RUN_LIVE_MQTT_SMOKE=true ./scripts/verify/verify_all.sh
 #
 # Exit codes:
 #   0 = every verification suite passed
 #   1 = one or more verification suites failed
 #
 # Safety:
-#   This script only invokes read-only verification scripts.
+#   The default execution invokes only read-only verification scripts.
+#   The optional live MQTT smoke tests each write one synthetic telemetry event.
 # ============================================================================
 
 set -u
@@ -90,6 +99,30 @@ run_suite "verify_database.sh" "Database Structure Verification"
 run_suite "verify_metadata.sh" "Metadata Integrity Verification"
 run_suite "verify_pipeline.sh" "Telemetry Pipeline Verification"
 run_suite "verify_jobs.sh" "TimescaleDB Job Verification"
+
+case "${RUN_LIVE_MQTT_SMOKE:-false}" in
+    true|TRUE|1|yes|YES)
+        run_suite             "smoke_mqtt_energy.sh"             "Live MQTT Energy Pipeline Smoke Test"
+
+        run_suite             "smoke_mqtt_environment.sh"             "Live MQTT Environment Pipeline Smoke Test"
+        ;;
+    false|FALSE|0|no|NO|"")
+        echo
+        echo "================================================================"
+        echo " Skipped: Live MQTT Energy Pipeline Smoke Test"
+        echo " Skipped: Live MQTT Environment Pipeline Smoke Test"
+        echo " Reason : RUN_LIVE_MQTT_SMOKE is not enabled"
+        echo " Enable : RUN_LIVE_MQTT_SMOKE=true ./scripts/verify/verify_all.sh"
+        echo "================================================================"
+        ;;
+    *)
+        echo
+        echo -e "${RED}[FAIL]${NC} Invalid RUN_LIVE_MQTT_SMOKE value: ${RUN_LIVE_MQTT_SMOKE}"
+        echo "Allowed values: true, false, 1, 0, yes, no"
+        ((TOTAL_SUITES++))
+        ((FAILED_SUITES++))
+        ;;
+esac
 
 echo
 echo "================================================================"

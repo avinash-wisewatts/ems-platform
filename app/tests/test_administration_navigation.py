@@ -90,7 +90,12 @@ def login_as(
     )
 
     assert response.status_code == 303
-    assert response.headers["location"] == "/administration"
+    expected_location = (
+        "/administration/organizations"
+        if role_code == "PLATFORM_ADMIN"
+        else "/administration"
+    )
+    assert response.headers["location"] == expected_location
 
 
 def test_operator_workspace_hides_platform_items(

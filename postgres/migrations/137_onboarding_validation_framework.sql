@@ -1,0 +1,108 @@
+BEGIN;
+
+CREATE OR REPLACE FUNCTION admin.validate_onboarding_field(
+    p_actor_portal_user_id bigint,
+    p_draft_token uuid,
+    p_step text,
+    p_field text,
+    p_value text,
+    p_form jsonb DEFAULT '{}'::jsonb
+) RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, admin, metadata, config
+AS $$
+DECLARE
+    v_actor admin.portal_users%ROWTYPE;
+    v_payload jsonb := '{}'::jsonb;
+    v_org_id uuid;
+    v_site_id uuid;
+    v_gateway_id uuid;
+    v_id uuid;
+    v_mode text;
+    v_exists boolean;
+    v_category uuid;
+BEGIN
+    SELECT * INTO v_actor FROM admin.portal_users
+    WHERE portal_user_id = p_actor_portal_user_id AND is_active;
+    IF NOT FOUND THEN
+        RETURN jsonb_build_object('valid', false, 'field', p_field, 'code', 'NOT_AUTHORIZED', 'message', 'Your session is no longer authorized.');
+    END IF;
+
+    IF p_draft_token IS NOT NULL THEN
+        SELECT payload INTO v_payload FROM admin.onboarding_drafts
+        WHERE draft_token = p_draft_token AND owner_portal_user_id = p_actor_portal_user_id AND status = 'DRAFT';
+        IF NOT FOUND THEN
+            RETURN jsonb_build_object('valid', false, 'field', p_field, 'code', 'DRAFT_NOT_FOUND', 'message', 'The onboarding draft is no longer available.');
+        END IF;
+    END IF;
+
+    v_mode := upper(coalesce(p_form->>(p_step || '_mode'), ''));
+    BEGIN
+        v_org_id := coalesce(nullif(v_payload#>>'{organization,existing_organization_id}','')::uuid, nullif(p_form->>'existing_organization_id','')::uuid);
+        v_site_id := coalesce(nullif(v_payload#>>'{site,existing_site_id}','')::uuid, nullif(p_form->>'existing_site_id','')::uuid);
+        v_gateway_id := coalesce(nullif(v_payload#>>'{gateway,existing_gateway_id}','')::uuid, nullif(p_form->>'existing_gateway_id','')::uuid);
+    EXCEPTION WHEN invalid_text_representation THEN
+        RETURN jsonb_build_object('valid', false, 'field', p_field, 'code', 'INVALID_SELECTION', 'message', 'Select a valid record.');
+    END;
+
+    IF p_field IN ('organization_name','site_name','building_name','floor_name','space_name','gateway_name','device_name','asset_name') AND btrim(coalesce(p_value,'')) = '' THEN
+        RETURN jsonb_build_object('valid', false, 'field', p_field, 'code', 'REQUIRED', 'message', 'This field is required.');
+    END IF;
+
+    IF p_field = 'existing_organization_id' THEN
+        BEGIN v_id := p_value::uuid; EXCEPTION WHEN invalid_text_representation THEN v_id := NULL; END;
+        SELECT EXISTS(SELECT 1 FROM metadata.organizations o WHERE o.id=v_id AND o.is_active AND (v_actor.role_code='PLATFORM_ADMIN' OR v_actor.organization_id=o.id)) INTO v_exists;
+        IF NOT v_exists THEN RETURN jsonb_build_object('valid',false,'field',p_field,'code','INVALID_ORGANIZATION','message','Select an active organization within your access scope.'); END IF;
+    ELSIF p_field = 'organization_code' THEN
+        SELECT EXISTS(SELECT 1 FROM metadata.organizations o WHERE upper(o.code)=upper(btrim(p_value))) INTO v_exists;
+        IF v_exists THEN RETURN jsonb_build_object('valid',false,'field',p_field,'code','DUPLICATE_CODE','message','This organization code is already in use.'); END IF;
+    ELSIF p_field = 'existing_site_id' THEN
+        BEGIN v_id := p_value::uuid; EXCEPTION WHEN invalid_text_representation THEN v_id := NULL; END;
+        SELECT EXISTS(SELECT 1 FROM metadata.sites s WHERE s.id=v_id AND s.organization_id=v_org_id AND s.is_active) INTO v_exists;
+        IF NOT v_exists THEN RETURN jsonb_build_object('valid',false,'field',p_field,'code','INVALID_SITE','message','Select an active site belonging to the chosen organization.'); END IF;
+    ELSIF p_field = 'site_code' AND v_org_id IS NOT NULL THEN
+        SELECT EXISTS(SELECT 1 FROM metadata.sites s WHERE s.organization_id=v_org_id AND upper(s.code)=upper(btrim(p_value))) INTO v_exists;
+        IF v_exists THEN RETURN jsonb_build_object('valid',false,'field',p_field,'code','DUPLICATE_CODE','message','This site code is already in use for the organization.'); END IF;
+    ELSIF p_field = 'existing_space_id' THEN
+        BEGIN v_id := p_value::uuid; EXCEPTION WHEN invalid_text_representation THEN v_id := NULL; END;
+        SELECT EXISTS(SELECT 1 FROM metadata.spaces s WHERE s.id=v_id AND s.organization_id=v_org_id AND s.site_id=v_site_id) INTO v_exists;
+        IF NOT v_exists THEN RETURN jsonb_build_object('valid',false,'field',p_field,'code','INVALID_LOCATION','message','Select a space belonging to the chosen site.'); END IF;
+    ELSIF p_field = 'building_code' AND v_site_id IS NOT NULL THEN
+        SELECT EXISTS(SELECT 1 FROM metadata.buildings b WHERE b.site_id=v_site_id AND upper(b.code)=upper(btrim(p_value))) INTO v_exists;
+        IF v_exists THEN RETURN jsonb_build_object('valid',false,'field',p_field,'code','DUPLICATE_CODE','message','This building code is already in use for the site.'); END IF;
+    ELSIF p_field = 'gateway_external_id' AND v_org_id IS NOT NULL THEN
+        SELECT EXISTS(SELECT 1 FROM metadata.gateways g WHERE g.organization_id=v_org_id AND upper(btrim(g.external_id))=upper(btrim(p_value))) INTO v_exists;
+        IF v_exists THEN RETURN jsonb_build_object('valid',false,'field',p_field,'code','DUPLICATE_EXTERNAL_ID','message','This gateway external ID is already in use.'); END IF;
+    ELSIF p_field = 'existing_gateway_id' THEN
+        BEGIN v_id := p_value::uuid; EXCEPTION WHEN invalid_text_representation THEN v_id := NULL; END;
+        SELECT EXISTS(SELECT 1 FROM metadata.gateways g WHERE g.id=v_id AND g.organization_id=v_org_id AND g.site_id=v_site_id AND g.lifecycle_status NOT IN ('INACTIVE','DECOMMISSIONED')) INTO v_exists;
+        IF NOT v_exists THEN RETURN jsonb_build_object('valid',false,'field',p_field,'code','INVALID_GATEWAY','message','Select an active gateway belonging to the chosen site.'); END IF;
+    ELSIF p_field = 'device_external_id' AND v_org_id IS NOT NULL THEN
+        SELECT EXISTS(SELECT 1 FROM metadata.devices d WHERE d.organization_id=v_org_id AND upper(btrim(d.external_id))=upper(btrim(p_value))) INTO v_exists;
+        IF v_exists THEN RETURN jsonb_build_object('valid',false,'field',p_field,'code','DUPLICATE_EXTERNAL_ID','message','This device external ID is already in use.'); END IF;
+    ELSIF p_field = 'new_identifier_value' THEN
+        SELECT EXISTS(SELECT 1 FROM metadata.device_identifiers di WHERE upper(di.identifier_type)=upper(coalesce(p_form->>'identifier_type','MQTT_UID')) AND di.identifier_value=btrim(p_value)) INTO v_exists;
+        IF v_exists THEN RETURN jsonb_build_object('valid',false,'field',p_field,'code','DUPLICATE_IDENTIFIER','message','This device identifier is already registered.'); END IF;
+    ELSIF p_field = 'existing_device_id' THEN
+        BEGIN v_id := p_value::uuid; EXCEPTION WHEN invalid_text_representation THEN v_id := NULL; END;
+        SELECT EXISTS(SELECT 1 FROM metadata.devices d WHERE d.id=v_id AND d.organization_id=v_org_id AND d.gateway_id=v_gateway_id AND d.lifecycle_status NOT IN ('INACTIVE','DECOMMISSIONED')) INTO v_exists;
+        IF NOT v_exists THEN RETURN jsonb_build_object('valid',false,'field',p_field,'code','INVALID_DEVICE','message','Select an active device belonging to the chosen gateway.'); END IF;
+    ELSIF p_field = 'profile_code' THEN
+        BEGIN v_category := nullif(p_form->>'device_category_id','')::uuid; EXCEPTION WHEN invalid_text_representation THEN v_category := NULL; END;
+        SELECT EXISTS(SELECT 1 FROM admin.v_active_device_profiles p WHERE p.profile_code=p_value AND (v_category IS NULL OR v_category=ANY(p.device_category_ids))) INTO v_exists;
+        IF NOT v_exists THEN RETURN jsonb_build_object('valid',false,'field',p_field,'code','INCOMPATIBLE_PROFILE','message','Choose a profile compatible with the selected device category.'); END IF;
+    ELSIF p_field = 'existing_asset_id' THEN
+        BEGIN v_id := p_value::uuid; EXCEPTION WHEN invalid_text_representation THEN v_id := NULL; END;
+        SELECT EXISTS(SELECT 1 FROM metadata.assets a WHERE a.id=v_id AND a.organization_id=v_org_id AND a.site_id=v_site_id AND lower(coalesce(a.status,'active'))='active') INTO v_exists;
+        IF NOT v_exists THEN RETURN jsonb_build_object('valid',false,'field',p_field,'code','INVALID_ASSET','message','Select an active asset belonging to the chosen site.'); END IF;
+    END IF;
+
+    RETURN jsonb_build_object('valid',true,'field',p_field,'code','OK','message','');
+END;
+$$;
+
+ALTER FUNCTION admin.validate_onboarding_field(bigint,uuid,text,text,text,jsonb) OWNER TO ems_admin;
+REVOKE ALL ON FUNCTION admin.validate_onboarding_field(bigint,uuid,text,text,text,jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION admin.validate_onboarding_field(bigint,uuid,text,text,text,jsonb) TO ems_app;
+COMMIT;

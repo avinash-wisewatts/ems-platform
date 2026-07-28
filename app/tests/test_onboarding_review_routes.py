@@ -171,7 +171,7 @@ def existing_records_draft() -> dict:
             "asset": {
                 "mode": "USE_EXISTING",
                 "existing_asset_id": str(ASSET_ID),
-                "relationship_type": "SUB_METER",
+                "relationship_type": "SECONDARY_METER",
                 "metadata": {},
             },
         },
@@ -590,7 +590,7 @@ def test_review_get_renders_existing_record_labels(
     assert "Existing Energy Meter" in response.text
     assert "EXISTING_DEVICE" in response.text
     assert "Existing Chiller" in response.text
-    assert "Sub Meter" in response.text
+    assert "Secondary Meter" in response.text
 
 
 def test_review_get_uses_fallback_labels_for_missing_existing_metadata(

@@ -65,6 +65,149 @@ def mock_organization_provisioning_status_list(
         fake_list,
     )
 
+    async def fake_workspace(*, actor_portal_user_id: int, organization_id: str) -> dict | None:
+        if organization_id != str(ORGANIZATION_ID):
+            return None
+        return {
+            "organization_id": str(ORGANIZATION_ID),
+            "organization_code": "ORG_1",
+            "organization_name": "Organization One",
+            "legal_name": "Organization One Pvt Ltd",
+            "timezone": "Asia/Kolkata",
+            "locale": "en-US",
+            "lifecycle_status": "ACTIVE",
+            "primary_contact": {"name": "Admin", "email": "admin@example.com", "phone": ""},
+            "address": {},
+            "created_at": None,
+            "updated_at": None,
+        }
+
+    monkeypatch.setattr(
+        "src.main.get_organization_workspace",
+        fake_workspace,
+    )
+
+
+def test_organization_page_renders_context_chooser(
+    portal_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login_super_admin(portal_client, monkeypatch)
+
+    async def fake_list() -> list[dict]:
+        return [
+            {
+                "organization_id": str(ORGANIZATION_ID),
+                "organization_code": "ORG_1",
+                "organization_name": "Organization One",
+                "timezone": "Asia/Kolkata",
+                "lifecycle_status": "ACTIVE",
+                "provisioning_status": "PROVISIONED",
+                "grafana_org_id": 7,
+                "attempt_count": 1,
+                "last_attempt_at": None,
+                "provisioned_at": None,
+                "last_error": None,
+            }
+        ]
+
+    monkeypatch.setattr(
+        "src.main.list_organizations_with_grafana_status",
+        fake_list,
+    )
+
+    response = portal_client.get("/administration/organizations")
+
+    assert response.status_code == 200
+    assert "Organizations" in response.text
+    assert "View and edit the organizations available within your scope." in response.text
+    assert "Search organizations" in response.text
+    assert "organization-table" in response.text
+    assert "EMS provisioning" in response.text
+    assert "EMS provisioning" in response.text
+    assert f"/administration/organizations/{ORGANIZATION_ID}" in response.text
+    assert f"/administration/organizations/{ORGANIZATION_ID}/edit" in response.text
+    assert ">View</a>" in response.text
+    assert ">Edit</a>" in response.text
+    assert "Administer" not in response.text
+    assert 'data-organization-row' in response.text
+    assert 'data-organization-card' not in response.text
+
+
+
+def test_organization_page_highlights_active_context_row(
+    portal_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login_super_admin(portal_client, monkeypatch)
+
+    async def fake_list() -> list[dict]:
+        return [{
+            "organization_id": str(ORGANIZATION_ID),
+            "organization_code": "ORG_1",
+            "organization_name": "Organization One",
+            "timezone": "Asia/Kolkata",
+            "lifecycle_status": "ACTIVE",
+            "provisioning_status": "PROVISIONED",
+            "grafana_org_id": 7,
+            "attempt_count": 1,
+            "last_attempt_at": None,
+            "provisioned_at": None,
+            "last_error": None,
+        }]
+
+    monkeypatch.setattr(
+        "src.main.list_organizations_with_grafana_status",
+        fake_list,
+    )
+
+    async def fake_organizations(**kwargs):
+        return [{
+            "id": ORGANIZATION_ID,
+            "organization_name": "Organization One",
+            "organization_code": "ORG_1",
+        }]
+
+    monkeypatch.setattr(
+        "src.context.service._accessible_organizations",
+        fake_organizations,
+    )
+
+    selection = portal_client.post(
+        "/context/organization",
+        data={
+            "organization_id": str(ORGANIZATION_ID),
+            "return_to": "/administration/organizations",
+        },
+    )
+    assert selection.status_code == 303
+
+    response = portal_client.get("/administration/organizations")
+
+    assert response.status_code == 200
+    assert 'class="organization-row is-active"' in response.text
+    assert 'aria-current="true"' in response.text
+    assert ">ACTIVE</span>" in response.text
+    assert "context-status-badge" in response.text
+    assert "Active context" in response.text
+    assert ">View</a>" in response.text
+    assert ">Edit</a>" in response.text
+    assert "Continue" not in response.text
+    assert "Details" not in response.text
+
+
+def test_organization_page_displays_context_selection_error(
+    portal_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login_super_admin(portal_client, monkeypatch)
+
+    response = portal_client.get(
+        "/administration/organizations?context_error=1"
+    )
+
+    assert response.status_code == 200
+    assert "no longer available to your account" in response.text
 
 def test_organization_administration_displays_persisted_status(
     portal_client,
@@ -99,15 +242,50 @@ def test_organization_administration_displays_persisted_status(
     )
 
     assert response.status_code == 200
-    assert "Organization provisioning status" in response.text
+    assert "Organization provisioning status" not in response.text
     assert "Organization One" in response.text
+    assert "EMS provisioning" in response.text
     assert "FAILED" in response.text
-    assert "Grafana API connection refused." in response.text
+    assert "Grafana API connection refused." not in response.text
     assert (
-        f"/administration/organizations/"
-        f"{ORGANIZATION_ID}/grafana/retry"
+        f"/administration/organizations/{ORGANIZATION_ID}"
     ) in response.text
 
+
+
+def test_organization_detail_contains_tenant_specific_operations(
+    portal_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login_super_admin(portal_client, monkeypatch)
+
+    async def fake_list() -> list[dict]:
+        return [{
+            "organization_id": str(ORGANIZATION_ID),
+            "organization_code": "ORG_1",
+            "organization_name": "Organization One",
+            "timezone": "Asia/Kolkata",
+            "lifecycle_status": "ACTIVE",
+            "provisioning_status": "FAILED",
+            "grafana_org_id": None,
+            "attempt_count": 2,
+            "last_error": "Grafana API connection refused.",
+        }]
+
+    monkeypatch.setattr(
+        "src.main.list_organizations_with_grafana_status",
+        fake_list,
+    )
+
+    response = portal_client.get(
+        f"/administration/organizations/{ORGANIZATION_ID}"
+    )
+
+    assert response.status_code == 200
+    assert "Provisioning and lifecycle" in response.text
+    assert "Grafana API connection refused." in response.text
+    assert "Retry Grafana provisioning" in response.text
+    assert "Reconcile Grafana organization" in response.text
 
 
 def test_organization_administration_get_renders_form(
@@ -117,7 +295,7 @@ def test_organization_administration_get_renders_form(
     login_super_admin(portal_client, monkeypatch)
 
     response = portal_client.get(
-        "/administration/organizations"
+        "/administration/organizations/new"
     )
 
     assert response.status_code == 200
@@ -199,20 +377,20 @@ def test_organization_administration_post_creates_organization(
         "/administration/organizations",
         data={
             "organization_name": "Organization One",
-            "organization_code": "ORG_1",
+            "organization_code": "IGNORED_CLIENT_VALUE",
             "organization_timezone": "Asia/Kolkata",
             "organization_lifecycle_status": "ACTIVE",
         },
     )
 
-    assert response.status_code == 201
-    assert "Organization created" in response.text
-    assert "Organization One" in response.text
-    assert "ORG_1" in response.text
+    assert response.status_code == 303
+    assert response.headers["location"] == (
+        f"/administration/organizations/{ORGANIZATION_ID}"
+    )
 
     assert captured == {
         "name": "Organization One",
-        "code": "ORG_1",
+        "code": "ORGANIZATION_ONE",
         "timezone": "Asia/Kolkata",
         "lifecycle_status": "ACTIVE",
         "requested_by": "superadmin@example.com",
@@ -227,7 +405,7 @@ def test_organization_administration_preserves_form_on_database_error(
 
     async def fake_create_organization(**kwargs):
         raise UniqueViolation(
-            "Organization code ORG_1 already exists."
+            "Organization code ORGANIZATION_ONE already exists."
         )
 
     monkeypatch.setattr(
@@ -239,7 +417,7 @@ def test_organization_administration_preserves_form_on_database_error(
         "/administration/organizations",
         data={
             "organization_name": "Organization One",
-            "organization_code": "ORG_1",
+            "organization_code": "IGNORED_CLIENT_VALUE",
             "organization_timezone": "Asia/Kolkata",
             "organization_lifecycle_status": "ACTIVE",
         },
@@ -247,7 +425,8 @@ def test_organization_administration_preserves_form_on_database_error(
 
     assert response.status_code == 409
     assert "Organization One" in response.text
-    assert "ORG_1" in response.text
+    assert "ORGANIZATION_ONE" in response.text
+    assert "IGNORED_CLIENT_VALUE" not in response.text
     assert "Asia/Kolkata" in response.text
 
 
@@ -306,9 +485,10 @@ def test_super_admin_retries_grafana_provisioning(
         )
     )
 
-    assert response.status_code == 200
-    assert "PROVISIONED" in response.text
-    assert "Organization One" in response.text
+    assert response.status_code == 303
+    assert response.headers["location"] == (
+        f"/administration/organizations/{ORGANIZATION_ID}"
+    )
     assert captured == {
         "organization_id": str(ORGANIZATION_ID),
         "organization_name": "Organization One",
@@ -361,10 +541,41 @@ def test_failed_grafana_retry_shows_internal_error_to_super_admin(
         )
     )
 
-    assert response.status_code == 200
-    assert "FAILED" in response.text
-    assert "Grafana API connection refused." in response.text
-    assert "Retry Grafana provisioning" in response.text
+    assert response.status_code == 303
+    assert response.headers["location"] == (
+        f"/administration/organizations/{ORGANIZATION_ID}"
+    )
+
+    async def fake_failed_status_list() -> list[dict]:
+        return [
+            {
+                "organization_id": str(ORGANIZATION_ID),
+                "organization_code": "ORG_1",
+                "organization_name": "Organization One",
+                "timezone": "Asia/Kolkata",
+                "lifecycle_status": "ACTIVE",
+                "provisioning_status": "FAILED",
+                "grafana_org_id": None,
+                "attempt_count": 2,
+                "last_attempt_at": None,
+                "provisioned_at": None,
+                "last_error": "Grafana API connection refused.",
+            }
+        ]
+
+    monkeypatch.setattr(
+        "src.main.list_organizations_with_grafana_status",
+        fake_failed_status_list,
+    )
+
+    detail_response = portal_client.get(
+        f"/administration/organizations/{ORGANIZATION_ID}"
+    )
+
+    assert detail_response.status_code == 200
+    assert "FAILED" in detail_response.text
+    assert "Grafana API connection refused." in detail_response.text
+    assert "Retry Grafana provisioning" in detail_response.text
 
 def successful_operator_result() -> AuthenticationResult:
     return AuthenticationResult(
@@ -374,6 +585,11 @@ def successful_operator_result() -> AuthenticationResult:
             username="operator@example.com",
             display_name="Test Operator",
             role_code="OPERATOR",
+            organization_id=(
+                "11111111-1111-1111-1111-111111111111"
+            ),
+            access_scope_mode="ORGANIZATION",
+            site_ids=(),
         ),
         status=AuthenticationStatus.AUTHENTICATED,
     )
@@ -440,10 +656,6 @@ def test_operator_sees_generic_grafana_failure_without_retry(
 
     assert response.status_code == 200
     assert "FAILED" in response.text
-    assert (
-        "Grafana provisioning did not complete."
-        in response.text
-    )
     assert "Grafana API connection refused." not in response.text
     assert "Retry Grafana provisioning" not in response.text
     assert "/grafana/retry" not in response.text

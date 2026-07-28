@@ -104,9 +104,22 @@ def required_permission_for_request(
 
     normalized_method = method.upper()
 
-    # Logging out is an authenticated self-service action, not an
-    # administrative user-management operation.
-    if method.upper() == "POST" and path.rstrip("/") == "/logout":
+    # Logging out and changing active context are authenticated self-service
+    # actions. Context ownership is validated separately by the context service.
+    if normalized_method == "POST" and path.rstrip("/") == "/logout":
+        return PortalPermission.DASHBOARD_VIEW
+
+    if (
+        normalized_method == "POST"
+        and (
+            path.rstrip("/") == "/context/organization"
+            or path.rstrip("/") == "/context/organization/clear"
+            or path.rstrip("/") == "/context/site"
+            or path.rstrip("/") == "/context/site/clear"
+            or path.rstrip("/") == "/context/location"
+            or path.rstrip("/") == "/context/location/clear"
+        )
+    ):
         return PortalPermission.DASHBOARD_VIEW
 
     if normalized_method in {"GET", "HEAD", "OPTIONS"}:
@@ -130,13 +143,22 @@ def required_permission_for_request(
     if (
         normalized_method == "POST"
         and path.startswith("/administration/organizations/")
-        and path.endswith("/grafana/retry")
+        and (
+            path.endswith("/grafana/retry")
+            or path.endswith("/grafana/reconcile")
+        )
     ):
         return PortalPermission.ORGANIZATION_MANAGE
 
     if (
         normalized_method in {"POST", "PUT", "PATCH", "DELETE"}
-        and path.rstrip("/") == "/administration/organizations"
+        and (
+            path.rstrip("/") == "/administration/organizations"
+            or (
+                path.startswith("/administration/organizations/")
+                and path.endswith("/edit")
+            )
+        )
     ):
         return PortalPermission.ORGANIZATION_MANAGE
 

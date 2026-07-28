@@ -66,32 +66,9 @@ def validate_device_step(
                 "Select an existing device."
             ) from exc
 
-        normalized_identifier_type = (
-            identifier_type.strip().upper()
-        )
-        normalized_identifier_value = (
-            identifier_value.strip()
-        )
-
-        if bool(normalized_identifier_type) != bool(
-            normalized_identifier_value
-        ):
-            raise DeviceStepValidationError(
-                "Identifier type and value must be supplied together."
-            )
-
-        if normalized_identifier_type == "MQTT_UID":
-            if not MQTT_UID_PATTERN.fullmatch(
-                normalized_identifier_value
-            ):
-                raise DeviceStepValidationError(
-                    "MQTT UID must contain eight hexadecimal byte pairs "
-                    "separated by colons."
-                )
-
-            normalized_identifier_value = (
-                normalized_identifier_value.lower()
-            )
+        # Existing device identity is loaded from the database by the
+        # route after access and gateway ownership are verified. Any
+        # client-submitted identifier fields are intentionally ignored.
 
         return {
             "mode": "USE_EXISTING",
@@ -105,12 +82,8 @@ def validate_device_step(
             "profile_code": None,
             "firmware_version": None,
             "identifier": {
-                "type": (
-                    normalized_identifier_type or None
-                ),
-                "value": (
-                    normalized_identifier_value or None
-                ),
+                "type": None,
+                "value": None,
             },
         }
 

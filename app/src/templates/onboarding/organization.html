@@ -132,14 +132,17 @@
             </label>
 
             <label>
-                Recommended organization code
+                System-generated organization code
 
                 <span class="field-help">
-                    Generated from the name and editable before saving.
+                    Generated automatically from the organization name.
                 </span>
 
                 <input
                     id="organization_code"
+                    data-generated-code-from="organization_name"
+                    readonly
+                    aria-readonly="true"
                     name="organization_code"
                     type="text"
                     maxlength="100"

@@ -139,7 +139,13 @@ def test_unauthenticated_protected_request_redirects_to_login(
         "/login?"
         "next_path=%2Fonboarding%2Fdevice%3Fdraft_token%3Dabc"
     )
-    assert response.headers["cache-control"] == "no-store"
+    cache_control = response.headers["cache-control"]
+
+    assert "no-store" in cache_control
+    assert "no-cache" in cache_control
+    assert "must-revalidate" in cache_control
+    assert "private" in cache_control
+    assert "max-age=0" in cache_control
 
 
 def test_failed_login_uses_generic_error(

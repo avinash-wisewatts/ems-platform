@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Telemetry validation | WiseWatts EMS{% endblock %}
+{% block breadcrumb %}<nav class="breadcrumb" aria-label="Breadcrumb"><span>Administration</span><span>/</span><span class="breadcrumb-current">Telemetry validation</span></nav>{% endblock %}
+{% block content %}
+<section class="administration-page">
+<header class="administration-page-header"><div><p class="eyebrow">DATA HEALTH</p><h2>{{ page_title }}</h2><p>Configuration health and telemetry availability are reported separately. Telemetry state never changes configuration or commissioning state.</p></div></header>
+<section class="form-card"><h3>Filters</h3><form method="get" action="/administration/telemetry-validation" class="form-grid">
+<label>Organization<select name="organization_id"><option value="">All accessible organizations</option>{% for organization in organizations %}<option value="{{ organization.organization_id }}" {% if selected_organization_id == organization.organization_id|string %}selected{% endif %}>{{ organization.organization_name }} ({{ organization.organization_code }})</option>{% endfor %}</select></label>
+<label>Site<select name="site_id"><option value="">All accessible sites</option>{% for site in sites %}<option value="{{ site.id }}" {% if selected_site_id == site.id|string %}selected{% endif %}>{{ site.organization_name }} / {{ site.site_name }}</option>{% endfor %}</select></label>
+<label>Telemetry state<select name="telemetry_state"><option value="">All states</option>{% for state in telemetry_states %}<option value="{{ state }}" {% if selected_telemetry_state == state %}selected{% endif %}>{{ state }}</option>{% endfor %}</select></label>
+<div><button type="submit">Apply filters</button> <a href="/administration/telemetry-validation">Clear</a></div></form></section>
+<section class="form-card"><h3>Accessible devices <span class="field-help">({{ rows|length }})</span></h3>
+{% if rows %}<div class="table-scroll"><table><thead><tr><th>Device</th><th>Gateway</th><th>Site</th><th>Associated asset</th><th>Configuration state</th><th>Telemetry state</th><th>Latest source timestamp</th><th>Latest received timestamp</th><th>Profile validation</th></tr></thead><tbody>
+{% for row in rows %}<tr><td><strong>{{ row.device_name }}</strong><br><span class="field-help">{{ row.external_id }}</span></td><td>{{ row.gateway_name }}</td><td>{{ row.site_name }}</td><td>{{ row.associated_asset_names }}</td><td><strong>{{ row.configuration_state }}</strong><br><span class="field-help">{{ row.mapped_point_count }} mapped / {{ row.required_point_count }} required</span></td><td><strong>{{ row.telemetry_state }}</strong><br><span class="field-help">thresholds {{ row.receiving_threshold_seconds }}s / {{ row.stale_threshold_seconds }}s / {{ row.silent_threshold_seconds }}s</span></td><td>{{ row.latest_source_timestamp or 'Never' }}</td><td>{{ row.latest_received_timestamp or 'Never' }}</td><td>{{ row.profile_validation_result }}</td></tr>{% endfor %}
+</tbody></table></div>{% else %}<p>No devices match the selected filters.</p>{% endif %}</section></section>
+{% endblock %}

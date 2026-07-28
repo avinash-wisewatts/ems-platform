@@ -252,6 +252,8 @@ def all_devices() -> list[dict]:
             "serial_number": None,
             "firmware_version": "4.1",
             "protocol": "MQTT",
+            "identifier_type": "MQTT_UID",
+            "identifier_value": "80:34:28:16:09:eb:00:01",
         },
         {
             "id": INCOMPLETE_DEVICE_ID,
@@ -277,6 +279,8 @@ def all_devices() -> list[dict]:
             "serial_number": None,
             "firmware_version": None,
             "protocol": "MQTT",
+            "identifier_type": None,
+            "identifier_value": None,
         },
         {
             "id": OTHER_DEVICE_ID,
@@ -304,6 +308,8 @@ def all_devices() -> list[dict]:
             "serial_number": None,
             "firmware_version": None,
             "protocol": "MQTT",
+            "identifier_type": "MQTT_UID",
+            "identifier_value": "80:34:28:16:09:eb:00:02",
         },
     ]
 
@@ -525,6 +531,13 @@ def test_device_get_filters_incomplete_and_other_gateway_devices(
     assert "INCOMPLETE_DEVICE" not in response.text
     assert "Other Gateway Device" not in response.text
     assert "OTHER_DEVICE" not in response.text
+    assert 'id="existing_identifier_type"' in response.text
+    assert 'readonly' in response.text
+    assert 'data-identifier-type="MQTT_UID"' in response.text
+    assert 'data-identifier-value="80:34:28:16:09:eb:00:01"' in response.text
+    assert 'name="identifier_type"' not in response.text.split(
+        'id="existing_identifier_type"', 1
+    )[1].split('id="create_device_fields"', 1)[0]
 
 
 def test_device_get_restores_saved_device_values(
@@ -634,7 +647,7 @@ def test_device_post_create_new_saves_and_redirects(
     }
 
 
-def test_device_post_use_existing_saves_identity_and_identifier(
+def test_device_post_use_existing_uses_stored_identity_and_ignores_tampering(
     portal_client,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -669,8 +682,8 @@ def test_device_post_use_existing_saves_identity_and_identifier(
             "draft_token": str(DRAFT_TOKEN),
             "device_mode": "USE_EXISTING",
             "existing_device_id": str(DEVICE_ID),
-            "identifier_type": "MQTT_UID",
-            "identifier_value": "80:34:28:16:09:EB:00:01",
+            "identifier_type": "FORGED_TYPE",
+            "identifier_value": "forged-value",
         },
     )
 

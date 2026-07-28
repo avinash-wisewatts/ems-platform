@@ -1,0 +1,61 @@
+apiVersion: 1
+
+deleteDatasources:
+  - name: EMS TimescaleDB
+    orgId: 1
+
+  - name: EMS TimescaleDB
+    orgId: 2
+
+datasources:
+  # WiseWatts Demo / platform administration organization
+  - name: EMS TimescaleDB
+    uid: ems-timescaledb
+    orgId: 1
+
+    type: postgres
+    access: proxy
+
+    url: timescaledb:5432
+    database: ems
+    user: grafana_reader
+
+    isDefault: true
+    editable: false
+
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: true
+      maxOpenConns: 10
+      maxIdleConns: 5
+      connMaxLifetime: 14400
+
+    secureJsonData:
+      password: ${EMS_GRAFANA_DB_PASSWORD}
+
+  # GOOD LUCK INC tenant organization
+  - name: EMS TimescaleDB
+    uid: ems-timescaledb
+    orgId: 2
+
+    type: postgres
+    access: proxy
+
+    url: timescaledb:5432
+    database: ems
+    user: grafana_reader
+
+    isDefault: true
+    editable: false
+
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: true
+      maxOpenConns: 10
+      maxIdleConns: 5
+      connMaxLifetime: 14400
+
+    secureJsonData:
+      password: ${EMS_GRAFANA_DB_PASSWORD}

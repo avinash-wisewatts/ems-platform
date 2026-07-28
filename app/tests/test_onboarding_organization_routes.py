@@ -235,7 +235,7 @@ def test_organization_post_create_new_saves_and_redirects(
             "draft_token": "",
             "existing_organization_id": "",
             "organization_name": "  WiseWatts Test  ",
-            "organization_code": "  wisewatts_test  ",
+            "organization_code": "IGNORED_CLIENT_VALUE",
             "organization_description": "  Route test tenant  ",
         },
     )
@@ -337,17 +337,15 @@ def test_organization_post_validation_error_preserves_form(
             "organization_mode": "CREATE_NEW",
             "draft_token": "",
             "existing_organization_id": "",
-            "organization_name": "Preserved Organization",
-            "organization_code": "INVALID-CODE",
+            "organization_name": "",
+            "organization_code": "IGNORED_CLIENT_VALUE",
             "organization_description": "Preserved description",
         },
     )
 
     assert response.status_code == 422
-    assert "Preserved Organization" in response.text
-    assert "INVALID-CODE" in response.text
     assert "Preserved description" in response.text
-    assert "Organization code" in response.text
+    assert "Organization name is required." in response.text
 
 
 def test_organization_post_rejects_invalid_draft_token(
@@ -397,7 +395,7 @@ def test_organization_post_database_failure_returns_controlled_conflict(
             "draft_token": "",
             "existing_organization_id": "",
             "organization_name": "Database Failure Organization",
-            "organization_code": "DATABASE_FAILURE",
+            "organization_code": "IGNORED_CLIENT_VALUE",
             "organization_description": "Preserve this value",
         },
     )
@@ -408,4 +406,4 @@ def test_organization_post_database_failure_returns_controlled_conflict(
         in response.text
     )
     assert "Database Failure Organization" in response.text
-    assert "DATABASE_FAILURE" in response.text
+    assert "DATABASE_FAILURE_ORGANIZATION" in response.text

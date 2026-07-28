@@ -13,7 +13,7 @@ CATEGORY_RELATIONSHIPS: dict[str, set[str]] = {
     "Energy Meter": {
         "PRIMARY_METER",
         "SECONDARY_METER",
-        "SUB_METER",
+        "SECONDARY_METER",
     },
     "Environmental Sensor": {
         "TEMPERATURE_SENSOR",

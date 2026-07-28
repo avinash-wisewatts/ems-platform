@@ -1,0 +1,589 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "Tenant-isolated EMS energy overview using TimescaleDB analytics views.",
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "ems-timescaledb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 2,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "kwatt"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.6.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ems-timescaledb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n    current_demand_kw AS \"Current Power\"\nFROM analytics.v_asset_energy_kpis\nWHERE grafana_org_id = ${__org.id}\n  AND site_id::text = '${site}'\n  AND asset_id::text = ANY(ARRAY[${asset:sqlstring}]::text[])\nORDER BY received_at DESC\nLIMIT 1;",
+          "refId": "A"
+        }
+      ],
+      "title": "Current Active Power",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "ems-timescaledb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 3,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "mwh"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.6.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ems-timescaledb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n    import_energy_register_kwh / 1000.0 AS \"Import Energy Register\"\nFROM analytics.v_asset_energy_kpis\nWHERE grafana_org_id = ${__org.id}\n  AND site_id::text = '${site}'\n  AND asset_id::text = ANY(ARRAY[${asset:sqlstring}]::text[])\nORDER BY received_at DESC\nLIMIT 1;",
+          "refId": "A"
+        }
+      ],
+      "title": "Import Energy Register",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "ems-timescaledb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 3,
+          "mappings": [],
+          "max": 1,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.85
+              },
+              {
+                "color": "green",
+                "value": 0.95
+              }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "id": 3,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.6.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ems-timescaledb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n    power_factor_total AS \"Power Factor\"\nFROM analytics.v_asset_energy_kpis\nWHERE grafana_org_id = ${__org.id}\n  AND site_id::text = '${site}'\n  AND asset_id::text = ANY(ARRAY[${asset:sqlstring}]::text[])\nORDER BY received_at DESC\nLIMIT 1;",
+          "refId": "A"
+        }
+      ],
+      "title": "Power Factor",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "ems-timescaledb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 2,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "hertz"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "id": 4,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.6.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ems-timescaledb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n    frequency_hz AS \"Frequency\"\nFROM analytics.v_asset_energy_kpis\nWHERE grafana_org_id = ${__org.id}\n  AND site_id::text = '${site}'\n  AND asset_id::text = ANY(ARRAY[${asset:sqlstring}]::text[])\nORDER BY received_at DESC\nLIMIT 1;",
+          "refId": "A"
+        }
+      ],
+      "title": "Frequency",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "ems-timescaledb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "kW",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "kwatt"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 5
+      },
+      "id": 5,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max",
+            "mean"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ems-timescaledb"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n    bucket_start AS \"time\",\n    asset_name AS metric,\n    demand_kw_avg AS value\nFROM analytics.v_asset_demand_15min\nWHERE grafana_org_id = ${__org.id}\n  AND site_id::text = '${site}'\n  AND asset_id::text = ANY(ARRAY[${asset:sqlstring}]::text[])\n  AND $__timeFilter(bucket_start)\nORDER BY bucket_start, asset_name;",
+          "refId": "A"
+        }
+      ],
+      "title": "Active Demand \u2014 15 Minute Average",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "ems-timescaledb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "V",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 4,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "volt"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 5
+      },
+      "id": 6,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ems-timescaledb"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n    bucket_start AS \"time\",\n    asset_name || ' L1' AS metric,\n    voltage_l1_v_avg AS value\nFROM analytics.v_asset_energy_15min\nWHERE grafana_org_id = ${__org.id}\n  AND site_id::text = '${site}'\n  AND asset_id::text = ANY(ARRAY[${asset:sqlstring}]::text[])\n  AND $__timeFilter(bucket_start)\n\nUNION ALL\n\nSELECT\n    bucket_start AS \"time\",\n    asset_name || ' L2' AS metric,\n    voltage_l2_v_avg AS value\nFROM analytics.v_asset_energy_15min\nWHERE grafana_org_id = ${__org.id}\n  AND site_id::text = '${site}'\n  AND asset_id::text = ANY(ARRAY[${asset:sqlstring}]::text[])\n  AND $__timeFilter(bucket_start)\n\nUNION ALL\n\nSELECT\n    bucket_start AS \"time\",\n    asset_name || ' L3' AS metric,\n    voltage_l3_v_avg AS value\nFROM analytics.v_asset_energy_15min\nWHERE grafana_org_id = ${__org.id}\n  AND site_id::text = '${site}'\n  AND asset_id::text = ANY(ARRAY[${asset:sqlstring}]::text[])\n  AND $__timeFilter(bucket_start)\n\nORDER BY 1, 2;",
+          "refId": "A"
+        }
+      ],
+      "title": "Source-Reported Asset Phase Voltage",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "ems-timescaledb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 14
+      },
+      "id": 7,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "pluginVersion": "11.6.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "ems-timescaledb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n    asset_name AS \"Asset\",\n    asset_type AS \"Type\",\n    parent_asset_name AS \"Parent\",\n    received_at AS \"Last Update\",\n    data_age_seconds AS \"Age Seconds\",\n    current_demand_kw AS \"Demand kW\",\n    import_energy_register_kwh AS \"Import Register kWh\",\n    power_factor_total AS \"PF\",\n    frequency_hz AS \"Hz\"\nFROM analytics.v_asset_energy_kpis\nWHERE grafana_org_id = ${__org.id}\n  AND site_id::text = '${site}'\n  AND asset_id::text = ANY(ARRAY[${asset:sqlstring}]::text[])\nORDER BY asset_name;",
+          "refId": "A"
+        }
+      ],
+      "title": "Operational Asset Status",
+      "type": "table"
+    }
+  ],
+  "refresh": "1m",
+  "schemaVersion": 40,
+  "tags": [
+    "EMS",
+    "Energy",
+    "Multi-tenant"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "datasource": {
+          "type": "postgres",
+          "uid": "ems-timescaledb"
+        },
+        "definition": "SELECT site_name AS __text, site_id::text AS __value FROM analytics.v_sites WHERE grafana_org_id = ${__org.id} ORDER BY site_name;",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Site",
+        "multi": false,
+        "name": "site",
+        "options": [],
+        "query": "SELECT site_name AS __text, site_id::text AS __value FROM analytics.v_sites WHERE grafana_org_id = ${__org.id} ORDER BY site_name;",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "ems-timescaledb"
+        },
+        "definition": "SELECT asset_name AS __text, asset_id::text AS __value FROM analytics.v_asset_selector WHERE grafana_org_id = ${__org.id} AND site_id::text = '${site}' ORDER BY asset_name;",
+        "hide": 0,
+        "includeAll": true,
+        "allValue": null,
+        "label": "Asset",
+        "multi": true,
+        "name": "asset",
+        "options": [],
+        "query": "SELECT asset_name AS __text, asset_id::text AS __value FROM analytics.v_asset_selector WHERE grafana_org_id = ${__org.id} AND site_id::text = '${site}' ORDER BY asset_name;",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Energy Overview",
+  "uid": "ems-energy-overview",
+  "version": 2,
+  "weekStart": ""
+}

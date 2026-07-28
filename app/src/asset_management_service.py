@@ -207,3 +207,47 @@ async def update_asset(
             "audit_transaction_id"
         ),
     )
+
+
+async def list_accessible_commissioning_readiness(
+    *, portal_user_id: int, entity_type: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return declarative commissioning readiness within the actor scope."""
+    async with database_connection() as connection:
+        async with connection.cursor() as cursor:
+            await cursor.execute(
+                "SELECT * FROM admin.list_accessible_commissioning_readiness(%s,%s)",
+                (portal_user_id, entity_type),
+            )
+            rows = await cursor.fetchall()
+        await connection.rollback()
+    return rows
+
+
+async def commission_asset(
+    *, portal_user_id: int, asset_id: str,
+) -> dict[str, Any]:
+    """Commission one asset through the database readiness contract."""
+    async with database_connection() as connection:
+        try:
+            async with connection.cursor() as cursor:
+                await cursor.execute(
+                    "SELECT admin.commission_asset(%s,%s::uuid) AS asset_result",
+                    (portal_user_id, asset_id),
+                )
+                row = await cursor.fetchone()
+            await connection.commit()
+        except DatabaseError:
+            await connection.rollback()
+            raise
+    payload = row["asset_result"]
+    return build_entity_result(
+        payload,
+        entity_type="ASSET",
+        entity_id=payload.get("asset_id"),
+        lifecycle_status=payload.get("lifecycle_status"),
+        commissioning_status=payload.get("commissioning_status"),
+        validation_warnings=payload.get("validation_warnings"),
+        blocking_conditions=payload.get("blocking_conditions"),
+        audit_transaction_id=payload.get("audit_transaction_id"),
+    )

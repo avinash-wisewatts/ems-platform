@@ -23,6 +23,32 @@ document.addEventListener("DOMContentLoaded", () => {
         "existing_device_id"
     );
 
+    const existingIdentifierType = document.getElementById(
+        "existing_identifier_type"
+    );
+    const existingIdentifierValue = document.getElementById(
+        "existing_identifier_value"
+    );
+
+    const updateExistingIdentity = () => {
+        if (!existingDevice) {
+            return;
+        }
+
+        const selectedOption = existingDevice.options[
+            existingDevice.selectedIndex
+        ];
+        const identifierType = selectedOption?.dataset.identifierType || "";
+        const identifierValue = selectedOption?.dataset.identifierValue || "";
+
+        if (existingIdentifierType) {
+            existingIdentifierType.value = identifierType;
+        }
+        if (existingIdentifierValue) {
+            existingIdentifierValue.value = identifierValue;
+        }
+    };
+
     const deviceName = document.getElementById("device_name");
     const externalId = document.getElementById(
         "device_external_id"
@@ -120,6 +146,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
         if (existingDevice) {
             existingDevice.required = useExisting;
+
+            if (useExisting) {
+                updateExistingIdentity();
+            }
         }
 
         [
@@ -188,6 +218,13 @@ document.addEventListener("DOMContentLoaded", () => {
         input.addEventListener("change", updateMode);
     });
 
+    if (existingDevice) {
+        existingDevice.addEventListener(
+            "change",
+            updateExistingIdentity
+        );
+    }
+
     form.addEventListener("submit", (event) => {
         updateMode();
 
@@ -198,5 +235,6 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     filterProfiles();
+    updateExistingIdentity();
     updateMode();
 });

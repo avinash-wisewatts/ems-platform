@@ -488,7 +488,6 @@ def test_asset_get_renders_create_new_device_context(
     assert "Device category: Energy Meter" in response.text
     assert "Primary Meter" in response.text
     assert "Secondary Meter" in response.text
-    assert "Sub Meter" in response.text
     assert "Chiller" in response.text
 
 
@@ -670,6 +669,17 @@ def test_asset_post_use_existing_saves_identity_and_relationship(
     )
     install_asset_catalogs(monkeypatch)
 
+    async def fake_validate_relationship(**kwargs):
+        assert kwargs["asset_id"] == str(ASSET_ID)
+        assert kwargs["relationship_type"] == "SECONDARY_METER"
+        assert kwargs["device_id"] == str(DEVICE_ID)
+        return {"valid": True}
+
+    monkeypatch.setattr(
+        "src.main.validate_asset_relationship_availability",
+        fake_validate_relationship,
+    )
+
     captured_payload: dict = {}
 
     async def fake_save_owned_step(
@@ -698,7 +708,7 @@ def test_asset_post_use_existing_saves_identity_and_relationship(
             "asset_type_id": str(ASSET_TYPE_ID),
 
             "metering_requirement": "DIRECT_METER_REQUIRED",
-            "relationship_type": "SUB_METER",
+            "relationship_type": "SECONDARY_METER",
             "operational_notes": "Discarded",
         },
     )
@@ -711,7 +721,7 @@ def test_asset_post_use_existing_saves_identity_and_relationship(
         "asset_type_id": None,
 
         "metering_requirement": None,
-        "relationship_type": "SUB_METER",
+        "relationship_type": "SECONDARY_METER",
         "metadata": {},
     }
 
@@ -985,3 +995,68 @@ def test_asset_post_database_failure_returns_controlled_conflict(
     )
     assert "Database Failure Chiller" in response.text
     assert "Database failure notes" in response.text
+
+
+def test_relationship_validation_reports_primary_meter_conflict(
+    portal_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login_operator(portal_client, monkeypatch)
+    install_visible_draft(monkeypatch, existing_device_draft())
+
+    async def fake_validate(**kwargs):
+        assert kwargs["actor_portal_user_id"] == 305
+        assert kwargs["asset_id"] == str(ASSET_ID)
+        assert kwargs["relationship_type"] == "PRIMARY_METER"
+        assert kwargs["device_id"] == str(DEVICE_ID)
+        return {
+            "valid": False,
+            "code": "PRIMARY_METER_EXISTS",
+            "message": "This asset already has a primary meter. Choose another relationship type.",
+        }
+
+    monkeypatch.setattr(
+        "src.main.validate_asset_relationship_availability",
+        fake_validate,
+    )
+
+    response = portal_client.get(
+        "/onboarding/asset/relationship-validation",
+        params={
+            "draft": str(DRAFT_TOKEN),
+            "asset_id": str(ASSET_ID),
+            "relationship_type": "PRIMARY_METER",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "PRIMARY_METER_EXISTS"
+
+
+def test_relationship_validation_accepts_available_relationship(
+    portal_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login_operator(portal_client, monkeypatch)
+    install_visible_draft(monkeypatch, create_new_device_draft())
+
+    async def fake_validate(**kwargs):
+        assert kwargs["device_id"] is None
+        return {"valid": True}
+
+    monkeypatch.setattr(
+        "src.main.validate_asset_relationship_availability",
+        fake_validate,
+    )
+
+    response = portal_client.get(
+        "/onboarding/asset/relationship-validation",
+        params={
+            "draft": str(DRAFT_TOKEN),
+            "asset_id": str(ASSET_ID),
+            "relationship_type": "TEMPERATURE_SENSOR",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"valid": True}

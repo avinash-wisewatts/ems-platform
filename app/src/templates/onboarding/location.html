@@ -28,10 +28,6 @@
     <div class="context-summary">
         <span class="context-summary-label">Site</span>
         <strong>{{ site_label }}</strong>
-
-        <a href="/onboarding/site?draft={{ draft_token }}">
-            Change
-        </a>
     </div>
 
     <div class="choice-cards location-choice-cards">
@@ -142,9 +138,12 @@
             </label>
 
             <label>
-                Recommended building code
+                System-generated building code
                 <input
                     id="building_code"
+                    data-generated-code-from="building_name"
+                    readonly
+                    aria-readonly="true"
                     name="building_code"
                     type="text"
                     maxlength="100"
@@ -176,9 +175,12 @@
             </label>
 
             <label>
-                Recommended floor code
+                System-generated floor code
                 <input
                     id="floor_code"
+                    data-generated-code-from="floor_name"
+                    readonly
+                    aria-readonly="true"
                     name="floor_code"
                     type="text"
                     maxlength="100"
@@ -210,9 +212,12 @@
             </label>
 
             <label>
-                Recommended space code
+                System-generated space code
                 <input
                     id="space_code"
+                    data-generated-code-from="space_name"
+                    readonly
+                    aria-readonly="true"
                     name="space_code"
                     type="text"
                     maxlength="100"

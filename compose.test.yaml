@@ -1,0 +1,47 @@
+name: ems-platform-test
+
+services:
+  timescaledb-test:
+    # Keep the test database version aligned with production for now.
+    # We will pin both production and test images to an exact version later.
+    image: timescale/timescaledb:latest-pg16
+
+    container_name: ems-timescaledb-test
+
+    restart: "no"
+
+    environment:
+      # These credentials are only for the disposable local test database.
+      # The test database is bound to localhost and must never be reused in
+      # production or exposed publicly.
+      POSTGRES_USER: ems_admin
+      POSTGRES_PASSWORD: ems_test_only_password
+      POSTGRES_DB: ems_test
+      TZ: Asia/Kolkata
+
+    ports:
+      # Use a different host port so the test database can run alongside
+      # the production database without a port conflict.
+      - "127.0.0.1:55432:5432"
+
+    volumes:
+      # Docker manages this isolated test volume.
+      # It is deleted by the test cleanup command.
+      - ems-timescaledb-test-data:/var/lib/postgresql/data
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ems_admin -d ems_test"
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+    shm_size: 256m
+
+volumes:
+  ems-timescaledb-test-data:
+    name: ems-timescaledb-test-data

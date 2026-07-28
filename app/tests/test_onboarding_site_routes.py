@@ -383,7 +383,7 @@ def test_site_post_create_new_saves_and_redirects(
             "site_mode": "CREATE_NEW",
             "existing_site_id": "",
             "site_name": "  Hyderabad Hotel  ",
-            "site_code": "  hyd_hotel  ",
+            "site_code": "IGNORED_CLIENT_VALUE",
             "site_timezone": "  Asia/Kolkata  ",
             "site_address": "  Test site address  ",
         },
@@ -401,7 +401,7 @@ def test_site_post_create_new_saves_and_redirects(
             "mode": "CREATE_NEW",
             "existing_site_id": None,
             "name": "Hyderabad Hotel",
-            "code": "HYD_HOTEL",
+            "code": "HYDERABAD_HOTEL",
             "timezone": "Asia/Kolkata",
             "address": {
                 "full_address": "Test site address"
@@ -556,19 +556,18 @@ def test_site_post_validation_error_preserves_form_data(
             "draft_token": str(DRAFT_TOKEN),
             "site_mode": "CREATE_NEW",
             "existing_site_id": "",
-            "site_name": "Preserved Site",
-            "site_code": "INVALID-CODE",
+            "site_name": "",
+            "site_code": "IGNORED_CLIENT_VALUE",
             "site_timezone": "Asia/Singapore",
             "site_address": "Preserved address",
         },
     )
 
     assert response.status_code == 422
-    assert "Preserved Site" in response.text
-    assert "INVALID-CODE" in response.text
+    assert "Site name is required." in response.text
     assert "Asia/Singapore" in response.text
     assert "Preserved address" in response.text
-    assert "Site code" in response.text
+    assert "IGNORED_CLIENT_VALUE" not in response.text
 
 
 def test_site_post_database_failure_returns_controlled_conflict(
@@ -596,7 +595,7 @@ def test_site_post_database_failure_returns_controlled_conflict(
             "site_mode": "CREATE_NEW",
             "existing_site_id": "",
             "site_name": "Database Failure Site",
-            "site_code": "DATABASE_FAILURE",
+            "site_code": "IGNORED_CLIENT_VALUE",
             "site_timezone": "Asia/Kolkata",
             "site_address": "Preserved address",
         },
@@ -608,4 +607,5 @@ def test_site_post_database_failure_returns_controlled_conflict(
         in response.text
     )
     assert "Database Failure Site" in response.text
-    assert "DATABASE_FAILURE" in response.text
+    assert "DATABASE_FAILURE_SITE" in response.text
+    assert "IGNORED_CLIENT_VALUE" not in response.text

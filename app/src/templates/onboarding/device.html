@@ -31,10 +31,6 @@
         </span>
 
         <strong>{{ gateway_label }}</strong>
-
-        <a href="/onboarding/gateway?draft={{ draft_token }}">
-            Change
-        </a>
     </div>
 
     {% if allow_existing_device %}
@@ -114,6 +110,8 @@
                     {% for device in devices %}
                     <option
                         value="{{ device.id }}"
+                        data-identifier-type="{{ device.identifier_type or '' }}"
+                        data-identifier-value="{{ '' if device.identifier_value is none else device.identifier_value }}"
                         {% if form_data.get(
                             'existing_device_id'
                         ) == device.id|string %}
@@ -131,43 +129,39 @@
             </label>
 
             <label>
-                Optional identifier verification type
+                Identifier type
 
-                <select
+                <input
                     id="existing_identifier_type"
-                    name="identifier_type"
+                    type="text"
+                    value="{{ form_data.get('identifier_type', '') }}"
+                    readonly
+                    aria-readonly="true"
+                    placeholder="Select an existing device"
                 >
-                    <option value="">
-                        Do not verify an identifier
-                    </option>
 
-                    <option
-                        value="MQTT_UID"
-                        {% if form_data.get(
-                            'identifier_type'
-                        ) == 'MQTT_UID' %}
-                        selected
-                        {% endif %}
-                    >
-                        MQTT UID
-                    </option>
-                </select>
+                <small>
+                    Stored device identity. This value cannot be changed
+                    during onboarding.
+                </small>
             </label>
 
             <label>
-                Optional identifier value
+                Identifier value
 
                 <input
                     id="existing_identifier_value"
-                    name="identifier_value"
                     type="text"
-                    maxlength="255"
-                    placeholder="80:34:28:16:09:eb:00:01"
-                    value="{{ form_data.get(
-                        'identifier_value',
-                        ''
-                    ) }}"
+                    value="{{ form_data.get('identifier_value', '') }}"
+                    readonly
+                    aria-readonly="true"
+                    placeholder="Select an existing device"
                 >
+
+                <small>
+                    Stored device identity. This value cannot be changed
+                    during onboarding.
+                </small>
             </label>
         </div>
     </div>
@@ -419,7 +413,7 @@
     src="{{ url_for(
         'static',
         path='/js/onboarding-device.js'
-    ) }}"
+    ) }}?v=existing-device-identity-2"
     defer
 ></script>
 {% endblock %}

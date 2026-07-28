@@ -26,12 +26,16 @@ if [[ ! -r "${PIPELINE_CONFIG}" ]]; then
 fi
 
 MQTT_TABLE="$(get_config_value MQTT_STAGING_TABLE)"
+RTDATA_VIEW="$(get_config_value RTDATA_VIEW)"
+NORMALIZED_VIEW="$(get_config_value NORMALIZED_VIEW)"
 NORMALIZED_TABLE="$(get_config_value NORMALIZED_TABLE)"
 ENERGY_TABLE="$(get_config_value ENERGY_TABLE)"
 ENVIRONMENT_TABLE="$(get_config_value ENVIRONMENT_TABLE)"
 PIPELINE_STATE_TABLE="$(get_config_value PIPELINE_STATE_TABLE)"
 
 if [[ -z "${MQTT_TABLE}" ||
+      -z "${RTDATA_VIEW}" ||
+      -z "${NORMALIZED_VIEW}" ||
       -z "${NORMALIZED_TABLE}" ||
       -z "${ENERGY_TABLE}" ||
       -z "${ENVIRONMENT_TABLE}" ||
@@ -87,6 +91,93 @@ if [[ -n "$LATEST_STAGING" ]]; then
     pass "Latest MQTT message: ${LATEST_STAGING}"
 else
     fail "Unable to determine latest MQTT message"
+fi
+
+
+#
+# MQTT ingestion timestamp contract
+#
+# Telegraf writes an absolute ingestion instant. The landing table and both
+# parsing views must expose TIMESTAMPTZ so database session time zones cannot
+# shift arrival timestamps or pipeline checkpoints.
+#
+
+print_section "MQTT Timestamp Contract"
+
+TIMESTAMPTZ_CONTRACT_COUNT="$(
+    psql_query "
+        SELECT COUNT(*)
+        FROM information_schema.columns
+        WHERE (
+                table_schema = 'public'
+                AND table_name = 'mqtt_staging'
+                AND column_name = 'received_at'
+                AND data_type = 'timestamp with time zone'
+              )
+           OR (
+                table_schema = 'telemetry'
+                AND table_name = 'v_rtdata'
+                AND column_name = 'received_at'
+                AND data_type = 'timestamp with time zone'
+              )
+           OR (
+                table_schema = 'telemetry'
+                AND table_name = 'v_normalized_points'
+                AND column_name = 'received_at'
+                AND data_type = 'timestamp with time zone'
+              );
+    " 2>/dev/null || echo 0
+)"
+
+if [[ "${TIMESTAMPTZ_CONTRACT_COUNT}" == "3" ]]; then
+    pass "MQTT landing and parsing views expose TIMESTAMPTZ"
+else
+    fail "MQTT timestamp contract is invalid: expected 3 TIMESTAMPTZ columns, found ${TIMESTAMPTZ_CONTRACT_COUNT}"
+fi
+
+LATEST_INGESTION_AGE_SECONDS="$(
+    psql_query "
+        SELECT
+            CASE
+                WHEN MAX(received_at) IS NULL
+                    THEN NULL
+                ELSE GREATEST(
+                    0,
+                    FLOOR(
+                        EXTRACT(
+                            EPOCH FROM (
+                                clock_timestamp() - MAX(received_at)
+                            )
+                        )
+                    )::BIGINT
+                )
+            END
+        FROM ${MQTT_TABLE};
+    " 2>/dev/null || true
+)"
+
+if [[ "${LATEST_INGESTION_AGE_SECONDS}" =~ ^[0-9]+$ ]]; then
+    pass "Latest MQTT ingestion age: ${LATEST_INGESTION_AGE_SECONDS} seconds"
+
+    if (( LATEST_INGESTION_AGE_SECONDS > 600 )); then
+        warn "No MQTT landing row has arrived within the last 10 minutes"
+    fi
+else
+    fail "Unable to calculate latest MQTT ingestion age"
+fi
+
+FUTURE_STAGING_ROWS="$(
+    psql_query "
+        SELECT COUNT(*)
+        FROM ${MQTT_TABLE}
+        WHERE received_at > clock_timestamp() + interval '5 minutes';
+    " 2>/dev/null || echo 0
+)"
+
+if [[ "${FUTURE_STAGING_ROWS}" == "0" ]]; then
+    pass "No MQTT landing timestamps are unexpectedly in the future"
+else
+    fail "MQTT landing timestamps more than five minutes in the future: ${FUTURE_STAGING_ROWS}"
 fi
 
 print_section "Normalization Stage"
@@ -230,6 +321,66 @@ if [[ "${STALE_PIPELINES}" == "0" ]]; then
     pass "All pipeline stages completed within the last 10 minutes"
 else
     warn "Pipeline stages not completed within the last 10 minutes: ${STALE_PIPELINES}"
+fi
+
+
+NORMALIZATION_CHECKPOINT_AHEAD="$(
+    psql_query "
+        SELECT COUNT(*)
+        FROM ${PIPELINE_STATE_TABLE} ps
+        CROSS JOIN (
+            SELECT MAX(received_at) AS newest_landing
+            FROM ${MQTT_TABLE}
+        ) source
+        WHERE ps.pipeline_name = 'normalized_points'
+          AND ps.last_received_at IS NOT NULL
+          AND source.newest_landing IS NOT NULL
+          AND ps.last_received_at > source.newest_landing;
+    " 2>/dev/null || echo 0
+)"
+
+if [[ "${NORMALIZATION_CHECKPOINT_AHEAD}" == "0" ]]; then
+    pass "Normalization checkpoint does not exceed the MQTT landing maximum"
+else
+    fail "Normalization checkpoint is ahead of the MQTT landing source"
+fi
+
+NORMALIZATION_CHECKPOINT_LAG_SECONDS="$(
+    psql_query "
+        SELECT
+            CASE
+                WHEN ps.last_received_at IS NULL
+                  OR source.newest_landing IS NULL
+                    THEN NULL
+                ELSE GREATEST(
+                    0,
+                    FLOOR(
+                        EXTRACT(
+                            EPOCH FROM (
+                                source.newest_landing -
+                                ps.last_received_at
+                            )
+                        )
+                    )::BIGINT
+                )
+            END
+        FROM ${PIPELINE_STATE_TABLE} ps
+        CROSS JOIN (
+            SELECT MAX(received_at) AS newest_landing
+            FROM ${MQTT_TABLE}
+        ) source
+        WHERE ps.pipeline_name = 'normalized_points';
+    " 2>/dev/null || true
+)"
+
+if [[ "${NORMALIZATION_CHECKPOINT_LAG_SECONDS}" =~ ^[0-9]+$ ]]; then
+    pass "Normalization checkpoint lag: ${NORMALIZATION_CHECKPOINT_LAG_SECONDS} seconds"
+
+    if (( NORMALIZATION_CHECKPOINT_LAG_SECONDS > 600 )); then
+        warn "Normalization checkpoint trails MQTT landing by more than 10 minutes"
+    fi
+else
+    fail "Unable to calculate normalization checkpoint lag"
 fi
 
 print_section "Checkpoint Details"

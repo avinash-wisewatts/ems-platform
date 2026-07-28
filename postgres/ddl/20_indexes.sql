@@ -93,3 +93,15 @@ ON metadata.device_field_mapping (device_id);
 CREATE INDEX IF NOT EXISTS idx_device_field_mapping_point
 ON metadata.device_field_mapping (logical_point_id);
 
+
+-- ============================================================================
+-- Physical location lookup indexes
+-- ============================================================================
+-- Speeds up onboarding filters and dashboard queries that locate assets and
+-- gateways by space. Floor and building are derived through the space hierarchy.
+
+CREATE INDEX IF NOT EXISTS idx_assets_space_id
+    ON metadata.assets (space_id);
+
+CREATE INDEX IF NOT EXISTS idx_gateways_space_id
+    ON metadata.gateways (space_id);

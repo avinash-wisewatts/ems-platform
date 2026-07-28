@@ -39,7 +39,11 @@ fi
 # Docker service validation
 # ------------------------------------------------------------
 
-if docker compose config --services 2>/dev/null | grep -qx "timescaledb"; then
+COMPOSE_SERVICES="$(
+    docker compose config --services 2>/dev/null || true
+)"
+
+if grep -qx "timescaledb" <<< "${COMPOSE_SERVICES}"; then
     pass "TimescaleDB service exists in Docker Compose"
 else
     fail "TimescaleDB service is missing from Docker Compose"

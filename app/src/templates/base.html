@@ -16,7 +16,7 @@
 
     <link
         rel="stylesheet"
-        href="{{ url_for('static', path='/css/app.css') }}"
+        href="{{ url_for('static', path='/css/app.css') }}?v=sprint-a-breadcrumb-fix-1"
     >
 
     {% block head %}{% endblock %}
@@ -131,12 +131,86 @@
                 </div>
             </header>
 
+            {% if current_portal_user and active_administration_context %}
+            <section class="active-context-bar" aria-label="Active administration context">
+                <div class="active-context-heading">
+                    <span class="active-context-kicker">Active context</span>
+                    {% if active_administration_context.active_organization_id %}
+                    <strong>
+                        {{ active_administration_context.active_organization_name or "Selected organization" }}
+                    </strong>
+                    {% if active_administration_context.active_organization_code %}
+                    <span class="active-context-code">
+                        {{ active_administration_context.active_organization_code }}
+                    </span>
+                    {% endif %}
+                    {% else %}
+                    <strong>No organization selected</strong>
+                    {% endif %}
+                </div>
+
+                <div class="active-context-levels" aria-label="Context hierarchy">
+                    <span class="context-level{% if active_administration_context.active_organization_id %} is-set{% endif %}">
+                        Organization
+                    </span>
+                    <span class="context-level{% if active_administration_context.active_site_id %} is-set{% endif %}">
+                        {% if active_administration_context.active_site_id %}
+                        {{ active_administration_context.active_site_name or "Selected site" }}
+                        {% if active_administration_context.active_site_code %}
+                        ({{ active_administration_context.active_site_code }})
+                        {% endif %}
+                        {% else %}Site not selected{% endif %}
+                    </span>
+                    <span class="context-level{% if active_administration_context.active_location_id %} is-set{% endif %}">
+                        {% if active_administration_context.active_location_id %}{{ active_administration_context.active_location_name or "Selected location" }}{% if active_administration_context.active_location_code %} ({{ active_administration_context.active_location_code }}){% endif %}{% else %}Location not selected{% endif %}
+                    </span>
+                </div>
+
+                <div class="active-context-actions">
+                    {% if current_portal_user.role_code == "PLATFORM_ADMIN" %}
+                    <a href="/administration/organizations?mode=choose&amp;return_to={{ request.url.path|urlencode }}">
+                        {% if active_administration_context.active_organization_id %}Change organization{% else %}Choose organization{% endif %}
+                    </a>
+                    {% if active_administration_context.active_organization_id %}
+                    <a href="/administration/organizations/{{ active_administration_context.active_organization_id }}">
+                        Organization details
+                    </a>
+                    {% endif %}
+                    {% endif %}
+                    {% if active_administration_context.active_organization_id %}
+                    <a href="/administration/sites">
+                        {% if active_administration_context.active_site_id %}Change site{% else %}Choose site{% endif %}
+                    </a>
+                    {% endif %}
+                    {% if active_administration_context.active_site_id %}
+                    <a href="/administration/locations">
+                        {% if active_administration_context.active_location_id %}Change location{% else %}Choose location{% endif %}
+                    </a>
+                    {% endif %}
+                </div>
+            </section>
+            {% endif %}
+
             <main class="workspace-content">
                 {% block content %}{% endblock %}
             </main>
         </div>
     </div>
 
+    <script src="{{ url_for('static', path='/js/system-generated-code.js') }}?v=sprint-a-breadcrumb-fix-1" defer></script>
     {% block scripts %}{% endblock %}
+
+    <script>
+        window.addEventListener("pageshow", function (event) {
+            const navigationEntry = performance.getEntriesByType("navigation")[0];
+            const restoredFromHistory =
+                event.persisted ||
+                (navigationEntry && navigationEntry.type === "back_forward");
+
+            if (restoredFromHistory) {
+                window.location.reload();
+            }
+        });
+    </script>
 </body>
 </html>

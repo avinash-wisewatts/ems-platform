@@ -48,9 +48,38 @@ def login_platform_admin(
     ) -> AuthenticationResult:
         return successful_platform_admin_result()
 
+    async def fake_organizations(**kwargs) -> list[dict]:
+        return [
+            {
+                "id": ORGANIZATION_ID,
+                "organization_id": ORGANIZATION_ID,
+                "organization_name": "Organization One",
+                "organization_code": "ORG_1",
+            }
+        ]
+
+    async def fake_sites(**kwargs) -> list[dict]:
+        return [
+            {
+                "id": SITE_ID,
+                "site_id": SITE_ID,
+                "organization_id": ORGANIZATION_ID,
+                "site_name": "Main Site",
+                "site_code": "SITE_1",
+            }
+        ]
+
     monkeypatch.setattr(
         "src.main.authenticate_portal_user",
         fake_authenticate,
+    )
+    monkeypatch.setattr(
+        "src.context.service._accessible_organizations",
+        fake_organizations,
+    )
+    monkeypatch.setattr(
+        "src.context.service._accessible_sites",
+        fake_sites,
     )
 
     response = portal_client.post(
@@ -63,6 +92,35 @@ def login_platform_admin(
     )
 
     assert response.status_code == 303
+    assert response.headers["location"] == (
+        "/administration/organizations"
+    )
+
+    organization_response = portal_client.post(
+        "/context/organization",
+        data={
+            "organization_id": str(ORGANIZATION_ID),
+            "return_to": "/administration/sites",
+        },
+    )
+
+    assert organization_response.status_code == 303
+    assert organization_response.headers["location"] == (
+        "/administration/sites"
+    )
+
+    site_response = portal_client.post(
+        "/context/site",
+        data={
+            "site_id": str(SITE_ID),
+            "return_to": "/administration/locations",
+        },
+    )
+
+    assert site_response.status_code == 303
+    assert site_response.headers["location"] == (
+        "/administration/locations"
+    )
 
 
 def hierarchy_rows() -> list[dict]:
@@ -139,7 +197,7 @@ def test_location_administration_get_renders_hierarchy_and_forms(
             "BUILDING",
             SITE_ID,
             "Building B",
-            "building_b",
+            "IGNORED_CLIENT_BUILDING",
             "create_building",
             {
                 "portal_user_id": 500,
@@ -154,13 +212,13 @@ def test_location_administration_get_renders_hierarchy_and_forms(
             "FLOOR",
             BUILDING_ID,
             "Second Floor",
-            "floor_2",
+            "IGNORED_CLIENT_FLOOR",
             "create_floor",
             {
                 "portal_user_id": 500,
                 "building_id": str(BUILDING_ID),
                 "name": "Second Floor",
-                "code": "FLOOR_2",
+                "code": "SECOND_FLOOR",
             },
             "FLOOR",
             FLOOR_ID,
@@ -169,7 +227,7 @@ def test_location_administration_get_renders_hierarchy_and_forms(
             "SPACE",
             FLOOR_ID,
             "Office",
-            "office",
+            "IGNORED_CLIENT_SPACE",
             "create_space",
             {
                 "portal_user_id": 500,

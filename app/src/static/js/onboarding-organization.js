@@ -33,18 +33,9 @@ document.addEventListener("DOMContentLoaded", () => {
         "organization_code"
     );
 
-    let codeWasManuallyEdited =
-        organizationCode.value.trim().length > 0;
+    const codeWasManuallyEdited = false;
 
-    const generateCode = (value) => {
-        return value
-            .trim()
-            .toUpperCase()
-            .replace(/[^A-Z0-9]+/g, "_")
-            .replace(/^_+|_+$/g, "")
-            .replace(/_+/g, "_")
-            .slice(0, 100);
-    };
+    const generateCode = (value) => window.WiseWattsCode.generate(value);
 
     const setSectionEnabled = (
         section,
@@ -88,13 +79,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 organizationName.value
             );
         }
-    });
-
-    organizationCode.addEventListener("input", () => {
-        codeWasManuallyEdited = true;
-        organizationCode.value = generateCode(
-            organizationCode.value
-        );
     });
 
     modeInputs.forEach((input) => {

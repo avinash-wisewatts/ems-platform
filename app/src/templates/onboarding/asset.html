@@ -32,10 +32,6 @@
         </span>
 
         <strong>{{ device_label }}</strong>
-
-        <a href="/onboarding/device?draft={{ draft_token }}">
-            Change
-        </a>
     </div>
 
     <div class="information-card">
@@ -260,6 +256,7 @@
                 id="relationship_type"
                 name="relationship_type"
                 required
+                aria-describedby="relationship_type_help relationship_type_error"
             >
                 <option value="">
                     Select a relationship
@@ -278,6 +275,21 @@
                 </option>
                 {% endfor %}
             </select>
+
+            <span
+                id="relationship_type_help"
+                class="field-help"
+            >
+                Availability is checked immediately for the selected asset.
+            </span>
+
+            <span
+                id="relationship_type_error"
+                class="field-error"
+                role="alert"
+                aria-live="polite"
+                hidden
+            ></span>
         </label>
     </div>
 
@@ -286,8 +298,8 @@
         <strong>Primary-meter constraint</strong>
         <p>
             An asset can have only one primary meter, and a device can be the
-            primary meter for only one asset. Final submission validates both
-            constraints atomically.
+            primary meter for only one asset. The wizard checks availability immediately, and final submission
+            validates both constraints atomically.
         </p>
     </div>
     {% endif %}
@@ -300,7 +312,7 @@
             Back
         </a>
 
-        <button type="submit">
+        <button type="submit" id="asset_submit">
             Save &amp; Continue
         </button>
     </div>

@@ -1,8 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}
-Sites | WiseWatts EMS
-{% endblock %}
+{% block title %}Sites | WiseWatts EMS{% endblock %}
 
 {% block breadcrumb %}
 <nav class="breadcrumb" aria-label="Breadcrumb">
@@ -13,186 +11,201 @@ Sites | WiseWatts EMS
 {% endblock %}
 
 {% block content %}
-<section class="administration-page">
+<section class="administration-page site-administration-page">
     <header class="administration-page-header">
         <div>
             <p class="eyebrow">TENANT ADMINISTRATION</p>
             <h2>{{ page_title }}</h2>
             <p>
-                Create a site independently under an existing organization.
-                Buildings, assets, gateways, and devices remain optional.
+                Choose the site you want to administer within
+                <strong>
+                    {{ active_organization.organization_name
+                       if active_organization
+                       else active_administration_context.active_organization_name
+                       or "the active organization" }}
+                </strong>.
             </p>
         </div>
-
-        <a class="button-link" href="/administration">
-            Back to administration
+        <a class="button-link secondary" href="/administration/organizations">
+            Change organization
         </a>
     </header>
 
-    {% if error %}
+    {% if context_error %}
     <div class="form-error" role="alert">
-        {{ error }}
+        That site is no longer available in the active organization.
+        Choose another site.
     </div>
     {% endif %}
+    {% if error %}<div class="form-error" role="alert">{{ error }}</div>{% endif %}
 
     {% if result %}
-    <section class="form-card">
+    <section class="form-card compact-result-card">
         <div class="section-heading">
             <div>
                 <h3>Site created</h3>
-                <p>The EMS site was created successfully.</p>
+                <p>The site was created successfully and is ready to administer.</p>
             </div>
         </div>
-
         <dl>
-            <dt>Site ID</dt>
-            <dd>{{ result.site_id }}</dd>
-
+            <dt>Site ID</dt><dd>{{ result.site_id }}</dd>
             {% if result.lifecycle_status %}
-            <dt>Lifecycle status</dt>
-            <dd>{{ result.lifecycle_status }}</dd>
-            {% endif %}
-
-            {% if result.audit_transaction_id %}
-            <dt>Audit transaction ID</dt>
-            <dd>{{ result.audit_transaction_id }}</dd>
+            <dt>Lifecycle status</dt><dd>{{ result.lifecycle_status }}</dd>
             {% endif %}
         </dl>
     </section>
     {% endif %}
 
-    <section class="form-card">
-        <div class="section-heading">
+    <section class="site-chooser" aria-labelledby="site-chooser-title">
+        <div class="section-heading site-chooser-heading">
             <div>
-                <h3>Accessible sites</h3>
-                <p>Sites currently visible within your access scope.</p>
+                <h3 id="site-chooser-title">Choose a site to administer</h3>
+                <p>Selecting a site clears any previously selected location.</p>
             </div>
+            <label class="organization-search-field">
+                <span>Search sites</span>
+                <input
+                    type="search"
+                    placeholder="Search by site name or code"
+                    data-site-search
+                    autocomplete="off"
+                >
+            </label>
         </div>
 
         {% if sites %}
-        <div class="table-scroll">
-            <table>
+        <div class="site-table-scroll table-scroll">
+            <table class="site-table">
                 <thead>
                     <tr>
-                        <th scope="col">Organization</th>
                         <th scope="col">Site</th>
                         <th scope="col">Code</th>
-                        <th scope="col">Site ID</th>
+                        <th scope="col">Lifecycle</th>
+                        <th scope="col">Context</th>
+                        <th scope="col">Action</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for site in sites %}
-                    <tr>
-                        <td>{{ site.organization_name }}</td>
-                        <td>{{ site.site_name }}</td>
-                        <td>{{ site.site_code }}</td>
-                        <td>{{ site.site_id }}</td>
+                    {% set site_identifier = (site.site_id or site.id)|string %}
+                    {% set is_active_site = (
+                        active_administration_context.active_site_id
+                        and active_administration_context.active_site_id == site_identifier
+                    ) %}
+                    <tr
+                        class="site-row{% if is_active_site %} is-active{% endif %}"
+                        data-site-row
+                        data-search-text="{{ site.site_name }} {{ site.site_code }} {{ site.lifecycle_status }}"
+                    >
+                        <td>
+                            <strong>{{ site.site_name }}</strong>
+                        </td>
+                        <td><span class="organization-code">{{ site.site_code }}</span></td>
+                        <td>
+                            <span class="status-badge status-{{ site.lifecycle_status|lower }}">
+                                {{ site.lifecycle_status }}
+                            </span>
+                        </td>
+                        <td>
+                            {% if is_active_site %}
+                            <span class="context-status-badge">Active</span>
+                            {% else %}
+                            <span class="field-help">Not selected</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <div class="site-row-actions">
+                                <form method="post" action="/context/site">
+                                    <input type="hidden" name="site_id" value="{{ site_identifier }}">
+                                    <input type="hidden" name="return_to" value="/administration/locations">
+                                    <button type="submit">
+                                        {% if is_active_site %}Continue{% else %}Administer{% endif %}
+                                    </button>
+                                </form>
+                            </div>
+                        </td>
                     </tr>
                     {% endfor %}
                 </tbody>
             </table>
         </div>
+        <p class="search-empty-state" data-site-empty hidden>
+            No sites match your search.
+        </p>
         {% else %}
-        <p>No accessible sites are available.</p>
+        <div class="empty-state">
+            <h4>No sites are available</h4>
+            <p>Create the first site for this organization below.</p>
+        </div>
         {% endif %}
     </section>
 
-    <form
-        method="post"
-        action="/administration/sites"
-        class="form-card"
-        novalidate
-    >
-        <div class="section-heading">
-            <div>
-                <h3>Create site</h3>
-                <p>
-                    The organization owner is permanent after creation.
-                </p>
+    <details class="administration-secondary-panel"{% if error or result %} open{% endif %}>
+        <summary>Create a new site</summary>
+        <form method="post" action="/administration/sites" class="form-card" novalidate>
+            <input
+                type="hidden"
+                name="organization_id"
+                value="{{ active_administration_context.active_organization_id }}"
+            >
+            <div class="section-heading">
+                <div>
+                    <h3>Create site</h3>
+                    <p>
+                        The site will belong permanently to the active organization.
+                    </p>
+                </div>
             </div>
-        </div>
-
-        <div class="form-grid">
-            <label>
-                Organization
-                <select name="organization_id" required>
-                    <option value="">Select organization</option>
-                    {% for organization in organizations %}
-                    <option
-                        value="{{ organization.id }}"
-                        {% if (
-                            form_data.get('organization_id')
-                            == organization.id|string
-                        ) %}selected{% endif %}
-                    >
-                        {{ organization.organization_name }}
-                        ({{ organization.organization_code }})
-                    </option>
-                    {% endfor %}
-                </select>
-            </label>
-
-            <label>
-                Site name
-                <input
-                    name="site_name"
-                    type="text"
-                    maxlength="200"
-                    required
-                    value="{{ form_data.get('site_name', '') }}"
-                >
-            </label>
-
-            <label>
-                Site code
-                <span class="field-help">
-                    Use A-Z, 0-9, and underscore.
-                </span>
-                <input
-                    name="site_code"
-                    type="text"
-                    maxlength="100"
-                    pattern="[A-Za-z][A-Za-z0-9_]*"
-                    required
-                    value="{{ form_data.get('site_code', '') }}"
-                >
-            </label>
-
-            <label>
-                IANA timezone
-                <input
-                    name="site_timezone"
-                    type="text"
-                    maxlength="100"
-                    required
-                    value="{{ form_data.get(
-                        'site_timezone',
-                        'Asia/Kolkata'
-                    ) }}"
-                >
-            </label>
-
-            <label>
-                Lifecycle status
-                <select name="lifecycle_status" required>
-                    {% for status in lifecycle_statuses %}
-                    <option
-                        value="{{ status }}"
-                        {% if (
-                            form_data.get(
-                                'lifecycle_status',
-                                'ACTIVE'
-                            ) == status
-                        ) %}selected{% endif %}
-                    >
-                        {{ status }}
-                    </option>
-                    {% endfor %}
-                </select>
-            </label>
-        </div>
-
-        <button type="submit">Create site</button>
-    </form>
+            <div class="form-grid">
+                <label>
+                    Site name
+                    <input name="site_name" type="text" maxlength="200" required
+                           value="{{ form_data.get('site_name', '') }}">
+                </label>
+                <label>
+                    System-generated site code
+                    <span class="field-help">Use A-Z, 0-9, and underscore.</span>
+                    <input name="site_code" type="text" maxlength="100"
+                           pattern="[A-Za-z][A-Za-z0-9_]*" required
+                           value="{{ form_data.get('site_code', '') }}">
+                </label>
+                <label>
+                    IANA timezone
+                    <input name="site_timezone" type="text" maxlength="100" required
+                           value="{{ form_data.get('site_timezone', 'Asia/Kolkata') }}">
+                </label>
+                <label>
+                    Lifecycle status
+                    <select name="lifecycle_status" required>
+                        {% for status in lifecycle_statuses %}
+                        <option value="{{ status }}"{% if form_data.get('lifecycle_status', 'ACTIVE') == status %} selected{% endif %}>{{ status }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+            </div>
+            <button type="submit">Create site</button>
+        </form>
+    </details>
 </section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(() => {
+    const input = document.querySelector("[data-site-search]");
+    if (!input) return;
+    const rows = Array.from(document.querySelectorAll("[data-site-row]"));
+    const empty = document.querySelector("[data-site-empty]");
+    input.addEventListener("input", () => {
+        const query = input.value.trim().toLowerCase();
+        let visible = 0;
+        rows.forEach((row) => {
+            const matches = !query || (row.dataset.searchText || "").toLowerCase().includes(query);
+            row.hidden = !matches;
+            if (matches) visible += 1;
+        });
+        if (empty) empty.hidden = visible !== 0;
+    });
+})();
+</script>
 {% endblock %}

@@ -274,8 +274,22 @@ async def list_devices() -> list[dict[str, Any]]:
                     device_name,
                     serial_number,
                     firmware_version,
-                    protocol
-                FROM admin.v_devices
+                    protocol,
+                    device_identifier.identifier_type,
+                    device_identifier.identifier_value
+                FROM admin.v_devices AS device
+                LEFT JOIN LATERAL (
+                    SELECT
+                        identifier_type,
+                        identifier_value
+                    FROM metadata.device_identifiers
+                    WHERE device_id = device.id
+                    ORDER BY
+                        CASE WHEN identifier_type = 'MQTT_UID' THEN 0 ELSE 1 END,
+                        identifier_type,
+                        identifier_value
+                    LIMIT 1
+                ) AS device_identifier ON TRUE
                 ORDER BY
                     organization_name,
                     site_name,
@@ -389,3 +403,84 @@ async def list_device_models() -> list[dict[str, Any]]:
                 """
             )
             return await cursor.fetchall()
+
+
+async def validate_asset_relationship_availability(
+    *,
+    actor_portal_user_id: int,
+    asset_id: str,
+    relationship_type: str,
+    device_id: str | None = None,
+) -> dict[str, Any]:
+    """Validate an onboarding asset/device relationship immediately."""
+    async with database_connection() as connection:
+        async with connection.cursor() as cursor:
+            await cursor.execute(
+                """
+                SELECT admin.validate_onboarding_asset_relationship(
+                    %s::bigint,
+                    %s::uuid,
+                    %s::text,
+                    %s::uuid
+                ) AS validation_result
+                """,
+                (
+                    actor_portal_user_id,
+                    asset_id,
+                    relationship_type,
+                    device_id,
+                ),
+            )
+            row = await cursor.fetchone()
+
+    result = row["validation_result"] if row else None
+    return result or {
+        "valid": False,
+        "code": "VALIDATION_UNAVAILABLE",
+        "message": "Relationship validation is temporarily unavailable.",
+    }
+
+
+async def validate_onboarding_field(
+    *,
+    actor_portal_user_id: int,
+    draft_token: str | None,
+    step: str,
+    field: str,
+    value: str | None,
+    form_data: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate one onboarding field against canonical database state."""
+    from psycopg.types.json import Jsonb
+
+    async with database_connection() as connection:
+        async with connection.cursor() as cursor:
+            await cursor.execute(
+                """
+                SELECT admin.validate_onboarding_field(
+                    %s::bigint,
+                    %s::uuid,
+                    %s::text,
+                    %s::text,
+                    %s::text,
+                    %s::jsonb
+                ) AS validation_result
+                """,
+                (
+                    actor_portal_user_id,
+                    draft_token,
+                    step,
+                    field,
+                    value,
+                    Jsonb(form_data),
+                ),
+            )
+            row = await cursor.fetchone()
+
+    result = row["validation_result"] if row else None
+    return result or {
+        "valid": False,
+        "field": field,
+        "code": "VALIDATION_UNAVAILABLE",
+        "message": "Validation is temporarily unavailable.",
+    }

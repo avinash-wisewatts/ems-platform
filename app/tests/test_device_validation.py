@@ -135,7 +135,7 @@ def test_existing_device_requires_existing_gateway() -> None:
         validate_device_step(**values)
 
 
-def test_existing_device_accepts_optional_identifier_pair() -> None:
+def test_existing_device_ignores_client_identifier_fields() -> None:
     existing_device_id = str(uuid4())
 
     values = valid_create_device_input()
@@ -144,8 +144,8 @@ def test_existing_device_accepts_optional_identifier_pair() -> None:
             "device_mode": "USE_EXISTING",
             "existing_device_id": existing_device_id,
             "gateway_mode": "USE_EXISTING",
-            "identifier_type": "MQTT_UID",
-            "identifier_value": "80:34:28:16:09:EB:00:01",
+            "identifier_type": "FORGED_TYPE",
+            "identifier_value": "forged-value",
         }
     )
 
@@ -163,26 +163,27 @@ def test_existing_device_accepts_optional_identifier_pair() -> None:
         "profile_code": None,
         "firmware_version": None,
         "identifier": {
-            "type": "MQTT_UID",
-            "value": "80:34:28:16:09:eb:00:01",
+            "type": None,
+            "value": None,
         },
     }
 
 
-def test_existing_device_rejects_partial_identifier() -> None:
+def test_existing_device_accepts_missing_client_identifier_fields() -> None:
     values = valid_create_device_input()
     values.update(
         {
             "device_mode": "USE_EXISTING",
             "existing_device_id": str(uuid4()),
             "gateway_mode": "USE_EXISTING",
-            "identifier_type": "MQTT_UID",
+            "identifier_type": "",
             "identifier_value": "",
         }
     )
 
-    with pytest.raises(
-        DeviceStepValidationError,
-        match="must be supplied together",
-    ):
-        validate_device_step(**values)
+    payload = validate_device_step(**values)
+
+    assert payload["identifier"] == {
+        "type": None,
+        "value": None,
+    }

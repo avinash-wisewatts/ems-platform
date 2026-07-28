@@ -12,7 +12,7 @@
 -- ----------------------------------------------------------------------------
 -- Database Comment
 -- ----------------------------------------------------------------------------
-COMMENT ON DATABASE ems IS
+COMMENT ON DATABASE :"db_name" IS
 'Enterprise Multi-Tenant Energy Management System (EMS) SaaS Platform';
 
 -- ----------------------------------------------------------------------------
@@ -23,13 +23,13 @@ COMMENT ON DATABASE ems IS
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 
 -- Ensure all users can connect to the database.
-GRANT CONNECT ON DATABASE ems TO PUBLIC;
+GRANT CONNECT ON DATABASE :"db_name" TO PUBLIC;
 
 -- ----------------------------------------------------------------------------
 -- Search Path
 -- ----------------------------------------------------------------------------
 
-ALTER DATABASE ems
+ALTER DATABASE :"db_name"
 SET search_path = public;
 
 -- ----------------------------------------------------------------------------

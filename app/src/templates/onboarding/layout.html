@@ -1,24 +1,36 @@
 {% extends "base.html" %}
 
+{% set onboarding_steps = [
+    ("organization", "Organization", "/onboarding/organization"),
+    ("site", "Site", "/onboarding/site"),
+    ("location", "Location", "/onboarding/location"),
+    ("gateway", "Gateway", "/onboarding/gateway"),
+    ("device", "Device", "/onboarding/device"),
+    ("asset", "Asset", "/onboarding/asset"),
+    ("review", "Review", "/onboarding/review")
+] %}
+
 {% block title %}
 {{ page_title }} | WiseWatts EMS
 {% endblock %}
 
 {% block nav_onboarding %}is-active{% endblock %}
 
-{% block breadcrumb %}
-<nav
-    class="breadcrumb"
-    aria-label="Breadcrumb"
->
-    <a href="/onboarding">Onboarding</a>
+{% macro onboarding_step_url(step_path) -%}
+    {%- if draft_token -%}
+        {{ step_path }}?draft={{ draft_token }}
+    {%- else -%}
+        {{ step_path }}
+    {%- endif -%}
+{%- endmacro %}
 
-    {% if current_step %}
-    <span class="breadcrumb-separator">›</span>
-    <span class="breadcrumb-current">
-        {{ current_step }}
+{% block breadcrumb %}
+<nav class="breadcrumb" aria-label="Application breadcrumb">
+    <a href="/onboarding">Onboarding</a>
+    <span aria-hidden="true">/</span>
+    <span class="breadcrumb-current" aria-current="page">
+        {{ page_title }}
     </span>
-    {% endif %}
 </nav>
 {% endblock %}
 
@@ -36,37 +48,58 @@
     </header>
 
     <nav
-        class="onboarding-progress"
-        aria-label="Onboarding progress"
+        class="onboarding-progress onboarding-step-navigation"
+        aria-label="Onboarding steps"
     >
-        {% set steps = [
-            ("organization", "Organization"),
-            ("site", "Site"),
-            ("location", "Location"),
-            ("gateway", "Gateway"),
-            ("device", "Device"),
-            ("asset", "Asset"),
-            ("review", "Review")
-        ] %}
+        {% for step_key, step_label, step_path in onboarding_steps %}
+        {% set is_complete = step_key in completed_steps %}
+        {% set is_current = step_key == active_step %}
+        {% set is_navigable = is_complete and draft_token %}
 
-        {% for step_key, step_label in steps %}
+        {% if is_navigable %}
+        <a
+            href="{{ onboarding_step_url(step_path) }}"
+            class="progress-step is-complete is-navigable"
+            aria-label="Return to {{ step_label }}"
+        >
+            <span class="progress-indicator">✓</span>
+            <span class="progress-copy">
+                <span class="progress-label">{{ step_label }}</span>
+                {% set entity_name = onboarding_navigation_labels.get(step_key, '') if onboarding_navigation_labels else '' %}
+                {% if entity_name %}
+                <span class="progress-entity" title="{{ entity_name }}">{{ entity_name }}</span>
+                {% endif %}
+            </span>
+        </a>
+        {% else %}
         <div
             class="progress-step
-            {% if step_key == active_step %}is-current{% endif %}
-            {% if step_key in completed_steps %}is-complete{% endif %}"
+                {% if is_current %}is-current{% endif %}
+                {% if is_complete %}is-complete{% endif %}
+            "
+            {% if is_current %}
+            aria-current="step"
+            {% else %}
+            aria-disabled="true"
+            {% endif %}
         >
             <span class="progress-indicator">
-                {% if step_key in completed_steps %}
+                {% if is_complete %}
                 ✓
                 {% else %}
                 {{ loop.index }}
                 {% endif %}
             </span>
 
-            <span class="progress-label">
-                {{ step_label }}
+            <span class="progress-copy">
+                <span class="progress-label">{{ step_label }}</span>
+                {% set entity_name = onboarding_navigation_labels.get(step_key, '') if onboarding_navigation_labels else '' %}
+                {% if entity_name %}
+                <span class="progress-entity" title="{{ entity_name }}">{{ entity_name }}</span>
+                {% endif %}
             </span>
         </div>
+        {% endif %}
         {% endfor %}
     </nav>
 
@@ -85,5 +118,6 @@
 
 {% block scripts %}
 {{ super() }}
+<script src="/static/js/onboarding-validation.js?v=validation-framework-2" defer></script>
 {% block onboarding_scripts %}{% endblock %}
 {% endblock %}

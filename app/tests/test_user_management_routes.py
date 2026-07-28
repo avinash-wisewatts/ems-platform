@@ -108,7 +108,12 @@ def login_as_user_manager(
     )
 
     assert response.status_code == 303
-    assert response.headers["location"] == "/administration/users"
+    expected_location = (
+        "/administration/organizations"
+        if role_code == "PLATFORM_ADMIN"
+        else "/administration/users"
+    )
+    assert response.headers["location"] == expected_location
 
 
 def test_platform_admin_can_open_user_management_page(
@@ -390,7 +395,7 @@ def test_org_admin_can_deactivate_user_in_own_organization(
     }
 
 
-def test_platform_admin_page_shows_organization_selector(
+def test_platform_admin_page_uses_global_organization_context(
     portal_client,
     monkeypatch,
 ) -> None:
@@ -428,15 +433,13 @@ def test_platform_admin_page_shows_organization_selector(
     response = portal_client.get("/administration/users")
 
     assert response.status_code == 200
-    assert 'name="organization_id"' in response.text
-    assert "Test Organization" in response.text
-    assert (
-        'value="11111111-1111-1111-1111-111111111111"'
-        in response.text
-    )
+    assert "User management" in response.text
+    assert 'name="organization_id"' not in response.text
+    assert "Test Organization" not in response.text
+    assert "/administration/users/new" in response.text
 
 
-def test_user_rows_include_role_and_status_controls(
+def test_user_rows_use_dedicated_view_and_edit_pages(
     portal_client,
     monkeypatch,
 ) -> None:
@@ -473,16 +476,12 @@ def test_user_rows_include_role_and_status_controls(
     response = portal_client.get("/administration/users")
 
     assert response.status_code == 200
-    assert (
-        'action="/administration/users/801/role"'
-        in response.text
-    )
-    assert (
-        'action="/administration/users/801/status"'
-        in response.text
-    )
-    assert 'value="OPERATOR"' in response.text
-    assert 'value="false"' in response.text
+    assert '/administration/users/801' in response.text
+    assert '/administration/users/801/edit' in response.text
+    assert ">View</a>" in response.text
+    assert ">Edit</a>" in response.text
+    assert 'action="/administration/users/801/role"' not in response.text
+    assert 'action="/administration/users/801/status"' not in response.text
 
 
 @pytest.fixture(autouse=True)

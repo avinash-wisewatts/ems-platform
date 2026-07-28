@@ -55,13 +55,16 @@ _TENANT_ITEMS = (
         "/administration/assets",
         "Manage independent asset inventory.",
     ),
-    NavigationItem("gateways", "Gateways", "◇", None, "Register and manage gateways."),
-    NavigationItem("devices", "Devices", "▣", None, "Register and manage devices."),
-    NavigationItem("relationships", "Relationships", "⇄", None, "Manage asset-device assignments."),
+    NavigationItem("gateways", "Gateways", "◇", "/administration/gateways", "Register and manage gateways."),
+    NavigationItem("devices", "Devices", "▣", "/administration/devices", "Register and manage devices."),
+    NavigationItem("relationships", "Relationships", "⇄", "/administration/relationships", "Manage asset-device assignments."),
+    NavigationItem("metering-coverage", "Metering coverage", "◫", "/administration/metering-coverage", "Review asset metering policy and configuration coverage."),
 )
 
 _OPERATIONS_ITEMS = (
-    NavigationItem("commissioning", "Commissioning", "✓", None, "Review readiness and commission entities."),
+    NavigationItem("commissioning", "Commissioning", "✓", "/administration/commissioning", "Review readiness and commission entities."),
+    NavigationItem("telemetry-validation", "Telemetry validation", "≈", "/administration/telemetry-validation", "Review device configuration and data health."),
+    NavigationItem("reconciliation", "Reconciliation", "!", "/administration/reconciliation", "Resolve operational configuration and provisioning issues."),
     NavigationItem("audit", "Audit", "◷", None, "Review administration audit history."),
 )
 

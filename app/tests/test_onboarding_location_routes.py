@@ -507,11 +507,11 @@ def test_location_post_create_hierarchy_saves_normalized_values(
             "location_mode": "CREATE_LOCATION",
             "existing_space_id": "",
             "building_name": "  Main Building  ",
-            "building_code": "  main_building  ",
+            "building_code": "IGNORED_CLIENT_BUILDING",
             "floor_name": "  Ground Floor  ",
-            "floor_code": "  ground_floor  ",
+            "floor_code": "IGNORED_CLIENT_FLOOR",
             "space_name": "  Chiller Room  ",
-            "space_code": "  chiller_room  ",
+            "space_code": "IGNORED_CLIENT_SPACE",
         },
     )
 
@@ -684,21 +684,22 @@ def test_location_post_validation_error_preserves_form_data(
             "draft_token": str(DRAFT_TOKEN),
             "location_mode": "CREATE_LOCATION",
             "existing_space_id": "",
-            "building_name": "Preserved Building",
-            "building_code": "INVALID-CODE",
+            "building_name": "",
+            "building_code": "IGNORED_CLIENT_BUILDING",
             "floor_name": "Preserved Floor",
-            "floor_code": "PRESERVED_FLOOR",
+            "floor_code": "IGNORED_CLIENT_FLOOR",
             "space_name": "Preserved Space",
-            "space_code": "PRESERVED_SPACE",
+            "space_code": "IGNORED_CLIENT_SPACE",
         },
     )
 
     assert response.status_code == 422
-    assert "Preserved Building" in response.text
-    assert "INVALID-CODE" in response.text
+    assert "Building name is required." in response.text
     assert "Preserved Floor" in response.text
     assert "Preserved Space" in response.text
-    assert "Building code" in response.text
+    assert "IGNORED_CLIENT_BUILDING" not in response.text
+    assert "IGNORED_CLIENT_FLOOR" not in response.text
+    assert "IGNORED_CLIENT_SPACE" not in response.text
 
 
 def test_location_post_database_failure_returns_controlled_conflict(
@@ -726,11 +727,11 @@ def test_location_post_database_failure_returns_controlled_conflict(
             "location_mode": "CREATE_LOCATION",
             "existing_space_id": "",
             "building_name": "Database Failure Building",
-            "building_code": "DATABASE_FAILURE_BUILDING",
+            "building_code": "IGNORED_CLIENT_BUILDING",
             "floor_name": "Database Failure Floor",
-            "floor_code": "DATABASE_FAILURE_FLOOR",
+            "floor_code": "IGNORED_CLIENT_FLOOR",
             "space_name": "Database Failure Space",
-            "space_code": "DATABASE_FAILURE_SPACE",
+            "space_code": "IGNORED_CLIENT_SPACE",
         },
     )
 

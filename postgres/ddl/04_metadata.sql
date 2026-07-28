@@ -29,11 +29,19 @@ CREATE TABLE IF NOT EXISTS metadata.organizations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
     name TEXT NOT NULL,
-    code TEXT UNIQUE NOT NULL,
+    code TEXT UNIQUE NOT NULL
+        CONSTRAINT organizations_code_format_chk
+        CHECK (code ~ '^[A-Z0-9_]+$'),
+
+    timezone TEXT NOT NULL DEFAULT 'Asia/Kolkata',
 
     description TEXT,
 
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
+
+    lifecycle_status TEXT NOT NULL DEFAULT 'ACTIVE'
+        CONSTRAINT organizations_lifecycle_status_chk
+        CHECK (lifecycle_status IN ('DRAFT', 'ACTIVE', 'SUSPENDED', 'DECOMMISSIONED')),
 
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -55,6 +63,10 @@ CREATE TABLE IF NOT EXISTS metadata.sites (
 
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
 
+    lifecycle_status TEXT NOT NULL DEFAULT 'ACTIVE'
+        CONSTRAINT sites_lifecycle_status_chk
+        CHECK (lifecycle_status IN ('DRAFT', 'ACTIVE', 'INACTIVE', 'DECOMMISSIONED')),
+
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 
@@ -73,8 +85,15 @@ CREATE TABLE IF NOT EXISTS metadata.buildings (
 
     name TEXT NOT NULL,
 
+    code TEXT NOT NULL
+        CONSTRAINT buildings_code_format_chk
+        CHECK (code ~ '^[A-Z][A-Z0-9_]*$'),
+
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT buildings_site_code_uq
+        UNIQUE (site_id, code)
 );
 
 
@@ -89,8 +108,15 @@ CREATE TABLE IF NOT EXISTS metadata.floors (
 
     name TEXT NOT NULL,
 
+    code TEXT NOT NULL
+        CONSTRAINT floors_code_format_chk
+        CHECK (code ~ '^[A-Z][A-Z0-9_]*$'),
+
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT floors_building_code_uq
+        UNIQUE (building_id, code)
 );
 
 
@@ -105,8 +131,15 @@ CREATE TABLE IF NOT EXISTS metadata.spaces (
 
     name TEXT NOT NULL,
 
+    code TEXT NOT NULL
+        CONSTRAINT spaces_code_format_chk
+        CHECK (code ~ '^[A-Z][A-Z0-9_]*$'),
+
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT spaces_floor_code_uq
+        UNIQUE (floor_id, code)
 );
 
 
@@ -127,6 +160,11 @@ CREATE TABLE IF NOT EXISTS metadata.asset_types (
 );
 
 
+-- Prevent duplicate controlled-vocabulary entries that differ only by case.
+CREATE UNIQUE INDEX IF NOT EXISTS asset_types_name_ci_uq
+    ON metadata.asset_types (lower(name));
+
+
 CREATE TABLE IF NOT EXISTS metadata.assets (
 
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -136,6 +174,12 @@ CREATE TABLE IF NOT EXISTS metadata.assets (
 
     site_id UUID NOT NULL
         REFERENCES metadata.sites(id),
+
+    -- Optional physical placement. Floor and building are derived through
+    -- metadata.spaces -> metadata.floors -> metadata.buildings.
+    space_id UUID
+        REFERENCES metadata.spaces(id)
+        ON DELETE SET NULL,
 
     asset_type_id UUID
         REFERENCES metadata.asset_types(id),
@@ -152,6 +196,23 @@ CREATE TABLE IF NOT EXISTS metadata.assets (
     serial_number TEXT,
 
     status TEXT DEFAULT 'active',
+
+    lifecycle_status TEXT NOT NULL DEFAULT 'ACTIVE'
+        CONSTRAINT assets_lifecycle_status_chk
+        CHECK (lifecycle_status IN ('DRAFT', 'COMMISSIONING', 'ACTIVE', 'INACTIVE', 'DECOMMISSIONED')),
+
+    -- Explicit energy-meter coverage policy. No default is provided because
+    -- onboarding must make a deliberate production decision for every asset.
+    metering_requirement TEXT NOT NULL
+        CHECK
+        (
+            metering_requirement IN
+            (
+                'DIRECT_METER_REQUIRED',
+                'DESCENDANT_COVERAGE_ALLOWED',
+                'NOT_REQUIRED'
+            )
+        ),
 
     metadata JSONB,
 
@@ -188,15 +249,41 @@ CREATE TABLE IF NOT EXISTS metadata.gateways (
     site_id UUID NOT NULL
         REFERENCES metadata.sites(id),
 
+    -- Optional physical installation location for the gateway.
+    building_id UUID
+        REFERENCES metadata.buildings(id)
+        ON DELETE SET NULL,
+
+    floor_id UUID
+        REFERENCES metadata.floors(id)
+        ON DELETE SET NULL,
+
+    space_id UUID
+        REFERENCES metadata.spaces(id)
+        ON DELETE SET NULL,
+
     gateway_model_id UUID
         REFERENCES metadata.gateway_models(id),
 
     name TEXT NOT NULL,
 
-    external_id TEXT,
+    external_id TEXT NOT NULL,
+
+    lifecycle_status TEXT NOT NULL DEFAULT 'REGISTERED'
+        CONSTRAINT gateways_lifecycle_status_chk
+        CHECK (lifecycle_status IN ('REGISTERED', 'COMMISSIONING', 'INACTIVE', 'DECOMMISSIONED')),
 
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+
+-- One stable gateway external identifier per organization.
+CREATE UNIQUE INDEX IF NOT EXISTS gateways_org_external_id_ci_uq
+    ON metadata.gateways
+    (
+        organization_id,
+        upper(btrim(external_id))
+    );
 
 
 CREATE TABLE IF NOT EXISTS metadata.device_models (
@@ -207,10 +294,24 @@ CREATE TABLE IF NOT EXISTS metadata.device_models (
 
     model TEXT NOT NULL,
 
+    -- Temporary compatibility column. New application logic must use
+    -- device_category_id as the authoritative classification.
     device_type TEXT,
+
+    device_category_id UUID NOT NULL
+        REFERENCES config.device_categories(id),
 
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+
+-- One canonical device-model definition per vendor and model.
+CREATE UNIQUE INDEX IF NOT EXISTS device_models_vendor_model_ci_uq
+    ON metadata.device_models
+    (
+        lower(COALESCE(vendor, '')),
+        lower(model)
+    );
 
 
 CREATE TABLE IF NOT EXISTS metadata.devices (
@@ -228,13 +329,22 @@ CREATE TABLE IF NOT EXISTS metadata.devices (
 
     name TEXT NOT NULL,
 
-    external_id TEXT,
+    external_id TEXT NOT NULL,
 
     serial_number TEXT,
 
     firmware_version TEXT,
 
     protocol TEXT,
+
+    -- Optional physical location independent from gateway and asset.
+    building_id UUID REFERENCES metadata.buildings(id) ON DELETE SET NULL,
+    floor_id UUID REFERENCES metadata.floors(id) ON DELETE SET NULL,
+    space_id UUID REFERENCES metadata.spaces(id) ON DELETE SET NULL,
+
+    lifecycle_status TEXT NOT NULL DEFAULT 'REGISTERED'
+        CONSTRAINT devices_lifecycle_status_chk
+        CHECK (lifecycle_status IN ('DISCOVERED', 'REGISTERED', 'UNASSIGNED', 'COMMISSIONING', 'ACTIVE', 'INACTIVE', 'DECOMMISSIONED')),
 
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 
@@ -247,6 +357,15 @@ CREATE TABLE IF NOT EXISTS metadata.devices (
 -- ============================================================================
 -- ASSET DEVICE RELATIONSHIP
 -- ============================================================================
+
+-- One stable device external identifier per organization.
+CREATE UNIQUE INDEX IF NOT EXISTS devices_org_external_id_ci_uq
+    ON metadata.devices
+    (
+        organization_id,
+        upper(btrim(external_id))
+    );
+
 
 CREATE TABLE IF NOT EXISTS metadata.asset_devices (
 

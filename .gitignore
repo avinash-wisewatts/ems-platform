@@ -77,3 +77,20 @@ grafana/dashboard-backups/
 .venv-test/
 .coverage
 *.bak-*
+# Local safety copies and editor artifacts
+*.before-*
+*.orig
+*.bak
+*.backup
+*.tmp
+*.swp
+*~
+
+# Repository-local backup bundles
+/backups/
+
+# Local environment files and historical copies
+.env
+.env.*
+**/.env
+**/.env.*

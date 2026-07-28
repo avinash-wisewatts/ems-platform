@@ -35,18 +35,9 @@ document.addEventListener("DOMContentLoaded", () => {
         "site_timezone"
     );
 
-    let codeWasManuallyEdited =
-        siteCode && siteCode.value.trim().length > 0;
+    const codeWasManuallyEdited = false;
 
-    const generateCode = (value) => {
-        return value
-            .trim()
-            .toUpperCase()
-            .replace(/[^A-Z0-9]+/g, "_")
-            .replace(/^_+|_+$/g, "")
-            .replace(/_+/g, "_")
-            .slice(0, 100);
-    };
+    const generateCode = (value) => window.WiseWattsCode.generate(value);
 
     const setSectionEnabled = (section, enabled) => {
         if (!section) {
@@ -104,13 +95,6 @@ document.addEventListener("DOMContentLoaded", () => {
                     siteName.value
                 );
             }
-        });
-
-        siteCode.addEventListener("input", () => {
-            codeWasManuallyEdited = true;
-            siteCode.value = generateCode(
-                siteCode.value
-            );
         });
     }
 

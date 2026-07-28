@@ -37,16 +37,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const manualCodeState = new Map();
 
-    const generateCode = (value) => {
-        return value
-            .trim()
-            .toUpperCase()
-            .replace(/[^A-Z0-9]+/g, "_")
-            .replace(/^_+|_+$/g, "")
-            .replace(/_+/g, "_")
-            .replace(/^[^A-Z]+/, "")
-            .slice(0, 100);
-    };
+    const generateCode = (value) => window.WiseWattsCode.generate(value);
 
     const setSectionEnabled = (
         section,
@@ -80,13 +71,6 @@ document.addEventListener("DOMContentLoaded", () => {
                     nameField.value
                 );
             }
-        });
-
-        codeField.addEventListener("input", () => {
-            manualCodeState.set(codeId, true);
-            codeField.value = generateCode(
-                codeField.value
-            );
         });
     });
 

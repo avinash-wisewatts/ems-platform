@@ -55,6 +55,29 @@ def login_platform_admin(
 
     assert response.status_code == 303
 
+    async def fake_accessible_organizations(**kwargs):
+        return [
+            {
+                "id": ORGANIZATION_ID,
+                "organization_code": "ORG_1",
+                "organization_name": "Organization One",
+            }
+        ]
+
+    monkeypatch.setattr(
+        "src.context.service._accessible_organizations",
+        fake_accessible_organizations,
+    )
+
+    selection = portal_client.post(
+        "/context/organization",
+        data={
+            "organization_id": str(ORGANIZATION_ID),
+            "return_to": "/administration/sites",
+        },
+    )
+    assert selection.status_code == 303
+
 
 @pytest.fixture(autouse=True)
 def mock_site_page_reads(
@@ -71,7 +94,7 @@ def mock_site_page_reads(
             }
         ]
 
-    async def fake_list_locations(
+    async def fake_list_sites(
         *,
         portal_user_id: int,
     ) -> list[dict]:
@@ -83,8 +106,8 @@ def mock_site_page_reads(
         fake_list_organizations,
     )
     monkeypatch.setattr(
-        "src.main.list_accessible_physical_locations",
-        fake_list_locations,
+        "src.main.list_accessible_sites",
+        fake_list_sites,
     )
 
 
@@ -97,9 +120,9 @@ def test_site_administration_get_renders_form(
     response = portal_client.get("/administration/sites")
 
     assert response.status_code == 200
-    assert "Create site" in response.text
+    assert "Choose a site to administer" in response.text
+    assert "Create a new site" in response.text
     assert "Organization One" in response.text
-    assert "ORG_1" in response.text
     assert "Asia/Kolkata" in response.text
     assert "Lifecycle status" in response.text
 
@@ -219,33 +242,27 @@ def test_site_administration_lists_accessible_sites(
 ) -> None:
     login_platform_admin(portal_client, monkeypatch)
 
-    async def fake_list_locations(
+    async def fake_list_sites(
         *,
         portal_user_id: int,
     ) -> list[dict]:
         return [
             {
+                "id": SITE_ID,
                 "organization_id": ORGANIZATION_ID,
                 "organization_code": "ORG_1",
                 "organization_name": "Organization One",
-                "site_id": SITE_ID,
                 "site_code": "SITE_1",
                 "site_name": "Site One",
-                "building_id": None,
-                "building_code": None,
-                "building_name": None,
-                "floor_id": None,
-                "floor_code": None,
-                "floor_name": None,
-                "space_id": None,
-                "space_code": None,
-                "space_name": None,
+                "timezone": "Asia/Kolkata",
+                "address": None,
+                "is_active": True,
             }
         ]
 
     monkeypatch.setattr(
-        "src.main.list_accessible_physical_locations",
-        fake_list_locations,
+        "src.main.list_accessible_sites",
+        fake_list_sites,
     )
 
     response = portal_client.get("/administration/sites")
@@ -254,3 +271,77 @@ def test_site_administration_lists_accessible_sites(
     assert "Site One" in response.text
     assert "SITE_1" in response.text
     assert str(SITE_ID) in response.text
+    assert 'action="/context/site"' in response.text
+    assert "Administer" in response.text
+
+
+def test_site_page_requires_active_organization(
+    portal_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_authenticate(username: str, password: str):
+        return successful_platform_admin_result()
+
+    monkeypatch.setattr(
+        "src.main.authenticate_portal_user",
+        fake_authenticate,
+    )
+    portal_client.post(
+        "/login",
+        data={
+            "username": "admin@example.com",
+            "password": "valid-password",
+            "next_path": "/administration/organizations",
+        },
+    )
+
+    response = portal_client.get(
+        "/administration/sites",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/administration/organizations"
+
+
+def test_site_page_highlights_active_context_row(
+    portal_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login_platform_admin(portal_client, monkeypatch)
+
+    async def fake_list_sites(*, portal_user_id: int) -> list[dict]:
+        return [
+            {
+                "id": SITE_ID,
+                "organization_id": ORGANIZATION_ID,
+                "site_code": "SITE_1",
+                "site_name": "Site One",
+                "is_active": True,
+            }
+        ]
+
+    monkeypatch.setattr(
+        "src.main.list_accessible_sites",
+        fake_list_sites,
+    )
+    monkeypatch.setattr(
+        "src.context.service._accessible_sites",
+        lambda **kwargs: fake_list_sites(portal_user_id=500),
+    )
+
+    selection = portal_client.post(
+        "/context/site",
+        data={
+            "site_id": str(SITE_ID),
+            "return_to": "/administration/sites",
+        },
+    )
+    assert selection.status_code == 303
+
+    response = portal_client.get("/administration/sites")
+
+    assert response.status_code == 200
+    assert "site-row is-active" in response.text
+    assert "Continue" in response.text
+    assert "Site One" in response.text

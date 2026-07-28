@@ -196,3 +196,38 @@ async def mark_grafana_provisioning_complete(
             raise
 
     return row["provisioning_result"]
+
+
+async def get_grafana_reconciliation_context(
+    *, portal_user_id: int, organization_id: str,
+) -> dict[str, Any]:
+    """Return the authoritative local Grafana mapping state."""
+    async with database_connection() as connection:
+        async with connection.cursor() as cursor:
+            await cursor.execute(
+                "SELECT admin.get_grafana_reconciliation_context(%s,%s::uuid) AS result",
+                (portal_user_id, organization_id),
+            )
+            row = await cursor.fetchone()
+        await connection.rollback()
+    return row["result"]
+
+
+async def apply_grafana_reconciliation_mapping(
+    *, portal_user_id: int, organization_id: str,
+    grafana_org_id: int, repair_reason: str,
+) -> dict[str, Any]:
+    """Persist one safe Grafana reconciliation mapping and its audit event."""
+    async with database_connection() as connection:
+        try:
+            async with connection.cursor() as cursor:
+                await cursor.execute(
+                    "SELECT admin.apply_grafana_reconciliation_mapping(%s,%s::uuid,%s,%s) AS result",
+                    (portal_user_id, organization_id, grafana_org_id, repair_reason),
+                )
+                row = await cursor.fetchone()
+            await connection.commit()
+        except DatabaseError:
+            await connection.rollback()
+            raise
+    return row["result"]

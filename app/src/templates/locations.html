@@ -4,144 +4,61 @@
     "components/physical_location_selector.html"
     import physical_location_selector
 %}
-
-{% block title %}
-Locations | WiseWatts EMS
-{% endblock %}
-
-{% block breadcrumb %}
-<nav class="breadcrumb" aria-label="Breadcrumb">
-    <a href="/administration">Administration</a>
-    <span aria-hidden="true">/</span>
-    <span class="breadcrumb-current">Locations</span>
-</nav>
-{% endblock %}
-
+{% block title %}Locations | WiseWatts EMS{% endblock %}
+{% block breadcrumb %}<nav class="breadcrumb" aria-label="Breadcrumb"><a href="/administration">Administration</a><span aria-hidden="true">/</span><a href="/administration/sites">Sites</a><span aria-hidden="true">/</span><span class="breadcrumb-current">Locations</span></nav>{% endblock %}
 {% block content %}
-<section class="administration-page">
-    <header class="administration-page-header">
+<section class="administration-page location-selection-page">
+
+{% if error %}
+<div class="form-error" role="alert">
+    {{ error }}
+</div>
+{% endif %}
+
+{% if result %}
+<section class="form-card" aria-live="polite">
+    <div class="section-heading">
         <div>
-            <p class="eyebrow">TENANT ADMINISTRATION</p>
-            <h2>{{ page_title }}</h2>
+            <h3>{{ result.entity_type|title }} created</h3>
+            <p>The physical location was created successfully.</p>
+        </div>
+    </div>
+
+    <dl>
+        <dt>Entity ID</dt>
+        <dd>{{ result.entity_id }}</dd>
+
+        {% if result.audit_transaction_id %}
+        <dt>Audit transaction ID</dt>
+        <dd>{{ result.audit_transaction_id }}</dd>
+        {% endif %}
+    </dl>
+</section>
+{% endif %}
+<header class="administration-page-header"><div><p class="eyebrow">TENANT ADMINISTRATION</p><h2>Choose a location</h2><p>Select a building, floor, or space within {{ active_context.active_site_name or "the active site" }} before opening location-scoped inventory.</p></div><a class="button-link secondary" href="/administration/sites">Change site</a></header>
+{% if context_error %}<div class="form-error" role="alert">That location is no longer available. Choose another location.</div>{% endif %}
+{% if error %}<div class="form-error" role="alert">{{ error }}</div>{% endif %}
+<section class="form-card"><div class="section-heading"><div><h3>Accessible hierarchy</h3><p>One row per selectable hierarchy level.</p></div><label class="organization-search"><span>Search locations</span><input type="search" placeholder="Name, code, or type" data-location-search></label></div>
+{% if locations %}<div class="table-scroll"><table class="location-selection-table"><thead><tr><th>Location</th><th>Type</th><th>Code</th><th>Hierarchy</th><th>Context</th><th>Action</th></tr></thead><tbody>{% for location in locations %}<tr class="location-row{% if active_context.active_location_id == location.location_id %} is-active{% endif %}" data-location-row data-search-text="{{ location.location_name }} {{ location.location_code }} {{ location.location_type }}"><td><strong>{{ location.location_name }}</strong></td><td><span class="status-badge">{{ location.location_type }}</span></td><td>{{ location.location_code or "—" }}</td><td>{{ location.building_name or "—" }}{% if location.floor_name %} / {{ location.floor_name }}{% endif %}{% if location.space_name %} / {{ location.space_name }}{% endif %}</td><td>{% if active_context.active_location_id == location.location_id %}<span class="context-status-badge">Active</span>{% else %}—{% endif %}</td><td><form method="post" action="/context/location"><input type="hidden" name="location_id" value="{{ location.location_id }}"><input type="hidden" name="return_to" value="/administration/assets"><button type="submit">{% if active_context.active_location_id == location.location_id %}Continue{% else %}Administer{% endif %}</button></form></td></tr>{% endfor %}</tbody></table></div><p hidden data-location-empty>No locations match your search.</p>{% else %}<p>No buildings, floors, or spaces exist under this site yet.</p>{% endif %}
+</section>
+<details class="organization-secondary-section"><summary>Manage physical hierarchy</summary>
+<section class="form-card">
+    <div class="section-heading">
+        <div>
+            <h3>Hierarchy selector</h3>
             <p>
-                Manage the optional physical hierarchy of buildings,
-                floors, and spaces beneath accessible sites.
+                Select the most-specific available physical location
+                while managing this site's hierarchy.
             </p>
         </div>
-
-        <a class="button-link" href="/administration">
-            Back to administration
-        </a>
-    </header>
-
-    {% if error %}
-    <div class="form-error" role="alert">
-        {{ error }}
     </div>
-    {% endif %}
 
-    {% if result %}
-    <section class="form-card">
-        <div class="section-heading">
-            <div>
-                <h3>{{ result.entity_type|title }} created</h3>
-                <p>The physical location was created successfully.</p>
-            </div>
-        </div>
-
-        <dl>
-            <dt>Entity ID</dt>
-            <dd>{{ result.entity_id }}</dd>
-
-            {% if result.audit_transaction_id %}
-            <dt>Audit transaction ID</dt>
-            <dd>{{ result.audit_transaction_id }}</dd>
-            {% endif %}
-        </dl>
-    </section>
-    {% endif %}
-
-    <section class="form-card">
-        <div class="section-heading">
-            <div>
-                <h3>Accessible hierarchy</h3>
-                <p>
-                    The most detailed available location is shown
-                    on each row.
-                </p>
-            </div>
-        </div>
-
-        {% if hierarchy_rows %}
-        <div class="table-scroll">
-            <table>
-                <thead>
-                    <tr>
-                        <th scope="col">Organization</th>
-                        <th scope="col">Site</th>
-                        <th scope="col">Building</th>
-                        <th scope="col">Floor</th>
-                        <th scope="col">Space</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for row in hierarchy_rows %}
-                    <tr>
-                        <td>{{ row.organization_name }}</td>
-                        <td>
-                            {{ row.site_name }}
-                            {% if row.site_code %}
-                            ({{ row.site_code }})
-                            {% endif %}
-                        </td>
-                        <td>
-                            {{ row.building_name or "—" }}
-                            {% if row.building_code %}
-                            ({{ row.building_code }})
-                            {% endif %}
-                        </td>
-                        <td>
-                            {{ row.floor_name or "—" }}
-                            {% if row.floor_code %}
-                            ({{ row.floor_code }})
-                            {% endif %}
-                        </td>
-                        <td>
-                            {{ row.space_name or "—" }}
-                            {% if row.space_code %}
-                            ({{ row.space_code }})
-                            {% endif %}
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-        {% else %}
-        <p>
-            No accessible sites exist yet. Create a site before
-            adding buildings, floors, or spaces.
-        </p>
-        {% endif %}
-    </section>
-
-    <section class="form-card">
-        <div class="section-heading">
-            <div>
-                <h3>Shared physical-location selector</h3>
-                <p>
-                    This reusable selector stores the most-specific
-                    selected site, building, floor, or space.
-                </p>
-            </div>
-        </div>
-
-        {{ physical_location_selector(
-            "physical_location",
-            hierarchy_rows
-        ) }}
-    </section>
-
+    {{ physical_location_selector(
+        "physical_location",
+        hierarchy_rows,
+        active_context.site_id if active_context else ""
+    ) }}
+</section>
     <div class="administration-grid">
         <form
             method="post"
@@ -189,7 +106,7 @@ Locations | WiseWatts EMS
             <label>
                 Building code
                 <input
-                    name="location_code"
+                    name="location_code" data-generated-code-from="location_name" readonly aria-readonly="true"
                     type="text"
                     maxlength="100"
                     pattern="[A-Za-z][A-Za-z0-9_]*"
@@ -246,7 +163,7 @@ Locations | WiseWatts EMS
             <label>
                 Floor code
                 <input
-                    name="location_code"
+                    name="location_code" data-generated-code-from="location_name" readonly aria-readonly="true"
                     type="text"
                     maxlength="100"
                     pattern="[A-Za-z][A-Za-z0-9_]*"
@@ -304,7 +221,7 @@ Locations | WiseWatts EMS
             <label>
                 Space code
                 <input
-                    name="location_code"
+                    name="location_code" data-generated-code-from="location_name" readonly aria-readonly="true"
                     type="text"
                     maxlength="100"
                     pattern="[A-Za-z][A-Za-z0-9_]*"
@@ -315,15 +232,15 @@ Locations | WiseWatts EMS
             <button type="submit">Create space</button>
         </form>
     </div>
+</details>
 </section>
 {% endblock %}
 
+
+
 {% block scripts %}
 <script
-    src="{{ url_for(
-        'static',
-        path='/js/physical-location-selector.js'
-    ) }}"
+    src="/static/js/physical-location-selector.js"
     defer
 ></script>
-{% endblock %}
+<script>(()=>{const input=document.querySelector("[data-location-search]");if(!input)return;const rows=[...document.querySelectorAll("[data-location-row]")];const empty=document.querySelector("[data-location-empty]");input.addEventListener("input",()=>{const q=input.value.trim().toLowerCase();let visible=0;rows.forEach(row=>{const match=!q||(row.dataset.searchText||"").toLowerCase().includes(q);row.hidden=!match;if(match)visible++;});if(empty)empty.hidden=visible!==0;});})();</script>{% endblock %}
