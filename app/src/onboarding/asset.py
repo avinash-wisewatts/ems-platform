@@ -1,3 +1,4 @@
+import re
 from typing import Any
 from uuid import UUID
 
@@ -5,6 +6,10 @@ from src.onboarding.statuses import status_codes
 
 
 METERING_REQUIREMENTS = status_codes("METERING_REQUIREMENT")
+
+ASSET_EXTERNAL_ID_PATTERN = re.compile(
+    r"^[A-Z0-9][A-Z0-9_]*$"
+)
 
 
 RELATIONSHIPS_BY_CATEGORY = {
@@ -83,6 +88,7 @@ def validate_asset_step(
     asset_mode: str,
     existing_asset_id: str,
     asset_name: str,
+    asset_external_id: str,
     asset_type_id: str,
     metering_requirement: str,
     relationship_type: str,
@@ -155,6 +161,7 @@ def validate_asset_step(
             "mode": "USE_EXISTING",
             "existing_asset_id": selected_asset_id,
             "name": None,
+            "external_id": None,
             "asset_type_id": None,
             "metering_requirement": None,
             "relationship_type": normalized_relationship,
@@ -182,6 +189,24 @@ def validate_asset_step(
             "Asset name must not exceed 200 characters."
         )
 
+    external_id = asset_external_id.strip().upper()
+
+    if not external_id:
+        raise AssetStepValidationError(
+            "Asset external ID is required."
+        )
+
+    if len(external_id) > 100:
+        raise AssetStepValidationError(
+            "Asset external ID must not exceed 100 characters."
+        )
+
+    if not ASSET_EXTERNAL_ID_PATTERN.fullmatch(external_id):
+        raise AssetStepValidationError(
+            "Asset external ID may contain only uppercase letters, "
+            "numbers, and underscores."
+        )
+
     try:
         normalized_asset_type_id = str(
             UUID(asset_type_id.strip())
@@ -200,6 +225,7 @@ def validate_asset_step(
         "mode": "CREATE_NEW",
         "existing_asset_id": None,
         "name": name,
+        "external_id": external_id,
         "asset_type_id": normalized_asset_type_id,
         "metering_requirement": normalized_metering_requirement,
         "relationship_type": normalized_relationship,

@@ -2,12 +2,55 @@
 
 (() => {
     const RULES = {
-        organization: ["existing_organization_id", "organization_code", "organization_name", "organization_timezone"],
-        site: ["existing_site_id", "site_code", "site_name", "site_timezone"],
-        location: ["existing_space_id", "building_code", "floor_code", "space_code", "building_name", "floor_name", "space_name"],
-        gateway: ["existing_gateway_id", "gateway_external_id", "gateway_name", "gateway_protocol"],
-        device: ["existing_device_id", "device_external_id", "new_identifier_value", "device_category_id", "profile_code"],
-        asset: ["existing_asset_id", "relationship_type", "asset_name", "asset_type_id", "metering_requirement"],
+        organization: [
+            "existing_organization_id",
+            "organization_name",
+            "organization_code",
+            "organization_timezone",
+        ],
+        site: [
+            "existing_site_id",
+            "site_name",
+            "site_code",
+            "site_timezone",
+            "site_address",
+        ],
+        location: [
+            "existing_space_id",
+            "building_name",
+            "building_code",
+            "floor_name",
+            "floor_code",
+            "space_name",
+            "space_code",
+        ],
+        gateway: [
+            "existing_gateway_id",
+            "gateway_name",
+            "gateway_external_id",
+            "gateway_vendor",
+            "gateway_model",
+            "gateway_protocol",
+        ],
+        device: [
+            "existing_device_id",
+            "device_name",
+            "device_external_id",
+            "device_vendor",
+            "device_model",
+            "device_category_id",
+            "device_protocol",
+            "profile_code",
+            "new_identifier_value",
+        ],
+        asset: [
+            "existing_asset_id",
+            "asset_name",
+            "asset_external_id",
+            "asset_type_id",
+            "metering_requirement",
+            "relationship_type",
+        ],
     };
 
     const formToObject = (form) => {
@@ -71,9 +114,13 @@
                 field.classList.add("is-invalid");
                 field.setAttribute("aria-invalid", "true");
                 node.textContent = result.message || "Check this value.";
+            } else if (result.code === "IDENTIFIER_ADJUSTED") {
+                node.textContent = result.message
+                    || "A unique identifier was generated.";
             } else {
                 node.textContent = "";
             }
+
             syncSubmit();
         };
 
@@ -102,6 +149,32 @@
                 });
                 const result = await response.json();
                 if (sequence.get(field.id) !== requestNumber) return false;
+
+                const recommendedValue = String(
+                    result.recommended_value || ""
+                ).trim();
+
+                if (
+                    recommendedValue
+                    && recommendedValue !== String(field.value || "").trim()
+                ) {
+                    field.value = recommendedValue;
+                    field.dataset.systemGenerated = "true";
+
+                    field.dispatchEvent(
+                        new CustomEvent(
+                            "wisewatts:identifier-adjusted",
+                            {
+                                bubbles: true,
+                                detail: {
+                                    value: recommendedValue,
+                                    message: result.message || "",
+                                },
+                            },
+                        ),
+                    );
+                }
+
                 setState(field, result);
                 return Boolean(result.valid);
             } catch (_error) {
@@ -121,9 +194,29 @@
         };
 
         fields.forEach((field) => {
-            field.addEventListener("change", () => scheduleValidation(field));
-            field.addEventListener("blur", () => scheduleValidation(field));
-            if (field.tagName === "INPUT") field.addEventListener("input", () => scheduleValidation(field));
+            field.addEventListener("change", () => {
+                void validateNow(field);
+            });
+
+            field.addEventListener("blur", () => {
+                void validateNow(field);
+            });
+
+            if (
+                field.tagName === "INPUT"
+                || field.tagName === "TEXTAREA"
+            ) {
+                field.addEventListener("input", () => {
+                    scheduleValidation(field);
+                });
+            }
+
+            field.addEventListener(
+                "wisewatts:value-generated",
+                () => {
+                    void validateNow(field);
+                },
+            );
         });
 
         form.addEventListener("submit", async (event) => {

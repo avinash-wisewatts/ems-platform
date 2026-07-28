@@ -264,6 +264,7 @@ def assets() -> list[dict]:
             "metering_requirement": "DIRECT_METER_REQUIRED",
             "asset_type_name": "Chiller",
             "asset_name": "Existing Chiller",
+            "asset_external_id": "TEST_ASSET",
             "status": "active",
         },
         {
@@ -279,6 +280,7 @@ def assets() -> list[dict]:
             "metering_requirement": "DIRECT_METER_REQUIRED",
             "asset_type_name": "Chiller",
             "asset_name": "Other Tenant Chiller",
+            "asset_external_id": "TEST_ASSET",
             "status": "active",
         },
         {
@@ -294,6 +296,7 @@ def assets() -> list[dict]:
             "metering_requirement": "DIRECT_METER_REQUIRED",
             "asset_type_name": "Chiller",
             "asset_name": "Child Asset",
+            "asset_external_id": "TEST_ASSET",
             "status": "active",
         },
         {
@@ -309,6 +312,7 @@ def assets() -> list[dict]:
             "metering_requirement": "DIRECT_METER_REQUIRED",
             "asset_type_name": "Chiller",
             "asset_name": "Inactive Asset",
+            "asset_external_id": "TEST_ASSET",
             "status": "inactive",
         },
     ]
@@ -622,6 +626,7 @@ def test_asset_post_create_new_saves_and_redirects(
             "asset_mode": "CREATE_NEW",
             "existing_asset_id": "",
             "asset_name": "  Chiller 1  ",
+            "asset_external_id": "TEST_ASSET",
             "asset_type_id": str(ASSET_TYPE_ID),
 
             "metering_requirement": "DIRECT_METER_REQUIRED",
@@ -644,6 +649,7 @@ def test_asset_post_create_new_saves_and_redirects(
             "mode": "CREATE_NEW",
             "existing_asset_id": None,
             "name": "Chiller 1",
+            "external_id": "TEST_ASSET",
             "asset_type_id": str(ASSET_TYPE_ID),
 
             "metering_requirement": "DIRECT_METER_REQUIRED",
@@ -705,6 +711,7 @@ def test_asset_post_use_existing_saves_identity_and_relationship(
             "asset_mode": "USE_EXISTING",
             "existing_asset_id": str(ASSET_ID),
             "asset_name": "Discarded",
+            "asset_external_id": "TEST_ASSET",
             "asset_type_id": str(ASSET_TYPE_ID),
 
             "metering_requirement": "DIRECT_METER_REQUIRED",
@@ -718,6 +725,7 @@ def test_asset_post_use_existing_saves_identity_and_relationship(
         "mode": "USE_EXISTING",
         "existing_asset_id": str(ASSET_ID),
         "name": None,
+        "external_id": None,
         "asset_type_id": None,
 
         "metering_requirement": None,
@@ -830,6 +838,7 @@ def test_asset_post_rejects_unknown_asset_type(
             "draft_token": str(DRAFT_TOKEN),
             "asset_mode": "CREATE_NEW",
             "asset_name": "Chiller 1",
+            "asset_external_id": "TEST_ASSET",
             "asset_type_id": str(ASSET_TYPE_ID),
 
             "metering_requirement": "DIRECT_METER_REQUIRED",
@@ -862,6 +871,7 @@ def test_asset_post_rejects_invalid_relationship_for_category(
             "draft_token": str(DRAFT_TOKEN),
             "asset_mode": "CREATE_NEW",
             "asset_name": "Chiller 1",
+            "asset_external_id": "TEST_ASSET",
             "asset_type_id": str(ASSET_TYPE_ID),
 
             "metering_requirement": "DIRECT_METER_REQUIRED",
@@ -907,6 +917,7 @@ def test_asset_post_rejects_unconfigured_device_category(
             "draft_token": str(DRAFT_TOKEN),
             "asset_mode": "CREATE_NEW",
             "asset_name": "Unsupported Asset",
+            "asset_external_id": "TEST_ASSET",
             "asset_type_id": str(ASSET_TYPE_ID),
 
             "metering_requirement": "DIRECT_METER_REQUIRED",
@@ -940,6 +951,7 @@ def test_asset_post_validation_error_preserves_form(
             "draft_token": str(DRAFT_TOKEN),
             "asset_mode": "CREATE_NEW",
             "asset_name": "Preserved Chiller",
+            "asset_external_id": "TEST_ASSET",
             "asset_type_id": "not-a-uuid",
 
             "metering_requirement": "DIRECT_METER_REQUIRED",
@@ -980,6 +992,7 @@ def test_asset_post_database_failure_returns_controlled_conflict(
             "draft_token": str(DRAFT_TOKEN),
             "asset_mode": "CREATE_NEW",
             "asset_name": "Database Failure Chiller",
+            "asset_external_id": "TEST_ASSET",
             "asset_type_id": str(ASSET_TYPE_ID),
 
             "metering_requirement": "DIRECT_METER_REQUIRED",
