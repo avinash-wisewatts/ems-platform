@@ -4,7 +4,6 @@
 -- Display names remain non-unique. external_id is the machine identifier.
 -- When omitted, PostgreSQL generates a unique value from the asset name.
 
-BEGIN;
 
 ALTER TABLE metadata.assets
     ADD COLUMN IF NOT EXISTS external_id TEXT;
@@ -128,5 +127,3 @@ COMMENT ON COLUMN metadata.assets.external_id IS
 
 COMMENT ON FUNCTION metadata.generate_asset_external_id() IS
     'Generates a site-scoped asset external ID while allowing duplicate asset names.';
-
-COMMIT;

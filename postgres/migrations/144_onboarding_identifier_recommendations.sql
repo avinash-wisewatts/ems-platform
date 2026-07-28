@@ -2,7 +2,6 @@
 -- Return available scoped identifier recommendations during onboarding
 -- instead of rejecting duplicate machine identifiers.
 
-BEGIN;
 
 CREATE OR REPLACE FUNCTION admin.validate_onboarding_field(
     p_actor_portal_user_id bigint,
@@ -356,5 +355,3 @@ GRANT EXECUTE ON FUNCTION admin.validate_onboarding_field(
     JSONB
 )
 TO ems_app;
-
-COMMIT;

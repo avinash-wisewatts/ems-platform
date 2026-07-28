@@ -4,7 +4,6 @@
 -- A selected or newly created space requires its matching floor and building.
 -- The previous onboarding writer passed only space_id to metadata.assets.
 
-BEGIN;
 
 CREATE OR REPLACE FUNCTION admin.onboard_energy_asset_legacy_upsert(p_request jsonb, p_requested_by text DEFAULT CURRENT_USER)
  RETURNS jsonb
@@ -2074,5 +2073,3 @@ REVOKE ALL ON FUNCTION
 GRANT EXECUTE ON FUNCTION
     admin.onboard_energy_asset_legacy_upsert(JSONB, TEXT)
     TO ems_app;
-
-COMMIT;

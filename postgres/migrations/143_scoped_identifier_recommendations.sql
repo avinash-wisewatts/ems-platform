@@ -5,7 +5,6 @@
 -- Display names are descriptive labels and may repeat.
 -- Codes and external IDs remain the stable machine identities.
 
-BEGIN;
 
 DROP INDEX IF EXISTS metadata.uq_assets_root_name;
 DROP INDEX IF EXISTS metadata.uq_assets_child_name;
@@ -195,5 +194,3 @@ COMMENT ON FUNCTION admin.recommend_available_identifier(
     UUID
 ) IS
     'Returns an available scoped code or external ID by appending numeric suffixes without rejecting duplicate display names.';
-
-COMMIT;
