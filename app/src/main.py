@@ -5419,25 +5419,6 @@ async def save_asset_step(
                     "organization and site."
                 )
 
-            actor = require_authenticated_portal_user(request)
-            device = draft_record["payload"].get("device", {})
-            validation = await validate_asset_relationship_availability(
-                actor_portal_user_id=actor.portal_user_id,
-                asset_id=asset_payload["existing_asset_id"],
-                relationship_type=asset_payload["relationship_type"],
-                device_id=(
-                    device.get("existing_device_id")
-                    if (device.get("mode") or "").upper()
-                    == "USE_EXISTING"
-                    else None
-                ),
-            )
-            if not validation.get("valid"):
-                raise AssetStepValidationError(
-                    validation.get("message")
-                    or "Choose a valid device relationship."
-                )
-
         else:
             asset_types = await list_asset_types()
 
@@ -5454,6 +5435,35 @@ async def save_asset_step(
             if selected_type is None:
                 raise AssetStepValidationError(
                     "The selected asset type does not exist."
+                )
+
+        actor = require_authenticated_portal_user(request)
+        device = draft_record["payload"].get("device", {})
+
+        existing_device_id = (
+            device.get("existing_device_id")
+            if (device.get("mode") or "").upper() == "USE_EXISTING"
+            else None
+        )
+
+        validation_asset_id = (
+            asset_payload["existing_asset_id"]
+            if asset_payload["mode"] == "USE_EXISTING"
+            else None
+        )
+
+        if validation_asset_id is not None or existing_device_id is not None:
+            validation = await validate_asset_relationship_availability(
+                actor_portal_user_id=actor.portal_user_id,
+                asset_id=validation_asset_id,
+                relationship_type=asset_payload["relationship_type"],
+                device_id=existing_device_id,
+            )
+
+            if not validation.get("valid"):
+                raise AssetStepValidationError(
+                    validation.get("message")
+                    or "Choose a valid device relationship."
                 )
 
         saved_draft_token = (

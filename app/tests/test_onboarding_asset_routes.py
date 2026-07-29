@@ -1010,6 +1010,81 @@ def test_asset_post_database_failure_returns_controlled_conflict(
     assert "Database failure notes" in response.text
 
 
+def test_asset_post_create_new_rejects_existing_primary_meter_device(
+    portal_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login_operator(portal_client, monkeypatch)
+    install_visible_draft(
+        monkeypatch,
+        existing_device_draft(),
+    )
+    install_asset_catalogs(monkeypatch)
+
+    validation_calls: list[dict] = []
+    save_called = False
+
+    async def fake_validate_relationship(**kwargs):
+        validation_calls.append(kwargs)
+        return {
+            "valid": False,
+            "code": "DEVICE_PRIMARY_METER_ASSIGNED",
+            "message": (
+                "This device is already the primary meter "
+                "for another asset."
+            ),
+        }
+
+    async def fake_save_owned_step(*args, **kwargs):
+        nonlocal save_called
+        save_called = True
+        raise AssertionError(
+            "The draft must not advance when relationship "
+            "validation fails."
+        )
+
+    monkeypatch.setattr(
+        "src.main.validate_asset_relationship_availability",
+        fake_validate_relationship,
+    )
+    monkeypatch.setattr(
+        "src.main.save_owned_onboarding_draft_step",
+        fake_save_owned_step,
+    )
+
+    response = portal_client.post(
+        "/onboarding/asset",
+        data={
+            "draft_token": str(DRAFT_TOKEN),
+            "asset_mode": "CREATE_NEW",
+            "existing_asset_id": "",
+            "asset_name": "Home Lights",
+            "asset_external_id": "HOME_LIGHTS",
+            "asset_type_id": str(ASSET_TYPE_ID),
+            "metering_requirement": "DIRECT_METER_REQUIRED",
+            "relationship_type": "PRIMARY_METER",
+            "operational_notes": "",
+        },
+    )
+
+    assert response.status_code == 422
+    assert save_called is False
+    assert validation_calls == [
+        {
+            "actor_portal_user_id": 305,
+            "asset_id": None,
+            "relationship_type": "PRIMARY_METER",
+            "device_id": str(DEVICE_ID),
+        }
+    ]
+    assert (
+        "This device is already the primary meter "
+        "for another asset."
+        in response.text
+    )
+
+
+
 def test_relationship_validation_reports_primary_meter_conflict(
     portal_client,
     monkeypatch: pytest.MonkeyPatch,

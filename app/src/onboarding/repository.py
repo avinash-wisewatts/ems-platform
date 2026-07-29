@@ -408,7 +408,7 @@ async def list_device_models() -> list[dict[str, Any]]:
 async def validate_asset_relationship_availability(
     *,
     actor_portal_user_id: int,
-    asset_id: str,
+    asset_id: str | None,
     relationship_type: str,
     device_id: str | None = None,
 ) -> dict[str, Any]:
