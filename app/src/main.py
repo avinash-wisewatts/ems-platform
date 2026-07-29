@@ -5981,6 +5981,21 @@ async def submit_review_step(
             status_code=409,
         )
 
+    organization_payload = (
+        draft_record.get("payload", {}).get("organization", {})
+    )
+
+    if organization_payload.get("mode") == "CREATE_NEW":
+        try:
+            await provision_grafana_for_organization(
+                organization_id=str(result["organization_id"]),
+                organization_name=organization_payload["name"],
+            )
+        except (DatabaseError, GrafanaApiError):
+            # EMS onboarding has already committed successfully.
+            # Grafana provisioning failure must not roll it back.
+            pass
+
     return RedirectResponse(
         url=(
             "/onboarding/result"

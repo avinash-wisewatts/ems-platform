@@ -699,9 +699,23 @@ def test_review_post_submits_atomically_and_redirects_to_result(
             "relationship_type": "PRIMARY_METER",
         }
 
+    async def fake_provision_grafana_for_organization(
+        *,
+        organization_id: str,
+        organization_name: str,
+    ) -> dict:
+        return {
+            "organization_id": organization_id,
+            "provisioning_status": "PROVISIONED",
+        }
+
     monkeypatch.setattr(
         "src.main.submit_owned_onboarding_draft",
         fake_submit_owned_draft,
+    )
+    monkeypatch.setattr(
+        "src.main.provision_grafana_for_organization",
+        fake_provision_grafana_for_organization,
     )
 
     response = portal_client.post(
@@ -714,6 +728,159 @@ def test_review_post_submits_atomically_and_redirects_to_result(
         f"/onboarding/result?draft={DRAFT_TOKEN}"
     )
     assert captured == {"draft_token": DRAFT_TOKEN}
+
+
+def test_review_post_provisions_grafana_for_new_organization(
+    portal_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login_operator(portal_client, monkeypatch)
+    install_visible_draft(monkeypatch, new_records_draft())
+
+    async def fake_submit_owned_draft(
+        request,
+        *,
+        draft_token: UUID,
+    ) -> dict:
+        return {
+            "organization_id": str(ORGANIZATION_ID),
+            "site_id": str(SITE_ID),
+            "gateway_id": str(GATEWAY_ID),
+            "device_id": str(DEVICE_ID),
+            "asset_id": str(ASSET_ID),
+            "relationship_type": "PRIMARY_METER",
+        }
+
+    captured: dict[str, str] = {}
+
+    async def fake_provision_grafana_for_organization(
+        *,
+        organization_id: str,
+        organization_name: str,
+    ) -> dict:
+        captured.update(
+            {
+                "organization_id": organization_id,
+                "organization_name": organization_name,
+            }
+        )
+        return {
+            "organization_id": organization_id,
+            "provisioning_status": "PROVISIONED",
+        }
+
+    monkeypatch.setattr(
+        "src.main.submit_owned_onboarding_draft",
+        fake_submit_owned_draft,
+    )
+    monkeypatch.setattr(
+        "src.main.provision_grafana_for_organization",
+        fake_provision_grafana_for_organization,
+    )
+
+    response = portal_client.post(
+        "/onboarding/review",
+        data={"draft_token": str(DRAFT_TOKEN)},
+    )
+
+    assert response.status_code == 303
+    assert captured == {
+        "organization_id": str(ORGANIZATION_ID),
+        "organization_name": "WiseWatts Demo Organization",
+    }
+
+
+def test_review_post_skips_grafana_for_existing_organization(
+    portal_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login_operator(portal_client, monkeypatch)
+
+    draft = new_records_draft()
+    draft["payload"]["organization"] = {
+        "mode": "USE_EXISTING",
+        "existing_organization_id": str(ORGANIZATION_ID),
+    }
+    install_visible_draft(monkeypatch, draft)
+
+    async def fake_submit_owned_draft(
+        request,
+        *,
+        draft_token: UUID,
+    ) -> dict:
+        return {
+            "organization_id": str(ORGANIZATION_ID),
+            "site_id": str(SITE_ID),
+            "gateway_id": str(GATEWAY_ID),
+            "device_id": str(DEVICE_ID),
+            "asset_id": str(ASSET_ID),
+            "relationship_type": "PRIMARY_METER",
+        }
+
+    async def unexpected_provision(**kwargs):
+        raise AssertionError(
+            "Existing organization must not be automatically reprovisioned."
+        )
+
+    monkeypatch.setattr(
+        "src.main.submit_owned_onboarding_draft",
+        fake_submit_owned_draft,
+    )
+    monkeypatch.setattr(
+        "src.main.provision_grafana_for_organization",
+        unexpected_provision,
+    )
+
+    response = portal_client.post(
+        "/onboarding/review",
+        data={"draft_token": str(DRAFT_TOKEN)},
+    )
+
+    assert response.status_code == 303
+
+
+def test_review_post_grafana_failure_does_not_undo_onboarding(
+    portal_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login_operator(portal_client, monkeypatch)
+    install_visible_draft(monkeypatch, new_records_draft())
+
+    async def fake_submit_owned_draft(
+        request,
+        *,
+        draft_token: UUID,
+    ) -> dict:
+        return {
+            "organization_id": str(ORGANIZATION_ID),
+            "site_id": str(SITE_ID),
+            "gateway_id": str(GATEWAY_ID),
+            "device_id": str(DEVICE_ID),
+            "asset_id": str(ASSET_ID),
+            "relationship_type": "PRIMARY_METER",
+        }
+
+    async def failed_provision(**kwargs):
+        raise DatabaseError("Grafana provisioning ledger unavailable")
+
+    monkeypatch.setattr(
+        "src.main.submit_owned_onboarding_draft",
+        fake_submit_owned_draft,
+    )
+    monkeypatch.setattr(
+        "src.main.provision_grafana_for_organization",
+        failed_provision,
+    )
+
+    response = portal_client.post(
+        "/onboarding/review",
+        data={"draft_token": str(DRAFT_TOKEN)},
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == (
+        f"/onboarding/result?draft={DRAFT_TOKEN}"
+    )
 
 
 def test_review_post_validation_failure_is_audited_and_rendered(

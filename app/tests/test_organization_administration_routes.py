@@ -285,7 +285,8 @@ def test_organization_detail_contains_tenant_specific_operations(
     assert "Provisioning and lifecycle" in response.text
     assert "Grafana API connection refused." in response.text
     assert "Retry Grafana provisioning" in response.text
-    assert "Reconcile Grafana organization" in response.text
+    assert "Provision Grafana" not in response.text
+    assert "Reconcile Grafana organization" not in response.text
 
 
 def test_organization_administration_get_renders_form(
