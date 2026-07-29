@@ -18,7 +18,6 @@ RELATIONSHIPS_BY_CATEGORY = {
     "Energy Meter": {
         "PRIMARY_METER",
         "SECONDARY_METER",
-        "SECONDARY_METER",
     },
     "Environmental Sensor": {
         "TEMPERATURE_SENSOR",
@@ -66,7 +65,6 @@ def allowed_relationships(
 
     preferred_order = [
         "PRIMARY_METER",
-        "SECONDARY_METER",
         "SECONDARY_METER",
         "TEMPERATURE_SENSOR",
         "HUMIDITY_SENSOR",

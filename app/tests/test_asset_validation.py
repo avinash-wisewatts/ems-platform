@@ -17,7 +17,6 @@ from src.onboarding.asset import (
             [
                 "PRIMARY_METER",
                 "SECONDARY_METER",
-                "SECONDARY_METER",
             ],
         ),
         (

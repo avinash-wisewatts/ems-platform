@@ -318,15 +318,49 @@
     </div>
 
     <div class="form-subsection-heading">
-        <h4>Device relationship</h4>
-        <p>
-            Defines how this device measures, senses, or controls the asset.
-        </p>
+        <h4 class="form-subsection-title">
+            <span>Device relationship</span>
+
+            <span class="field-info">
+                <span
+                    class="field-info-trigger"
+                    tabindex="0"
+                    aria-label="More information about Device relationship"
+                    aria-describedby="device_relationship_help"
+                >i</span>
+
+                <span
+                    id="device_relationship_help"
+                    class="field-info-content"
+                    role="tooltip"
+                >
+                    Defines how this device measures, senses, or controls
+                    the asset.
+                </span>
+            </span>
+        </h4>
     </div>
 
     <div class="form-grid">
         <label class="full-width">
             Relationship type
+
+            <span class="field-info">
+                    <span
+                        class="field-info-trigger"
+                        tabindex="0"
+                        aria-label="More information about this field"
+                        aria-describedby="relationship_type_help"
+                    >i</span>
+                    <span
+                        id="relationship_type_help"
+                        class="field-info-content"
+                        role="tooltip"
+                    >
+                        Availability is checked immediately for the selected asset.
+                    </span>
+                </span>
+
 
             <select
                 id="relationship_type"
@@ -352,21 +386,7 @@
                 {% endfor %}
             </select>
 
-            <span class="field-info">
-                    <span
-                        class="field-info-trigger"
-                        tabindex="0"
-                        aria-label="More information about this field"
-                        aria-describedby="relationship_type_help"
-                    >i</span>
-                    <span
-                        id="relationship_type_help"
-                        class="field-info-content"
-                        role="tooltip"
-                    >
-                        Availability is checked immediately for the selected asset.
-                    </span>
-                </span>
+            
 
             <span
                 id="relationship_type_error"

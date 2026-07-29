@@ -2182,3 +2182,16 @@ td, th { vertical-align: middle; }
         transform: translateY(0);
     }
 }
+
+
+/* Asset relationship tooltip alignment */
+.onboarding-stage .form-subsection-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin: 0;
+}
+
+.onboarding-stage .form-subsection-title .field-info {
+    margin-left: 0;
+}
