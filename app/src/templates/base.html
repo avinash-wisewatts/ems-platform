@@ -168,24 +168,29 @@
 
                 <div class="active-context-actions">
                     {% if current_portal_user.role_code == "PLATFORM_ADMIN" %}
-                    <a href="/administration/organizations?mode=choose&amp;return_to={{ request.url.path|urlencode }}">
-                        {% if active_administration_context.active_organization_id %}Change organization{% else %}Choose organization{% endif %}
+                    <a href="/administration/organizations?return_to={{ request.url.path|urlencode }}">
+                        Change organization
                     </a>
+
                     {% if active_administration_context.active_organization_id %}
-                    <a href="/administration/organizations/{{ active_administration_context.active_organization_id }}">
-                        Organization details
-                    </a>
+                    <form
+                        method="post"
+                        action="/context/organization/clear"
+                        class="active-context-action-form"
+                    >
+                        <input
+                            type="hidden"
+                            name="return_to"
+                            value="{{ request.url.path }}"
+                        >
+                        <button
+                            type="submit"
+                            class="active-context-link-button"
+                        >
+                            Clear organization
+                        </button>
+                    </form>
                     {% endif %}
-                    {% endif %}
-                    {% if active_administration_context.active_organization_id %}
-                    <a href="/administration/sites">
-                        {% if active_administration_context.active_site_id %}Change site{% else %}Choose site{% endif %}
-                    </a>
-                    {% endif %}
-                    {% if active_administration_context.active_site_id %}
-                    <a href="/administration/locations">
-                        {% if active_administration_context.active_location_id %}Change location{% else %}Choose location{% endif %}
-                    </a>
                     {% endif %}
                 </div>
             </section>

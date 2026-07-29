@@ -2195,3 +2195,56 @@ td, th { vertical-align: middle; }
 .onboarding-stage .form-subsection-title .field-info {
     margin-left: 0;
 }
+
+/* Organization workspace refinement */
+.active-context-action-form,
+.inline-action-form {
+    display: inline;
+    margin: 0;
+}
+
+.active-context-link-button {
+    appearance: none;
+    background: transparent;
+    border: 0;
+    color: #05245B;
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.78rem;
+    font-weight: 800;
+    margin: 0;
+    padding: 0;
+}
+
+.active-context-link-button:hover {
+    text-decoration: underline;
+}
+
+.organization-overview-sections {
+    display: grid;
+    gap: 1rem;
+}
+
+.organization-detail-section {
+    padding: 1.25rem;
+}
+
+.organization-detail-section > h3,
+.organization-detail-section .section-heading {
+    margin-top: 0;
+}
+
+.organization-detail-table {
+    width: 100%;
+}
+
+.organization-detail-table th[scope="row"] {
+    color: var(--text-muted);
+    font-weight: 700;
+    text-align: left;
+    width: min(18rem, 38%);
+}
+
+.organization-detail-table td {
+    overflow-wrap: anywhere;
+}

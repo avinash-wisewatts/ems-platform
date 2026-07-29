@@ -156,6 +156,39 @@ def test_platform_can_select_accessible_organization(
     assert "no-store" in response.headers["cache-control"]
 
 
+def test_platform_can_clear_organization_and_return_safely(
+    portal_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login(portal_client, "PLATFORM_ADMIN", monkeypatch)
+
+    response = portal_client.post(
+        "/context/organization/clear",
+        data={"return_to": "/administration/users"},
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/administration/users"
+    assert "no-store" in response.headers["cache-control"]
+
+
+def test_clear_organization_rejects_external_return_path(
+    portal_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login(portal_client, "PLATFORM_ADMIN", monkeypatch)
+
+    response = portal_client.post(
+        "/context/organization/clear",
+        data={"return_to": "https://evil.example"},
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == (
+        "/administration/organizations"
+    )
+
+
 def test_inaccessible_organization_fails_safely(
     portal_client,
     monkeypatch: pytest.MonkeyPatch,

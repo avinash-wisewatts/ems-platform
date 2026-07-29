@@ -63,12 +63,23 @@ async def select_organization(
 @router.post("/organization/clear")
 async def clear_organization(
     request: Request,
+    return_to: Annotated[
+        str,
+        Form(),
+    ] = "/administration/organizations",
 ) -> RedirectResponse:
     user = require_authenticated_portal_user(request)
     if user.role_code != "PLATFORM_ADMIN":
         return _redirect("/forbidden")
+
     clear_active_organization(request)
-    return _redirect("/administration/organizations")
+
+    return _redirect(
+        _safe_return_path(
+            return_to,
+            "/administration/organizations",
+        )
+    )
 
 
 @router.post("/site")

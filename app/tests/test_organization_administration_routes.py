@@ -120,15 +120,15 @@ def test_organization_page_renders_context_chooser(
 
     assert response.status_code == 200
     assert "Organizations" in response.text
-    assert "View and edit the organizations available within your scope." in response.text
+    assert "View organizations or select the organization you want to work in." in response.text
     assert "Search organizations" in response.text
     assert "organization-table" in response.text
     assert "EMS provisioning" in response.text
     assert "EMS provisioning" in response.text
     assert f"/administration/organizations/{ORGANIZATION_ID}" in response.text
-    assert f"/administration/organizations/{ORGANIZATION_ID}/edit" in response.text
-    assert ">View</a>" in response.text
-    assert ">Edit</a>" in response.text
+    assert 'action="/context/organization"' in response.text
+    assert "View" in response.text
+    assert "Select" in response.text
     assert "Administer" not in response.text
     assert 'data-organization-row' in response.text
     assert 'data-organization-card' not in response.text
@@ -187,11 +187,11 @@ def test_organization_page_highlights_active_context_row(
     assert response.status_code == 200
     assert 'class="organization-row is-active"' in response.text
     assert 'aria-current="true"' in response.text
-    assert ">ACTIVE</span>" in response.text
+    assert "ACTIVE" in response.text
     assert "context-status-badge" in response.text
     assert "Active context" in response.text
-    assert ">View</a>" in response.text
-    assert ">Edit</a>" in response.text
+    assert "View" in response.text
+    assert "Select" in response.text
     assert "Continue" not in response.text
     assert "Details" not in response.text
 

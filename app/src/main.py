@@ -2364,9 +2364,9 @@ async def render_organization_administration(
     error: str | None = None,
     status_code: int = 200,
     chooser_mode: bool = False,
-    return_to: str = "/administration",
+    return_to: str = "/administration/organizations",
 ) -> HTMLResponse:
-    """Render the independent organization administration page."""
+    """Render the organization administration and context-selection page."""
 
     user = require_authenticated_portal_user(request)
 
@@ -2420,9 +2420,9 @@ async def render_organization_administration(
 async def organization_administration(
     request: Request,
     mode: str = "manage",
-    return_to: str = "/administration",
+    return_to: str = "/administration/organizations",
 ) -> HTMLResponse:
-    """Display the independent organization creation page."""
+    """Display organizations for viewing or context selection."""
 
     require_authenticated_portal_user(request)
 
