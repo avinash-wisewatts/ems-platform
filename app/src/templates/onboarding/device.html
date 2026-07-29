@@ -46,10 +46,24 @@
             >
 
             <span>
-                <strong>Use existing device</strong>
-                <small>
-                    Select a device already registered under this gateway.
-                </small>
+                <span class="choice-card-heading">
+                    <strong>Use existing device</strong>
+                    <span class="field-info">
+                        <span
+                            class="field-info-trigger"
+                            tabindex="0"
+                            aria-label="More information about Use existing device"
+                            aria-describedby="device_choice_help_1"
+                        >i</span>
+                        <span
+                            id="device_choice_help_1"
+                            class="field-info-content"
+                            role="tooltip"
+                        >
+                            Select a device already registered under this gateway.
+                        </span>
+                    </span>
+                </span>
             </span>
         </label>
 
@@ -67,10 +81,24 @@
             >
 
             <span>
-                <strong>Create new device</strong>
-                <small>
-                    Register a new field device and telemetry identity.
-                </small>
+                <span class="choice-card-heading">
+                    <strong>Create new device</strong>
+                    <span class="field-info">
+                        <span
+                            class="field-info-trigger"
+                            tabindex="0"
+                            aria-label="More information about Create new device"
+                            aria-describedby="device_choice_help_2"
+                        >i</span>
+                        <span
+                            id="device_choice_help_2"
+                            class="field-info-content"
+                            role="tooltip"
+                        >
+                            Register a new field device and telemetry identity.
+                        </span>
+                    </span>
+                </span>
             </span>
         </label>
     </div>
@@ -142,10 +170,21 @@
                     placeholder="Select an existing device"
                 >
 
-                <small>
-                    Stored device identity. This value cannot be changed
-                    during onboarding.
-                </small>
+                <span class="field-info">
+                    <span
+                        class="field-info-trigger"
+                        tabindex="0"
+                        aria-label="More information about this field"
+                        aria-describedby="existing_identifier_type_help"
+                    >i</span>
+                    <span
+                        id="existing_identifier_type_help"
+                        class="field-info-content"
+                        role="tooltip"
+                    >
+                        Stored device identity. This value cannot be changed during onboarding.
+                    </span>
+                </span>
             </label>
 
             <label>
@@ -160,10 +199,21 @@
                     placeholder="Select an existing device"
                 >
 
-                <small>
-                    Stored device identity. This value cannot be changed
-                    during onboarding.
-                </small>
+                <span class="field-info">
+                    <span
+                        class="field-info-trigger"
+                        tabindex="0"
+                        aria-label="More information about this field"
+                        aria-describedby="existing_identifier_value_help"
+                    >i</span>
+                    <span
+                        id="existing_identifier_value_help"
+                        class="field-info-content"
+                        role="tooltip"
+                    >
+                        Stored device identity. This value cannot be changed during onboarding.
+                    </span>
+                </span>
             </label>
         </div>
     </div>
@@ -363,8 +413,20 @@
             <label class="full-width">
                 MQTT UID
 
-                <span class="field-help">
-                    Eight hexadecimal byte pairs separated by colons.
+                <span class="field-info">
+                    <span
+                        class="field-info-trigger"
+                        tabindex="0"
+                        aria-label="More information about this field"
+                        aria-describedby="new_identifier_value_help"
+                    >i</span>
+                    <span
+                        id="new_identifier_value_help"
+                        class="field-info-content"
+                        role="tooltip"
+                    >
+                        Eight hexadecimal byte pairs separated by colons.
+                    </span>
                 </span>
 
                 <input

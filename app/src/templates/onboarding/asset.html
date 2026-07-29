@@ -55,11 +55,24 @@
             >
 
             <span>
-                <strong>Use existing asset</strong>
-                <small>
-                    Attach the device to equipment already registered at this
-                    site.
-                </small>
+                <span class="choice-card-heading">
+                    <strong>Use existing asset</strong>
+                    <span class="field-info">
+                        <span
+                            class="field-info-trigger"
+                            tabindex="0"
+                            aria-label="More information about Use existing asset"
+                            aria-describedby="asset_choice_help_1"
+                        >i</span>
+                        <span
+                            id="asset_choice_help_1"
+                            class="field-info-content"
+                            role="tooltip"
+                        >
+                            Attach the device to equipment already registered at this site.
+                        </span>
+                    </span>
+                </span>
             </span>
         </label>
 
@@ -77,10 +90,24 @@
             >
 
             <span>
-                <strong>Create new asset</strong>
-                <small>
-                    Register new equipment and attach the device.
-                </small>
+                <span class="choice-card-heading">
+                    <strong>Create new asset</strong>
+                    <span class="field-info">
+                        <span
+                            class="field-info-trigger"
+                            tabindex="0"
+                            aria-label="More information about Create new asset"
+                            aria-describedby="asset_choice_help_2"
+                        >i</span>
+                        <span
+                            id="asset_choice_help_2"
+                            class="field-info-content"
+                            role="tooltip"
+                        >
+                            Register new equipment and attach the device.
+                        </span>
+                    </span>
+                </span>
             </span>
         </label>
     </div>
@@ -110,9 +137,20 @@
             <label class="full-width">
                 Existing asset
 
-                <span class="field-help">
-                    Only active root assets belonging to the selected
-                    organization and site are shown.
+                <span class="field-info">
+                    <span
+                        class="field-info-trigger"
+                        tabindex="0"
+                        aria-label="More information about this field"
+                        aria-describedby="existing_asset_id_help"
+                    >i</span>
+                    <span
+                        id="existing_asset_id_help"
+                        class="field-info-content"
+                        role="tooltip"
+                    >
+                        Only active root assets belonging to the selected organization and site are shown.
+                    </span>
                 </span>
 
                 <select
@@ -154,8 +192,20 @@
             <label>
                 Asset name
 
-                <span class="field-help">
-                    Physical equipment name used in dashboards and reports.
+                <span class="field-info">
+                    <span
+                        class="field-info-trigger"
+                        tabindex="0"
+                        aria-label="More information about this field"
+                        aria-describedby="asset_name_help"
+                    >i</span>
+                    <span
+                        id="asset_name_help"
+                        class="field-info-content"
+                        role="tooltip"
+                    >
+                        Physical equipment name used in dashboards and reports.
+                    </span>
                 </span>
 
                 <input
@@ -197,10 +247,20 @@
             <label>
                 Metering requirement
 
-                <span class="field-help">
-                    Defines whether this asset needs its own meter, may use
-                    descendant meters, or is intentionally excluded from
-                    energy-meter coverage.
+                <span class="field-info">
+                    <span
+                        class="field-info-trigger"
+                        tabindex="0"
+                        aria-label="More information about this field"
+                        aria-describedby="metering_requirement_help"
+                    >i</span>
+                    <span
+                        id="metering_requirement_help"
+                        class="field-info-content"
+                        role="tooltip"
+                    >
+                        Defines whether this asset needs its own meter, may use descendant meters, or is intentionally excluded from energy-meter coverage.
+                    </span>
                 </span>
 
                 <select
@@ -230,9 +290,20 @@
             <label class="full-width">
                 Operational notes
 
-                <span class="field-help">
-                    Optional installation or operating context stored as
-                    structured asset metadata.
+                <span class="field-info">
+                    <span
+                        class="field-info-trigger"
+                        tabindex="0"
+                        aria-label="More information about this field"
+                        aria-describedby="operational_notes_help"
+                    >i</span>
+                    <span
+                        id="operational_notes_help"
+                        class="field-info-content"
+                        role="tooltip"
+                    >
+                        Optional installation or operating context stored as structured asset metadata.
+                    </span>
                 </span>
 
                 <textarea
@@ -281,12 +352,21 @@
                 {% endfor %}
             </select>
 
-            <span
-                id="relationship_type_help"
-                class="field-help"
-            >
-                Availability is checked immediately for the selected asset.
-            </span>
+            <span class="field-info">
+                    <span
+                        class="field-info-trigger"
+                        tabindex="0"
+                        aria-label="More information about this field"
+                        aria-describedby="relationship_type_help"
+                    >i</span>
+                    <span
+                        id="relationship_type_help"
+                        class="field-info-content"
+                        role="tooltip"
+                    >
+                        Availability is checked immediately for the selected asset.
+                    </span>
+                </span>
 
             <span
                 id="relationship_type_error"

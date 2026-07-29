@@ -2063,3 +2063,122 @@ td, th { vertical-align: middle; }
     cursor: not-allowed;
     opacity: 0.58;
 }
+
+
+/* Onboarding field information tooltips */
+.onboarding-stage .field-info {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    margin-left: 0.35rem;
+    vertical-align: middle;
+    font-weight: 400;
+}
+
+.onboarding-stage .field-info-trigger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.15rem;
+    height: 1.15rem;
+    border: 1px solid var(--ww-border);
+    border-radius: 50%;
+    background: var(--ww-surface);
+    color: var(--ww-text-muted);
+    font-size: 0.72rem;
+    font-style: normal;
+    font-weight: 700;
+    line-height: 1;
+    cursor: help;
+    user-select: none;
+}
+
+.onboarding-stage .field-info-trigger:hover,
+.onboarding-stage .field-info-trigger:focus-visible {
+    border-color: #027b75;
+    color: #027b75;
+    outline: 2px solid rgba(3, 169, 160, 0.22);
+    outline-offset: 2px;
+}
+
+.onboarding-stage .field-info-content {
+    position: absolute;
+    z-index: 100;
+    top: calc(100% + 0.45rem);
+    left: 50%;
+    width: max-content;
+    max-width: min(20rem, calc(100vw - 2rem));
+    padding: 0.65rem 0.75rem;
+    border: 1px solid var(--ww-border);
+    border-radius: 8px;
+    background: #10233f;
+    box-shadow: 0 8px 24px rgba(16, 35, 63, 0.22);
+    color: #fff;
+    font-size: 0.78rem;
+    font-weight: 400;
+    line-height: 1.4;
+    text-align: left;
+    white-space: normal;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translate(-50%, -0.2rem);
+    transition:
+        opacity 120ms ease,
+        transform 120ms ease,
+        visibility 120ms ease;
+}
+
+.onboarding-stage .field-info:hover .field-info-content,
+.onboarding-stage .field-info:focus-within .field-info-content {
+    opacity: 1;
+    visibility: visible;
+    transform: translate(-50%, 0);
+}
+
+/*
+ * Existing form labels are column-oriented. This keeps label text and its
+ * information icon inline while controls remain on the following row.
+ */
+.onboarding-stage .form-grid > label {
+    display: block;
+}
+
+.onboarding-stage .form-grid > label > input,
+.onboarding-stage .form-grid > label > select,
+.onboarding-stage .form-grid > label > textarea {
+    display: block;
+    margin-top: 0.45rem;
+}
+
+.onboarding-stage .form-grid > label > .field-error {
+    display: block;
+    margin-top: 0.35rem;
+}
+
+.onboarding-stage .choice-card-heading {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+}
+
+.onboarding-stage .choice-card-heading .field-info {
+    margin-left: 0;
+}
+
+.onboarding-stage .choice-card > span {
+    min-width: 0;
+}
+
+@media (max-width: 700px) {
+    .onboarding-stage .field-info-content {
+        right: 0;
+        left: auto;
+        transform: translateY(-0.2rem);
+    }
+
+    .onboarding-stage .field-info:hover .field-info-content,
+    .onboarding-stage .field-info:focus-within .field-info-content {
+        transform: translateY(0);
+    }
+}
