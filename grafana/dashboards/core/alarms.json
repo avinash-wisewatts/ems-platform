@@ -1,0 +1,306 @@
+{
+  "uid": "ems-alarms",
+  "title": "EMS | Alarms",
+  "tags": [
+    "ems",
+    "mvp",
+    "alarms"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "templating": {
+    "list": [
+      {
+        "name": "severity",
+        "label": "Severity",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "ems-timescaledb"
+        },
+        "query": "SELECT DISTINCT severity AS __text,severity AS __value FROM analytics.v_grafana_active_alarms WHERE grafana_org_id = ${__org.id} ORDER BY 1",
+        "definition": "SELECT DISTINCT severity AS __text,severity AS __value FROM analytics.v_grafana_active_alarms WHERE grafana_org_id = ${__org.id} ORDER BY 1",
+        "refresh": 1,
+        "multi": true,
+        "includeAll": true,
+        "hide": 0,
+        "sort": 1,
+        "current": {}
+      }
+    ]
+  },
+  "links": [
+    {
+      "title": "EMS navigation",
+      "type": "link",
+      "url": "/d/ems-org-overview",
+      "includeVars": true,
+      "keepTime": true
+    }
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "EMS Navigation",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 2
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "[Organization](/d/ems-org-overview) | [Site](/d/ems-site-overview) | [Area](/d/ems-area-overview) | [Asset](/d/ems-asset-overview) | [Devices](/d/ems-device-diagnostics) | [Analytics](/d/ems-analytics-explorer) | [Alarms](/d/ems-alarms)"
+      }
+    },
+    {
+      "id": 2,
+      "title": "Critical",
+      "type": "stat",
+      "gridPos": {
+        "x": 0,
+        "y": 2,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ems-timescaledb"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ems-timescaledb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT count(*) FROM analytics.v_grafana_active_alarms WHERE grafana_org_id = ${__org.id} AND severity='CRITICAL'",
+          "refId": "A"
+        }
+      ],
+      "description": "",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 3,
+      "title": "High",
+      "type": "stat",
+      "gridPos": {
+        "x": 6,
+        "y": 2,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ems-timescaledb"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ems-timescaledb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT count(*) FROM analytics.v_grafana_active_alarms WHERE grafana_org_id = ${__org.id} AND severity='HIGH'",
+          "refId": "A"
+        }
+      ],
+      "description": "",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 4,
+      "title": "Medium",
+      "type": "stat",
+      "gridPos": {
+        "x": 12,
+        "y": 2,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ems-timescaledb"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ems-timescaledb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT count(*) FROM analytics.v_grafana_active_alarms WHERE grafana_org_id = ${__org.id} AND severity='MEDIUM'",
+          "refId": "A"
+        }
+      ],
+      "description": "",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 5,
+      "title": "Low",
+      "type": "stat",
+      "gridPos": {
+        "x": 18,
+        "y": 2,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ems-timescaledb"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ems-timescaledb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT count(*) FROM analytics.v_grafana_active_alarms WHERE grafana_org_id = ${__org.id} AND severity='LOW'",
+          "refId": "A"
+        }
+      ],
+      "description": "",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 6,
+      "title": "Active alarms by site",
+      "type": "table",
+      "gridPos": {
+        "x": 0,
+        "y": 6,
+        "w": 10,
+        "h": 8
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ems-timescaledb"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ems-timescaledb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT s.site_name,a.severity,count(*) AS alarms FROM analytics.v_grafana_active_alarms a JOIN analytics.v_grafana_sites s ON s.grafana_org_id=a.grafana_org_id AND s.site_id=a.site_id WHERE a.grafana_org_id = ${__org.id} AND ('$__all' IN (${severity:sqlstring}) OR a.severity IN (${severity:sqlstring})) GROUP BY s.site_name,a.severity ORDER BY alarms DESC",
+          "refId": "A"
+        }
+      ],
+      "description": "",
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    },
+    {
+      "id": 7,
+      "title": "Alarm detail",
+      "type": "table",
+      "gridPos": {
+        "x": 10,
+        "y": 6,
+        "w": 14,
+        "h": 12
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ems-timescaledb"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ems-timescaledb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT severity,site_id,entity_type,entity_name,alarm_code,alarm_message,detected_at,last_observed_at FROM analytics.v_grafana_active_alarms WHERE grafana_org_id = ${__org.id} AND ('$__all' IN (${severity:sqlstring}) OR severity IN (${severity:sqlstring})) ORDER BY CASE severity WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2 WHEN 'MEDIUM' THEN 3 ELSE 4 END,last_observed_at DESC",
+          "refId": "A"
+        }
+      ],
+      "description": "",
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    },
+    {
+      "id": 8,
+      "type": "text",
+      "title": "MVP alarm lifecycle boundary",
+      "gridPos": {
+        "x": 0,
+        "y": 18,
+        "w": 10,
+        "h": 6
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "This dashboard shows **currently active operational conditions** derived from device telemetry health and authoritative asset alarm signals. Acknowledgement, assignment, escalation, suppression, and resolution history require the dedicated alarm-event engine planned after the MVP."
+      }
+    }
+  ]
+}

@@ -1,0 +1,375 @@
+{
+  "uid": "ems-device-diagnostics",
+  "title": "EMS | Device Diagnostics",
+  "tags": [
+    "ems",
+    "mvp",
+    "device",
+    "technical"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "templating": {
+    "list": [
+      {
+        "name": "site_id",
+        "label": "Site",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "ems-timescaledb"
+        },
+        "query": "SELECT site_name AS __text, site_id AS __value FROM analytics.v_grafana_sites WHERE grafana_org_id = ${__org.id} ORDER BY site_name",
+        "definition": "SELECT site_name AS __text, site_id AS __value FROM analytics.v_grafana_sites WHERE grafana_org_id = ${__org.id} ORDER BY site_name",
+        "refresh": 1,
+        "multi": false,
+        "includeAll": false,
+        "hide": 0,
+        "sort": 1,
+        "current": {}
+      },
+      {
+        "name": "device_id",
+        "label": "Device",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "ems-timescaledb"
+        },
+        "query": "WITH devices AS (\n    SELECT\n        device_name AS __text,\n        device_id::text AS __value\n    FROM analytics.v_grafana_devices\n    WHERE grafana_org_id = ${__org.id}\n      AND site_id::text = '$site_id'\n)\nSELECT __text, __value\nFROM devices\n\nUNION ALL\n\nSELECT\n    'No devices configured for this site' AS __text,\n    '00000000-0000-0000-0000-000000000000' AS __value\nWHERE NOT EXISTS (SELECT 1 FROM devices)\n\nORDER BY 1",
+        "definition": "WITH devices AS (\n    SELECT\n        device_name AS __text,\n        device_id::text AS __value\n    FROM analytics.v_grafana_devices\n    WHERE grafana_org_id = ${__org.id}\n      AND site_id::text = '$site_id'\n)\nSELECT __text, __value\nFROM devices\n\nUNION ALL\n\nSELECT\n    'No devices configured for this site' AS __text,\n    '00000000-0000-0000-0000-000000000000' AS __value\nWHERE NOT EXISTS (SELECT 1 FROM devices)\n\nORDER BY 1",
+        "refresh": 2,
+        "multi": false,
+        "includeAll": false,
+        "hide": 0,
+        "sort": 1,
+        "current": {}
+      }
+    ]
+  },
+  "links": [
+    {
+      "title": "EMS navigation",
+      "type": "link",
+      "url": "/d/ems-org-overview",
+      "includeVars": true,
+      "keepTime": true
+    }
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "EMS Navigation",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 2
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "[Organization](/d/ems-org-overview) | [Site](/d/ems-site-overview) | [Area](/d/ems-area-overview) | [Asset](/d/ems-asset-overview) | [Devices](/d/ems-device-diagnostics) | [Analytics](/d/ems-analytics-explorer) | [Alarms](/d/ems-alarms)"
+      }
+    },
+    {
+      "id": 2,
+      "title": "Telemetry state",
+      "type": "stat",
+      "gridPos": {
+        "x": 0,
+        "y": 2,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ems-timescaledb"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ems-timescaledb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT telemetry_state FROM analytics.v_grafana_devices WHERE grafana_org_id = ${__org.id} AND device_id::text = '$device_id'",
+          "refId": "A"
+        }
+      ],
+      "description": "",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 3,
+      "title": "Data age seconds",
+      "type": "stat",
+      "gridPos": {
+        "x": 6,
+        "y": 2,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ems-timescaledb"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ems-timescaledb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT data_age_seconds FROM analytics.v_grafana_devices WHERE grafana_org_id = ${__org.id} AND device_id::text = '$device_id'",
+          "refId": "A"
+        }
+      ],
+      "description": "",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 4,
+      "title": "Mapped points",
+      "type": "stat",
+      "gridPos": {
+        "x": 12,
+        "y": 2,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ems-timescaledb"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ems-timescaledb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT mapped_point_count FROM analytics.v_grafana_devices WHERE grafana_org_id = ${__org.id} AND device_id::text = '$device_id'",
+          "refId": "A"
+        }
+      ],
+      "description": "",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 5,
+      "title": "Active alarms",
+      "type": "stat",
+      "gridPos": {
+        "x": 18,
+        "y": 2,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ems-timescaledb"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ems-timescaledb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT count(*) FROM analytics.v_grafana_active_alarms WHERE grafana_org_id = ${__org.id} AND device_id::text = '$device_id'",
+          "refId": "A"
+        }
+      ],
+      "description": "",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 6,
+      "title": "Latest normalized points",
+      "type": "table",
+      "gridPos": {
+        "x": 0,
+        "y": 6,
+        "w": 16,
+        "h": 9
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ems-timescaledb"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ems-timescaledb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT DISTINCT ON (logical_point) logical_point,unit_symbol,numeric_value,raw_value,quality_code,event_time FROM analytics.v_grafana_normalized_points WHERE grafana_org_id = ${__org.id} AND device_id::text = '$device_id' ORDER BY logical_point,event_time DESC",
+          "refId": "A"
+        }
+      ],
+      "description": "",
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    },
+    {
+      "id": 7,
+      "title": "Device identity",
+      "type": "table",
+      "gridPos": {
+        "x": 16,
+        "y": 6,
+        "w": 8,
+        "h": 9
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ems-timescaledb"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ems-timescaledb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT device_name,external_id,gateway_name,device_model,device_category,profile_code,protocol,lifecycle_status,configuration_state,telemetry_state,latest_received_timestamp FROM analytics.v_grafana_devices WHERE grafana_org_id = ${__org.id} AND device_id::text = '$device_id'",
+          "refId": "A"
+        }
+      ],
+      "description": "",
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    },
+    {
+      "id": 8,
+      "title": "Asset assignments",
+      "type": "table",
+      "gridPos": {
+        "x": 0,
+        "y": 15,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ems-timescaledb"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ems-timescaledb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT asset_name,relationship_type,site_name FROM analytics.v_grafana_asset_devices WHERE grafana_org_id = ${__org.id} AND device_id::text = '$device_id' ORDER BY asset_name",
+          "refId": "A"
+        }
+      ],
+      "description": "",
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    },
+    {
+      "id": 9,
+      "title": "Device alarms",
+      "type": "table",
+      "gridPos": {
+        "x": 12,
+        "y": 15,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ems-timescaledb"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ems-timescaledb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT severity,alarm_code,alarm_message,detected_at,last_observed_at FROM analytics.v_grafana_active_alarms WHERE grafana_org_id = ${__org.id} AND device_id::text = '$device_id' ORDER BY last_observed_at DESC",
+          "refId": "A"
+        }
+      ],
+      "description": "",
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    }
+  ]
+}
