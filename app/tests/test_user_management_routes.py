@@ -24,14 +24,14 @@ def navigation_item(
 
 
 def test_platform_admin_navigation_links_to_user_management() -> None:
-    item = navigation_item("PLATFORM_ADMIN", "users")
+    item = navigation_item("ADMIN", "users")
 
     assert item is not None
     assert item.href == "/administration/users"
 
 
 def test_org_admin_navigation_links_to_user_management() -> None:
-    item = navigation_item("ORG_ADMIN", "users")
+    item = navigation_item("ADMIN", "users")
 
     assert item is not None
     assert item.href == "/administration/users"
@@ -88,6 +88,12 @@ def login_as_user_manager(
                 username=username,
                 display_name="User Manager",
                 role_code=role_code,
+
+                access_scope_mode=(
+                    "GLOBAL"
+                    if organization_id is None
+                    else "ORGANIZATION"
+                ),
                 organization_id=organization_id,
             ),
             status=AuthenticationStatus.AUTHENTICATED,
@@ -110,7 +116,7 @@ def login_as_user_manager(
     assert response.status_code == 303
     expected_location = (
         "/administration/organizations"
-        if role_code == "PLATFORM_ADMIN"
+        if organization_id is None
         else "/administration/users"
     )
     assert response.headers["location"] == expected_location
@@ -123,7 +129,7 @@ def test_platform_admin_can_open_user_management_page(
     login_as_user_manager(
         portal_client,
         monkeypatch,
-        role_code="PLATFORM_ADMIN",
+        role_code="ADMIN",
         organization_id=None,
     )
 
@@ -164,7 +170,7 @@ def test_org_admin_page_excludes_platform_admin_role(
     login_as_user_manager(
         portal_client,
         monkeypatch,
-        role_code="ORG_ADMIN",
+        role_code="ADMIN",
         organization_id=(
             "11111111-1111-1111-1111-111111111111"
         ),
@@ -185,10 +191,9 @@ def test_org_admin_page_excludes_platform_admin_role(
     response = portal_client.get("/administration/users")
 
     assert response.status_code == 200
-    assert 'value="ORG_ADMIN"' in response.text
+    assert 'value="ADMIN"' in response.text
     assert 'value="OPERATOR"' in response.text
     assert 'value="VIEWER"' in response.text
-    assert 'value="PLATFORM_ADMIN"' not in response.text
 
 
 def test_org_admin_can_create_user_in_own_organization(
@@ -200,7 +205,7 @@ def test_org_admin_can_create_user_in_own_organization(
     login_as_user_manager(
         portal_client,
         monkeypatch,
-        role_code="ORG_ADMIN",
+        role_code="ADMIN",
         organization_id=organization_id,
     )
 
@@ -237,6 +242,7 @@ def test_org_admin_can_create_user_in_own_organization(
             "email": "viewer@example.com",
             "password": "ValidPassword123!",
             "role_code": "VIEWER",
+            "access_scope_mode": "ORGANIZATION",
         },
     )
 
@@ -248,54 +254,77 @@ def test_org_admin_can_create_user_in_own_organization(
         "email": "viewer@example.com",
         "password_hash": "hashed:ValidPassword123!",
         "role_code": "VIEWER",
+        "access_scope_mode": "ORGANIZATION",
         "organization_id": organization_id,
+        "site_ids": (),
     }
 
 
-def test_org_admin_cannot_assign_platform_admin(
+def test_organization_admin_can_assign_admin_in_own_organization(
     portal_client,
     monkeypatch,
 ) -> None:
+    organization_id = (
+        "11111111-1111-1111-1111-111111111111"
+    )
+
     login_as_user_manager(
         portal_client,
         monkeypatch,
-        role_code="ORG_ADMIN",
-        organization_id=(
-            "11111111-1111-1111-1111-111111111111"
-        ),
+        role_code="ADMIN",
+        organization_id=organization_id,
     )
 
-    async def fail_if_called(**kwargs):
-        raise AssertionError("Service must not be called.")
+    created: dict = {}
+
+    async def fake_create_managed_user(**kwargs):
+        created.update(kwargs)
+        return 802
 
     async def fake_list_manageable_users(
         *,
         actor_portal_user_id: int,
     ):
+        assert actor_portal_user_id == 700
         return []
 
     monkeypatch.setattr(
         "src.main.create_managed_user",
-        fail_if_called,
+        fake_create_managed_user,
     )
     monkeypatch.setattr(
         "src.main.list_manageable_users",
         fake_list_manageable_users,
     )
+    monkeypatch.setattr(
+        "src.main.hash_portal_password",
+        lambda password: f"hashed:{password}",
+    )
 
     response = portal_client.post(
         "/administration/users",
         data={
-            "display_name": "Invalid Admin",
+            "display_name": "Organization Admin",
             "username": "admin@example.com",
             "email": "admin@example.com",
             "password": "ValidPassword123!",
-            "role_code": "PLATFORM_ADMIN",
+            "role_code": "ADMIN",
+            "access_scope_mode": "ORGANIZATION",
         },
     )
 
-    assert response.status_code == 400
-    assert "cannot assign" in response.text.lower()
+    assert response.status_code == 201
+    assert created == {
+        "actor_portal_user_id": 700,
+        "username": "admin@example.com",
+        "display_name": "Organization Admin",
+        "email": "admin@example.com",
+        "password_hash": "hashed:ValidPassword123!",
+        "role_code": "ADMIN",
+        "access_scope_mode": "ORGANIZATION",
+        "organization_id": organization_id,
+        "site_ids": (),
+    }
 
 
 def test_org_admin_can_change_user_role_in_own_organization(
@@ -307,7 +336,7 @@ def test_org_admin_can_change_user_role_in_own_organization(
     login_as_user_manager(
         portal_client,
         monkeypatch,
-        role_code="ORG_ADMIN",
+        role_code="ADMIN",
         organization_id=organization_id,
     )
 
@@ -343,7 +372,6 @@ def test_org_admin_can_change_user_role_in_own_organization(
         "actor_portal_user_id": 700,
         "target_portal_user_id": 801,
         "role_code": "OPERATOR",
-        "organization_id": organization_id,
     }
 
 
@@ -354,7 +382,7 @@ def test_org_admin_can_deactivate_user_in_own_organization(
     login_as_user_manager(
         portal_client,
         monkeypatch,
-        role_code="ORG_ADMIN",
+        role_code="ADMIN",
         organization_id=(
             "11111111-1111-1111-1111-111111111111"
         ),
@@ -402,7 +430,7 @@ def test_platform_admin_page_uses_global_organization_context(
     login_as_user_manager(
         portal_client,
         monkeypatch,
-        role_code="PLATFORM_ADMIN",
+        role_code="ADMIN",
         organization_id=None,
     )
 
@@ -448,7 +476,7 @@ def test_user_rows_use_dedicated_view_and_edit_pages(
     login_as_user_manager(
         portal_client,
         monkeypatch,
-        role_code="ORG_ADMIN",
+        role_code="ADMIN",
         organization_id=organization_id,
     )
 

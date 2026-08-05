@@ -20,7 +20,9 @@ def successful_super_admin_result() -> AuthenticationResult:
             portal_user_id=500,
             username="superadmin@example.com",
             display_name="Test Super Admin",
-            role_code="PLATFORM_ADMIN",
+            role_code="ADMIN",
+
+            access_scope_mode="GLOBAL",
         ),
         status=AuthenticationStatus.AUTHENTICATED,
     )
@@ -586,6 +588,7 @@ def successful_operator_result() -> AuthenticationResult:
             username="operator@example.com",
             display_name="Test Operator",
             role_code="OPERATOR",
+
             organization_id=(
                 "11111111-1111-1111-1111-111111111111"
             ),

@@ -31,7 +31,7 @@ def request_with_session() -> SimpleNamespace:
 
 def user(
     *,
-    role_code: str = "PLATFORM_ADMIN",
+    role_code: str = "ADMIN",
     organization_id: str | None = None,
     access_scope_mode: str | None = None,
     site_ids: tuple[str, ...] = (),
@@ -58,7 +58,7 @@ def test_bootstrap_separates_platform_and_tenant_context() -> None:
     tenant_context = bootstrap_context_for_identity(
         tenant_request,
         user(
-            role_code="ORG_ADMIN",
+            role_code="ADMIN",
             organization_id=ORG_ID,
             access_scope_mode="ORGANIZATION",
         ),
@@ -113,7 +113,7 @@ async def test_organization_selection_failure_preserves_context(
 
 
 @pytest.mark.asyncio
-async def test_site_selection_requires_same_active_organization(
+async def test_site_selection_sets_parent_organization_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def fake_sites(**kwargs):
@@ -121,6 +121,10 @@ async def test_site_selection_requires_same_active_organization(
             {
                 "id": SITE_ID,
                 "organization_id": OTHER_ORG_ID,
+                "organization_name": "Organization Two",
+                "organization_code": "ORG_2",
+                "site_name": "Site One",
+                "site_code": "SITE_1",
             }
         ]
 
@@ -131,11 +135,19 @@ async def test_site_selection_requires_same_active_organization(
     request = request_with_session()
     store_administration_context(
         request,
-        AdministrationContext(active_organization_id=ORG_ID),
+        AdministrationContext(
+            active_organization_id=ORG_ID,
+            active_location_id=LOCATION_ID,
+        ),
     )
 
-    with pytest.raises(AdministrationContextError):
-        await set_active_site(request, user(), SITE_ID)
+    context = await set_active_site(request, user(), SITE_ID)
+
+    assert context.active_organization_id == OTHER_ORG_ID
+    assert context.active_organization_name == "Organization Two"
+    assert context.active_organization_code == "ORG_2"
+    assert context.active_site_id == SITE_ID
+    assert context.active_location_id is None
 
 
 @pytest.mark.asyncio
@@ -147,6 +159,8 @@ async def test_site_selection_stores_display_labels(
             {
                 "id": SITE_ID,
                 "organization_id": ORG_ID,
+                "organization_name": "Organization One",
+                "organization_code": "ORG_1",
                 "site_name": "Site One",
                 "site_code": "SITE_1",
             }
@@ -168,6 +182,9 @@ async def test_site_selection_stores_display_labels(
 
     context = await set_active_site(request, user(), SITE_ID)
 
+    assert context.active_organization_id == ORG_ID
+    assert context.active_organization_name == "Organization One"
+    assert context.active_organization_code == "ORG_1"
     assert context.active_site_id == SITE_ID
     assert context.active_site_name == "Site One"
     assert context.active_site_code == "SITE_1"

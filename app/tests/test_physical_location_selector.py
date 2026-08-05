@@ -115,17 +115,15 @@ def test_selector_can_make_site_optional() -> None:
     assert "required" not in site_select
 
 
-def test_locations_page_loads_selector_controller() -> None:
+def test_locations_page_uses_controlled_context_selection() -> None:
     template = Path(
         "app/src/templates/locations.html"
     ).read_text()
 
-    assert (
-        "components/physical_location_selector.html"
-        in template
-    )
-    assert "physical_location_selector(" in template
-    assert "physical-location-selector.js" in template
+    assert 'action="/context/location"' in template
+    assert 'name="location_id"' in template
+    assert 'name="return_to"' in template
+    assert 'value="/administration/locations"' in template
 
 
 def test_selector_controller_uses_most_specific_value() -> None:

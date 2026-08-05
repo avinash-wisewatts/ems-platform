@@ -6,6 +6,9 @@ def values():
     return dict(gateway_id=str(uuid4()),device_name="Main Meter",external_id="meter_01",
         device_category_id=str(uuid4()),device_model_id=str(uuid4()),profile_id=str(uuid4()),
         protocol="mqtt",lifecycle_status="registered",firmware_version="1.0",
+        serial_number="SN-001",identifier_type="MQTT_UID",
+        identifier_value="80:34:28:16:09:eb:00:01",
+        operational_policy="ASSET_ASSIGNED",
         use_gateway_location="",building_id="",floor_id="",space_id="")
 
 def test_device_only_registration_is_valid_without_asset():
@@ -22,10 +25,11 @@ def test_gateway_location_reuse_requires_explicit_choice():
     v=values(); v["use_gateway_location"]="on"
     assert validate_device_submission(**v)["use_gateway_location"] is True
 
-def test_gateway_location_reuse_rejects_manual_location():
+def test_gateway_location_reuse_ignores_stale_manual_location():
     v=values(); v["use_gateway_location"]="on"; v["building_id"]=str(uuid4())
-    with pytest.raises(DeviceManagementValidationError,match="Clear the device location"):
-        validate_device_submission(**v)
+    payload = validate_device_submission(**v)
+    assert payload["use_gateway_location"] is True
+    assert payload["building_id"] is None
 
 def test_external_id_is_controlled():
     v=values(); v["external_id"]="METER-01"
@@ -71,3 +75,42 @@ def test_lifecycle_update_rejects_long_reason():
         validate_device_lifecycle_update(
             lifecycle_status="INACTIVE", change_reason="x" * 501
         )
+
+
+def test_mqtt_uid_is_normalized():
+    payload = validate_device_submission(**values())
+    assert payload["identifier_type"] == "MQTT_UID"
+    assert payload["identifier_value"] == "80:34:28:16:09:eb:00:01"
+
+
+def test_invalid_mqtt_uid_is_rejected():
+    v = values(); v["identifier_value"] = "not-a-uid"
+    with pytest.raises(DeviceManagementValidationError, match="eight hexadecimal"):
+        validate_device_submission(**v)
+
+
+def test_operational_policy_is_required_and_normalized():
+    payload = validate_device_submission(**values())
+    assert payload["operational_policy"] == "ASSET_ASSIGNED"
+
+
+def test_invalid_operational_policy_is_rejected():
+    v = values(); v["operational_policy"] = "UNKNOWN"
+    with pytest.raises(DeviceManagementValidationError, match="operational policy"):
+        validate_device_submission(**v)
+
+
+
+def test_external_id_is_generated_when_omitted():
+    v = values(); v["external_id"] = ""; v["device_name"] = "AirSense Environmental Sensor"
+    payload = validate_device_submission(**v)
+    assert payload["external_id"] == "AIRSENSE_ENVIRONMENTAL_SENSOR"
+
+
+def test_create_device_service_has_matching_parameter_count():
+    from pathlib import Path
+    import re
+    source = Path("app/src/device_management_service.py").read_text()
+    match = re.search(r"SELECT admin\.create_device\((.*?)\) AS device_result", source, re.DOTALL)
+    assert match is not None
+    assert match.group(1).count("%s") == 18

@@ -1,5 +1,5 @@
 from pathlib import Path
-SQL=(Path(__file__).parents[2]/"postgres/migrations/128_grafana_tenant_reconciliation.sql").read_text()
+SQL=(Path(__file__).parents[2]/"postgres/migrations/150_three_role_scope_model.sql").read_text()
 
 def test_reconciliation_contract_is_audited_and_safe():
     assert "get_grafana_reconciliation_context" in SQL
@@ -10,4 +10,5 @@ def test_reconciliation_contract_is_audited_and_safe():
     assert "Automatic Grafana tenant reassignment is prohibited" in SQL
 
 def test_reconciliation_is_platform_admin_only():
-    assert "v_role IS DISTINCT FROM 'PLATFORM_ADMIN'" in SQL
+    assert "v_role IS DISTINCT FROM 'ADMIN'" in SQL
+    assert "v_scope_mode IS DISTINCT FROM 'GLOBAL'" in SQL

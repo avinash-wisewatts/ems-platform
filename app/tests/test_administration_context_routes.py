@@ -21,6 +21,8 @@ SITE_ID = "22222222-2222-4222-8222-222222222222"
 def authentication_result(
     *,
     role_code: str,
+    access_scope_mode: str,
+    organization_id: str | None,
 ) -> AuthenticationResult:
     return AuthenticationResult(
         authenticated=True,
@@ -29,12 +31,9 @@ def authentication_result(
             username="admin@example.com",
             display_name="Administrator",
             role_code=role_code,
-            organization_id=(
-                None if role_code == "PLATFORM_ADMIN" else ORG_ID
-            ),
-            access_scope_mode=(
-                None if role_code == "PLATFORM_ADMIN" else "ORGANIZATION"
-            ),
+
+            organization_id=organization_id,
+            access_scope_mode=access_scope_mode,
             site_ids=(),
         ),
         status=AuthenticationStatus.AUTHENTICATED,
@@ -44,9 +43,16 @@ def authentication_result(
 def install_authenticator(
     monkeypatch: pytest.MonkeyPatch,
     role_code: str,
+    *,
+    access_scope_mode: str = "GLOBAL",
+    organization_id: str | None = None,
 ) -> None:
     async def fake_authenticate(username: str, password: str):
-        return authentication_result(role_code=role_code)
+        return authentication_result(
+            role_code=role_code,
+            access_scope_mode=access_scope_mode,
+            organization_id=organization_id,
+        )
 
     monkeypatch.setattr(
         "src.main.authenticate_portal_user",
@@ -54,8 +60,20 @@ def install_authenticator(
     )
 
 
-def login(portal_client, role_code: str, monkeypatch) -> None:
-    install_authenticator(monkeypatch, role_code)
+def login(
+    portal_client,
+    role_code: str,
+    monkeypatch,
+    *,
+    access_scope_mode: str = "GLOBAL",
+    organization_id: str | None = None,
+) -> None:
+    install_authenticator(
+        monkeypatch,
+        role_code,
+        access_scope_mode=access_scope_mode,
+        organization_id=organization_id,
+    )
     response = portal_client.post(
         "/login",
         data={
@@ -101,7 +119,7 @@ def test_platform_login_starts_without_tenant_context(
     portal_client,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    install_authenticator(monkeypatch, "PLATFORM_ADMIN")
+    install_authenticator(monkeypatch, "ADMIN")
 
     response = portal_client.post(
         "/login",
@@ -120,7 +138,13 @@ def test_tenant_login_bootstraps_assigned_organization(
     portal_client,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    login(portal_client, "ORG_ADMIN", monkeypatch)
+    login(
+        portal_client,
+        "ADMIN",
+        monkeypatch,
+        access_scope_mode="ORGANIZATION",
+        organization_id=ORG_ID,
+    )
 
     response = portal_client.post("/context/site/clear")
 
@@ -133,7 +157,7 @@ def test_platform_can_select_accessible_organization(
     portal_client,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    login(portal_client, "PLATFORM_ADMIN", monkeypatch)
+    login(portal_client, "ADMIN", monkeypatch)
 
     async def fake_organizations(**kwargs):
         return [{"id": ORG_ID}]
@@ -160,7 +184,7 @@ def test_platform_can_clear_organization_and_return_safely(
     portal_client,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    login(portal_client, "PLATFORM_ADMIN", monkeypatch)
+    login(portal_client, "ADMIN", monkeypatch)
 
     response = portal_client.post(
         "/context/organization/clear",
@@ -176,7 +200,7 @@ def test_clear_organization_rejects_external_return_path(
     portal_client,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    login(portal_client, "PLATFORM_ADMIN", monkeypatch)
+    login(portal_client, "ADMIN", monkeypatch)
 
     response = portal_client.post(
         "/context/organization/clear",
@@ -193,7 +217,7 @@ def test_inaccessible_organization_fails_safely(
     portal_client,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    login(portal_client, "PLATFORM_ADMIN", monkeypatch)
+    login(portal_client, "ADMIN", monkeypatch)
 
     async def fake_organizations(**kwargs):
         return [{"id": ORG_ID}]
@@ -218,7 +242,7 @@ def test_external_return_path_is_rejected(
     portal_client,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    login(portal_client, "PLATFORM_ADMIN", monkeypatch)
+    login(portal_client, "ADMIN", monkeypatch)
 
     async def fake_organizations(**kwargs):
         return [{"id": ORG_ID}]

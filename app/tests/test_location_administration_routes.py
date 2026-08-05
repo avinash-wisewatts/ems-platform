@@ -32,7 +32,9 @@ def successful_platform_admin_result() -> AuthenticationResult:
             portal_user_id=500,
             username="admin@example.com",
             display_name="Platform Admin",
-            role_code="PLATFORM_ADMIN",
+            role_code="ADMIN",
+
+            access_scope_mode="GLOBAL",
         ),
         status=AuthenticationStatus.AUTHENTICATED,
     )
@@ -162,7 +164,7 @@ def mock_location_page_reads(
     )
 
 
-def test_location_administration_get_renders_hierarchy_and_forms(
+def test_location_administration_get_renders_workspace(
     portal_client,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -171,14 +173,13 @@ def test_location_administration_get_renders_hierarchy_and_forms(
     response = portal_client.get("/administration/locations")
 
     assert response.status_code == 200
-    assert "Accessible hierarchy" in response.text
-    assert "Main Site" in response.text
+    assert "Locations" in response.text
     assert "Building A" in response.text
     assert "First Floor" in response.text
     assert "Plant Room" in response.text
-    assert "Create building" in response.text
-    assert "Create floor" in response.text
-    assert "Create space" in response.text
+    assert "Create location" in response.text
+    assert ">View</a>" in response.text
+    assert ">Select</button>" in response.text
 
 
 @pytest.mark.parametrize(
@@ -278,7 +279,7 @@ def test_location_administration_creates_each_location_type(
     )
 
     response = portal_client.post(
-        "/administration/locations",
+        "/administration/locations/new",
         data={
             "location_type": location_type,
             "parent_id": str(parent_id),
@@ -287,9 +288,10 @@ def test_location_administration_creates_each_location_type(
         },
     )
 
-    assert response.status_code == 201
-    assert f"{entity_type.title()} created" in response.text
-    assert str(entity_id) in response.text
+    assert response.status_code == 303
+    assert response.headers["location"] == (
+        f"/administration/locations/{entity_type.lower()}/{entity_id}"
+    )
     assert captured == expected_arguments
 
 
@@ -300,7 +302,7 @@ def test_location_administration_rejects_unknown_type(
     login_platform_admin(portal_client, monkeypatch)
 
     response = portal_client.post(
-        "/administration/locations",
+        "/administration/locations/new",
         data={
             "location_type": "CAMPUS",
             "parent_id": str(SITE_ID),
@@ -320,17 +322,17 @@ def test_location_administration_rejects_invalid_parent(
     login_platform_admin(portal_client, monkeypatch)
 
     response = portal_client.post(
-        "/administration/locations",
+        "/administration/locations/new",
         data={
-            "location_type": "BUILDING",
+            "location_type": "FLOOR",
             "parent_id": "",
-            "location_name": "Building B",
-            "location_code": "BUILDING_B",
+            "location_name": "Second Floor",
+            "location_code": "SECOND_FLOOR",
         },
     )
 
     assert response.status_code == 400
-    assert "Site is required." in response.text
+    assert "Building is required." in response.text
 
 
 def test_location_administration_handles_database_error(
@@ -350,7 +352,7 @@ def test_location_administration_handles_database_error(
     )
 
     response = portal_client.post(
-        "/administration/locations",
+        "/administration/locations/new",
         data={
             "location_type": "BUILDING",
             "parent_id": str(SITE_ID),

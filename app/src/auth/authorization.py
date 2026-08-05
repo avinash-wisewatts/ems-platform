@@ -6,8 +6,7 @@ from src.auth.models import AuthenticatedPortalUser
 class PortalRole(str, Enum):
     """Canonical controlled portal authorization roles."""
 
-    PLATFORM_ADMIN = "PLATFORM_ADMIN"
-    ORG_ADMIN = "ORG_ADMIN"
+    ADMIN = "ADMIN"
     OPERATOR = "OPERATOR"
     VIEWER = "VIEWER"
 
@@ -32,12 +31,7 @@ class PortalPermission(str, Enum):
 
 
 ROLE_PERMISSIONS: dict[PortalRole, frozenset[PortalPermission]] = {
-    PortalRole.PLATFORM_ADMIN: frozenset(PortalPermission),
-    PortalRole.ORG_ADMIN: frozenset(
-        permission
-        for permission in PortalPermission
-        if permission is not PortalPermission.ORGANIZATION_MANAGE
-    ),
+    PortalRole.ADMIN: frozenset(PortalPermission),
     PortalRole.OPERATOR: frozenset(
         {
             PortalPermission.SITE_MANAGE,
@@ -77,11 +71,7 @@ def has_permission(
     user: AuthenticatedPortalUser,
     permission: PortalPermission,
 ) -> bool:
-    """
-    Return whether a portal identity has one explicit permission.
-
-    Unknown roles fail closed.
-    """
+    """Return whether a portal identity has one explicit permission."""
 
     role = portal_role(user)
 
@@ -95,41 +85,29 @@ def required_permission_for_request(
     method: str,
     path: str,
 ) -> PortalPermission | None:
-    """
-    Resolve the permission required for a protected HTTP request.
-
-    Onboarding writes are divided so final submission can remain a distinct
-    authorization capability as the portal grows.
-    """
+    """Resolve the permission required for a protected HTTP request."""
 
     normalized_method = method.upper()
 
-    # Logging out and changing active context are authenticated self-service
-    # actions. Context ownership is validated separately by the context service.
     if normalized_method == "POST" and path.rstrip("/") == "/logout":
         return PortalPermission.DASHBOARD_VIEW
 
     if (
         normalized_method == "POST"
-        and (
-            path.rstrip("/") == "/context/organization"
-            or path.rstrip("/") == "/context/organization/clear"
-            or path.rstrip("/") == "/context/site"
-            or path.rstrip("/") == "/context/site/clear"
-            or path.rstrip("/") == "/context/location"
-            or path.rstrip("/") == "/context/location/clear"
-        )
+        and path.rstrip("/")
+        in {
+            "/context/organization",
+            "/context/organization/clear",
+            "/context/site",
+            "/context/site/clear",
+            "/context/location",
+            "/context/location/clear",
+        }
     ):
         return PortalPermission.DASHBOARD_VIEW
 
     if normalized_method in {"GET", "HEAD", "OPTIONS"}:
         return PortalPermission.DASHBOARD_VIEW
-
-    if (
-        normalized_method == "POST"
-        and path == "/onboarding/review"
-    ):
-        return PortalPermission.COMMISSIONING_EXECUTE
 
     if (
         normalized_method == "POST"
@@ -164,15 +142,67 @@ def required_permission_for_request(
 
     if (
         normalized_method in {"POST", "PUT", "PATCH", "DELETE"}
-        and path.rstrip("/") == "/administration/sites"
+        and (
+            path.rstrip("/") == "/administration/sites"
+            or path.startswith("/administration/sites/")
+        )
     ):
         return PortalPermission.SITE_MANAGE
 
     if (
         normalized_method in {"POST", "PUT", "PATCH", "DELETE"}
-        and path.rstrip("/") == "/administration/locations"
+        and (
+            path.rstrip("/")
+            in {
+                "/administration/locations",
+                "/administration/locations/new",
+            }
+            or (
+                path.startswith("/administration/locations/")
+                and path.endswith("/edit")
+            )
+        )
     ):
         return PortalPermission.LOCATION_MANAGE
+
+    if (
+        normalized_method == "POST"
+        and path.startswith("/administration/gateways/")
+        and path.endswith("/select")
+    ):
+        return PortalPermission.DASHBOARD_VIEW
+
+    if (
+        normalized_method == "POST"
+        and path.startswith("/administration/gateways/")
+        and path.endswith("/commission")
+    ):
+        return PortalPermission.COMMISSIONING_EXECUTE
+
+    if (
+        normalized_method in {"POST", "PUT", "PATCH", "DELETE"}
+        and (
+            path.rstrip("/") == "/administration/gateways"
+            or path.startswith("/administration/gateways/")
+        )
+    ):
+        return PortalPermission.GATEWAY_MANAGE
+
+    if (
+        normalized_method == "POST"
+        and path.startswith("/administration/devices/")
+        and path.endswith("/commission")
+    ):
+        return PortalPermission.COMMISSIONING_EXECUTE
+
+    if (
+        normalized_method in {"POST", "PUT", "PATCH", "DELETE"}
+        and (
+            path.rstrip("/") == "/administration/devices"
+            or path.startswith("/administration/devices/")
+        )
+    ):
+        return PortalPermission.DEVICE_MANAGE
 
     if (
         normalized_method in {"POST", "PUT", "PATCH", "DELETE"}
@@ -192,20 +222,11 @@ def required_permission_for_request(
     ):
         return PortalPermission.USER_MANAGE
 
-    # Any future protected write route must be explicitly mapped.
-    # Returning no permission causes middleware to reject it fail-closed.
     return None
 
 
 ROLE_ASSIGNMENT_POLICY: dict[PortalRole, frozenset[PortalRole]] = {
-    PortalRole.PLATFORM_ADMIN: frozenset(PortalRole),
-    PortalRole.ORG_ADMIN: frozenset(
-        {
-            PortalRole.ORG_ADMIN,
-            PortalRole.OPERATOR,
-            PortalRole.VIEWER,
-        }
-    ),
+    PortalRole.ADMIN: frozenset(PortalRole),
     PortalRole.OPERATOR: frozenset(),
     PortalRole.VIEWER: frozenset(),
 }
@@ -214,7 +235,7 @@ ROLE_ASSIGNMENT_POLICY: dict[PortalRole, frozenset[PortalRole]] = {
 def assignable_portal_roles(
     actor_role: PortalRole,
 ) -> set[PortalRole]:
-    """Return the canonical roles one actor role may assign."""
+    """Return the canonical roles one actor may assign."""
 
     return set(ROLE_ASSIGNMENT_POLICY[actor_role])
 
@@ -228,28 +249,57 @@ def can_assign_portal_role(
     return target_role in ROLE_ASSIGNMENT_POLICY[actor_role]
 
 
-def can_manage_user_in_organization(
+def can_manage_user_in_scope(
     *,
     actor_role: PortalRole,
+    actor_access_scope_mode: str | None,
     actor_organization_id: str | None,
     target_organization_id: str | None,
 ) -> bool:
-    """
-    Return whether an actor may manage a user in the target organization.
+    """Return whether an actor may manage a target user."""
 
-    Platform administrators are global. Organization administrators are
-    restricted to their own non-null organization. Other roles cannot manage
-    users.
-    """
+    if actor_role is not PortalRole.ADMIN:
+        return False
 
-    if actor_role is PortalRole.PLATFORM_ADMIN:
+    if actor_access_scope_mode == "GLOBAL":
         return True
 
-    if actor_role is not PortalRole.ORG_ADMIN:
+    if actor_access_scope_mode not in {
+        "ORGANIZATION",
+        "SELECTED_SITES",
+    }:
         return False
 
     return (
         actor_organization_id is not None
         and target_organization_id is not None
         and actor_organization_id == target_organization_id
+    )
+
+
+def can_manage_user_in_organization(
+    *,
+    actor_role: PortalRole,
+    actor_organization_id: str | None,
+    target_organization_id: str | None,
+    actor_access_scope_mode: str | None = None,
+) -> bool:
+    """
+    Backward-compatible wrapper for callers transitioning to scope-aware access.
+    """
+
+    effective_scope = actor_access_scope_mode
+
+    if effective_scope is None:
+        effective_scope = (
+            "GLOBAL"
+            if actor_organization_id is None
+            else "ORGANIZATION"
+        )
+
+    return can_manage_user_in_scope(
+        actor_role=actor_role,
+        actor_access_scope_mode=effective_scope,
+        actor_organization_id=actor_organization_id,
+        target_organization_id=target_organization_id,
     )

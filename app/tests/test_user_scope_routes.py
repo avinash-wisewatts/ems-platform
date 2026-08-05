@@ -10,7 +10,7 @@ async def test_scope_route_calls_controlled_service(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     request = object()
-    actor = SimpleNamespace(portal_user_id=10)
+    actor = SimpleNamespace(portal_user_id=10, access_scope_mode="GLOBAL", organization_id=None)
     captured: dict = {}
 
     monkeypatch.setattr(
@@ -23,6 +23,7 @@ async def test_scope_route_calls_controlled_service(
         actor_portal_user_id: int,
         target_portal_user_id: int,
         access_scope_mode: str,
+        organization_id: str | None,
         site_ids: tuple[str, ...],
     ) -> None:
         captured.update(
@@ -30,6 +31,7 @@ async def test_scope_route_calls_controlled_service(
                 "actor_portal_user_id": actor_portal_user_id,
                 "target_portal_user_id": target_portal_user_id,
                 "access_scope_mode": access_scope_mode,
+                "organization_id": organization_id,
                 "site_ids": site_ids,
             }
         )
@@ -62,6 +64,7 @@ async def test_scope_route_calls_controlled_service(
         request=request,
         portal_user_id=42,
         access_scope_mode=" selected_sites ",
+        organization_id="11111111-1111-1111-1111-111111111111",
         site_ids=[
             "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
             "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
@@ -73,6 +76,7 @@ async def test_scope_route_calls_controlled_service(
         "actor_portal_user_id": 10,
         "target_portal_user_id": 42,
         "access_scope_mode": "SELECTED_SITES",
+        "organization_id": "11111111-1111-1111-1111-111111111111",
         "site_ids": (
             "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
             "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
@@ -91,7 +95,7 @@ async def test_scope_route_rejects_invalid_submission(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     request = object()
-    actor = SimpleNamespace(portal_user_id=10)
+    actor = SimpleNamespace(portal_user_id=10, access_scope_mode="GLOBAL", organization_id=None)
 
     monkeypatch.setattr(
         "src.main.require_authenticated_portal_user",
@@ -145,7 +149,8 @@ async def test_user_renderer_includes_accessible_site_catalog(
     request = object()
     actor = SimpleNamespace(
         portal_user_id=10,
-        role_code="ORG_ADMIN",
+        role_code="ADMIN",
+        access_scope_mode="ORGANIZATION",
         organization_id=(
             "11111111-1111-1111-1111-111111111111"
         ),

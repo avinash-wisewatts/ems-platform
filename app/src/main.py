@@ -38,6 +38,8 @@ from src.context.service import (
     get_administration_context,
     require_location_context,
     require_site_context,
+    set_active_location,
+    set_active_site,
 )
 from src.routers.context import router as context_router
 from src.auth.security import hash_portal_password
@@ -155,10 +157,12 @@ from src.onboarding.grafana_provisioning_service import (
 )
 from src.location_management import (
     LIFECYCLE_STATUSES,
+    SITE_SECTORS,
     LocationManagementValidationError,
     validate_building_submission,
     validate_floor_submission,
     validate_site_submission,
+    TELEMETRY_CAPTURE_INTERVALS,
     validate_space_submission,
 )
 from src.location_management_service import (
@@ -166,6 +170,12 @@ from src.location_management_service import (
     create_floor,
     create_site,
     create_space,
+    create_site_workspace,
+    get_site_workspace,
+    get_location_workspace,
+    list_manageable_sites,
+    update_site_workspace,
+    update_location_workspace,
     list_accessible_physical_locations,
 )
 from src.asset_management import (
@@ -177,29 +187,45 @@ from src.asset_management import (
 from src.asset_management_service import (
     commission_asset,
     create_asset,
+    get_asset_workspace,
     list_accessible_assets,
     list_accessible_commissioning_readiness,
     update_asset,
+    update_asset_workspace,
 )
 from src.gateway_management import (
     GATEWAY_LIFECYCLE_STATUSES,
     GatewayManagementValidationError,
     validate_gateway_submission,
     validate_gateway_lifecycle_update,
+    validate_gateway_workspace_update,
 )
 from src.gateway_management_service import (
     commission_gateway,
     create_gateway,
+    get_gateway_workspace,
     list_accessible_gateways,
     update_gateway_lifecycle,
+    update_gateway_workspace,
 )
 from src.device_management import (
-    DEVICE_LIFECYCLE_STATUSES, DEVICE_PROTOCOLS,
-    DeviceManagementValidationError, validate_device_submission,
+    DEVICE_IDENTIFIER_TYPES,
+    DEVICE_LIFECYCLE_STATUSES,
+    DEVICE_OPERATIONAL_POLICIES,
+    DEVICE_PROTOCOLS,
+    DeviceManagementValidationError,
     validate_device_lifecycle_update,
+    validate_device_submission,
+    validate_device_workspace_update,
 )
 from src.device_management_service import (
-    create_device, list_accessible_devices, update_device_lifecycle,
+    commission_device,
+    create_device,
+    get_device_workspace,
+    list_accessible_devices,
+    set_device_operational_policy,
+    update_device_lifecycle,
+    update_device_workspace,
 )
 
 settings = get_settings()
@@ -289,7 +315,8 @@ def portal_template_context(request: Request) -> dict:
             else None
         ),
         "administration_navigation": administration_navigation(
-            current_user.role_code if current_user else None
+            current_user.role_code if current_user else None,
+            current_user.access_scope_mode if current_user else None,
         ),
         "active_navigation_key": active_navigation_key,
     }
@@ -516,7 +543,8 @@ async def login_page(
     if existing_user is not None:
         destination = (
             "/administration/organizations"
-            if existing_user.role_code == "PLATFORM_ADMIN"
+            if existing_user.role_code == "ADMIN"
+            and existing_user.access_scope_mode == "GLOBAL"
             and get_administration_context(
                 request
             ).active_organization_id is None
@@ -578,7 +606,8 @@ async def login_submit(
 
     destination = (
         "/administration/organizations"
-        if result.user.role_code == "PLATFORM_ADMIN"
+        if result.user.role_code == "ADMIN"
+        and result.user.access_scope_mode == "GLOBAL"
         else safe_login_redirect_path(next_path)
     )
 
@@ -663,17 +692,9 @@ def user_manager_assignable_roles(
 ) -> tuple[str, ...]:
     """Return roles assignable by one user-management actor."""
 
-    if role_code == "PLATFORM_ADMIN":
+    if role_code == "ADMIN":
         return (
-            "PLATFORM_ADMIN",
-            "ORG_ADMIN",
-            "OPERATOR",
-            "VIEWER",
-        )
-
-    if role_code == "ORG_ADMIN":
-        return (
-            "ORG_ADMIN",
+            "ADMIN",
             "OPERATOR",
             "VIEWER",
         )
@@ -701,7 +722,10 @@ async def render_user_administration(
 
     organizations = (
         await list_organizations()
-        if user.role_code == "PLATFORM_ADMIN"
+        if (
+            user.role_code == "ADMIN"
+            and user.access_scope_mode == "GLOBAL"
+        )
         else []
     )
 
@@ -715,6 +739,7 @@ async def render_user_administration(
             "sites": sites,
             "organizations": organizations,
             "actor_role_code": user.role_code,
+            "actor_access_scope_mode": user.access_scope_mode,
             "actor_organization_id": user.organization_id,
             "assignable_roles": user_manager_assignable_roles(
                 user.role_code
@@ -747,7 +772,12 @@ async def user_administration(
 )
 async def create_user_page(request: Request) -> HTMLResponse:
     user = require_authenticated_portal_user(request)
-    organizations = await list_organizations() if user.role_code == "PLATFORM_ADMIN" else []
+    organizations = (
+        await list_organizations()
+        if user.access_scope_mode == "GLOBAL"
+        else []
+    )
+    sites = await list_sites_for_request(request)
     return templates.TemplateResponse(
         request=request,
         name="user_create.html",
@@ -755,7 +785,10 @@ async def create_user_page(request: Request) -> HTMLResponse:
             "environment": settings.app_env,
             "form_data": {},
             "actor_role_code": user.role_code,
+            "actor_access_scope_mode": user.access_scope_mode,
+            "actor_organization_id": user.organization_id,
             "organizations": organizations,
+            "sites": sites,
             "assignable_roles": user_manager_assignable_roles(user.role_code),
             "active_navigation_key": "users",
         },
@@ -795,6 +828,11 @@ async def user_access_edit(request: Request, portal_user_id: int) -> Response:
     if portal_user is None:
         return RedirectResponse(url="/administration/users", status_code=303)
     sites = await list_sites_for_request(request)
+    organizations = (
+        await list_organizations()
+        if actor.access_scope_mode == "GLOBAL"
+        else []
+    )
     return templates.TemplateResponse(
         request=request,
         name="user_edit.html",
@@ -802,6 +840,9 @@ async def user_access_edit(request: Request, portal_user_id: int) -> Response:
             "environment": settings.app_env,
             "portal_user": portal_user,
             "sites": sites,
+            "organizations": organizations,
+            "actor_access_scope_mode": actor.access_scope_mode,
+            "actor_organization_id": actor.organization_id,
             "assignable_roles": user_manager_assignable_roles(actor.role_code),
             "active_navigation_key": "users",
         },
@@ -820,7 +861,9 @@ async def create_user_administration(
     email: Annotated[str, Form()],
     password: Annotated[str, Form()],
     role_code: Annotated[str, Form()],
+    access_scope_mode: Annotated[str, Form()],
     organization_id: Annotated[str, Form()] = "",
+    site_ids: Annotated[list[str], Form()] = [],
 ) -> HTMLResponse:
     """Create a portal user within the actor's authorized scope."""
 
@@ -831,7 +874,9 @@ async def create_user_administration(
         "username": username,
         "email": email,
         "role_code": role_code,
+        "access_scope_mode": access_scope_mode,
         "organization_id": organization_id,
+        "site_ids": site_ids,
     }
 
     if role_code not in user_manager_assignable_roles(user.role_code):
@@ -861,11 +906,58 @@ async def create_user_administration(
             status_code=400,
         )
 
+    try:
+        normalized_scope, normalized_site_ids = (
+            normalize_portal_access_scope_submission(
+                access_scope_mode=access_scope_mode,
+                site_ids=site_ids,
+            )
+        )
+    except ValueError as exc:
+        return await render_user_administration(
+            request,
+            form_data=submitted_form_data,
+            error=str(exc),
+            status_code=400,
+        )
+
     target_organization_id = (
-        user.organization_id
-        if user.role_code == "ORG_ADMIN"
-        else organization_id.strip() or None
+        None
+        if normalized_scope.value == "GLOBAL"
+        else (
+            user.organization_id
+            if user.access_scope_mode != "GLOBAL"
+            else organization_id.strip() or None
+        )
     )
+
+    if (
+        normalized_scope.value != "GLOBAL"
+        and not target_organization_id
+    ):
+        return await render_user_administration(
+            request,
+            form_data=submitted_form_data,
+            error=(
+                "ORGANIZATION and SELECTED_SITES scopes require "
+                "an organization."
+            ),
+            status_code=400,
+        )
+
+    if (
+        user.access_scope_mode != "GLOBAL"
+        and normalized_scope.value == "GLOBAL"
+    ):
+        return await render_user_administration(
+            request,
+            form_data=submitted_form_data,
+            error=(
+                "Only a GLOBAL administrator may create a "
+                "GLOBAL-scoped user."
+            ),
+            status_code=400,
+        )
 
     try:
         portal_user_id = await create_managed_user(
@@ -875,7 +967,9 @@ async def create_user_administration(
             email=email.strip(),
             password_hash=hash_portal_password(password),
             role_code=role_code,
+            access_scope_mode=normalized_scope.value,
             organization_id=target_organization_id,
+            site_ids=normalized_site_ids,
         )
     except DatabaseError as exc:
         return await render_user_administration(
@@ -909,7 +1003,6 @@ async def change_user_role_administration(
     request: Request,
     portal_user_id: int,
     role_code: Annotated[str, Form()],
-    organization_id: Annotated[str, Form()] = "",
 ) -> HTMLResponse:
     """Change a managed portal user's role and audit the change."""
 
@@ -925,27 +1018,11 @@ async def change_user_role_administration(
             status_code=400,
         )
 
-    active_context = get_administration_context(request)
-
-    target_organization_id = (
-        user.organization_id
-        if user.role_code == "ORG_ADMIN"
-        else active_context.active_organization_id
-    )
-
-    if role_code != "PLATFORM_ADMIN" and not target_organization_id:
-        return await render_user_administration(
-            request,
-            error="Choose an organization before assigning a tenant role.",
-            status_code=400,
-        )
-
     try:
         await change_managed_user_role(
             actor_portal_user_id=user.portal_user_id,
             target_portal_user_id=portal_user_id,
             role_code=role_code,
-            organization_id=target_organization_id,
         )
     except DatabaseError as exc:
         return await render_user_administration(
@@ -976,6 +1053,7 @@ async def change_user_scope_administration(
     request: Request,
     portal_user_id: int,
     access_scope_mode: Annotated[str, Form()],
+    organization_id: Annotated[str, Form()] = "",
     site_ids: Annotated[list[str], Form()] = [],
 ) -> HTMLResponse:
     """Change a managed portal user's access scope independently."""
@@ -996,11 +1074,47 @@ async def change_user_scope_administration(
             status_code=400,
         )
 
+    target_organization_id = (
+        None
+        if normalized_mode.value == "GLOBAL"
+        else (
+            user.organization_id
+            if user.access_scope_mode != "GLOBAL"
+            else organization_id.strip() or None
+        )
+    )
+
+    if (
+        normalized_mode.value != "GLOBAL"
+        and not target_organization_id
+    ):
+        return await render_user_administration(
+            request,
+            error=(
+                "ORGANIZATION and SELECTED_SITES scopes require "
+                "an organization."
+            ),
+            status_code=400,
+        )
+
+    if (
+        user.access_scope_mode != "GLOBAL"
+        and normalized_mode.value == "GLOBAL"
+    ):
+        return await render_user_administration(
+            request,
+            error=(
+                "Only a GLOBAL administrator may assign GLOBAL scope."
+            ),
+            status_code=400,
+        )
+
     try:
         await set_managed_user_access_scope(
             actor_portal_user_id=user.portal_user_id,
             target_portal_user_id=portal_user_id,
             access_scope_mode=normalized_mode.value,
+            organization_id=target_organization_id,
             site_ids=normalized_site_ids,
         )
     except DatabaseError as exc:
@@ -1074,354 +1188,556 @@ async def change_user_status_administration(
     )
 
 
+async def _site_page_organizations(user):
+    from src.context.repository import list_accessible_organizations_for_user
+    return await list_accessible_organizations_for_user(
+        portal_user_id=user.portal_user_id,
+        role_code=user.role_code,
+        access_scope_mode=user.access_scope_mode,
+        assigned_organization_id=user.organization_id,
+    )
+
+
+def _site_address_from_form(
+    address_line1: str, address_line2: str, city: str, region: str,
+    postal_code: str, country: str,
+) -> dict[str, str]:
+    return {
+        key: value.strip()
+        for key, value in {
+            "line1": address_line1, "line2": address_line2,
+            "city": city, "region": region,
+            "postal_code": postal_code, "country": country,
+        }.items()
+        if value.strip()
+    }
+
+
 async def render_site_administration(
     request: Request,
     *,
-    form_data: dict | None = None,
-    result: dict | None = None,
+    selected_organization_id: str | None = None,
     error: str | None = None,
     status_code: int = 200,
 ) -> HTMLResponse:
-    """Render the site chooser for the active organization."""
+    """Render all accessible sites, optionally filtered by organization."""
 
     user = require_authenticated_portal_user(request)
     active_context = get_administration_context(request)
+    organizations = await _site_page_organizations(user)
+    accessible_ids = {str(row.get("id")) for row in organizations}
 
-    organization_rows = await list_organizations()
-    active_organization = next(
-        (
-            organization
-            for organization in organization_rows
-            if str(organization.get("id"))
-            == str(active_context.active_organization_id)
-        ),
-        None,
-    )
+    requested = request.query_params.get("organization_id")
+    if requested == "all":
+        selected = None
+    elif requested:
+        selected = requested if requested in accessible_ids else None
+        if requested not in accessible_ids:
+            error = "That organization is not available to your account."
+    elif selected_organization_id is not None:
+        selected = selected_organization_id
+    else:
+        selected = active_context.active_organization_id
 
-    site_rows = await list_accessible_sites(
-        portal_user_id=user.portal_user_id,
-    )
-    sites = [
-        {
-            **site,
-            "site_id": site.get("site_id") or site.get("id"),
-            "lifecycle_status": (
-                site.get("lifecycle_status")
-                or ("ACTIVE" if site.get("is_active") else "INACTIVE")
-            ),
-        }
-        for site in site_rows
-        if str(site.get("organization_id"))
-        == str(active_context.active_organization_id)
-    ]
+    rows = await list_manageable_sites(portal_user_id=user.portal_user_id)
+    sites = [row for row in rows if selected is None or str(row.get("organization_id")) == str(selected)]
+
+    status_rank = {"ACTIVE": 0, "DRAFT": 1, "INACTIVE": 2, "DECOMMISSIONED": 3}
+    sites.sort(key=lambda row: (
+        status_rank.get(str(row.get("lifecycle_status")), 99),
+        str(row.get("site_name") or "").casefold(),
+        str(row.get("site_code") or "").casefold(),
+    ))
+
+    can_manage = has_permission(user, PortalPermission.SITE_MANAGE)
+    can_create = can_manage and user.access_scope_mode != "SELECTED_SITES"
 
     return templates.TemplateResponse(
-        request=request,
-        name="sites.html",
+        request=request, name="sites.html",
         context={
-            "environment": settings.app_env,
-            "page_title": "Sites",
-            "active_organization": active_organization,
-            "sites": sites,
-            "lifecycle_statuses": LIFECYCLE_STATUSES,
-            "form_data": form_data or {},
-            "result": result,
-            "error": error,
-            "context_error": (
-                request.query_params.get("context_error") == "1"
-            ),
+            "environment": settings.app_env, "page_title": "Sites",
+            "organizations": organizations, "sites": sites,
+            "selected_organization_id": selected,
+            "active_site_id": active_context.active_site_id,
+            "can_create_site": can_create, "can_edit_sites": can_manage,
+            "lifecycle_statuses": LIFECYCLE_STATUSES, "error": error,
+            "context_error": request.query_params.get("context_error") == "1",
             "active_navigation_key": "sites",
-        },
-        status_code=status_code,
+        }, status_code=status_code,
     )
 
 
-@app.get(
-    "/administration/sites",
-    response_class=HTMLResponse,
-    include_in_schema=False,
-)
-async def site_administration(
-    request: Request,
-) -> Response:
-    """Choose a site within the active organization."""
-
-    active_context = get_administration_context(request)
-    if active_context.active_organization_id is None:
-        return RedirectResponse(
-            url="/administration/organizations",
-            status_code=303,
-        )
-
-    return await render_site_administration(
-        request,
-        form_data={
-            "organization_id": active_context.active_organization_id,
-            "site_timezone": "Asia/Kolkata",
-            "lifecycle_status": "ACTIVE",
-        },
-    )
+@app.get("/administration/sites", response_class=HTMLResponse, include_in_schema=False)
+async def site_administration(request: Request) -> HTMLResponse:
+    return await render_site_administration(request)
 
 
-@app.post(
-    "/administration/sites",
-    response_class=HTMLResponse,
-    include_in_schema=False,
-)
-async def create_site_administration(
-    request: Request,
-    organization_id: Annotated[str, Form()],
-    site_name: Annotated[str, Form()],
-    site_code: Annotated[str, Form()],
-    site_timezone: Annotated[str, Form()],
-    lifecycle_status: Annotated[str, Form()],
-) -> HTMLResponse:
-    """Create one site independently under an accessible organization."""
-
+@app.get("/administration/sites/new", response_class=HTMLResponse, include_in_schema=False)
+async def create_site_page(request: Request) -> Response:
     user = require_authenticated_portal_user(request)
+    if not has_permission(user, PortalPermission.SITE_MANAGE) or user.access_scope_mode == "SELECTED_SITES":
+        return RedirectResponse(url="/forbidden", status_code=303)
+    organizations = await _site_page_organizations(user)
     active_context = get_administration_context(request)
-    if active_context.active_organization_id is None:
-        return RedirectResponse(
-            url="/administration/organizations",
-            status_code=303,
-        )
-
-    # Ownership is derived from the active administration context.
-    organization_id = active_context.active_organization_id
-
-    site_code = generate_entity_code(site_name)
-
-    submitted_form_data = {
-        "organization_id": organization_id,
-        "site_name": site_name,
-        "site_code": site_code,
-        "site_timezone": site_timezone,
-        "lifecycle_status": lifecycle_status,
-    }
-
-    try:
-        validated = validate_site_submission(
-            organization_id=organization_id,
-            site_name=site_name,
-            site_code=site_code,
-            site_timezone=site_timezone,
-            lifecycle_status=lifecycle_status,
-        )
-    except LocationManagementValidationError as exc:
-        return await render_site_administration(
-            request,
-            form_data=submitted_form_data,
-            error=str(exc),
-            status_code=400,
-        )
-
-    try:
-        result = await create_site(
-            portal_user_id=user.portal_user_id,
-            organization_id=validated["organization_id"],
-            name=validated["name"],
-            code=validated["code"],
-            timezone=validated["timezone"],
-            lifecycle_status=validated["lifecycle_status"],
-        )
-    except DatabaseError as exc:
-        return await render_site_administration(
-            request,
-            form_data=submitted_form_data,
-            error=user_facing_database_error(
-                exc,
-                fallback="The database rejected the site request.",
-            ),
-            status_code=409,
-        )
-
-    return await render_site_administration(
-        request,
-        form_data={
-            "site_timezone": validated["timezone"],
-            "lifecycle_status": "ACTIVE",
+    return templates.TemplateResponse(
+        request=request, name="site_create.html",
+        context={
+            "environment": settings.app_env, "organizations": organizations,
+            "selected_organization_id": active_context.active_organization_id,
+            "form_data": {"site_timezone": "Asia/Kolkata", "site_sector": "OTHER", "lifecycle_status": "ACTIVE"},
+            "lifecycle_statuses": LIFECYCLE_STATUSES, "site_sectors": SITE_SECTORS, "telemetry_capture_intervals": TELEMETRY_CAPTURE_INTERVALS, "active_navigation_key": "sites",
         },
-        result=result,
-        status_code=201,
     )
+
+
+@app.post("/administration/sites", response_class=HTMLResponse, include_in_schema=False)
+async def create_site_administration(
+    request: Request, organization_id: Annotated[str, Form()],
+    site_name: Annotated[str, Form()], site_timezone: Annotated[str, Form()],
+    site_sector: Annotated[str, Form()] = "OTHER", lifecycle_status: Annotated[str, Form()] = "ACTIVE", address_line1: Annotated[str, Form()] = "",
+    address_line2: Annotated[str, Form()] = "", city: Annotated[str, Form()] = "",
+    region: Annotated[str, Form()] = "", postal_code: Annotated[str, Form()] = "",
+    country: Annotated[str, Form()] = "",
+    telemetry_capture_interval_seconds: Annotated[str, Form()] = "60",
+) -> Response:
+    user = require_authenticated_portal_user(request)
+    organizations = await _site_page_organizations(user)
+    accessible_ids = {str(row.get("id")) for row in organizations}
+    if organization_id not in accessible_ids or user.access_scope_mode == "SELECTED_SITES":
+        return RedirectResponse(url="/forbidden", status_code=303)
+    site_code = generate_entity_code(site_name)
+    submitted = locals().copy()
+    try:
+        validated = validate_site_submission(organization_id=organization_id, site_name=site_name,
+            site_code=site_code, site_timezone=site_timezone, lifecycle_status=lifecycle_status, site_sector=site_sector, telemetry_capture_interval_seconds=telemetry_capture_interval_seconds)
+        result = await create_site_workspace(
+            portal_user_id=user.portal_user_id, organization_id=validated["organization_id"],
+            name=validated["name"], code=validated["code"], timezone=validated["timezone"],
+            lifecycle_status=validated["lifecycle_status"], sector_code=validated["sector_code"],
+            address=_site_address_from_form(address_line1,address_line2,city,region,postal_code,country),
+            telemetry_capture_interval_seconds=validated["telemetry_capture_interval_seconds"],
+        )
+    except (LocationManagementValidationError, DatabaseError) as exc:
+        return templates.TemplateResponse(request=request, name="site_create.html", context={
+            "environment": settings.app_env, "organizations": organizations,
+            "selected_organization_id": organization_id, "form_data": submitted,
+            "error": str(exc) if isinstance(exc, LocationManagementValidationError) else user_facing_database_error(exc, fallback="The database rejected the site request."),
+            "lifecycle_statuses": LIFECYCLE_STATUSES, "site_sectors": SITE_SECTORS, "telemetry_capture_intervals": TELEMETRY_CAPTURE_INTERVALS, "active_navigation_key": "sites"},
+            status_code=400 if isinstance(exc, LocationManagementValidationError) else 409)
+    return RedirectResponse(url=f"/administration/sites/{result['site_id']}", status_code=303)
+
+
+async def _accessible_site_or_none(request: Request, site_id: UUID):
+    user = require_authenticated_portal_user(request)
+    return await get_site_workspace(portal_user_id=user.portal_user_id, site_id=str(site_id))
+
+
+@app.get("/administration/sites/{site_id}", response_class=HTMLResponse, include_in_schema=False)
+async def site_detail_administration(request: Request, site_id: UUID) -> Response:
+    user = require_authenticated_portal_user(request)
+    site = await _accessible_site_or_none(request, site_id)
+    if site is None:
+        return RedirectResponse(url="/administration/sites?context_error=1", status_code=303)
+    return templates.TemplateResponse(request=request, name="site_detail.html", context={
+        "environment": settings.app_env, "site": site,
+        "can_edit": has_permission(user, PortalPermission.SITE_MANAGE),
+        "active_navigation_key": "sites"})
+
+
+@app.get("/administration/sites/{site_id}/edit", response_class=HTMLResponse, include_in_schema=False)
+async def edit_site_page(request: Request, site_id: UUID) -> Response:
+    user = require_authenticated_portal_user(request)
+    if not has_permission(user, PortalPermission.SITE_MANAGE):
+        return RedirectResponse(url="/forbidden", status_code=303)
+    site = await _accessible_site_or_none(request, site_id)
+    if site is None:
+        return RedirectResponse(url="/administration/sites?context_error=1", status_code=303)
+    return templates.TemplateResponse(request=request, name="site_edit.html", context={
+        "environment": settings.app_env, "site": site, "form_data": {},
+        "lifecycle_statuses": LIFECYCLE_STATUSES, "telemetry_capture_intervals": TELEMETRY_CAPTURE_INTERVALS, "active_navigation_key": "sites"})
+
+
+@app.post("/administration/sites/{site_id}/edit", response_class=HTMLResponse, include_in_schema=False)
+async def edit_site_submit(
+    request: Request, site_id: UUID, site_name: Annotated[str, Form()],
+    site_timezone: Annotated[str, Form()], lifecycle_status: Annotated[str, Form()],
+    change_reason: Annotated[str, Form()], address_line1: Annotated[str, Form()] = "",
+    address_line2: Annotated[str, Form()] = "", city: Annotated[str, Form()] = "",
+    region: Annotated[str, Form()] = "", postal_code: Annotated[str, Form()] = "", country: Annotated[str, Form()] = "",
+    telemetry_capture_interval_seconds: Annotated[str, Form()] = "60",
+) -> Response:
+    user = require_authenticated_portal_user(request)
+    site = await _accessible_site_or_none(request, site_id)
+    if site is None:
+        return RedirectResponse(url="/administration/sites?context_error=1", status_code=303)
+    submitted = locals().copy()
+    try:
+        validated = validate_site_submission(organization_id=str(site["organization_id"]),
+            site_name=site_name, site_code=site["site_code"], site_timezone=site_timezone, lifecycle_status=lifecycle_status, telemetry_capture_interval_seconds=telemetry_capture_interval_seconds)
+        result = await update_site_workspace(portal_user_id=user.portal_user_id, site_id=str(site_id),
+            name=validated["name"], timezone=validated["timezone"], lifecycle_status=validated["lifecycle_status"],
+            address=_site_address_from_form(address_line1,address_line2,city,region,postal_code,country), change_reason=change_reason, telemetry_capture_interval_seconds=validated["telemetry_capture_interval_seconds"])
+        if not result.get("success", False):
+            raise LocationManagementValidationError(result.get("failure_reason", "The lifecycle transition was rejected."))
+    except (LocationManagementValidationError, DatabaseError) as exc:
+        return templates.TemplateResponse(request=request, name="site_edit.html", context={
+            "environment": settings.app_env, "site": site, "form_data": submitted,
+            "error": str(exc) if isinstance(exc, LocationManagementValidationError) else user_facing_database_error(exc, fallback="The database rejected the site update."),
+            "lifecycle_statuses": LIFECYCLE_STATUSES, "telemetry_capture_intervals": TELEMETRY_CAPTURE_INTERVALS, "active_navigation_key": "sites"},
+            status_code=400 if isinstance(exc, LocationManagementValidationError) else 409)
+    return RedirectResponse(url=f"/administration/sites/{site_id}", status_code=303)
+
+
+async def _location_page_catalog(request: Request) -> dict:
+    user = require_authenticated_portal_user(request)
+    context = get_administration_context(request)
+    rows = await list_accessible_physical_locations(
+        portal_user_id=user.portal_user_id,
+    )
+    serializable = [
+        {
+            key: str(value) if isinstance(value, UUID) else value
+            for key, value in row.items()
+        }
+        for row in rows
+    ]
+
+    if not context.active_organization_id or not context.active_site_id:
+        return {
+            "context": context,
+            "rows": [],
+            "locations": [],
+            "buildings": [],
+            "floors": [],
+        }
+
+    filtered = [
+        row for row in serializable
+        if str(row.get("organization_id")) == context.active_organization_id
+        and str(row.get("site_id")) == context.active_site_id
+    ]
+
+    locations: dict[tuple[str, str], dict] = {}
+    buildings: dict[str, dict] = {}
+    floors: dict[str, dict] = {}
+    for row in filtered:
+        if row.get("building_id"):
+            buildings.setdefault(row["building_id"], {
+                "location_id": row["building_id"],
+                "location_type": "BUILDING",
+                "location_name": row.get("building_name"),
+                "location_code": row.get("building_code"),
+                "organization_name": row.get("organization_name"),
+                "site_name": row.get("site_name"),
+                "parent_name": row.get("site_name"),
+                "lifecycle_status": row.get("building_lifecycle_status") or "ACTIVE",
+                "hierarchy": row.get("building_name"),
+            })
+        if row.get("floor_id"):
+            floors.setdefault(row["floor_id"], {
+                "location_id": row["floor_id"],
+                "location_type": "FLOOR",
+                "location_name": row.get("floor_name"),
+                "location_code": row.get("floor_code"),
+                "organization_name": row.get("organization_name"),
+                "site_name": row.get("site_name"),
+                "building_name": row.get("building_name"),
+                "parent_name": row.get("building_name"),
+                "lifecycle_status": row.get("floor_lifecycle_status") or "ACTIVE",
+                "hierarchy": f'{row.get("building_name") or ""} / {row.get("floor_name") or ""}',
+            })
+        for location_type, id_key, name_key, code_key, parent_name in (
+            ("BUILDING", "building_id", "building_name", "building_code", row.get("site_name")),
+            ("FLOOR", "floor_id", "floor_name", "floor_code", row.get("building_name")),
+            ("SPACE", "space_id", "space_name", "space_code", row.get("floor_name")),
+        ):
+            location_id = row.get(id_key)
+            if not location_id:
+                continue
+            locations.setdefault((location_type, location_id), {
+                "location_id": location_id,
+                "location_type": location_type,
+                "location_name": row.get(name_key),
+                "location_code": row.get(code_key),
+                "organization_name": row.get("organization_name"),
+                "site_name": row.get("site_name"),
+                "building_name": row.get("building_name"),
+                "floor_name": row.get("floor_name"),
+                "space_name": row.get("space_name"),
+                "parent_name": parent_name,
+                "lifecycle_status": row.get(f"{location_type.lower()}_lifecycle_status") or "ACTIVE",
+            })
+
+    type_order = {"BUILDING": 0, "FLOOR": 1, "SPACE": 2}
+    return {
+        "context": context,
+        "rows": filtered,
+        "locations": sorted(
+            locations.values(),
+            key=lambda item: (
+                type_order[item["location_type"]],
+                (item["location_name"] or "").casefold(),
+                item["location_code"] or "",
+            ),
+        ),
+        "buildings": sorted(buildings.values(), key=lambda item: (item["location_name"] or "").casefold()),
+        "floors": sorted(floors.values(), key=lambda item: (item["location_name"] or "").casefold()),
+    }
 
 
 async def render_location_administration(
     request: Request,
     *,
-    form_data: dict | None = None,
-    result: dict | None = None,
     error: str | None = None,
     status_code: int = 200,
 ) -> HTMLResponse:
-    """Render site-scoped location selection and hierarchy management."""
+    """Render a site-scoped location administration workspace."""
 
     user = require_authenticated_portal_user(request)
-    context = require_site_context(request)
-    hierarchy_rows = await list_accessible_physical_locations(
-        portal_user_id=user.portal_user_id,
+    catalog = await _location_page_catalog(request)
+    context = catalog["context"]
+    has_site_context = bool(
+        context.active_organization_id and context.active_site_id
     )
-    hierarchy_rows = [
-        row for row in hierarchy_rows
-        if str(row.get("organization_id")) == context.active_organization_id
-        and str(row.get("site_id")) == context.active_site_id
-    ]
-
-    serializable_hierarchy_rows = [
-        {key: str(value) if isinstance(value, UUID) else value for key, value in row.items()}
-        for row in hierarchy_rows
-    ]
-
-    locations_by_id: dict[str, dict] = {}
-    buildings_by_id: dict[str, dict] = {}
-    floors_by_id: dict[str, dict] = {}
-    sites_by_id: dict[str, dict] = {}
-    for row in serializable_hierarchy_rows:
-        sites_by_id.setdefault(row["site_id"], {
-            "site_id": row["site_id"], "site_name": row.get("site_name"),
-            "site_code": row.get("site_code"), "organization_name": row.get("organization_name"),
-        })
-        if row.get("building_id"):
-            buildings_by_id.setdefault(row["building_id"], {
-                "building_id": row["building_id"], "building_name": row.get("building_name"),
-                "building_code": row.get("building_code"), "site_name": row.get("site_name"),
-            })
-        if row.get("floor_id"):
-            floors_by_id.setdefault(row["floor_id"], {
-                "floor_id": row["floor_id"], "floor_name": row.get("floor_name"),
-                "floor_code": row.get("floor_code"), "building_name": row.get("building_name"),
-            })
-        for location_type, id_key, name_key, code_key in (
-            ("BUILDING", "building_id", "building_name", "building_code"),
-            ("FLOOR", "floor_id", "floor_name", "floor_code"),
-            ("SPACE", "space_id", "space_name", "space_code"),
-        ):
-            location_id = row.get(id_key)
-            if location_id:
-                locations_by_id.setdefault(location_id, {
-                    "location_id": location_id, "location_type": location_type,
-                    "location_name": row.get(name_key), "location_code": row.get(code_key),
-                    "building_name": row.get("building_name"),
-                    "floor_name": row.get("floor_name"),
-                    "space_name": row.get("space_name"),
-                })
-
     return templates.TemplateResponse(
-        request=request, name="locations.html",
+        request=request,
+        name="locations.html",
         context={
-            "environment": settings.app_env, "page_title": "Locations",
-            "hierarchy_rows": serializable_hierarchy_rows,
-            "locations": sorted(locations_by_id.values(), key=lambda row: (row["location_type"], (row["location_name"] or "").casefold())),
-            "sites": list(sites_by_id.values()), "buildings": list(buildings_by_id.values()),
-            "floors": list(floors_by_id.values()), "form_data": form_data or {},
-            "result": result, "error": error,
+            "environment": settings.app_env,
+            "page_title": "Locations",
+            "locations": catalog["locations"],
+            "error": error,
             "context_error": request.query_params.get("context_error") == "1",
-            "active_context": context, "active_navigation_key": "locations",
-        }, status_code=status_code,
+            "active_context": context,
+            "has_site_context": has_site_context,
+            "can_manage_locations": has_permission(user, PortalPermission.LOCATION_MANAGE),
+            "lifecycle_statuses": ("ACTIVE", "INACTIVE", "DECOMMISSIONED"),
+            "active_navigation_key": "locations",
+        },
+        status_code=status_code,
     )
 
 
-@app.get(
-    "/administration/locations",
-    response_class=HTMLResponse,
-    include_in_schema=False,
-)
+@app.get("/administration/locations", response_class=HTMLResponse, include_in_schema=False)
 async def location_administration(request: Request) -> Response:
-    try:
-        return await render_location_administration(request)
-    except AdministrationContextError:
-        return RedirectResponse(url="/administration/sites", status_code=303)
+    return await render_location_administration(request)
 
 
-@app.post(
-    "/administration/locations",
-    response_class=HTMLResponse,
-    include_in_schema=False,
-)
+@app.get("/administration/locations/new", response_class=HTMLResponse, include_in_schema=False)
+async def create_location_page(request: Request) -> Response:
+    user = require_authenticated_portal_user(request)
+    if not has_permission(user, PortalPermission.LOCATION_MANAGE):
+        return RedirectResponse(url="/forbidden", status_code=303)
+    catalog = await _location_page_catalog(request)
+    context = catalog["context"]
+    if not context.active_organization_id or not context.active_site_id:
+        return RedirectResponse(url="/administration/locations?context_required=1", status_code=303)
+    return templates.TemplateResponse(
+        request=request,
+        name="location_create.html",
+        context={
+            "environment": settings.app_env,
+            "active_context": context,
+            "buildings": catalog["buildings"],
+            "floors": catalog["floors"],
+            "form_data": {},
+            "active_navigation_key": "locations",
+        },
+    )
+
+
+async def _render_location_create_error(
+    request: Request,
+    *,
+    form_data: dict,
+    error: str,
+    status_code: int,
+) -> HTMLResponse:
+    catalog = await _location_page_catalog(request)
+    return templates.TemplateResponse(
+        request=request,
+        name="location_create.html",
+        context={
+            "environment": settings.app_env,
+            "active_context": catalog["context"],
+            "buildings": catalog["buildings"],
+            "floors": catalog["floors"],
+            "form_data": form_data,
+            "error": error,
+            "active_navigation_key": "locations",
+        },
+        status_code=status_code,
+    )
+
+
+@app.post("/administration/locations", response_class=HTMLResponse, include_in_schema=False)
+@app.post("/administration/locations/new", response_class=HTMLResponse, include_in_schema=False)
 async def create_location_administration(
     request: Request,
     location_type: Annotated[str, Form()],
-    parent_id: Annotated[str, Form()],
-    location_name: Annotated[str, Form()],
-    location_code: Annotated[str, Form()],
-) -> HTMLResponse:
-    """Create one building, floor, or space."""
+    parent_id: Annotated[str, Form()] = "",
+    location_name: Annotated[str, Form()] = "",
+    location_code: Annotated[str, Form()] = "",
+) -> Response:
+    """Create one building, floor, or space inside the active site."""
 
     user = require_authenticated_portal_user(request)
-    normalized_type = location_type.strip().upper()
-    location_code = generate_entity_code(location_name)
+    if not has_permission(user, PortalPermission.LOCATION_MANAGE):
+        return RedirectResponse(url="/forbidden", status_code=303)
+    context = get_administration_context(request)
+    if not context.active_organization_id or not context.active_site_id:
+        return RedirectResponse(url="/administration/locations?context_required=1", status_code=303)
 
-    submitted_form_data = {
+    normalized_type = location_type.strip().upper()
+    generated_code = generate_entity_code(location_name)
+    submitted = {
         "location_type": normalized_type,
         "parent_id": parent_id,
         "location_name": location_name,
-        "location_code": location_code,
+        "location_code": generated_code,
     }
-
     try:
         if normalized_type == "BUILDING":
             validated = validate_building_submission(
-                site_id=parent_id,
+                site_id=context.active_site_id,
                 building_name=location_name,
-                building_code=location_code,
+                building_code=generated_code,
             )
-            result = await create_building(
-                portal_user_id=user.portal_user_id,
-                **validated,
-            )
-
+            result = await create_building(portal_user_id=user.portal_user_id, **validated)
         elif normalized_type == "FLOOR":
             validated = validate_floor_submission(
                 building_id=parent_id,
                 floor_name=location_name,
-                floor_code=location_code,
+                floor_code=generated_code,
             )
-            result = await create_floor(
-                portal_user_id=user.portal_user_id,
-                **validated,
-            )
-
+            result = await create_floor(portal_user_id=user.portal_user_id, **validated)
         elif normalized_type == "SPACE":
             validated = validate_space_submission(
                 floor_id=parent_id,
                 space_name=location_name,
-                space_code=location_code,
+                space_code=generated_code,
             )
-            result = await create_space(
-                portal_user_id=user.portal_user_id,
-                **validated,
-            )
-
+            result = await create_space(portal_user_id=user.portal_user_id, **validated)
         else:
-            raise LocationManagementValidationError(
-                "Select a valid location type."
-            )
-
+            raise LocationManagementValidationError("Select a valid location type.")
     except LocationManagementValidationError as exc:
-        return await render_location_administration(
-            request,
-            form_data=submitted_form_data,
-            error=str(exc),
-            status_code=400,
+        return await _render_location_create_error(
+            request, form_data=submitted, error=str(exc), status_code=400,
         )
-
     except DatabaseError as exc:
-        return await render_location_administration(
+        return await _render_location_create_error(
             request,
-            form_data=submitted_form_data,
-            error=user_facing_database_error(
-                exc,
-                fallback=(
-                    "The database rejected the location request."
-                ),
-            ),
+            form_data=submitted,
+            error=user_facing_database_error(exc, fallback="The database rejected the location request."),
             status_code=409,
         )
+    location_id = result.get(f"{normalized_type.lower()}_id") or result.get("entity_id")
+    return RedirectResponse(
+        url=f"/administration/locations/{normalized_type.lower()}/{location_id}",
+        status_code=303,
+    )
 
-    return await render_location_administration(
-        request,
-        result=result,
-        status_code=201,
+
+async def _accessible_location_or_none(
+    request: Request,
+    location_type: str,
+    location_id: UUID,
+) -> dict | None:
+    user = require_authenticated_portal_user(request)
+    normalized_type = location_type.strip().upper()
+    if normalized_type not in {"BUILDING", "FLOOR", "SPACE"}:
+        return None
+    return await get_location_workspace(
+        portal_user_id=user.portal_user_id,
+        location_type=normalized_type,
+        location_id=str(location_id),
+    )
+
+
+@app.get("/administration/locations/{location_type}/{location_id}", response_class=HTMLResponse, include_in_schema=False)
+async def location_detail_page(request: Request, location_type: str, location_id: UUID) -> Response:
+    user = require_authenticated_portal_user(request)
+    location = await _accessible_location_or_none(request, location_type, location_id)
+    if location is None:
+        return RedirectResponse(url="/administration/locations?context_error=1", status_code=303)
+    return templates.TemplateResponse(
+        request=request,
+        name="location_detail.html",
+        context={
+            "environment": settings.app_env,
+            "location": location,
+            "can_edit": has_permission(user, PortalPermission.LOCATION_MANAGE),
+            "active_navigation_key": "locations",
+        },
+    )
+
+
+@app.get("/administration/locations/{location_type}/{location_id}/edit", response_class=HTMLResponse, include_in_schema=False)
+async def edit_location_page(request: Request, location_type: str, location_id: UUID) -> Response:
+    user = require_authenticated_portal_user(request)
+    if not has_permission(user, PortalPermission.LOCATION_MANAGE):
+        return RedirectResponse(url="/forbidden", status_code=303)
+    location = await _accessible_location_or_none(request, location_type, location_id)
+    if location is None:
+        return RedirectResponse(url="/administration/locations?context_error=1", status_code=303)
+    return templates.TemplateResponse(
+        request=request,
+        name="location_edit.html",
+        context={
+            "environment": settings.app_env,
+            "location": location,
+            "form_data": {},
+            "active_navigation_key": "locations",
+        },
+    )
+
+
+@app.post("/administration/locations/{location_type}/{location_id}/edit", response_class=HTMLResponse, include_in_schema=False)
+async def edit_location_submit(
+    request: Request,
+    location_type: str,
+    location_id: UUID,
+    location_name: Annotated[str, Form()],
+    change_reason: Annotated[str, Form()],
+) -> Response:
+    user = require_authenticated_portal_user(request)
+    if not has_permission(user, PortalPermission.LOCATION_MANAGE):
+        return RedirectResponse(url="/forbidden", status_code=303)
+    location = await _accessible_location_or_none(request, location_type, location_id)
+    if location is None:
+        return RedirectResponse(url="/administration/locations?context_error=1", status_code=303)
+    submitted = {"location_name": location_name, "change_reason": change_reason}
+    try:
+        normalized_name = location_name.strip()
+        if not normalized_name:
+            raise LocationManagementValidationError("Location name is required.")
+        if len(normalized_name) > 200:
+            raise LocationManagementValidationError("Location name must not exceed 200 characters.")
+        if not change_reason.strip():
+            raise LocationManagementValidationError("Change reason is required.")
+        await update_location_workspace(
+            portal_user_id=user.portal_user_id,
+            location_type=location["location_type"],
+            location_id=str(location_id),
+            name=normalized_name,
+            change_reason=change_reason.strip(),
+        )
+    except (LocationManagementValidationError, DatabaseError) as exc:
+        return templates.TemplateResponse(
+            request=request,
+            name="location_edit.html",
+            context={
+                "environment": settings.app_env,
+                "location": location,
+                "form_data": submitted,
+                "error": str(exc) if isinstance(exc, LocationManagementValidationError) else user_facing_database_error(exc, fallback="The database rejected the location update."),
+                "active_navigation_key": "locations",
+            },
+            status_code=400 if isinstance(exc, LocationManagementValidationError) else 409,
+        )
+    return RedirectResponse(
+        url=f"/administration/locations/{location['location_type'].lower()}/{location_id}",
+        status_code=303,
     )
 
 
@@ -1442,14 +1758,14 @@ async def render_asset_administration(
     """Render independent asset inventory administration."""
 
     user = require_authenticated_portal_user(request)
-    context = require_location_context(request)
+    context = get_administration_context(request)
 
     organization_rows = await list_organizations()
     organizations = [
         organization
         for organization in organization_rows
         if (
-            user.role_code == "PLATFORM_ADMIN"
+            user.access_scope_mode == "GLOBAL"
             or str(organization["id"])
             == str(user.organization_id)
         )
@@ -1461,8 +1777,6 @@ async def render_asset_administration(
     assets = await list_accessible_assets(
         portal_user_id=user.portal_user_id,
     )
-    hierarchy_rows = [row for row in hierarchy_rows if _matches_active_location(row, context.active_location_id)]
-    assets = [row for row in assets if _matches_active_location(row, context.active_location_id)]
     readiness_rows = await list_accessible_commissioning_readiness(
         portal_user_id=user.portal_user_id,
         entity_type="ASSET",
@@ -1490,6 +1804,8 @@ async def render_asset_administration(
             "hierarchy_rows": serializable_hierarchy_rows,
             "assets": assets,
             "asset_readiness": readiness_by_asset,
+            "can_manage": has_permission(user, PortalPermission.ASSET_MANAGE),
+            "active_context": context,
             "asset_types": asset_types,
             "asset_lifecycle_statuses": (
                 ASSET_LIFECYCLE_STATUSES
@@ -1512,18 +1828,65 @@ async def render_asset_administration(
 async def asset_administration(
     request: Request,
 ) -> Response:
-    """Display location-scoped asset inventory administration."""
-    try:
-        require_location_context(request)
-    except AdministrationContextError:
-        return RedirectResponse(url="/administration/locations", status_code=303)
+    """Display every asset available within the actor's controlled scope."""
+    return await render_asset_administration(request)
 
-    return await render_asset_administration(
-        request,
-        form_data={
-            "lifecycle_status": "ACTIVE",
-            "metering_requirement": "NOT_REQUIRED",
-        },
+
+async def _asset_form_context(request: Request, form_data: dict | None = None) -> dict:
+    user = require_authenticated_portal_user(request)
+    organizations = await list_organizations()
+    if user.access_scope_mode != "GLOBAL":
+        organizations = [
+            row for row in organizations
+            if str(row["id"]) == str(user.organization_id)
+        ]
+    hierarchy_rows = await list_accessible_physical_locations(
+        portal_user_id=user.portal_user_id
+    )
+    assets = await list_accessible_assets(portal_user_id=user.portal_user_id)
+    active_context = get_administration_context(request)
+    defaults = {
+        "organization_id": active_context.active_organization_id or "",
+        "site_id": active_context.active_site_id or "",
+        "building_id": active_context.active_location_id
+            if active_context.active_location_type == "BUILDING" else "",
+        "floor_id": active_context.active_location_id
+            if active_context.active_location_type == "FLOOR" else "",
+        "space_id": active_context.active_location_id
+            if active_context.active_location_type == "SPACE" else "",
+        "lifecycle_status": "DRAFT",
+        "metering_requirement": "NOT_REQUIRED",
+    }
+    defaults.update(form_data or {})
+    return {
+        "environment": settings.app_env,
+        "page_title": "Create asset",
+        "organizations": organizations,
+        "hierarchy_rows": [
+            {key: str(value) if isinstance(value, UUID) else value for key, value in row.items()}
+            for row in hierarchy_rows
+        ],
+        "assets": assets,
+        "asset_types": await list_asset_types(),
+        "asset_lifecycle_statuses": ASSET_LIFECYCLE_STATUSES,
+        "metering_requirements": METERING_REQUIREMENTS,
+        "form_data": defaults,
+        "active_navigation_key": "assets",
+    }
+
+
+@app.get(
+    "/administration/assets/new",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def asset_create_page(request: Request) -> Response:
+    user = require_authenticated_portal_user(request)
+    if not has_permission(user, PortalPermission.ASSET_MANAGE):
+        return RedirectResponse("/forbidden", status_code=303)
+    return templates.TemplateResponse(
+        request=request, name="asset_create.html",
+        context={**await _asset_form_context(request), "error": None},
     )
 
 
@@ -1578,10 +1941,9 @@ async def create_asset_administration(
             space_id=asset_location_space_id,
         )
     except AssetManagementValidationError as exc:
-        return await render_asset_administration(
-            request,
-            form_data=submitted_form_data,
-            error=str(exc),
+        return templates.TemplateResponse(
+            request=request, name="asset_create.html",
+            context={**await _asset_form_context(request, submitted_form_data), "error": str(exc)},
             status_code=400,
         )
 
@@ -1591,26 +1953,16 @@ async def create_asset_administration(
             **validated,
         )
     except DatabaseError as exc:
-        return await render_asset_administration(
-            request,
-            form_data=submitted_form_data,
-            error=user_facing_database_error(
-                exc,
-                fallback=(
-                    "The database rejected the asset request."
-                ),
-            ),
+        return templates.TemplateResponse(
+            request=request, name="asset_create.html",
+            context={**await _asset_form_context(request, submitted_form_data),
+                     "error": user_facing_database_error(
+                         exc, fallback="The database rejected the asset request.")},
             status_code=409,
         )
 
-    return await render_asset_administration(
-        request,
-        form_data={
-            "lifecycle_status": "ACTIVE",
-            "metering_requirement": "NOT_REQUIRED",
-        },
-        result=result,
-        status_code=201,
+    return RedirectResponse(
+        f"/administration/assets/{result['entity_id']}", status_code=303
     )
 
 
@@ -1764,6 +2116,233 @@ async def update_asset_administration(
     )
 
 
+async def _accessible_asset_or_none(request: Request, asset_id: UUID) -> dict | None:
+    user = require_authenticated_portal_user(request)
+    return await get_asset_workspace(
+        portal_user_id=user.portal_user_id, asset_id=str(asset_id)
+    )
+
+
+@app.get(
+    "/administration/assets/{asset_id}",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def asset_detail_page(request: Request, asset_id: UUID) -> Response:
+    user = require_authenticated_portal_user(request)
+    asset = await _accessible_asset_or_none(request, asset_id)
+    if asset is None:
+        return RedirectResponse("/forbidden", status_code=303)
+    relationships = [
+        row for row in await list_accessible_relationships(
+            portal_user_id=user.portal_user_id
+        ) if str(row["asset_id"]) == str(asset_id)
+    ]
+    candidate_devices = [
+        row for row in await list_accessible_devices(
+            portal_user_id=user.portal_user_id
+        ) if str(row["site_id"]) == str(asset["site_id"])
+    ]
+    return templates.TemplateResponse(
+        request=request, name="asset_detail.html",
+        context={
+            "environment": settings.app_env, "page_title": asset["asset_name"],
+            "asset": asset, "relationships": relationships,
+            "candidate_devices": candidate_devices,
+            "relationship_types": await list_relationship_types(),
+            "phase_designations": PHASE_DESIGNATIONS,
+            "relationship_error": request.query_params.get("relationship_error"),
+            "relationship_notice": request.query_params.get("relationship_notice"),
+            "can_edit": has_permission(user, PortalPermission.ASSET_MANAGE),
+            "can_manage_relationships": has_permission(
+                user, PortalPermission.RELATIONSHIP_MANAGE
+            ),
+            "active_navigation_key": "assets",
+        },
+    )
+
+
+@app.get(
+    "/administration/assets/{asset_id}/edit",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def asset_edit_page(request: Request, asset_id: UUID) -> Response:
+    user = require_authenticated_portal_user(request)
+    if not has_permission(user, PortalPermission.ASSET_MANAGE):
+        return RedirectResponse("/forbidden", status_code=303)
+    asset = await _accessible_asset_or_none(request, asset_id)
+    if asset is None:
+        return RedirectResponse("/forbidden", status_code=303)
+    catalog = await _asset_form_context(request)
+    return templates.TemplateResponse(
+        request=request, name="asset_edit.html",
+        context={**catalog, "page_title": f"Edit {asset['asset_name']}",
+                 "asset": asset, "form_data": {}, "error": None},
+    )
+
+
+@app.post(
+    "/administration/assets/{asset_id}/edit",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def asset_edit_submit(
+    request: Request, asset_id: UUID,
+    asset_name: Annotated[str, Form()], asset_type_id: Annotated[str, Form()],
+    lifecycle_status: Annotated[str, Form()],
+    metering_requirement: Annotated[str, Form()],
+    change_reason: Annotated[str, Form()],
+    parent_asset_id: Annotated[str, Form()] = "",
+    asset_location_building_id: Annotated[str, Form()] = "",
+    asset_location_floor_id: Annotated[str, Form()] = "",
+    asset_location_space_id: Annotated[str, Form()] = "",
+) -> Response:
+    user = require_authenticated_portal_user(request)
+    asset = await _accessible_asset_or_none(request, asset_id)
+    if asset is None:
+        return RedirectResponse("/forbidden", status_code=303)
+    submitted = {
+        "asset_name": asset_name, "asset_type_id": asset_type_id,
+        "lifecycle_status": lifecycle_status,
+        "metering_requirement": metering_requirement,
+        "parent_asset_id": parent_asset_id, "building_id": asset_location_building_id,
+        "floor_id": asset_location_floor_id, "space_id": asset_location_space_id,
+        "change_reason": change_reason,
+    }
+    catalog = await _asset_form_context(request, submitted)
+    try:
+        validated = validate_asset_submission(
+            organization_id=str(asset["organization_id"]),
+            site_id=str(asset["site_id"]), asset_name=asset_name,
+            asset_type_id=asset_type_id, lifecycle_status=lifecycle_status,
+            metering_requirement=metering_requirement, parent_asset_id=parent_asset_id,
+            building_id=asset_location_building_id, floor_id=asset_location_floor_id,
+            space_id=asset_location_space_id,
+        )
+        if validated["parent_asset_id"] == str(asset_id):
+            raise AssetManagementValidationError("An asset cannot be its own parent.")
+        reason = change_reason.strip()
+        if not reason or len(reason) > 1000:
+            raise AssetManagementValidationError(
+                "Change reason is required and must not exceed 1000 characters."
+            )
+        await update_asset_workspace(
+            portal_user_id=user.portal_user_id, asset_id=str(asset_id),
+            asset_name=validated["asset_name"], asset_type_id=validated["asset_type_id"],
+            lifecycle_status=validated["lifecycle_status"],
+            metering_requirement=validated["metering_requirement"],
+            parent_asset_id=validated["parent_asset_id"],
+            building_id=validated["building_id"], floor_id=validated["floor_id"],
+            space_id=validated["space_id"], change_reason=reason,
+        )
+    except (AssetManagementValidationError, DatabaseError) as exc:
+        return templates.TemplateResponse(
+            request=request, name="asset_edit.html",
+            context={**catalog, "page_title": f"Edit {asset['asset_name']}",
+                     "asset": asset, "form_data": submitted,
+                     "error": str(exc) if isinstance(exc, AssetManagementValidationError)
+                     else user_facing_database_error(
+                         exc, fallback="The database rejected the asset update.")},
+            status_code=400 if isinstance(exc, AssetManagementValidationError) else 409,
+        )
+    return RedirectResponse(f"/administration/assets/{asset_id}", status_code=303)
+
+
+
+def _relationship_redirect(path: str, *, notice: str | None = None, error: str | None = None) -> RedirectResponse:
+    from urllib.parse import quote
+    key, value = ("relationship_error", error) if error else ("relationship_notice", notice or "Relationship updated.")
+    return RedirectResponse(f"{path}?{key}={quote(value)}", status_code=303)
+
+
+@app.post("/administration/assets/{asset_id}/assign-device", include_in_schema=False)
+async def assign_device_from_asset(request: Request, asset_id: UUID, device_id: Annotated[str, Form()], relationship_type: Annotated[str, Form()]) -> Response:
+    user = require_authenticated_portal_user(request)
+    path = f"/administration/assets/{asset_id}"
+    try:
+        validated = validate_relationship_submission(asset_id=str(asset_id), device_id=device_id, relationship_type=relationship_type)
+        await assign_device_to_asset(portal_user_id=user.portal_user_id, **validated)
+    except RelationshipManagementValidationError as exc:
+        return _relationship_redirect(path, error=str(exc))
+    except DatabaseError as exc:
+        return _relationship_redirect(path, error=user_facing_database_error(exc, fallback="The database rejected the device assignment."))
+    return _relationship_redirect(path, notice="Device assigned to asset.")
+
+
+@app.post("/administration/devices/{device_id}/assign-asset", include_in_schema=False)
+async def assign_asset_from_device(request: Request, device_id: UUID, asset_id: Annotated[str, Form()], relationship_type: Annotated[str, Form()]) -> Response:
+    user = require_authenticated_portal_user(request)
+    path = f"/administration/devices/{device_id}"
+    try:
+        validated = validate_relationship_submission(asset_id=asset_id, device_id=str(device_id), relationship_type=relationship_type)
+        await assign_device_to_asset(portal_user_id=user.portal_user_id, **validated)
+    except RelationshipManagementValidationError as exc:
+        return _relationship_redirect(path, error=str(exc))
+    except DatabaseError as exc:
+        return _relationship_redirect(path, error=user_facing_database_error(exc, fallback="The database rejected the asset assignment."))
+    return _relationship_redirect(path, notice="Asset assignment created.")
+
+
+@app.post("/administration/assets/{asset_id}/relationships/{relationship_id}/metadata", include_in_schema=False)
+async def update_asset_relationship_metadata(
+    request: Request, asset_id: UUID, relationship_id: UUID,
+    panel_name: Annotated[str, Form()] = "", feeder_name: Annotated[str, Form()] = "",
+    breaker_identifier: Annotated[str, Form()] = "", channel_identifier: Annotated[str, Form()] = "",
+    ct_ratio: Annotated[str, Form()] = "", phase_designation: Annotated[str, Form()] = "",
+    mounting_point: Annotated[str, Form()] = "", engineering_notes: Annotated[str, Form()] = "",
+) -> Response:
+    user = require_authenticated_portal_user(request)
+    path = f"/administration/assets/{asset_id}"
+    rows = await list_accessible_relationships(portal_user_id=user.portal_user_id)
+    if not any(str(r["relationship_id"]) == str(relationship_id) and str(r["asset_id"]) == str(asset_id) for r in rows):
+        return _relationship_redirect(path, error="Relationship was not found for this asset.")
+    try:
+        validated = validate_relationship_metadata(relationship_id=str(relationship_id), panel_name=panel_name, feeder_name=feeder_name, breaker_identifier=breaker_identifier, channel_identifier=channel_identifier, ct_ratio=ct_ratio, phase_designation=phase_designation, mounting_point=mounting_point, engineering_notes=engineering_notes)
+        await update_relationship_metadata(portal_user_id=user.portal_user_id, **validated)
+    except RelationshipManagementValidationError as exc:
+        return _relationship_redirect(path, error=str(exc))
+    except DatabaseError as exc:
+        return _relationship_redirect(path, error=user_facing_database_error(exc, fallback="The database rejected the assignment details."))
+    return _relationship_redirect(path, notice="Assignment details updated.")
+
+
+@app.post("/administration/assets/{asset_id}/relationships/{relationship_id}/replace-primary-meter", include_in_schema=False)
+async def replace_asset_primary_meter(
+    request: Request, asset_id: UUID, relationship_id: UUID,
+    replacement_device_id: Annotated[str, Form()], replacement_reason: Annotated[str, Form()],
+) -> Response:
+    user = require_authenticated_portal_user(request)
+    path = f"/administration/assets/{asset_id}"
+    rows = await list_accessible_relationships(portal_user_id=user.portal_user_id)
+    if not any(str(r["relationship_id"]) == str(relationship_id) and str(r["asset_id"]) == str(asset_id) and r["relationship_type"] == "PRIMARY_METER" for r in rows):
+        return _relationship_redirect(path, error="Primary-meter relationship was not found for this asset.")
+    try:
+        validated = validate_primary_meter_replacement(relationship_id=str(relationship_id), replacement_device_id=replacement_device_id, replacement_reason=replacement_reason)
+        await replace_primary_meter(portal_user_id=user.portal_user_id, **validated)
+    except RelationshipManagementValidationError as exc:
+        return _relationship_redirect(path, error=str(exc))
+    except DatabaseError as exc:
+        return _relationship_redirect(path, error=user_facing_database_error(exc, fallback="The database rejected the primary-meter replacement."))
+    return _relationship_redirect(path, notice="Primary meter replaced.")
+
+
+@app.post("/administration/assets/{asset_id}/relationships/{relationship_id}/remove", include_in_schema=False)
+async def remove_asset_relationship(request: Request, asset_id: UUID, relationship_id: UUID, removal_reason: Annotated[str, Form()]) -> Response:
+    user = require_authenticated_portal_user(request)
+    path = f"/administration/assets/{asset_id}"
+    rows = await list_accessible_relationships(portal_user_id=user.portal_user_id)
+    if not any(str(r["relationship_id"]) == str(relationship_id) and str(r["asset_id"]) == str(asset_id) for r in rows):
+        return _relationship_redirect(path, error="Relationship was not found for this asset.")
+    try:
+        validated = validate_relationship_removal(relationship_id=str(relationship_id), removal_reason=removal_reason)
+        await remove_relationship(portal_user_id=user.portal_user_id, **validated)
+    except RelationshipManagementValidationError as exc:
+        return _relationship_redirect(path, error=str(exc))
+    except DatabaseError as exc:
+        return _relationship_redirect(path, error=user_facing_database_error(exc, fallback="The database rejected the relationship removal."))
+    return _relationship_redirect(path, notice="Device assignment removed.")
+
 @app.get(
     "/administration/metering-coverage",
     response_class=HTMLResponse,
@@ -1797,8 +2376,8 @@ async def render_relationship_administration(request: Request, *, result: dict |
     return templates.TemplateResponse(request=request,name="relationships.html",context={"environment":settings.app_env,"page_title":"Relationships","assets":assets,"devices":devices,"relationships":relationships,"relationship_types":relationship_types,"phase_designations":PHASE_DESIGNATIONS,"result":result,"error":error,"active_navigation_key":"relationships"},status_code=status_code)
 
 @app.get("/administration/relationships",response_class=HTMLResponse,include_in_schema=False)
-async def relationship_administration(request: Request) -> HTMLResponse:
-    return await render_relationship_administration(request)
+async def relationship_administration(request: Request) -> Response:
+    return RedirectResponse("/administration/assets", status_code=303)
 
 @app.post("/administration/relationships",response_class=HTMLResponse,include_in_schema=False)
 async def create_relationship_administration(request: Request,asset_id: Annotated[str,Form()],device_id: Annotated[str,Form()],relationship_type: Annotated[str,Form()]) -> HTMLResponse:
@@ -1843,91 +2422,454 @@ async def replace_primary_meter_administration(request: Request,relationship_id:
     return await render_relationship_administration(request,result=result,status_code=200)
 
 
+def _device_matches_context(row: dict, active_context) -> bool:
+    """Return whether one accessible device is inside the active context."""
+    if active_context.active_location_id:
+        location_id = active_context.active_location_id
+        if active_context.active_location_type == "SPACE":
+            return str(row.get("space_id")) == location_id
+        if active_context.active_location_type == "FLOOR":
+            return str(row.get("floor_id")) == location_id
+        return str(row.get("building_id")) == location_id
+    if active_context.active_site_id:
+        return str(row.get("site_id")) == active_context.active_site_id
+    if active_context.active_organization_id:
+        return str(row.get("organization_id")) == active_context.active_organization_id
+    return True
+
+
 async def render_device_administration(
-    request: Request, *, form_data: dict | None = None,
-    result: dict | None = None, error: str | None = None,
+    request: Request,
+    *,
+    error: str | None = None,
     status_code: int = 200,
 ) -> HTMLResponse:
+    """Render the scope-safe Device administration landing page."""
     user = require_authenticated_portal_user(request)
-    context = require_location_context(request)
+    devices = await list_accessible_devices(portal_user_id=user.portal_user_id)
+    devices.sort(key=lambda row: (
+        str(row.get("organization_name") or "").casefold(),
+        str(row.get("site_name") or "").casefold(),
+        str(row.get("building_name") or "").casefold(),
+        str(row.get("floor_name") or "").casefold(),
+        str(row.get("space_name") or "").casefold(),
+        str(row.get("device_name") or "").casefold(),
+        str(row.get("lifecycle_status") or ""),
+    ))
+    telemetry_states = tuple(dict.fromkeys(
+        [*TELEMETRY_STATES, "SILENT"]
+    ))
+    return templates.TemplateResponse(
+        request=request,
+        name="devices.html",
+        context={
+            "environment": settings.app_env,
+            "page_title": "Devices",
+            "devices": devices,
+            "can_manage": has_permission(user, PortalPermission.DEVICE_MANAGE),
+            "device_lifecycle_statuses": DEVICE_LIFECYCLE_STATUSES,
+            "telemetry_states": telemetry_states,
+            "error": error,
+            "active_navigation_key": "devices",
+        },
+        status_code=status_code,
+    )
+
+
+async def _device_form_catalog(request: Request) -> dict:
+    """Return accessible and controlled catalogs used by Device forms."""
+    user = require_authenticated_portal_user(request)
+    gateways = await list_accessible_gateways(portal_user_id=user.portal_user_id)
     hierarchy_rows = await list_accessible_physical_locations(
         portal_user_id=user.portal_user_id
     )
-    gateways = await list_accessible_gateways(portal_user_id=user.portal_user_id)
-    devices = await list_accessible_devices(portal_user_id=user.portal_user_id)
-    hierarchy_rows = [row for row in hierarchy_rows if _matches_active_location(row, context.active_location_id)]
-    devices = [row for row in devices if _matches_active_location(row, context.active_location_id)]
-    readiness_rows = await list_accessible_commissioning_readiness(
-        portal_user_id=user.portal_user_id, entity_type="DEVICE"
-    )
-    readiness_by_device = {str(row["entity_id"]): row for row in readiness_rows}
-    categories = await list_device_categories()
-    models = await list_device_models()
-    profiles = await list_device_profiles()
-    serializable_hierarchy_rows = [
-        {key: str(value) if isinstance(value, UUID) else value for key, value in row.items()}
-        for row in hierarchy_rows
-    ]
-    return templates.TemplateResponse(
-        request=request, name="devices.html",
-        context={"environment": settings.app_env, "page_title": "Devices",
-                 "hierarchy_rows": serializable_hierarchy_rows, "gateways": gateways,
-                 "devices": devices, "device_readiness": readiness_by_device,
-                 "device_operational_policies": ("STANDALONE", "ASSET_ASSIGNED"),
-                 "categories": categories, "models": models,
-                 "profiles": profiles, "device_protocols": DEVICE_PROTOCOLS,
-                 "device_lifecycle_statuses": DEVICE_LIFECYCLE_STATUSES,
-                 "form_data": form_data or {}, "result": result, "error": error,
-                 "active_navigation_key": "devices"}, status_code=status_code,
-    )
+    return {
+        "gateways": gateways,
+        "hierarchy_rows": [
+            {
+                key: str(value) if isinstance(value, UUID) else value
+                for key, value in row.items()
+            }
+            for row in hierarchy_rows
+        ],
+        "categories": await list_device_categories(),
+        "models": await list_device_models(),
+        "profiles": await list_device_profiles(),
+        "device_protocols": DEVICE_PROTOCOLS,
+        "device_lifecycle_statuses": DEVICE_LIFECYCLE_STATUSES,
+        "identifier_types": DEVICE_IDENTIFIER_TYPES,
+        "operational_policies": DEVICE_OPERATIONAL_POLICIES,
+    }
 
 
-@app.get("/administration/devices", response_class=HTMLResponse, include_in_schema=False)
+@app.get(
+    "/administration/devices",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
 async def device_administration(request: Request) -> Response:
-    try:
-        require_location_context(request)
-    except AdministrationContextError:
-        return RedirectResponse(url="/administration/locations", status_code=303)
-    return await render_device_administration(
-        request, form_data={"lifecycle_status": "REGISTERED"}
+    return await render_device_administration(request)
+
+
+@app.get(
+    "/administration/devices/new",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def device_create_page(request: Request) -> Response:
+    user = require_authenticated_portal_user(request)
+    if not has_permission(user, PortalPermission.DEVICE_MANAGE):
+        return RedirectResponse("/forbidden", status_code=303)
+    catalog = await _device_form_catalog(request)
+    return templates.TemplateResponse(
+        request=request,
+        name="device_create.html",
+        context={
+            "environment": settings.app_env,
+            "page_title": "Create device",
+            "active_navigation_key": "devices",
+            "form_data": {
+                "lifecycle_status": "REGISTERED",
+                "protocol": "MQTT",
+                "identifier_type": "MQTT_UID",
+                "operational_policy": "ASSET_ASSIGNED",
+                "use_gateway_location": True,
+            },
+            "error": None,
+            **catalog,
+        },
     )
 
 
-@app.post("/administration/devices", response_class=HTMLResponse, include_in_schema=False)
+@app.post(
+    "/administration/devices",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
 async def create_device_administration(
-    request: Request, gateway_id: Annotated[str, Form()],
-    device_name: Annotated[str, Form()], external_id: Annotated[str, Form()],
-    device_category_id: Annotated[str, Form()], device_model_id: Annotated[str, Form()],
-    profile_id: Annotated[str, Form()], protocol: Annotated[str, Form()],
+    request: Request,
+    gateway_id: Annotated[str, Form()],
+    device_name: Annotated[str, Form()],
+    external_id: Annotated[str, Form()],
+    device_category_id: Annotated[str, Form()],
+    device_model_id: Annotated[str, Form()],
+    profile_id: Annotated[str, Form()],
+    protocol: Annotated[str, Form()],
+    identifier_type: Annotated[str, Form()],
+    identifier_value: Annotated[str, Form()],
+    operational_policy: Annotated[str, Form()],
     lifecycle_status: Annotated[str, Form()] = "REGISTERED",
     firmware_version: Annotated[str, Form()] = "",
+    serial_number: Annotated[str, Form()] = "",
     use_gateway_location: Annotated[str, Form()] = "",
     device_location_building_id: Annotated[str, Form()] = "",
     device_location_floor_id: Annotated[str, Form()] = "",
     device_location_space_id: Annotated[str, Form()] = "",
-) -> HTMLResponse:
+) -> Response:
     user = require_authenticated_portal_user(request)
-    submitted={"gateway_id":gateway_id,"device_name":device_name,"external_id":external_id,
-               "device_category_id":device_category_id,"device_model_id":device_model_id,
-               "profile_id":profile_id,"protocol":protocol,"lifecycle_status":lifecycle_status,
-               "firmware_version":firmware_version,"use_gateway_location":use_gateway_location,
-               "building_id":device_location_building_id,"floor_id":device_location_floor_id,
-               "space_id":device_location_space_id}
+    submitted = {
+        "gateway_id": gateway_id,
+        "device_name": device_name,
+        "external_id": external_id,
+        "device_category_id": device_category_id,
+        "device_model_id": device_model_id,
+        "profile_id": profile_id,
+        "protocol": protocol,
+        "identifier_type": identifier_type,
+        "identifier_value": identifier_value,
+        "operational_policy": operational_policy,
+        "lifecycle_status": lifecycle_status,
+        "firmware_version": firmware_version,
+        "serial_number": serial_number,
+        "use_gateway_location": use_gateway_location,
+        "building_id": device_location_building_id,
+        "floor_id": device_location_floor_id,
+        "space_id": device_location_space_id,
+    }
+    catalog = await _device_form_catalog(request)
+    base_context = {
+        "environment": settings.app_env,
+        "page_title": "Create device",
+        "active_navigation_key": "devices",
+        "form_data": submitted,
+        **catalog,
+    }
     try:
-        validated=validate_device_submission(
-            gateway_id=gateway_id,device_name=device_name,external_id=external_id,
-            device_category_id=device_category_id,device_model_id=device_model_id,
-            profile_id=profile_id,protocol=protocol,lifecycle_status=lifecycle_status,
-            firmware_version=firmware_version,use_gateway_location=use_gateway_location,
-            building_id=device_location_building_id,floor_id=device_location_floor_id,
-            space_id=device_location_space_id)
-        result=await create_device(portal_user_id=user.portal_user_id,**validated)
+        validated = validate_device_submission(
+            gateway_id=gateway_id,
+            device_name=device_name,
+            external_id=external_id,
+            device_category_id=device_category_id,
+            device_model_id=device_model_id,
+            profile_id=profile_id,
+            protocol=protocol,
+            lifecycle_status=lifecycle_status,
+            firmware_version=firmware_version,
+            serial_number=serial_number,
+            identifier_type=identifier_type,
+            identifier_value=identifier_value,
+            operational_policy=operational_policy,
+            use_gateway_location=use_gateway_location,
+            building_id=device_location_building_id,
+            floor_id=device_location_floor_id,
+            space_id=device_location_space_id,
+        )
+        result = await create_device(
+            portal_user_id=user.portal_user_id,
+            **validated,
+        )
     except DeviceManagementValidationError as exc:
-        return await render_device_administration(request,form_data=submitted,error=str(exc),status_code=400)
+        return templates.TemplateResponse(
+            request=request,
+            name="device_create.html",
+            context={**base_context, "error": str(exc)},
+            status_code=400,
+        )
     except DatabaseError as exc:
-        return await render_device_administration(request,form_data=submitted,
-            error=user_facing_database_error(exc,fallback="The database rejected the device request."),status_code=409)
-    return await render_device_administration(request,result=result,status_code=200)
+        return templates.TemplateResponse(
+            request=request,
+            name="device_create.html",
+            context={
+                **base_context,
+                "error": user_facing_database_error(
+                    exc,
+                    fallback="The database rejected the device request.",
+                ),
+            },
+            status_code=409,
+        )
+    return RedirectResponse(
+        f"/administration/devices/{result['entity_id']}",
+        status_code=303,
+    )
+
+
+async def _accessible_device_or_none(
+    request: Request,
+    device_id: UUID,
+) -> dict | None:
+    user = require_authenticated_portal_user(request)
+    return await get_device_workspace(
+        portal_user_id=user.portal_user_id,
+        device_id=str(device_id),
+    )
+
+
+@app.get(
+    "/administration/devices/{device_id}",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def device_detail_page(request: Request, device_id: UUID) -> Response:
+    user = require_authenticated_portal_user(request)
+    device = await _accessible_device_or_none(request, device_id)
+    if device is None:
+        return RedirectResponse("/forbidden", status_code=303)
+    relationships = [
+        row for row in await list_accessible_relationships(
+            portal_user_id=user.portal_user_id
+        ) if str(row["device_id"]) == str(device_id)
+    ]
+    candidate_assets = [
+        row for row in await list_accessible_assets(
+            portal_user_id=user.portal_user_id
+        ) if str(row["site_id"]) == str(device["site_id"])
+    ]
+    return templates.TemplateResponse(
+        request=request,
+        name="device_detail.html",
+        context={
+            "environment": settings.app_env,
+            "page_title": device["device_name"],
+            "active_navigation_key": "devices",
+            "device": device, "relationships": relationships,
+            "candidate_assets": candidate_assets,
+            "relationship_types": await list_relationship_types(),
+            "relationship_error": request.query_params.get("relationship_error"),
+            "relationship_notice": request.query_params.get("relationship_notice"),
+            "can_manage_relationships": has_permission(
+                user, PortalPermission.RELATIONSHIP_MANAGE
+            ),
+            "can_edit": has_permission(user, PortalPermission.DEVICE_MANAGE),
+            "can_commission": has_permission(
+                user, PortalPermission.COMMISSIONING_EXECUTE
+            ),
+        },
+    )
+
+
+@app.get(
+    "/administration/devices/{device_id}/edit",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def device_edit_page(request: Request, device_id: UUID) -> Response:
+    user = require_authenticated_portal_user(request)
+    if not has_permission(user, PortalPermission.DEVICE_MANAGE):
+        return RedirectResponse("/forbidden", status_code=303)
+    device = await _accessible_device_or_none(request, device_id)
+    if device is None:
+        return RedirectResponse("/forbidden", status_code=303)
+    gateway = await get_gateway_workspace(
+        portal_user_id=user.portal_user_id,
+        gateway_id=str(device["gateway_id"]),
+    )
+    catalog = await _device_form_catalog(request)
+    device_site_id = str(
+        device.get("site_id")
+        or (gateway or {}).get("site_id")
+        or ""
+    )
+    catalog["hierarchy_rows"] = [
+        row
+        for row in catalog["hierarchy_rows"]
+        if str(row.get("site_id") or "") == device_site_id
+    ]
+    inherited = device.get("location_mode") == "GATEWAY"
+    return templates.TemplateResponse(
+        request=request,
+        name="device_edit.html",
+        context={
+            "environment": settings.app_env,
+            "page_title": f"Edit {device['device_name']}",
+            "active_navigation_key": "devices",
+            "device": device,
+            "gateway": gateway or {},
+            "device_site_id": device_site_id,
+            "form_data": {"use_gateway_location": inherited},
+            "error": None,
+            **catalog,
+        },
+    )
+
+
+@app.post(
+    "/administration/devices/{device_id}/edit",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def device_edit_submit(
+    request: Request,
+    device_id: UUID,
+    device_name: Annotated[str, Form()],
+    device_category_id: Annotated[str, Form()],
+    device_model_id: Annotated[str, Form()],
+    profile_id: Annotated[str, Form()],
+    protocol: Annotated[str, Form()],
+    lifecycle_status: Annotated[str, Form()],
+    identifier_type: Annotated[str, Form()],
+    identifier_value: Annotated[str, Form()],
+    operational_policy: Annotated[str, Form()],
+    change_reason: Annotated[str, Form()],
+    firmware_version: Annotated[str, Form()] = "",
+    serial_number: Annotated[str, Form()] = "",
+    use_gateway_location: Annotated[str, Form()] = "",
+    device_location_building_id: Annotated[str, Form()] = "",
+    device_location_floor_id: Annotated[str, Form()] = "",
+    device_location_space_id: Annotated[str, Form()] = "",
+) -> Response:
+    user = require_authenticated_portal_user(request)
+    device = await _accessible_device_or_none(request, device_id)
+    if device is None:
+        return RedirectResponse("/forbidden", status_code=303)
+    gateway = await get_gateway_workspace(
+        portal_user_id=user.portal_user_id,
+        gateway_id=str(device["gateway_id"]),
+    )
+    submitted = {
+        "device_name": device_name,
+        "device_category_id": device_category_id,
+        "device_model_id": device_model_id,
+        "profile_id": profile_id,
+        "protocol": protocol,
+        "lifecycle_status": lifecycle_status,
+        "identifier_type": identifier_type,
+        "identifier_value": identifier_value,
+        "operational_policy": operational_policy,
+        "change_reason": change_reason,
+        "firmware_version": firmware_version,
+        "serial_number": serial_number,
+        "use_gateway_location": use_gateway_location,
+        "building_id": device_location_building_id,
+        "floor_id": device_location_floor_id,
+        "space_id": device_location_space_id,
+    }
+    catalog = await _device_form_catalog(request)
+    device_site_id = str(
+        device.get("site_id")
+        or (gateway or {}).get("site_id")
+        or ""
+    )
+    catalog["hierarchy_rows"] = [
+        row
+        for row in catalog["hierarchy_rows"]
+        if str(row.get("site_id") or "") == device_site_id
+    ]
+    base_context = {
+        "environment": settings.app_env,
+        "page_title": f"Edit {device['device_name']}",
+        "active_navigation_key": "devices",
+        "device": device,
+        "gateway": gateway or {},
+        "device_site_id": device_site_id,
+        "form_data": submitted,
+        **catalog,
+    }
+    try:
+        if (
+            lifecycle_status.strip().upper() == "ACTIVE"
+            and device.get("lifecycle_status") != "ACTIVE"
+        ):
+            raise DeviceManagementValidationError(
+                "Use the controlled commissioning action to activate a device."
+            )
+        validated = validate_device_workspace_update(
+            device_name=device_name,
+            device_category_id=device_category_id,
+            device_model_id=device_model_id,
+            profile_id=profile_id,
+            protocol=protocol,
+            lifecycle_status=lifecycle_status,
+            firmware_version=firmware_version,
+            serial_number=serial_number,
+            identifier_type=identifier_type,
+            identifier_value=identifier_value,
+            operational_policy=operational_policy,
+            use_gateway_location=use_gateway_location,
+            building_id=device_location_building_id,
+            floor_id=device_location_floor_id,
+            space_id=device_location_space_id,
+            change_reason=change_reason,
+        )
+        await update_device_workspace(
+            portal_user_id=user.portal_user_id,
+            device_id=str(device_id),
+            **validated,
+        )
+    except DeviceManagementValidationError as exc:
+        return templates.TemplateResponse(
+            request=request,
+            name="device_edit.html",
+            context={**base_context, "error": str(exc)},
+            status_code=400,
+        )
+    except DatabaseError as exc:
+        return templates.TemplateResponse(
+            request=request,
+            name="device_edit.html",
+            context={
+                **base_context,
+                "error": user_facing_database_error(
+                    exc,
+                    fallback="The database rejected the device update.",
+                ),
+            },
+            status_code=409,
+        )
+    return RedirectResponse(
+        f"/administration/devices/{device_id}",
+        status_code=303,
+    )
 
 
 @app.post(
@@ -1936,77 +2878,98 @@ async def create_device_administration(
     include_in_schema=False,
 )
 async def update_device_lifecycle_administration(
-    request: Request, device_id: UUID,
+    request: Request,
+    device_id: UUID,
     lifecycle_status: Annotated[str, Form()],
     change_reason: Annotated[str, Form()] = "",
-) -> HTMLResponse:
+) -> Response:
     user = require_authenticated_portal_user(request)
     try:
         validated = validate_device_lifecycle_update(
-            lifecycle_status=lifecycle_status, change_reason=change_reason
+            lifecycle_status=lifecycle_status,
+            change_reason=change_reason,
         )
-        result = await update_device_lifecycle(
-            portal_user_id=user.portal_user_id, device_id=str(device_id),
+        await update_device_lifecycle(
+            portal_user_id=user.portal_user_id,
+            device_id=str(device_id),
             **validated,
         )
-    except DeviceManagementValidationError as exc:
-        return await render_device_administration(
-            request, error=str(exc), status_code=400
-        )
-    except DatabaseError as exc:
+    except (DeviceManagementValidationError, DatabaseError) as exc:
         return await render_device_administration(
             request,
-            error=user_facing_database_error(
-                exc, fallback="The database rejected the device lifecycle change."
-            ),
-            status_code=409,
+            error=(str(exc) if isinstance(exc, DeviceManagementValidationError)
+                   else user_facing_database_error(
+                       exc,
+                       fallback="The database rejected the device lifecycle change.",
+                   )),
+            status_code=(400 if isinstance(exc, DeviceManagementValidationError) else 409),
         )
-    return await render_device_administration(
-        request, result=result, status_code=200
+    return RedirectResponse(
+        f"/administration/devices/{device_id}",
+        status_code=303,
     )
 
 
 @app.post(
     "/administration/devices/{device_id}/operational-policy",
-    response_class=HTMLResponse, include_in_schema=False,
+    response_class=HTMLResponse,
+    include_in_schema=False,
 )
 async def set_device_operational_policy_administration(
-    request: Request, device_id: UUID, operational_policy: Annotated[str, Form()],
-) -> HTMLResponse:
+    request: Request,
+    device_id: UUID,
+    operational_policy: Annotated[str, Form()],
+) -> Response:
     user = require_authenticated_portal_user(request)
     try:
-        result = await set_device_operational_policy(
-            portal_user_id=user.portal_user_id, device_id=str(device_id),
+        await set_device_operational_policy(
+            portal_user_id=user.portal_user_id,
+            device_id=str(device_id),
             operational_policy=operational_policy,
         )
     except DatabaseError as exc:
         return await render_device_administration(
-            request, error=user_facing_database_error(
-                exc, fallback="The database rejected the device operational policy."
-            ), status_code=409,
+            request,
+            error=user_facing_database_error(
+                exc,
+                fallback="The database rejected the device operational policy.",
+            ),
+            status_code=409,
         )
-    return await render_device_administration(request, result=result, status_code=200)
+    return RedirectResponse(
+        f"/administration/devices/{device_id}",
+        status_code=303,
+    )
 
 
 @app.post(
     "/administration/devices/{device_id}/commission",
-    response_class=HTMLResponse, include_in_schema=False,
+    response_class=HTMLResponse,
+    include_in_schema=False,
 )
 async def commission_device_administration(
-    request: Request, device_id: UUID,
-) -> HTMLResponse:
+    request: Request,
+    device_id: UUID,
+) -> Response:
     user = require_authenticated_portal_user(request)
     try:
-        result = await commission_device(
-            portal_user_id=user.portal_user_id, device_id=str(device_id)
+        await commission_device(
+            portal_user_id=user.portal_user_id,
+            device_id=str(device_id),
         )
     except DatabaseError as exc:
         return await render_device_administration(
-            request, error=user_facing_database_error(
-                exc, fallback="The database rejected device commissioning."
-            ), status_code=409,
+            request,
+            error=user_facing_database_error(
+                exc,
+                fallback="The database rejected device commissioning.",
+            ),
+            status_code=409,
         )
-    return await render_device_administration(request, result=result, status_code=200)
+    return RedirectResponse(
+        f"/administration/devices/{device_id}",
+        status_code=303,
+    )
 
 
 @app.get(
@@ -2162,53 +3125,34 @@ async def render_gateway_administration(
     error: str | None = None,
     status_code: int = 200,
 ) -> HTMLResponse:
-    """Render independent gateway registration administration."""
+    """Render the scope-safe gateway administration landing page."""
     user = require_authenticated_portal_user(request)
-    context = require_site_context(request)
-    organization_rows = await list_organizations()
-    organizations = [
-        row for row in organization_rows
-        if user.role_code == "PLATFORM_ADMIN"
-        or str(row["id"]) == str(user.organization_id)
-    ]
-    hierarchy_rows = await list_accessible_physical_locations(
-        portal_user_id=user.portal_user_id
-    )
-    gateways = await list_accessible_gateways(
-        portal_user_id=user.portal_user_id
-    )
-    hierarchy_rows = [row for row in hierarchy_rows if str(row.get("site_id")) == context.active_site_id]
-    gateways = [row for row in gateways if str(row.get("site_id")) == context.active_site_id]
+    gateways = await list_accessible_gateways(portal_user_id=user.portal_user_id)
     readiness_rows = await list_accessible_commissioning_readiness(
         portal_user_id=user.portal_user_id, entity_type="GATEWAY"
     )
-    readiness_by_gateway = {
-        str(row["entity_id"]): row for row in readiness_rows
-    }
-    gateway_models = await list_gateway_models()
-    serializable_hierarchy_rows = [
-        {key: str(value) if isinstance(value, UUID) else value
-         for key, value in row.items()}
-        for row in hierarchy_rows
-    ]
+    gateway_readiness = {str(row["entity_id"]): row for row in readiness_rows}
+
+    gateways.sort(key=lambda row: (
+        str(row.get("organization_name") or "").casefold(),
+        str(row.get("site_name") or "").casefold(),
+        str(row.get("building_name") or "").casefold(),
+        str(row.get("floor_name") or "").casefold(),
+        str(row.get("space_name") or "").casefold(),
+        str(row.get("gateway_name") or "").casefold(),
+        str(row.get("lifecycle_status") or ""),
+    ))
     return templates.TemplateResponse(
-        request=request,
-        name="gateways.html",
+        request=request, name="gateways.html",
         context={
-            "environment": settings.app_env,
-            "page_title": "Gateways",
-            "organizations": organizations,
-            "hierarchy_rows": serializable_hierarchy_rows,
+            "environment": settings.app_env, "page_title": "Gateways",
             "gateways": gateways,
-            "gateway_readiness": readiness_by_gateway,
-            "gateway_models": gateway_models,
+            "can_manage": has_permission(user, PortalPermission.GATEWAY_MANAGE),
+            "gateway_readiness": gateway_readiness,
             "gateway_lifecycle_statuses": GATEWAY_LIFECYCLE_STATUSES,
-            "form_data": form_data or {},
-            "result": result,
-            "error": error,
+            "form_data": form_data or {}, "result": result, "error": error,
             "active_navigation_key": "gateways",
-        },
-        status_code=status_code,
+        }, status_code=status_code,
     )
 
 
@@ -2218,13 +3162,7 @@ async def render_gateway_administration(
     include_in_schema=False,
 )
 async def gateway_administration(request: Request) -> Response:
-    try:
-        require_site_context(request)
-    except AdministrationContextError:
-        return RedirectResponse(url="/administration/sites", status_code=303)
-    return await render_gateway_administration(
-        request, form_data={"lifecycle_status": "REGISTERED"}
-    )
+    return await render_gateway_administration(request)
 
 
 @app.post(
@@ -2243,50 +3181,43 @@ async def create_gateway_administration(
     gateway_location_building_id: Annotated[str, Form()] = "",
     gateway_location_floor_id: Annotated[str, Form()] = "",
     gateway_location_space_id: Annotated[str, Form()] = "",
-) -> HTMLResponse:
+) -> Response:
     user = require_authenticated_portal_user(request)
     submitted = {
-        "organization_id": organization_id,
-        "site_id": gateway_location_site_id,
-        "gateway_name": gateway_name,
-        "external_id": external_id,
-        "gateway_model_id": gateway_model_id,
-        "lifecycle_status": lifecycle_status,
-        "building_id": gateway_location_building_id,
-        "floor_id": gateway_location_floor_id,
+        "gateway_name": gateway_name, "external_id": external_id,
+        "gateway_model_id": gateway_model_id, "lifecycle_status": lifecycle_status,
+        "building_id": gateway_location_building_id, "floor_id": gateway_location_floor_id,
         "space_id": gateway_location_space_id,
+    }
+    context = get_administration_context(request)
+    if (not context.active_site_id or not context.active_organization_id
+            or context.active_site_id != gateway_location_site_id
+            or context.active_organization_id != organization_id):
+        return RedirectResponse("/forbidden", status_code=303)
+    catalog = await _gateway_form_catalog(request, context.active_site_id)
+    base_context = {
+        "environment": settings.app_env, "page_title": "Create gateway",
+        "active_navigation_key": "gateways", "active_context": context,
+        "form_data": submitted, **catalog,
     }
     try:
         validated = validate_gateway_submission(
-            organization_id=organization_id,
-            site_id=gateway_location_site_id,
-            gateway_name=gateway_name,
-            external_id=external_id,
-            gateway_model_id=gateway_model_id,
-            lifecycle_status=lifecycle_status,
-            building_id=gateway_location_building_id,
-            floor_id=gateway_location_floor_id,
+            organization_id=organization_id, site_id=gateway_location_site_id,
+            gateway_name=gateway_name, external_id=external_id,
+            gateway_model_id=gateway_model_id, lifecycle_status=lifecycle_status,
+            building_id=gateway_location_building_id, floor_id=gateway_location_floor_id,
             space_id=gateway_location_space_id,
         )
+        result = await create_gateway(portal_user_id=user.portal_user_id, **validated)
     except GatewayManagementValidationError as exc:
-        return await render_gateway_administration(
-            request, form_data=submitted, error=str(exc), status_code=400
-        )
-    try:
-        result = await create_gateway(
-            portal_user_id=user.portal_user_id, **validated
-        )
+        return templates.TemplateResponse(request=request, name="gateway_create.html",
+            context={**base_context, "error": str(exc)}, status_code=400)
     except DatabaseError as exc:
-        return await render_gateway_administration(
-            request, form_data=submitted,
-            error=user_facing_database_error(
-                exc, fallback="The database rejected the gateway request."
-            ),
-            status_code=409,
-        )
-    return await render_gateway_administration(
-        request, form_data={"lifecycle_status": "REGISTERED"},
-        result=result, status_code=201
+        return templates.TemplateResponse(request=request, name="gateway_create.html",
+            context={**base_context, "error": user_facing_database_error(
+                exc, fallback="The database rejected the gateway request.")}, status_code=409)
+    return RedirectResponse(
+        f"/administration/gateways/{result['entity_id']}", status_code=303
     )
 
 
@@ -2354,6 +3285,112 @@ async def update_gateway_lifecycle_administration(
     return await render_gateway_administration(
         request, result=result, status_code=200
     )
+
+
+async def _gateway_form_catalog(request: Request, site_id: str) -> dict:
+    user = require_authenticated_portal_user(request)
+    rows = await list_accessible_physical_locations(portal_user_id=user.portal_user_id)
+    rows = [row for row in rows if str(row.get("site_id")) == str(site_id)]
+    return {
+        "hierarchy_rows": [{key: str(value) if isinstance(value, UUID) else value for key, value in row.items()} for row in rows],
+        "gateway_models": await list_gateway_models(),
+        "gateway_lifecycle_statuses": GATEWAY_LIFECYCLE_STATUSES,
+    }
+
+
+@app.get("/administration/gateways/new", response_class=HTMLResponse, include_in_schema=False)
+async def gateway_create_page(request: Request) -> Response:
+    user = require_authenticated_portal_user(request)
+    if not has_permission(user, PortalPermission.GATEWAY_MANAGE):
+        return RedirectResponse("/forbidden", status_code=303)
+    context = get_administration_context(request)
+    if not context.active_site_id or not context.active_organization_id:
+        return RedirectResponse("/administration/sites?chooser=1&return_to=/administration/gateways/new", status_code=303)
+    catalog = await _gateway_form_catalog(request, context.active_site_id)
+    return templates.TemplateResponse(request=request, name="gateway_create.html", context={
+        "environment": settings.app_env, "page_title": "Create gateway",
+        "active_navigation_key": "gateways", "form_data": {"lifecycle_status": "REGISTERED"},
+        "error": None, "active_context": context, **catalog})
+
+
+async def _accessible_gateway_or_none(request: Request, gateway_id: UUID):
+    user = require_authenticated_portal_user(request)
+    return await get_gateway_workspace(portal_user_id=user.portal_user_id, gateway_id=str(gateway_id))
+
+
+@app.get("/administration/gateways/{gateway_id}", response_class=HTMLResponse, include_in_schema=False)
+async def gateway_detail_page(request: Request, gateway_id: UUID) -> Response:
+    user = require_authenticated_portal_user(request)
+    gateway = await _accessible_gateway_or_none(request, gateway_id)
+    if gateway is None:
+        return RedirectResponse("/forbidden", status_code=303)
+    return templates.TemplateResponse(request=request, name="gateway_detail.html", context={
+        "environment": settings.app_env, "page_title": gateway["gateway_name"],
+        "active_navigation_key": "gateways", "gateway": gateway,
+        "can_edit": has_permission(user, PortalPermission.GATEWAY_MANAGE)})
+
+
+@app.post("/administration/gateways/{gateway_id}/select", include_in_schema=False)
+async def select_gateway_context(request: Request, gateway_id: UUID) -> Response:
+    user = require_authenticated_portal_user(request)
+    gateway = await _accessible_gateway_or_none(request, gateway_id)
+    if gateway is None:
+        return RedirectResponse("/forbidden", status_code=303)
+    await set_active_site(request, user, str(gateway["site_id"]))
+    location_id = gateway.get("space_id") or gateway.get("floor_id") or gateway.get("building_id")
+    if location_id:
+        await set_active_location(request, user, str(location_id))
+    return RedirectResponse("/administration/gateways", status_code=303)
+
+
+@app.get("/administration/gateways/{gateway_id}/edit", response_class=HTMLResponse, include_in_schema=False)
+async def gateway_edit_page(request: Request, gateway_id: UUID) -> Response:
+    user = require_authenticated_portal_user(request)
+    if not has_permission(user, PortalPermission.GATEWAY_MANAGE):
+        return RedirectResponse("/forbidden", status_code=303)
+    gateway = await _accessible_gateway_or_none(request, gateway_id)
+    if gateway is None:
+        return RedirectResponse("/forbidden", status_code=303)
+    catalog = await _gateway_form_catalog(request, str(gateway["site_id"]))
+    return templates.TemplateResponse(request=request, name="gateway_edit.html", context={
+        "environment": settings.app_env, "page_title": f"Edit {gateway['gateway_name']}",
+        "active_navigation_key": "gateways", "gateway": gateway,
+        "form_data": {}, "error": None, **catalog})
+
+
+@app.post("/administration/gateways/{gateway_id}/edit", response_class=HTMLResponse, include_in_schema=False)
+async def gateway_edit_submit(
+    request: Request, gateway_id: UUID, gateway_name: Annotated[str, Form()],
+    gateway_model_id: Annotated[str, Form()], lifecycle_status: Annotated[str, Form()],
+    change_reason: Annotated[str, Form()], gateway_location_building_id: Annotated[str, Form()] = "",
+    gateway_location_floor_id: Annotated[str, Form()] = "", gateway_location_space_id: Annotated[str, Form()] = "",
+) -> Response:
+    user = require_authenticated_portal_user(request)
+    gateway = await _accessible_gateway_or_none(request, gateway_id)
+    if gateway is None:
+        return RedirectResponse("/forbidden", status_code=303)
+    submitted = {"gateway_name": gateway_name, "gateway_model_id": gateway_model_id,
+                 "lifecycle_status": lifecycle_status, "change_reason": change_reason,
+                 "building_id": gateway_location_building_id, "floor_id": gateway_location_floor_id,
+                 "space_id": gateway_location_space_id}
+    catalog = await _gateway_form_catalog(request, str(gateway["site_id"]))
+    try:
+        validated = validate_gateway_workspace_update(
+            gateway_name=gateway_name, gateway_model_id=gateway_model_id, lifecycle_status=lifecycle_status,
+            building_id=gateway_location_building_id, floor_id=gateway_location_floor_id,
+            space_id=gateway_location_space_id, change_reason=change_reason)
+        await update_gateway_workspace(portal_user_id=user.portal_user_id, gateway_id=str(gateway_id), **validated)
+    except GatewayManagementValidationError as exc:
+        return templates.TemplateResponse(request=request, name="gateway_edit.html", context={
+            "environment": settings.app_env, "page_title": f"Edit {gateway['gateway_name']}",
+            "active_navigation_key": "gateways", "gateway": gateway, "form_data": submitted,
+            "error": str(exc), **catalog}, status_code=400)
+    except DatabaseError as exc:
+        return templates.TemplateResponse(request=request, name="gateway_edit.html", context={
+            "environment": settings.app_env, "page_title": f"Edit {gateway['gateway_name']}",
+            "active_navigation_key": "gateways", "gateway": gateway, "form_data": submitted,
+            "error": user_facing_database_error(exc, fallback="The database rejected the gateway update."), **catalog}, status_code=409)
+    return RedirectResponse(f"/administration/gateways/{gateway_id}", status_code=303)
 
 
 async def render_organization_administration(
@@ -2859,7 +3896,7 @@ async def get_visible_onboarding_draft(
     """
     Return one active draft visible to the authenticated portal user.
 
-    PostgreSQL enforces ownership and PLATFORM_ADMIN override. This helper keeps
+    PostgreSQL enforces ownership and GLOBAL-scope override. This helper keeps
     identity propagation consistent across every onboarding route.
     """
 
@@ -3436,6 +4473,7 @@ async def render_site_step(
             "organization_mode": organization_mode,
             "organization_label": organization_label,
             "sites": sites,
+            "site_sectors": SITE_SECTORS,
             "form_data": form_data or {},
             "error": error,
         },
@@ -3505,9 +4543,11 @@ async def site_step(
         "site_timezone": (
             site.get("timezone") or "Asia/Kolkata"
         ),
+        "site_sector": (site.get("sector_code") or "OTHER"),
         "site_address": (
             address.get("full_address") or ""
         ),
+        "telemetry_capture_interval_seconds": str(site.get("telemetry_capture_interval_seconds") or 60),
     }
 
     return await render_site_step(
@@ -3530,7 +4570,9 @@ async def save_site_step(
     site_name: Annotated[str, Form()] = "",
     site_code: Annotated[str, Form()] = "",
     site_timezone: Annotated[str, Form()] = "Asia/Kolkata",
+    site_sector: Annotated[str, Form()] = "OTHER",
     site_address: Annotated[str, Form()] = "",
+    telemetry_capture_interval_seconds: Annotated[str, Form()] = "60",
 ) -> HTMLResponse:
     """Validate and save the Site wizard step."""
 
@@ -3570,7 +4612,9 @@ async def save_site_step(
         "site_name": site_name,
         "site_code": site_code,
         "site_timezone": site_timezone,
+        "site_sector": site_sector,
         "site_address": site_address,
+        "telemetry_capture_interval_seconds": telemetry_capture_interval_seconds,
     }
 
     try:
@@ -3580,7 +4624,9 @@ async def save_site_step(
             site_name=site_name,
             site_code=site_code,
             site_timezone=site_timezone,
+            site_sector=site_sector,
             site_address=site_address,
+            telemetry_capture_interval_seconds=telemetry_capture_interval_seconds,
             organization_mode=(
                 organization.get("mode") or ""
             ),

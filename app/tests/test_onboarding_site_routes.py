@@ -31,6 +31,7 @@ def successful_result() -> AuthenticationResult:
             username="site.operator@example.com",
             display_name="Site Test Operator",
             role_code="OPERATOR",
+
             organization_id=(
                 "11111111-1111-1111-1111-111111111111"
             ),
@@ -403,6 +404,8 @@ def test_site_post_create_new_saves_and_redirects(
             "name": "Hyderabad Hotel",
             "code": "HYDERABAD_HOTEL",
             "timezone": "Asia/Kolkata",
+            "sector_code": "OTHER",
+            "telemetry_capture_interval_seconds": 60,
             "address": {
                 "full_address": "Test site address"
             },
@@ -463,7 +466,9 @@ def test_site_post_use_existing_saves_only_site_identity(
         "name": None,
         "code": None,
         "timezone": None,
+        "sector_code": None,
         "address": None,
+        "telemetry_capture_interval_seconds": 60,
     }
 
 

@@ -16,7 +16,7 @@ async def get_onboarding_draft(
     """
     Return one active, unexpired draft visible to the authenticated user.
 
-    PostgreSQL remains authoritative for ownership and PLATFORM_ADMIN access.
+    PostgreSQL remains authoritative for ownership and GLOBAL-scope access.
     """
 
     async with database_connection() as connection:
@@ -122,6 +122,18 @@ async def submit_onboarding_draft(
             async with connection.cursor() as cursor:
                 await cursor.execute(
                     """
+                    SELECT payload
+                    FROM admin.get_onboarding_draft(
+                        %s::uuid, %s::bigint, %s
+                    )
+                    """,
+                    (str(draft_token), portal_user_id, role_code),
+                )
+                draft_row = await cursor.fetchone()
+                draft_payload = draft_row["payload"] if draft_row else {}
+
+                await cursor.execute(
+                    """
                     SELECT admin.submit_onboarding_draft(
                         %s::uuid,
                         %s::bigint,
@@ -138,6 +150,38 @@ async def submit_onboarding_draft(
                 )
 
                 row = await cursor.fetchone()
+
+                site_payload = (draft_payload or {}).get("site", {})
+                onboarding_result = row["onboarding_result"]
+                if (
+                    str(site_payload.get("mode", "")).upper() == "CREATE_NEW"
+                    and onboarding_result.get("site_id")
+                ):
+                    await cursor.execute(
+                        """
+                        SELECT admin.set_site_telemetry_capture_interval(
+                            %s, %s::uuid, %s, %s
+                        )
+                        """,
+                        (
+                            portal_user_id,
+                            str(onboarding_result["site_id"]),
+                            int(site_payload.get("telemetry_capture_interval_seconds", 60)),
+                            "Onboarding site telemetry storage interval",
+                        ),
+                    )
+                    await cursor.execute(
+                        """
+                        SELECT admin.set_site_sector(
+                            %s, %s::uuid, %s
+                        )
+                        """,
+                        (
+                            portal_user_id,
+                            str(onboarding_result["site_id"]),
+                            str(site_payload.get("sector_code") or "OTHER"),
+                        ),
+                    )
 
             await connection.commit()
 
@@ -160,7 +204,7 @@ async def get_submitted_onboarding_result(
     """
     Return one submitted result visible to the authenticated portal user.
 
-    PostgreSQL enforces ownership, current account state, and PLATFORM_ADMIN
+    PostgreSQL enforces ownership, current account state, and GLOBAL-scope ADMIN
     override. The application role has no direct table access.
     """
 

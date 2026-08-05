@@ -142,7 +142,7 @@ def test_safe_authenticated_user_preserves_organization_scope(
 ) -> None:
     scoped_record = replace(
         active_authentication_record,
-        role_code="ORG_ADMIN",
+        role_code="ADMIN",
         organization_id="11111111-1111-1111-1111-111111111111",
     )
 

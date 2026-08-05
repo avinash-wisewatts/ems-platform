@@ -92,44 +92,60 @@ async def list_accessible_assets(
     *,
     portal_user_id: int,
 ) -> list[dict[str, Any]]:
-    """Return assets visible within one portal user's access scope."""
-
+    """Return every asset visible within one portal user's access scope."""
     async with database_connection() as connection:
         async with connection.cursor() as cursor:
             await cursor.execute(
-                """
-                SELECT
-                    organization_id,
-                    organization_code,
-                    organization_name,
-                    site_id,
-                    site_code,
-                    site_name,
-                    asset_id,
-                    asset_name,
-                    asset_type_id,
-                    asset_type_name,
-                    parent_asset_id,
-                    parent_asset_name,
-                    building_id,
-                    building_name,
-                    floor_id,
-                    floor_name,
-                    space_id,
-                    space_name,
-                    lifecycle_status,
-                    metering_requirement,
-                    coverage_status
-                FROM admin.list_accessible_assets(%s)
-                """,
+                "SELECT * FROM admin.list_accessible_assets(%s)",
                 (portal_user_id,),
             )
-
             rows = await cursor.fetchall()
-
         await connection.rollback()
-
     return rows
+
+
+async def get_asset_workspace(
+    *, portal_user_id: int, asset_id: str,
+) -> dict[str, Any] | None:
+    """Return one asset only when it is accessible to the actor."""
+    async with database_connection() as connection:
+        async with connection.cursor() as cursor:
+            await cursor.execute(
+                "SELECT admin.get_asset_workspace(%s,%s::uuid) AS result",
+                (portal_user_id, asset_id),
+            )
+            row = await cursor.fetchone()
+        await connection.rollback()
+    return row["result"] if row else None
+
+
+async def update_asset_workspace(
+    *, portal_user_id: int, asset_id: str, asset_name: str,
+    asset_type_id: str, lifecycle_status: str, metering_requirement: str,
+    parent_asset_id: str | None, building_id: str | None,
+    floor_id: str | None, space_id: str | None, change_reason: str,
+) -> dict[str, Any]:
+    """Apply one audited asset workspace update."""
+    async with database_connection() as connection:
+        try:
+            async with connection.cursor() as cursor:
+                await cursor.execute(
+                    """
+                    SELECT admin.update_asset_workspace(
+                        %s,%s::uuid,%s,%s::uuid,%s,%s,
+                        %s::uuid,%s::uuid,%s::uuid,%s::uuid,%s
+                    ) AS result
+                    """,
+                    (portal_user_id, asset_id, asset_name, asset_type_id,
+                     lifecycle_status, metering_requirement, building_id,
+                     floor_id, space_id, parent_asset_id, change_reason),
+                )
+                row = await cursor.fetchone()
+            await connection.commit()
+        except DatabaseError:
+            await connection.rollback()
+            raise
+    return row["result"]
 
 
 async def update_asset(

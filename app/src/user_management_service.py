@@ -34,7 +34,9 @@ async def create_managed_user(
     email: str,
     password_hash: str,
     role_code: str,
+    access_scope_mode: str,
     organization_id: str | None,
+    site_ids: tuple[str, ...],
 ) -> int:
     async with database_connection() as connection:
         try:
@@ -42,6 +44,8 @@ async def create_managed_user(
                 await cursor.execute(
                     """
                     SELECT admin.create_managed_portal_user(
+                        %s,
+                        %s,
                         %s,
                         %s,
                         %s,
@@ -58,7 +62,9 @@ async def create_managed_user(
                         email,
                         password_hash,
                         role_code,
+                        access_scope_mode,
                         organization_id,
+                        list(site_ids),
                     ),
                 )
                 row = await cursor.fetchone()
@@ -80,7 +86,6 @@ async def change_managed_user_role(
     actor_portal_user_id: int,
     target_portal_user_id: int,
     role_code: str,
-    organization_id: str | None,
 ) -> None:
     async with database_connection() as connection:
         try:
@@ -90,7 +95,6 @@ async def change_managed_user_role(
                     SELECT admin.change_managed_portal_user_role(
                         %s,
                         %s,
-                        %s,
                         %s
                     )
                     """,
@@ -98,7 +102,6 @@ async def change_managed_user_role(
                         actor_portal_user_id,
                         target_portal_user_id,
                         role_code,
-                        organization_id,
                     ),
                 )
 
@@ -143,6 +146,7 @@ async def set_managed_user_access_scope(
     actor_portal_user_id: int,
     target_portal_user_id: int,
     access_scope_mode: str,
+    organization_id: str | None,
     site_ids: tuple[str, ...],
 ) -> None:
     async with database_connection() as connection:
@@ -154,6 +158,7 @@ async def set_managed_user_access_scope(
                         %s,
                         %s,
                         %s,
+                        %s,
                         %s
                     )
                     """,
@@ -161,6 +166,7 @@ async def set_managed_user_access_scope(
                         actor_portal_user_id,
                         target_portal_user_id,
                         access_scope_mode,
+                        organization_id,
                         list(site_ids),
                     ),
                 )

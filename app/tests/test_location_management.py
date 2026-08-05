@@ -28,6 +28,8 @@ def test_validate_site_submission_normalizes_values() -> None:
         "code": "MAIN_SITE",
         "timezone": "Europe/London",
         "lifecycle_status": "ACTIVE",
+        "sector_code": "OTHER",
+        "telemetry_capture_interval_seconds": 60,
     }
 
 

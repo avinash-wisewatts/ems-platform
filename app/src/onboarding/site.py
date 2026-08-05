@@ -2,8 +2,11 @@ import re
 from typing import Any
 from uuid import UUID
 
+from src.location_management import SITE_SECTORS
+
 
 SITE_CODE_PATTERN = re.compile(r"^[A-Z0-9_]+$")
+TELEMETRY_CAPTURE_INTERVALS = (10, 30, 60, 300, 900)
 
 
 class SiteStepValidationError(ValueError):
@@ -17,8 +20,10 @@ def validate_site_step(
     site_name: str,
     site_code: str,
     site_timezone: str,
-    site_address: str,
+    site_sector: str = "OTHER",
+    site_address: str = "",
     organization_mode: str,
+    telemetry_capture_interval_seconds: str = "60",
 ) -> dict[str, Any]:
     """
     Validate and normalize the Site wizard step.
@@ -40,6 +45,18 @@ def validate_site_step(
             "A new organization cannot use an existing site."
         )
 
+    try:
+        capture_interval = int(telemetry_capture_interval_seconds.strip())
+    except (TypeError, ValueError) as exc:
+        raise SiteStepValidationError(
+            "Select a valid telemetry storage interval."
+        ) from exc
+
+    if capture_interval not in TELEMETRY_CAPTURE_INTERVALS:
+        raise SiteStepValidationError(
+            "Telemetry storage interval must be 10, 30, 60, 300, or 900 seconds."
+        )
+
     if mode == "USE_EXISTING":
         try:
             site_id = str(UUID(existing_site_id.strip()))
@@ -54,12 +71,15 @@ def validate_site_step(
             "name": None,
             "code": None,
             "timezone": None,
+            "sector_code": None,
             "address": None,
+            "telemetry_capture_interval_seconds": capture_interval,
         }
 
     name = site_name.strip()
     code = site_code.strip().upper()
     timezone = site_timezone.strip()
+    sector_code = site_sector.strip().upper()
     address = site_address.strip()
 
     if not name:
@@ -97,6 +117,11 @@ def validate_site_step(
             "Site timezone must not exceed 100 characters."
         )
 
+    if sector_code not in SITE_SECTORS:
+        raise SiteStepValidationError(
+            "Select a valid site sector."
+        )
+
     if len(address) > 1000:
         raise SiteStepValidationError(
             "Site address must not exceed 1000 characters."
@@ -108,6 +133,8 @@ def validate_site_step(
         "name": name,
         "code": code,
         "timezone": timezone,
+        "sector_code": sector_code,
+        "telemetry_capture_interval_seconds": capture_interval,
         "address": (
             {"full_address": address}
             if address

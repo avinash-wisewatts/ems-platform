@@ -16,7 +16,7 @@
 
     <link
         rel="stylesheet"
-        href="{{ url_for('static', path='/css/app.css') }}?v=sprint-a-breadcrumb-fix-1"
+        href="{{ url_for('static', path='/css/app.css') }}?v=admin-shell-layout-2"
     >
 
     {% block head %}{% endblock %}
@@ -110,7 +110,9 @@
                             </strong>
 
                             <span>
-                                {{ current_portal_user.role_code }}
+                                {% if current_portal_user.role_code == "ADMIN" %}Administrator{% elif current_portal_user.role_code == "OPERATOR" %}Operator{% else %}Viewer{% endif %}
+                                <span aria-hidden="true">&middot;</span>
+                                {% if current_portal_user.access_scope_mode == "GLOBAL" %}Global access{% elif current_portal_user.access_scope_mode == "ORGANIZATION" %}Organization access{% else %}Selected sites{% endif %}
                             </span>
                         </div>
 
@@ -133,43 +135,33 @@
 
             {% if current_portal_user and active_administration_context %}
             <section class="active-context-bar" aria-label="Active administration context">
-                <div class="active-context-heading">
+                <div class="active-context-summary">
                     <span class="active-context-kicker">Active context</span>
-                    {% if active_administration_context.active_organization_id %}
-                    <strong>
-                        {{ active_administration_context.active_organization_name or "Selected organization" }}
-                    </strong>
-                    {% if active_administration_context.active_organization_code %}
-                    <span class="active-context-code">
-                        {{ active_administration_context.active_organization_code }}
-                    </span>
-                    {% endif %}
-                    {% else %}
-                    <strong>No organization selected</strong>
-                    {% endif %}
+                    <div class="active-context-trail" aria-label="Selected organization, site, and location">
+                        <span class="context-node{% if active_administration_context.active_organization_id %} is-set{% endif %}">
+                            <span class="context-node-label">Organization</span>
+                            <strong>{{ active_administration_context.active_organization_name or "Not selected" }}</strong>
+                        </span>
+                        <span class="context-trail-separator" aria-hidden="true">›</span>
+                        <span class="context-node{% if active_administration_context.active_site_id %} is-set{% endif %}">
+                            <span class="context-node-label">Site</span>
+                            <strong>{{ active_administration_context.active_site_name or "Not selected" }}</strong>
+                        </span>
+                        <span class="context-trail-separator" aria-hidden="true">›</span>
+                        <span class="context-node{% if active_administration_context.active_location_id %} is-set{% endif %}">
+                            <span class="context-node-label">Location</span>
+                            <strong>{{ active_administration_context.active_location_name or "Not selected" }}</strong>
+                        </span>
+                    </div>
                 </div>
 
-                <div class="active-context-levels" aria-label="Context hierarchy">
-                    <span class="context-level{% if active_administration_context.active_organization_id %} is-set{% endif %}">
-                        Organization
-                    </span>
-                    <span class="context-level{% if active_administration_context.active_site_id %} is-set{% endif %}">
-                        {% if active_administration_context.active_site_id %}
-                        {{ active_administration_context.active_site_name or "Selected site" }}
-                        {% if active_administration_context.active_site_code %}
-                        ({{ active_administration_context.active_site_code }})
-                        {% endif %}
-                        {% else %}Site not selected{% endif %}
-                    </span>
-                    <span class="context-level{% if active_administration_context.active_location_id %} is-set{% endif %}">
-                        {% if active_administration_context.active_location_id %}{{ active_administration_context.active_location_name or "Selected location" }}{% if active_administration_context.active_location_code %} ({{ active_administration_context.active_location_code }}){% endif %}{% else %}Location not selected{% endif %}
-                    </span>
-                </div>
-
-                <div class="active-context-actions">
-                    {% if current_portal_user.role_code == "PLATFORM_ADMIN" %}
-                    <a href="/administration/organizations?return_to={{ request.url.path|urlencode }}">
-                        Change organization
+                {% if current_portal_user.access_scope_mode == "GLOBAL" %}
+                <div class="active-context-actions" aria-label="Context actions">
+                    <a
+                        class="active-context-action is-primary"
+                        href="{% if request.url.path == '/administration/locations' %}/administration/organizations?return_to=%2Fadministration%2Fsites%3Freturn_to%3D%252Fadministration%252Flocations{% else %}/administration/organizations?return_to={{ request.url.path|urlencode }}{% endif %}"
+                    >
+                        {% if active_administration_context.active_organization_id or active_administration_context.active_site_id %}Change context{% else %}Select context{% endif %}
                     </a>
 
                     {% if active_administration_context.active_organization_id %}
@@ -185,14 +177,15 @@
                         >
                         <button
                             type="submit"
-                            class="active-context-link-button"
+                            class="active-context-action is-secondary"
+                            title="Clear organization, site, and location context"
                         >
-                            Clear organization
+                            Clear
                         </button>
                     </form>
                     {% endif %}
-                    {% endif %}
                 </div>
+                {% endif %}
             </section>
             {% endif %}
 

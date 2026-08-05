@@ -6,16 +6,22 @@ from src.auth.security import AuthenticationStatus
 from src.auth.service import AuthenticationResult
 
 
-def item_labels(role_code: str) -> set[str]:
+def item_labels(
+    role_code: str,
+    access_scope_mode: str | None = None,
+) -> set[str]:
     return {
         item.label
-        for section in administration_navigation(role_code)
+        for section in administration_navigation(
+            role_code,
+            access_scope_mode,
+        )
         for item in section.items
     }
 
 
 def test_super_admin_sees_platform_navigation() -> None:
-    labels = item_labels("PLATFORM_ADMIN")
+    labels = item_labels("ADMIN", "GLOBAL")
 
     assert "Organizations" in labels
     assert "Users" in labels
@@ -23,7 +29,7 @@ def test_super_admin_sees_platform_navigation() -> None:
 
 
 def test_org_admin_sees_user_management_but_not_platform_management() -> None:
-    labels = item_labels("ORG_ADMIN")
+    labels = item_labels("ADMIN", "ORGANIZATION")
 
     assert "Users" in labels
     assert "Organizations" not in labels
@@ -48,6 +54,9 @@ def login_as(
     portal_client,
     monkeypatch: pytest.MonkeyPatch,
     role_code: str,
+    *,
+    access_scope_mode: str,
+    organization_id: str | None,
 ) -> None:
     async def fake_authenticate(
         username: str,
@@ -60,16 +69,9 @@ def login_as(
                 username=f"{role_code.lower()}@example.com",
                 display_name=f"Test {role_code}",
                 role_code=role_code,
-                organization_id=(
-                    None
-                    if role_code == "PLATFORM_ADMIN"
-                    else "11111111-1111-1111-1111-111111111111"
-                ),
-                access_scope_mode=(
-                    None
-                    if role_code == "PLATFORM_ADMIN"
-                    else "ORGANIZATION"
-                ),
+
+                organization_id=organization_id,
+                access_scope_mode=access_scope_mode,
                 site_ids=(),
             ),
             status=AuthenticationStatus.AUTHENTICATED,
@@ -92,7 +94,7 @@ def login_as(
     assert response.status_code == 303
     expected_location = (
         "/administration/organizations"
-        if role_code == "PLATFORM_ADMIN"
+        if access_scope_mode == "GLOBAL"
         else "/administration"
     )
     assert response.headers["location"] == expected_location
@@ -102,7 +104,13 @@ def test_operator_workspace_hides_platform_items(
     portal_client,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    login_as(portal_client, monkeypatch, "OPERATOR")
+    login_as(
+        portal_client,
+        monkeypatch,
+        "OPERATOR",
+        access_scope_mode="ORGANIZATION",
+        organization_id="11111111-1111-1111-1111-111111111111",
+    )
 
     response = portal_client.get("/administration")
 
@@ -117,7 +125,13 @@ def test_super_admin_workspace_shows_platform_items(
     portal_client,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    login_as(portal_client, monkeypatch, "PLATFORM_ADMIN")
+    login_as(
+        portal_client,
+        monkeypatch,
+        "ADMIN",
+        access_scope_mode="GLOBAL",
+        organization_id=None,
+    )
 
     response = portal_client.get("/administration")
 
@@ -132,7 +146,13 @@ def test_org_admin_workspace_hides_platform_items(
     portal_client,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    login_as(portal_client, monkeypatch, "ORG_ADMIN")
+    login_as(
+        portal_client,
+        monkeypatch,
+        "ADMIN",
+        access_scope_mode="ORGANIZATION",
+        organization_id="11111111-1111-1111-1111-111111111111",
+    )
 
     response = portal_client.get("/administration")
 
@@ -155,7 +175,7 @@ def test_epic_four_navigation_items_are_enabled(
 ) -> None:
     items = {
         item.key: item
-        for section in administration_navigation("ORG_ADMIN")
+        for section in administration_navigation("ADMIN")
         for item in section.items
     }
 
@@ -165,7 +185,7 @@ def test_epic_four_navigation_items_are_enabled(
 def test_assets_navigation_item_is_enabled() -> None:
     items = {
         item.key: item
-        for section in administration_navigation("ORG_ADMIN")
+        for section in administration_navigation("ADMIN")
         for item in section.items
     }
 

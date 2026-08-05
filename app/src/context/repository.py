@@ -15,13 +15,14 @@ async def list_accessible_organizations_for_user(
     *,
     portal_user_id: int,
     role_code: str,
+    access_scope_mode: str | None,
     assigned_organization_id: str | None,
 ) -> list[dict[str, Any]]:
     """Return organizations available to one authenticated identity."""
 
     organizations = await list_organizations()
 
-    if role_code == "PLATFORM_ADMIN":
+    if access_scope_mode == "GLOBAL":
         return organizations
 
     if assigned_organization_id is None:

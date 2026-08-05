@@ -118,6 +118,8 @@ def test_create_site_normalizes_values() -> None:
         "name": "Hyderabad Hotel",
         "code": "HYD_HOTEL",
         "timezone": "Asia/Kolkata",
+        "sector_code": "OTHER",
+        "telemetry_capture_interval_seconds": 60,
         "address": {
             "full_address": "Hyderabad, Telangana",
         },
@@ -173,7 +175,9 @@ def test_existing_organization_can_use_existing_site() -> None:
         "name": None,
         "code": None,
         "timezone": None,
+        "sector_code": None,
         "address": None,
+        "telemetry_capture_interval_seconds": 60,
     }
 
 

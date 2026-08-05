@@ -77,6 +77,218 @@ async def create_site(
     )
 
 
+async def list_manageable_sites(
+    *,
+    portal_user_id: int,
+) -> list[dict[str, Any]]:
+    """Return every site visible to the actor, including inactive sites."""
+
+    async with database_connection() as connection:
+        async with connection.cursor() as cursor:
+            await cursor.execute(
+                """
+                SELECT
+                    site_id, organization_id, organization_code,
+                    organization_name, site_code, site_name, timezone,
+                    address, lifecycle_status, is_active, created_at, updated_at
+                FROM admin.list_manageable_sites(%s)
+                """,
+                (portal_user_id,),
+            )
+            rows = await cursor.fetchall()
+        await connection.rollback()
+    return rows
+
+
+async def _set_site_capture_interval(
+    *,
+    cursor,
+    portal_user_id: int,
+    site_id: str,
+    capture_interval_seconds: int,
+    change_reason: str,
+) -> None:
+    await cursor.execute(
+        """
+        SELECT admin.set_site_telemetry_capture_interval(
+            %s, %s::uuid, %s, %s
+        )
+        """,
+        (portal_user_id, site_id, capture_interval_seconds, change_reason),
+    )
+
+
+async def get_site_workspace(
+    *,
+    portal_user_id: int,
+    site_id: str,
+) -> dict[str, Any] | None:
+    """Return one site only when it is inside the actor's access scope."""
+
+    async with database_connection() as connection:
+        async with connection.cursor() as cursor:
+            await cursor.execute(
+                "SELECT admin.get_site_workspace(%s, %s::uuid) AS result",
+                (portal_user_id, site_id),
+            )
+            row = await cursor.fetchone()
+        await connection.rollback()
+    result = row["result"] if row else None
+    if result is None:
+        return None
+
+    async with database_connection() as connection:
+        async with connection.cursor() as cursor:
+            await cursor.execute(
+                "SELECT admin.get_site_telemetry_capture_interval(%s, %s::uuid) AS interval_seconds",
+                (portal_user_id, site_id),
+            )
+            interval_row = await cursor.fetchone()
+        await connection.rollback()
+
+    result["telemetry_capture_interval_seconds"] = (
+        interval_row["interval_seconds"] if interval_row else 60
+    )
+    return result
+
+
+async def create_site_workspace(
+    *,
+    portal_user_id: int,
+    organization_id: str,
+    name: str,
+    code: str,
+    timezone: str,
+    lifecycle_status: str,
+    sector_code: str,
+    address: dict[str, str],
+    telemetry_capture_interval_seconds: int,
+) -> dict[str, Any]:
+    """Create one site through the scope-aware site workspace contract."""
+
+    async with database_connection() as connection:
+        try:
+            async with connection.cursor() as cursor:
+                await cursor.execute(
+                    """
+                    SELECT admin.create_site_workspace(
+                        %s, %s::uuid, %s, %s, %s, %s, %s::jsonb
+                    ) AS result
+                    """,
+                    (portal_user_id, organization_id, name, code, timezone,
+                     lifecycle_status, __import__('json').dumps(address)),
+                )
+                row = await cursor.fetchone()
+                await cursor.execute(
+                    """
+                    SELECT admin.set_site_sector(
+                        %s, %s::uuid, %s
+                    )
+                    """,
+                    (
+                        portal_user_id,
+                        str(row["result"]["site_id"]),
+                        sector_code,
+                    ),
+                )
+                await _set_site_capture_interval(
+                    cursor=cursor,
+                    portal_user_id=portal_user_id,
+                    site_id=str(row["result"]["site_id"]),
+                    capture_interval_seconds=telemetry_capture_interval_seconds,
+                    change_reason="Site creation telemetry storage interval",
+                )
+            await connection.commit()
+        except DatabaseError:
+            await connection.rollback()
+            raise
+    return row["result"]
+
+
+async def update_site_workspace(
+    *,
+    portal_user_id: int,
+    site_id: str,
+    name: str,
+    timezone: str,
+    lifecycle_status: str,
+    address: dict[str, str],
+    change_reason: str,
+    telemetry_capture_interval_seconds: int,
+) -> dict[str, Any]:
+    """Update one site without allowing organization or code reassignment."""
+
+    async with database_connection() as connection:
+        try:
+            async with connection.cursor() as cursor:
+                await cursor.execute(
+                    """
+                    SELECT admin.update_site_workspace(
+                        %s, %s::uuid, %s, %s, %s, %s::jsonb, %s
+                    ) AS result
+                    """,
+                    (portal_user_id, site_id, name, timezone, lifecycle_status,
+                     __import__('json').dumps(address), change_reason),
+                )
+                row = await cursor.fetchone()
+                await _set_site_capture_interval(
+                    cursor=cursor,
+                    portal_user_id=portal_user_id,
+                    site_id=site_id,
+                    capture_interval_seconds=telemetry_capture_interval_seconds,
+                    change_reason=change_reason,
+                )
+            await connection.commit()
+        except DatabaseError:
+            await connection.rollback()
+            raise
+    return row["result"]
+
+
+async def get_location_workspace(
+    *,
+    portal_user_id: int,
+    location_type: str,
+    location_id: str,
+) -> dict[str, Any] | None:
+    """Return one accessible building, floor, or space workspace."""
+
+    async with database_connection() as connection:
+        async with connection.cursor() as cursor:
+            await cursor.execute(
+                "SELECT admin.get_location_workspace(%s, %s, %s::uuid) AS result",
+                (portal_user_id, location_type, location_id),
+            )
+            row = await cursor.fetchone()
+        await connection.rollback()
+    return row["result"] if row else None
+
+
+async def update_location_workspace(
+    *,
+    portal_user_id: int,
+    location_type: str,
+    location_id: str,
+    name: str,
+    change_reason: str,
+) -> dict[str, Any]:
+    """Update one location without changing its type, code, or parent."""
+
+    async with database_connection() as connection:
+        try:
+            async with connection.cursor() as cursor:
+                await cursor.execute(
+                    "SELECT admin.update_location_workspace(%s, %s, %s::uuid, %s, %s) AS result",
+                    (portal_user_id, location_type, location_id, name, change_reason),
+                )
+                row = await cursor.fetchone()
+            await connection.commit()
+        except DatabaseError:
+            await connection.rollback()
+            raise
+    return row["result"]
+
+
 async def create_building(
     *,
     portal_user_id: int,

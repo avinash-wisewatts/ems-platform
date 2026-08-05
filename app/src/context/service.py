@@ -31,6 +31,7 @@ async def _accessible_organizations(
     return await list_accessible_organizations_for_user(
         portal_user_id=user.portal_user_id,
         role_code=user.role_code,
+        access_scope_mode=user.access_scope_mode,
         assigned_organization_id=user.organization_id,
     )
 
@@ -99,7 +100,7 @@ def bootstrap_context_for_identity(
     context = AdministrationContext(
         active_organization_id=(
             None
-            if user.role_code == "PLATFORM_ADMIN"
+            if user.access_scope_mode == "GLOBAL"
             else user.organization_id
         )
     )
@@ -158,11 +159,7 @@ async def set_active_site(
     user: AuthenticatedPortalUser,
     site_id: str,
 ) -> AdministrationContext:
-    """Validate and establish site context under the active organization."""
-
-    current = get_administration_context(request)
-    if current.active_organization_id is None:
-        raise AdministrationContextError(GENERIC_CONTEXT_ERROR)
+    """Validate and establish site and parent organization context."""
 
     normalized_id = _normalize_uuid(site_id)
     sites = await _accessible_sites(user=user)
@@ -177,17 +174,21 @@ async def set_active_site(
         None,
     )
 
-    if (
-        selected is None
-        or str(selected.get("organization_id"))
-        != current.active_organization_id
-    ):
+    if selected is None:
         raise AdministrationContextError(GENERIC_CONTEXT_ERROR)
 
+    selected_organization_id = str(selected.get("organization_id"))
+    try:
+        selected_organization_id = _normalize_uuid(
+            selected_organization_id
+        )
+    except AdministrationContextError as exc:
+        raise AdministrationContextError(GENERIC_CONTEXT_ERROR) from exc
+
     context = AdministrationContext(
-        active_organization_id=current.active_organization_id,
-        active_organization_name=current.active_organization_name,
-        active_organization_code=current.active_organization_code,
+        active_organization_id=selected_organization_id,
+        active_organization_name=selected.get("organization_name"),
+        active_organization_code=selected.get("organization_code"),
         active_site_id=normalized_id,
         active_site_name=(
             selected.get("site_name") or selected.get("name")

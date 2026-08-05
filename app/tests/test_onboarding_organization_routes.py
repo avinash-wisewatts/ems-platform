@@ -32,6 +32,7 @@ def successful_result() -> AuthenticationResult:
             username="organization.operator@example.com",
             display_name="Organization Test Operator",
             role_code="OPERATOR",
+
             organization_id=(
                 "11111111-1111-1111-1111-111111111111"
             ),

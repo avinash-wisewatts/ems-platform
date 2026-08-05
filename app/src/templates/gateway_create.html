@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Create gateway | WiseWatts EMS{% endblock %}
+{% block breadcrumb %}<nav class="breadcrumb"><a href="/administration">Administration</a><span>/</span><a href="/administration/gateways">Gateways</a><span>/</span><span class="breadcrumb-current">Create</span></nav>{% endblock %}
+{% block content %}<section class="administration-page form-page">
+<header class="administration-page-header"><div><p class="eyebrow">GATEWAY ADMINISTRATION</p><h2>Create gateway</h2><p>Register a gateway under the active organization and site.</p></div><a class="button button-secondary" href="/administration/gateways">Cancel</a></header>
+{% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+<form method="post" action="/administration/gateways" class="surface-panel entity-form" data-gateway-form>
+<input type="hidden" name="organization_id" value="{{ active_context.active_organization_id }}"><input type="hidden" name="gateway_location_site_id" value="{{ active_context.active_site_id }}">
+<section class="form-section"><div class="form-section-heading"><h3>Context</h3></div><div class="form-grid"><label><span>Organization</span><input value="{{ active_context.active_organization_name }}" disabled></label><label><span>Site</span><input value="{{ active_context.active_site_name }}" disabled></label></div></section>
+<section class="form-section"><div class="form-section-heading"><h3>Identity and lifecycle</h3></div><div class="form-grid">
+<label><span>Gateway name</span><input name="gateway_name" required maxlength="200" value="{{ form_data.get('gateway_name','') }}"></label>
+<label><span>External ID <span class="field-info"><span class="field-info-trigger" tabindex="0" aria-label="More information about external ID" aria-describedby="gateway_external_help">i</span><span id="gateway_external_help" class="field-info-content" role="tooltip">Stable organization-scoped identifier used for integrations. Letters, numbers, and underscores only.</span></span></span><input name="external_id" required maxlength="200" value="{{ form_data.get('external_id','') }}"></label>
+<label><span>Gateway model</span><select name="gateway_model_id" required><option value="">Select model</option>{% for model in gateway_models %}<option value="{{ model.id }}"{% if form_data.get('gateway_model_id')|string == model.id|string %} selected{% endif %}>{{ model.vendor or 'Generic' }} — {{ model.model }}{% if model.protocol %} ({{ model.protocol }}){% endif %}</option>{% endfor %}</select></label>
+<label><span>Lifecycle status</span><select name="lifecycle_status">{% for status in gateway_lifecycle_statuses %}<option value="{{ status }}"{% if form_data.get('lifecycle_status','REGISTERED') == status %} selected{% endif %}>{{ status|title }}</option>{% endfor %}</select></label>
+</div></section>
+<section class="form-section"><div class="form-section-heading"><h3>Physical location</h3><p>Optional. Choose the most specific known installation location.</p></div><div class="form-grid">
+<label><span>Building</span><select name="gateway_location_building_id" data-building><option value="">Site level</option></select></label>
+<label><span>Floor</span><select name="gateway_location_floor_id" data-floor><option value="">No floor</option></select></label>
+<label><span>Space</span><select name="gateway_location_space_id" data-space><option value="">No space</option></select></label>
+</div></section>
+<div class="form-actions sticky-actions"><a class="button button-secondary" href="/administration/gateways">Cancel</a><button class="button button-primary" type="submit">Create gateway</button></div></form></section>{% endblock %}
+{% block scripts %}<script>window.gatewayHierarchy={{ hierarchy_rows|tojson }};window.gatewaySelected={{ {'building_id':form_data.get('building_id',''),'floor_id':form_data.get('floor_id',''),'space_id':form_data.get('space_id','')}|tojson }};</script><script src="/static/js/gateway-hierarchy.js"></script>{% endblock %}

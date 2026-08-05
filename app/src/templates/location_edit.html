@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Edit {{ location.location_name }} | WiseWatts EMS{% endblock %}
+{% block content %}
+<section class="page-stack narrow-workspace">
+  <section class="page-header-card"><div><p class="eyebrow">LOCATION ADMINISTRATION</p><h2>Edit location</h2><p>Type, code, and parent are immutable.</p></div><a class="button button-secondary" href="/administration/locations/{{ location.location_type|lower }}/{{ location.location_id }}">Cancel</a></section>
+  {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+  <form method="post" action="/administration/locations/{{ location.location_type|lower }}/{{ location.location_id }}/edit" class="form-card location-form">
+    <div class="form-grid two-column">
+      <label>Location type<input value="{{ location.location_type|title }}" readonly></label>
+      <label>Location code<input value="{{ location.location_code }}" readonly></label>
+      <label>Parent<input value="{{ location.parent_name or '—' }}" readonly></label>
+      <label>Location name<input name="location_name" maxlength="200" required value="{{ form_data.location_name if form_data else location.location_name }}"></label>
+      <label class="full-width">Change reason <button class="info-icon" type="button" aria-label="Change reason information" data-tooltip="Required for the audit trail. Describe why this location is being updated. Do not enter passwords or secrets.">i</button><textarea name="change_reason" required>{{ form_data.change_reason or '' }}</textarea></label>
+    </div>
+    <div class="form-actions"><a class="button button-secondary" href="/administration/locations/{{ location.location_type|lower }}/{{ location.location_id }}">Cancel</a><button class="button button-primary" type="submit">Save changes</button></div>
+  </form>
+</section>
+{% endblock %}

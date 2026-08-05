@@ -10,12 +10,7 @@ SESSION_IDENTITY_KEY = "portal_identity"
 def serialize_authenticated_user(
     user: AuthenticatedPortalUser,
 ) -> dict[str, Any]:
-    """
-    Convert a safe authenticated identity into session-compatible primitives.
-
-    Password hashes, lockout state, and other authentication internals are
-    intentionally excluded.
-    """
+    """Convert a safe authenticated identity into session primitives."""
 
     return {
         "portal_user_id": user.portal_user_id,
@@ -31,11 +26,7 @@ def serialize_authenticated_user(
 def deserialize_authenticated_user(
     payload: object,
 ) -> AuthenticatedPortalUser | None:
-    """
-    Rebuild an authenticated identity from signed session data.
-
-    Invalid or incomplete session payloads fail closed and return None.
-    """
+    """Rebuild an authenticated identity and fail closed on invalid data."""
 
     if not isinstance(payload, dict):
         return None
@@ -56,10 +47,14 @@ def deserialize_authenticated_user(
         or not isinstance(display_name, str)
         or not display_name.strip()
         or role_code not in {
-            "PLATFORM_ADMIN",
-            "ORG_ADMIN",
+            "ADMIN",
             "OPERATOR",
             "VIEWER",
+        }
+        or access_scope_mode not in {
+            "GLOBAL",
+            "ORGANIZATION",
+            "SELECTED_SITES",
         }
     ):
         return None
@@ -72,22 +67,6 @@ def deserialize_authenticated_user(
             organization_id = str(UUID(organization_id))
         except ValueError:
             return None
-
-    if role_code == "PLATFORM_ADMIN":
-        if organization_id is not None:
-            return None
-    elif organization_id is None:
-        return None
-
-    if access_scope_mode is None and organization_id is not None:
-        access_scope_mode = "ORGANIZATION"
-
-    if access_scope_mode not in {
-        None,
-        "ORGANIZATION",
-        "SELECTED_SITES",
-    }:
-        return None
 
     if not isinstance(site_ids, (list, tuple)):
         return None
@@ -106,8 +85,8 @@ def deserialize_authenticated_user(
         if normalized_site_id not in normalized_site_ids:
             normalized_site_ids.append(normalized_site_id)
 
-    if access_scope_mode is None:
-        if normalized_site_ids:
+    if access_scope_mode == "GLOBAL":
+        if organization_id is not None or normalized_site_ids:
             return None
     elif organization_id is None:
         return None

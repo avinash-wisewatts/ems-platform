@@ -5,13 +5,14 @@ from enum import Enum
 class PortalAccessScopeMode(str, Enum):
     """Canonical portal access-scope modes."""
 
+    GLOBAL = "GLOBAL"
     ORGANIZATION = "ORGANIZATION"
     SELECTED_SITES = "SELECTED_SITES"
 
 
 @dataclass(frozen=True, slots=True)
 class PortalAccessScope:
-    """Organization and optional site assignments for one portal identity."""
+    """Platform, organization, or selected-site access for one identity."""
 
     mode: PortalAccessScopeMode
     organization_id: str | None
@@ -23,9 +24,20 @@ def validate_portal_access_scope(
 ) -> None:
     """Validate one controlled portal access scope."""
 
+    if scope.mode is PortalAccessScopeMode.GLOBAL:
+        if scope.organization_id is not None:
+            raise ValueError(
+                "Global access scope must not include an organization."
+            )
+        if scope.site_ids:
+            raise ValueError(
+                "Global access scope must not include site assignments."
+            )
+        return
+
     if scope.organization_id is None:
         raise ValueError(
-            "Tenant access scope requires an organization."
+            "Organization and selected-sites scope require an organization."
         )
 
     if scope.mode is PortalAccessScopeMode.ORGANIZATION:
@@ -57,6 +69,9 @@ def can_access_site(
         validate_portal_access_scope(scope)
     except ValueError:
         return False
+
+    if scope.mode is PortalAccessScopeMode.GLOBAL:
+        return True
 
     if site_organization_id != scope.organization_id:
         return False
@@ -103,9 +118,14 @@ def normalize_portal_access_scope_submission(
         if normalized_site_id not in normalized_site_ids:
             normalized_site_ids.append(normalized_site_id)
 
+    placeholder_organization_id = (
+        None if mode is PortalAccessScopeMode.GLOBAL
+        else "submission-placeholder"
+    )
+
     scope = PortalAccessScope(
         mode=mode,
-        organization_id="submission-placeholder",
+        organization_id=placeholder_organization_id,
         site_ids=frozenset(normalized_site_ids),
     )
 

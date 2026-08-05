@@ -1,5 +1,178 @@
 {% extends "base.html" %}
 {% block title %}User management | WiseWatts EMS{% endblock %}
-{% block breadcrumb %}<nav class="breadcrumb"><a href="/administration">Administration</a><span>/</span><span class="breadcrumb-current">User management</span></nav>{% endblock %}
-{% block content %}<section class="administration-page"><header class="administration-page-header"><div><p class="eyebrow">ACCESS ADMINISTRATION</p><h2>User management</h2><p>Manage portal access within the current organization context.</p></div><a class="button-link" href="/administration/users/new">Create user</a></header>{% if error %}<div class="form-error" role="alert">{{ error }}</div>{% endif %}{% if result %}<div class="success-message" role="status">The user-management action completed successfully.</div>{% endif %}<section class="form-card"><div class="list-toolbar"><label>Search users<input type="search" data-user-search placeholder="Name or email"></label><label>Role<select data-user-role><option value="">All roles</option>{% for role in assignable_roles %}<option value="{{ role }}">{{ role }}</option>{% endfor %}</select></label><label>Status<select data-user-status><option value="">All statuses</option><option value="ACTIVE">Active</option><option value="INACTIVE">Inactive</option></select></label></div>{% if users %}<div class="table-scroll"><table><thead><tr><th>User</th><th>Email</th><th>Role</th><th>Access scope</th><th>Status</th><th>Actions</th></tr></thead><tbody>{% for portal_user in users %}<tr data-user-row data-search-text="{{ portal_user.display_name }} {{ portal_user.email }} {{ portal_user.username }}" data-role="{{ portal_user.role_code }}" data-status="{% if portal_user.is_active %}ACTIVE{% else %}INACTIVE{% endif %}"><td><a href="/administration/users/{{ portal_user.portal_user_id }}">{{ portal_user.display_name }}</a></td><td>{{ portal_user.email or portal_user.username }}</td><td>{{ portal_user.role_code }}</td><td>{% if portal_user.role_code == 'PLATFORM_ADMIN' %}Entire platform{% elif portal_user.access_scope_mode == 'SELECTED_SITES' %}Selected sites{% else %}Entire organization{% endif %}</td><td><span class="status-pill{% if portal_user.is_active %} is-positive{% endif %}">{% if portal_user.is_active %}ACTIVE{% else %}INACTIVE{% endif %}</span></td><td class="row-actions"><a class="button-link secondary compact" href="/administration/users/{{ portal_user.portal_user_id }}">View</a><a class="button-link compact" href="/administration/users/{{ portal_user.portal_user_id }}/edit">Edit</a></td></tr>{% endfor %}</tbody></table></div><p data-user-empty hidden>No users match the current filters.</p>{% else %}<div class="empty-state"><h3>No users are available</h3><p>Create a user within the current organization scope.</p></div>{% endif %}</section></section>{% endblock %}
-{% block scripts %}<script>(()=>{const q=document.querySelector('[data-user-search]'),r=document.querySelector('[data-user-role]'),s=document.querySelector('[data-user-status]'),rows=[...document.querySelectorAll('[data-user-row]')],e=document.querySelector('[data-user-empty]');if(!q)return;const f=()=>{let n=0;rows.forEach(x=>{const ok=(!q.value.trim()||(x.dataset.searchText||'').toLowerCase().includes(q.value.trim().toLowerCase()))&&(!r.value||x.dataset.role===r.value)&&(!s.value||x.dataset.status===s.value);x.hidden=!ok;if(ok)n++});if(e)e.hidden=n!==0};[q,r,s].forEach(x=>x.addEventListener(x===q?'input':'change',f))})();</script>{% endblock %}
+{% block breadcrumb %}
+<nav class="breadcrumb" aria-label="Breadcrumb">
+    <a href="/administration">Administration</a>
+    <span>/</span>
+    <span class="breadcrumb-current">User management</span>
+</nav>
+{% endblock %}
+
+{% block content %}
+<section class="administration-page user-management-page">
+    <header class="administration-page-header">
+        <div>
+            <p class="eyebrow">ACCESS ADMINISTRATION</p>
+            <h2>User management</h2>
+            <p>
+                {% if current_portal_user.access_scope_mode == "GLOBAL" %}
+                Manage portal access across organizations and sites.
+                {% else %}
+                Manage portal access within your authorized organization scope.
+                {% endif %}
+            </p>
+        </div>
+        <a class="button button-primary" href="/administration/users/new">Create user</a>
+    </header>
+
+    {% if error %}
+    <div class="form-error" role="alert">{{ error }}</div>
+    {% endif %}
+
+    {% if result %}
+    <div class="success-message" role="status">
+        The user-management action completed successfully.
+    </div>
+    {% endif %}
+
+    <section class="form-card user-list-card">
+        <div class="list-toolbar user-list-toolbar">
+            <label>
+                Search users
+                <input type="search" data-user-search placeholder="Name, username, or email">
+            </label>
+            <label>
+                Role
+                <select data-user-role>
+                    <option value="">All roles</option>
+                    {% for role in assignable_roles %}
+                    <option value="{{ role }}">
+                        {% if role == "ADMIN" %}Administrator{% elif role == "OPERATOR" %}Operator{% else %}Viewer{% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>
+                Status
+                <select data-user-status>
+                    <option value="">All statuses</option>
+                    <option value="ACTIVE">Active</option>
+                    <option value="INACTIVE">Inactive</option>
+                </select>
+            </label>
+        </div>
+
+        {% if users %}
+        <div class="table-scroll user-table-scroll">
+            <table class="user-table">
+                <colgroup>
+                    <col class="user-table-name-column">
+                    <col class="user-table-email-column">
+                    <col class="user-table-role-column">
+                    <col class="user-table-scope-column">
+                    <col class="user-table-status-column">
+                    <col class="user-table-actions-column">
+                </colgroup>
+                <thead>
+                    <tr>
+                        <th scope="col">User</th>
+                        <th scope="col">Email</th>
+                        <th scope="col">Role</th>
+                        <th scope="col">Access scope</th>
+                        <th scope="col" class="user-table-centered">Status</th>
+                        <th scope="col" class="user-table-actions-heading">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for portal_user in users %}
+                    <tr
+                        data-user-row
+                        data-search-text="{{ portal_user.display_name }} {{ portal_user.email }} {{ portal_user.username }}"
+                        data-role="{{ portal_user.role_code }}"
+                        data-status="{% if portal_user.is_active %}ACTIVE{% else %}INACTIVE{% endif %}"
+                    >
+                        <td>
+                            <div class="user-identity-cell">
+                                <a class="user-name-link" href="/administration/users/{{ portal_user.portal_user_id }}">
+                                    {{ portal_user.display_name }}
+                                </a>
+                                <span>{{ portal_user.username }}</span>
+                            </div>
+                        </td>
+                        <td class="user-email-cell">{{ portal_user.email or portal_user.username }}</td>
+                        <td>
+                            <span class="role-badge role-badge-{{ portal_user.role_code|lower }}">
+                                {% if portal_user.role_code == "ADMIN" %}Administrator{% elif portal_user.role_code == "OPERATOR" %}Operator{% else %}Viewer{% endif %}
+                            </span>
+                        </td>
+                        <td>
+                            <div class="scope-cell">
+                                <strong>
+                                    {% if portal_user.access_scope_mode == "GLOBAL" %}Global{% elif portal_user.access_scope_mode == "SELECTED_SITES" %}Selected sites{% else %}Organization{% endif %}
+                                </strong>
+                                <span>
+                                    {% if portal_user.access_scope_mode == "GLOBAL" %}All organizations and sites{% elif portal_user.access_scope_mode == "SELECTED_SITES" %}Assigned sites only{% else %}All sites in organization{% endif %}
+                                </span>
+                            </div>
+                        </td>
+                        <td class="user-table-centered">
+                            <span class="status-pill{% if portal_user.is_active %} is-positive{% endif %}">
+                                {% if portal_user.is_active %}Active{% else %}Inactive{% endif %}
+                            </span>
+                        </td>
+                        <td>
+                            <div class="row-actions user-row-actions">
+                                <a class="button button-secondary button-compact" href="/administration/users/{{ portal_user.portal_user_id }}">View</a>
+                                <a class="button button-primary button-compact" href="/administration/users/{{ portal_user.portal_user_id }}/edit">Edit</a>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <p class="user-filter-empty" data-user-empty hidden>No users match the current filters.</p>
+        {% else %}
+        <div class="empty-state">
+            <h3>No users are available</h3>
+            <p>Create a user within your authorized scope.</p>
+        </div>
+        {% endif %}
+    </section>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(() => {
+    const query = document.querySelector('[data-user-search]');
+    const role = document.querySelector('[data-user-role]');
+    const status = document.querySelector('[data-user-status]');
+    const rows = [...document.querySelectorAll('[data-user-row]')];
+    const empty = document.querySelector('[data-user-empty]');
+
+    if (!query) return;
+
+    const filterRows = () => {
+        let visibleCount = 0;
+        const searchValue = query.value.trim().toLowerCase();
+
+        rows.forEach((row) => {
+            const matches =
+                (!searchValue || (row.dataset.searchText || '').toLowerCase().includes(searchValue)) &&
+                (!role.value || row.dataset.role === role.value) &&
+                (!status.value || row.dataset.status === status.value);
+
+            row.hidden = !matches;
+            if (matches) visibleCount += 1;
+        });
+
+        if (empty) empty.hidden = visibleCount !== 0;
+    };
+
+    query.addEventListener('input', filterRows);
+    role.addEventListener('change', filterRows);
+    status.addEventListener('change', filterRows);
+})();
+</script>
+{% endblock %}

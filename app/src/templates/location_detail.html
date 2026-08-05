@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}{{ location.location_name }} | WiseWatts EMS{% endblock %}
+{% block breadcrumb %}
+<nav class="breadcrumb" aria-label="Breadcrumb">
+    <a href="/administration">Administration</a>
+    <span>/</span>
+    <a href="/administration/locations">Locations</a>
+    <span>/</span>
+    <span class="breadcrumb-current">{{ location.location_name }}</span>
+</nav>
+{% endblock %}
+{% block content %}
+<section class="administration-page location-detail-page">
+    <header class="administration-page-header">
+        <div>
+            <p class="eyebrow">LOCATION DETAILS</p>
+            <h2>{{ location.location_name }}</h2>
+            <p>{{ location.organization_name }} · {{ location.site_name }}</p>
+        </div>
+        <div class="row-actions">
+            <a class="button button-secondary" href="/administration/locations">Back</a>
+            {% if can_edit %}
+            <a class="button button-primary" href="/administration/locations/{{ location.location_type|lower }}/{{ location.location_id }}/edit">Edit</a>
+            {% endif %}
+        </div>
+    </header>
+
+    <div class="administration-detail-sections">
+        <section class="surface-panel administration-detail-section">
+            <h3>Identity</h3>
+            <div class="table-scroll">
+                <table class="data-table administration-detail-table">
+                    <tbody>
+                        <tr><th scope="row">Name</th><td>{{ location.location_name }}</td></tr>
+                        <tr><th scope="row">Code</th><td><code>{{ location.location_code }}</code></td></tr>
+                        <tr><th scope="row">Type</th><td>{{ location.location_type|title }}</td></tr>
+                        <tr>
+                            <th scope="row">Lifecycle status</th>
+                            <td>
+                                {% set status = location.lifecycle_status or 'ACTIVE' %}
+                                <span class="status-pill{% if status == 'ACTIVE' %} is-positive{% elif status in ('INACTIVE', 'DECOMMISSIONED') %} is-warning{% endif %}">{{ status }}</span>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="surface-panel administration-detail-section">
+            <h3>Hierarchy</h3>
+            <div class="table-scroll">
+                <table class="data-table administration-detail-table">
+                    <tbody>
+                        <tr><th scope="row">Organization</th><td>{{ location.organization_name }}</td></tr>
+                        <tr><th scope="row">Site</th><td>{{ location.site_name }}</td></tr>
+                        <tr><th scope="row">Parent</th><td>{{ location.parent_name or '—' }}</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="surface-panel administration-detail-section">
+            <h3>Record information</h3>
+            <div class="table-scroll">
+                <table class="data-table administration-detail-table">
+                    <tbody>
+                        <tr><th scope="row">Created</th><td>{{ location.created_at|date_time if location.created_at else '—' }}</td></tr>
+                        <tr><th scope="row">Last updated</th><td>{{ location.updated_at|date_time if location.updated_at else '—' }}</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </div>
+</section>
+{% endblock %}

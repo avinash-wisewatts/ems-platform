@@ -7,11 +7,25 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 CODE_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
+TELEMETRY_CAPTURE_INTERVALS = (10, 30, 60, 300, 900)
+
 LIFECYCLE_STATUSES = (
     "DRAFT",
     "ACTIVE",
     "INACTIVE",
     "DECOMMISSIONED",
+)
+
+SITE_SECTORS = (
+    "HOSPITALITY",
+    "HEALTHCARE",
+    "MANUFACTURING",
+    "RETAIL",
+    "FOOD&BEVERAGE",
+    "COMMERCIAL",
+    "EDUCATION",
+    "DATA CENTER",
+    "OTHER",
 )
 
 
@@ -73,6 +87,8 @@ def validate_site_submission(
     site_code: str,
     site_timezone: str,
     lifecycle_status: str,
+    site_sector: str = "OTHER",
+    telemetry_capture_interval_seconds: str = "60",
 ) -> dict[str, Any]:
     """Validate and normalize an independent site request."""
 
@@ -95,7 +111,25 @@ def validate_site_submission(
             "Site timezone must be a valid IANA timezone."
         ) from exc
 
+    try:
+        capture_interval = int(telemetry_capture_interval_seconds.strip())
+    except (TypeError, ValueError) as exc:
+        raise LocationManagementValidationError(
+            "Select a valid telemetry storage interval."
+        ) from exc
+
+    if capture_interval not in TELEMETRY_CAPTURE_INTERVALS:
+        raise LocationManagementValidationError(
+            "Telemetry storage interval must be 10, 30, 60, 300, or 900 seconds."
+        )
+
     normalized_status = lifecycle_status.strip().upper()
+    normalized_sector = site_sector.strip().upper()
+
+    if normalized_sector not in SITE_SECTORS:
+        raise LocationManagementValidationError(
+            "Select a valid site sector."
+        )
 
     if normalized_status not in LIFECYCLE_STATUSES:
         raise LocationManagementValidationError(
@@ -111,6 +145,8 @@ def validate_site_submission(
         "code": _required_code(site_code, "Site code"),
         "timezone": timezone,
         "lifecycle_status": normalized_status,
+        "sector_code": normalized_sector,
+        "telemetry_capture_interval_seconds": capture_interval,
     }
 
 

@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block title %}Create location | WiseWatts EMS{% endblock %}
+{% block breadcrumb %}
+<nav class="breadcrumb" aria-label="Breadcrumb">
+    <a href="/administration">Administration</a>
+    <span>/</span>
+    <a href="/administration/locations">Locations</a>
+    <span>/</span>
+    <span class="breadcrumb-current">Create</span>
+</nav>
+{% endblock %}
+{% block content %}
+<section class="administration-page form-page">
+    <header class="administration-page-header">
+        <div>
+            <p class="eyebrow">LOCATION ADMINISTRATION</p>
+            <h2>Create location</h2>
+            <p>Create a building, floor, or space within {{ active_context.active_site_name }}.</p>
+        </div>
+        <a class="button button-secondary" href="/administration/locations">Cancel</a>
+    </header>
+
+    {% if error %}<div class="alert alert-error" role="alert">{{ error }}</div>{% endif %}
+
+    <form method="post" action="/administration/locations/new" class="surface-panel entity-form" novalidate>
+        <section class="form-section">
+            <div class="form-section-heading">
+                <div>
+                    <h3>Hierarchy</h3>
+                    <p>Choose the location type and its parent within the active site.</p>
+                </div>
+            </div>
+            <div class="form-grid">
+                <label>
+                    <span>
+                        Location type
+                        <span class="field-info">
+                            <span class="field-info-trigger" tabindex="0" aria-label="More information about location type" aria-describedby="location_type_help">i</span>
+                            <span id="location_type_help" class="field-info-content" role="tooltip">Buildings belong to the active site. Floors belong to buildings. Spaces belong to floors.</span>
+                        </span>
+                    </span>
+                    <select name="location_type" required data-location-type>
+                        <option value="">Select type</option>
+                        <option value="BUILDING"{% if form_data.location_type == 'BUILDING' %} selected{% endif %}>Building</option>
+                        <option value="FLOOR"{% if form_data.location_type == 'FLOOR' %} selected{% endif %}>Floor</option>
+                        <option value="SPACE"{% if form_data.location_type == 'SPACE' %} selected{% endif %}>Space</option>
+                    </select>
+                </label>
+
+                <label>
+                    <span>
+                        Parent
+                        <span class="field-info">
+                            <span class="field-info-trigger" tabindex="0" aria-label="More information about location parent" aria-describedby="location_parent_help">i</span>
+                            <span id="location_parent_help" class="field-info-content" role="tooltip">The parent is fixed after creation to preserve hierarchy integrity.</span>
+                        </span>
+                    </span>
+                    <select name="parent_id" required data-location-parent>
+                        <option value="">Select location type first</option>
+                        <optgroup label="Active site" data-parent-group="BUILDING">
+                            <option value="{{ active_context.active_site_id }}">{{ active_context.active_site_name }}</option>
+                        </optgroup>
+                        <optgroup label="Buildings" data-parent-group="FLOOR">
+                            {% for building in buildings %}
+                            <option value="{{ building.location_id }}"{% if form_data.parent_id == building.location_id %} selected{% endif %}>{{ building.location_name }}</option>
+                            {% endfor %}
+                        </optgroup>
+                        <optgroup label="Floors" data-parent-group="SPACE">
+                            {% for floor in floors %}
+                            <option value="{{ floor.location_id }}"{% if form_data.parent_id == floor.location_id %} selected{% endif %}>{{ floor.building_name }} / {{ floor.location_name }}</option>
+                            {% endfor %}
+                        </optgroup>
+                    </select>
+                </label>
+            </div>
+        </section>
+
+        <section class="form-section">
+            <div class="form-section-heading">
+                <div>
+                    <h3>Identity</h3>
+                    <p>Name the location. Its immutable code is generated automatically.</p>
+                </div>
+            </div>
+            <div class="form-grid">
+                <label>
+                    <span>Location name</span>
+                    <input name="location_name" maxlength="200" required value="{{ form_data.location_name or '' }}">
+                </label>
+
+                <label>
+                    <span>
+                        Location code
+                        <span class="field-info">
+                            <span class="field-info-trigger" tabindex="0" aria-label="More information about location code" aria-describedby="location_code_help">i</span>
+                            <span id="location_code_help" class="field-info-content" role="tooltip">Generated from the location name and immutable after creation.</span>
+                        </span>
+                    </span>
+                    <input name="location_code" data-generated-code-from="location_name" readonly aria-readonly="true" value="{{ form_data.location_code or '' }}">
+                </label>
+            </div>
+        </section>
+
+        <div class="form-actions sticky-actions">
+            <a class="button button-secondary" href="/administration/locations">Cancel</a>
+            <button class="button button-primary" type="submit">Create location</button>
+        </div>
+    </form>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+(() => {
+    const type = document.querySelector('[data-location-type]');
+    const parent = document.querySelector('[data-location-parent]');
+    const groups = [...parent.querySelectorAll('optgroup')];
+
+    function syncParentOptions() {
+        groups.forEach((group) => {
+            group.hidden = group.dataset.parentGroup !== type.value;
+        });
+
+        const validOptions = [...parent.options].filter((option) => (
+            option.parentElement.tagName === 'OPTGROUP'
+            && !option.parentElement.hidden
+        ));
+
+        if (!validOptions.some((option) => option.selected)) {
+            parent.value = validOptions[0]?.value || '';
+        }
+
+        parent.disabled = !type.value;
+    }
+
+    type.addEventListener('change', syncParentOptions);
+    syncParentOptions();
+})();
+</script>
+{% endblock %}

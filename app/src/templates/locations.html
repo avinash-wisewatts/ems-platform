@@ -1,246 +1,56 @@
 {% extends "base.html" %}
-
-{% from
-    "components/physical_location_selector.html"
-    import physical_location_selector
-%}
 {% block title %}Locations | WiseWatts EMS{% endblock %}
-{% block breadcrumb %}<nav class="breadcrumb" aria-label="Breadcrumb"><a href="/administration">Administration</a><span aria-hidden="true">/</span><a href="/administration/sites">Sites</a><span aria-hidden="true">/</span><span class="breadcrumb-current">Locations</span></nav>{% endblock %}
+{% block breadcrumb %}<nav class="breadcrumb" aria-label="Breadcrumb"><a href="/administration">Administration</a><span>/</span><span class="breadcrumb-current">Locations</span></nav>{% endblock %}
 {% block content %}
-<section class="administration-page location-selection-page">
+<section class="administration-page location-management-page">
+  <header class="administration-page-header">
+    <div><p class="eyebrow">SITE ADMINISTRATION</p><h2>Locations</h2><p>View and manage buildings, floors, and spaces within the active site.</p></div>
+    {% if has_site_context and can_manage_locations %}<a class="button button-primary" href="/administration/locations/new">Create location</a>{% endif %}
+  </header>
 
-{% if error %}
-<div class="form-error" role="alert">
-    {{ error }}
-</div>
-{% endif %}
+  {% if context_error %}<div class="alert alert-error" role="alert">That location is not available to your account.</div>{% endif %}
+  {% if request.query_params.get('context_required') == '1' %}<div class="alert alert-warning" role="alert">Select an organization and site before creating a location.</div>{% endif %}
 
-{% if result %}
-<section class="form-card" aria-live="polite">
-    <div class="section-heading">
-        <div>
-            <h3>{{ result.entity_type|title }} created</h3>
-            <p>The physical location was created successfully.</p>
-        </div>
+  {% if not has_site_context %}
+  <section class="surface-panel empty-state location-context-empty">
+    <p class="eyebrow">CONTEXT REQUIRED</p>
+    <h3>Select an organization and site</h3>
+    <p>Locations are managed inside a site. Context selection will guide you through organization and site selection, then return here.</p>
+    <a class="button button-primary" href="/administration/organizations?return_to=%2Fadministration%2Fsites%3Freturn_to%3D%252Fadministration%252Flocations">Select context</a>
+  </section>
+  {% else %}
+  <section class="surface-panel location-list-panel">
+    <div class="list-toolbar location-list-toolbar">
+      <label class="search-field"><span>Search locations</span><input type="search" autocomplete="off" placeholder="Name, code, or parent" data-location-search></label>
+      <label><span>Type</span><select data-location-type-filter><option value="">All types</option><option value="BUILDING">Buildings</option><option value="FLOOR">Floors</option><option value="SPACE">Spaces</option></select></label>
+      <label><span>Status</span><select data-location-status-filter><option value="">All statuses</option>{% for status in lifecycle_statuses %}<option value="{{ status }}">{{ status|title }}</option>{% endfor %}</select></label>
     </div>
 
-    <dl>
-        <dt>Entity ID</dt>
-        <dd>{{ result.entity_id }}</dd>
-
-        {% if result.audit_transaction_id %}
-        <dt>Audit transaction ID</dt>
-        <dd>{{ result.audit_transaction_id }}</dd>
-        {% endif %}
-    </dl>
-</section>
-{% endif %}
-<header class="administration-page-header"><div><p class="eyebrow">TENANT ADMINISTRATION</p><h2>Choose a location</h2><p>Select a building, floor, or space within {{ active_context.active_site_name or "the active site" }} before opening location-scoped inventory.</p></div><a class="button-link secondary" href="/administration/sites">Change site</a></header>
-{% if context_error %}<div class="form-error" role="alert">That location is no longer available. Choose another location.</div>{% endif %}
-{% if error %}<div class="form-error" role="alert">{{ error }}</div>{% endif %}
-<section class="form-card"><div class="section-heading"><div><h3>Accessible hierarchy</h3><p>One row per selectable hierarchy level.</p></div><label class="organization-search"><span>Search locations</span><input type="search" placeholder="Name, code, or type" data-location-search></label></div>
-{% if locations %}<div class="table-scroll"><table class="location-selection-table"><thead><tr><th>Location</th><th>Type</th><th>Code</th><th>Hierarchy</th><th>Context</th><th>Action</th></tr></thead><tbody>{% for location in locations %}<tr class="location-row{% if active_context.active_location_id == location.location_id %} is-active{% endif %}" data-location-row data-search-text="{{ location.location_name }} {{ location.location_code }} {{ location.location_type }}"><td><strong>{{ location.location_name }}</strong></td><td><span class="status-badge">{{ location.location_type }}</span></td><td>{{ location.location_code or "—" }}</td><td>{{ location.building_name or "—" }}{% if location.floor_name %} / {{ location.floor_name }}{% endif %}{% if location.space_name %} / {{ location.space_name }}{% endif %}</td><td>{% if active_context.active_location_id == location.location_id %}<span class="context-status-badge">Active</span>{% else %}—{% endif %}</td><td><form method="post" action="/context/location"><input type="hidden" name="location_id" value="{{ location.location_id }}"><input type="hidden" name="return_to" value="/administration/assets"><button type="submit">{% if active_context.active_location_id == location.location_id %}Continue{% else %}Administer{% endif %}</button></form></td></tr>{% endfor %}</tbody></table></div><p hidden data-location-empty>No locations match your search.</p>{% else %}<p>No buildings, floors, or spaces exist under this site yet.</p>{% endif %}
-</section>
-<details class="organization-secondary-section"><summary>Manage physical hierarchy</summary>
-<section class="form-card">
-    <div class="section-heading">
-        <div>
-            <h3>Hierarchy selector</h3>
-            <p>
-                Select the most-specific available physical location
-                while managing this site's hierarchy.
-            </p>
-        </div>
+    {% if locations %}
+    <div class="table-scroll">
+      <table class="data-table location-management-table">
+        <thead><tr><th>Location</th><th>Type</th><th>Parent</th><th>Status</th><th>Active context</th><th><span class="sr-only">Actions</span></th></tr></thead>
+        <tbody>
+        {% for location in locations %}
+          {% set is_active = active_context.active_location_id and active_context.active_location_id|string == location.location_id|string %}
+          <tr class="location-row{% if is_active %} is-active{% endif %}" data-location-row data-type="{{ location.location_type }}" data-status="{{ location.lifecycle_status }}" data-search-text="{{ location.location_name }} {{ location.location_code }} {{ location.parent_name }}"{% if is_active %} aria-current="true"{% endif %}>
+            <td><div class="entity-cell location-identity-inline"><a class="entity-link" href="/administration/locations/{{ location.location_type|lower }}/{{ location.location_id }}">{{ location.location_name }}</a><code>{{ location.location_code }}</code></div></td>
+            <td><span class="status-pill">{{ location.location_type|title }}</span></td>
+            <td>{{ location.parent_name or '—' }}</td>
+            <td><span class="status-pill{% if location.lifecycle_status == 'ACTIVE' %} is-positive{% else %} is-warning{% endif %}">{{ location.lifecycle_status }}</span></td>
+            <td>{% if is_active %}<span class="context-status-badge">Active context</span>{% else %}—{% endif %}</td>
+            <td class="row-actions"><div class="location-row-actions"><a class="button button-secondary button-compact" href="/administration/locations/{{ location.location_type|lower }}/{{ location.location_id }}">View</a><form method="post" action="/context/location" class="inline-action-form"><input type="hidden" name="location_id" value="{{ location.location_id }}"><input type="hidden" name="return_to" value="/administration/locations"><button class="button button-primary button-compact" type="submit">Select</button></form></div></td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
     </div>
-
-    {{ physical_location_selector(
-        "physical_location",
-        hierarchy_rows,
-        active_context.site_id if active_context else ""
-    ) }}
-</section>
-    <div class="administration-grid">
-        <form
-            method="post"
-            action="/administration/locations"
-            class="form-card"
-            novalidate
-        >
-            <input
-                type="hidden"
-                name="location_type"
-                value="BUILDING"
-            >
-
-            <div class="section-heading">
-                <div>
-                    <h3>Create building</h3>
-                    <p>A building belongs directly to a site.</p>
-                </div>
-            </div>
-
-            <label>
-                Site
-                <select name="parent_id" required>
-                    <option value="">Select site</option>
-                    {% for site in sites %}
-                    <option value="{{ site.site_id }}">
-                        {{ site.organization_name }} /
-                        {{ site.site_name }}
-                        ({{ site.site_code }})
-                    </option>
-                    {% endfor %}
-                </select>
-            </label>
-
-            <label>
-                Building name
-                <input
-                    name="location_name"
-                    type="text"
-                    maxlength="200"
-                    required
-                >
-            </label>
-
-            <label>
-                Building code
-                <input
-                    name="location_code" data-generated-code-from="location_name" readonly aria-readonly="true"
-                    type="text"
-                    maxlength="100"
-                    pattern="[A-Za-z][A-Za-z0-9_]*"
-                    required
-                >
-            </label>
-
-            <button type="submit">Create building</button>
-        </form>
-
-        <form
-            method="post"
-            action="/administration/locations"
-            class="form-card"
-            novalidate
-        >
-            <input
-                type="hidden"
-                name="location_type"
-                value="FLOOR"
-            >
-
-            <div class="section-heading">
-                <div>
-                    <h3>Create floor</h3>
-                    <p>A floor belongs directly to a building.</p>
-                </div>
-            </div>
-
-            <label>
-                Building
-                <select name="parent_id" required>
-                    <option value="">Select building</option>
-                    {% for building in buildings %}
-                    <option value="{{ building.building_id }}">
-                        {{ building.site_name }} /
-                        {{ building.building_name }}
-                        ({{ building.building_code }})
-                    </option>
-                    {% endfor %}
-                </select>
-            </label>
-
-            <label>
-                Floor name
-                <input
-                    name="location_name"
-                    type="text"
-                    maxlength="200"
-                    required
-                >
-            </label>
-
-            <label>
-                Floor code
-                <input
-                    name="location_code" data-generated-code-from="location_name" readonly aria-readonly="true"
-                    type="text"
-                    maxlength="100"
-                    pattern="[A-Za-z][A-Za-z0-9_]*"
-                    required
-                >
-            </label>
-
-            <button type="submit">Create floor</button>
-        </form>
-
-        <form
-            method="post"
-            action="/administration/locations"
-            class="form-card"
-            novalidate
-        >
-            <input
-                type="hidden"
-                name="location_type"
-                value="SPACE"
-            >
-
-            <div class="section-heading">
-                <div>
-                    <h3>Create space</h3>
-                    <p>A space belongs directly to a floor.</p>
-                </div>
-            </div>
-
-            <label>
-                Floor
-                <select name="parent_id" required>
-                    <option value="">Select floor</option>
-                    {% for floor in floors %}
-                    <option value="{{ floor.floor_id }}">
-                        {{ floor.site_name }} /
-                        {{ floor.building_name }} /
-                        {{ floor.floor_name }}
-                        ({{ floor.floor_code }})
-                    </option>
-                    {% endfor %}
-                </select>
-            </label>
-
-            <label>
-                Space name
-                <input
-                    name="location_name"
-                    type="text"
-                    maxlength="200"
-                    required
-                >
-            </label>
-
-            <label>
-                Space code
-                <input
-                    name="location_code" data-generated-code-from="location_name" readonly aria-readonly="true"
-                    type="text"
-                    maxlength="100"
-                    pattern="[A-Za-z][A-Za-z0-9_]*"
-                    required
-                >
-            </label>
-
-            <button type="submit">Create space</button>
-        </form>
-    </div>
-</details>
+    <p class="empty-filter-state" data-location-empty hidden>No locations match the current filters.</p>
+    {% else %}<div class="empty-state"><h3>No locations available</h3><p>Create the first building for this site.</p></div>{% endif %}
+  </section>
+  {% endif %}
 </section>
 {% endblock %}
-
-
-
 {% block scripts %}
-<script
-    src="/static/js/physical-location-selector.js"
-    defer
-></script>
-<script>(()=>{const input=document.querySelector("[data-location-search]");if(!input)return;const rows=[...document.querySelectorAll("[data-location-row]")];const empty=document.querySelector("[data-location-empty]");input.addEventListener("input",()=>{const q=input.value.trim().toLowerCase();let visible=0;rows.forEach(row=>{const match=!q||(row.dataset.searchText||"").toLowerCase().includes(q);row.hidden=!match;if(match)visible++;});if(empty)empty.hidden=visible!==0;});})();</script>{% endblock %}
+<script>(()=>{const q=document.querySelector('[data-location-search]'),t=document.querySelector('[data-location-type-filter]'),s=document.querySelector('[data-location-status-filter]'),rows=[...document.querySelectorAll('[data-location-row]')],empty=document.querySelector('[data-location-empty]');if(!q||!t||!s)return;const apply=()=>{let n=0;const text=q.value.trim().toLowerCase();rows.forEach(r=>{const ok=(!text||(r.dataset.searchText||'').toLowerCase().includes(text))&&(!t.value||r.dataset.type===t.value)&&(!s.value||r.dataset.status===s.value);r.hidden=!ok;if(ok)n++});if(empty)empty.hidden=n!==0};q.addEventListener('input',apply);t.addEventListener('change',apply);s.addEventListener('change',apply)})();</script>
+{% endblock %}

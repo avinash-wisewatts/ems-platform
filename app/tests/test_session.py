@@ -97,11 +97,26 @@ def test_invalid_session_payloads_fail_closed(
 
 
 @pytest.mark.parametrize(
-    "role_code",
-    ["PLATFORM_ADMIN", "ORG_ADMIN", "OPERATOR", "VIEWER"],
+    ("role_code", "access_scope_mode", "organization_id"),
+    [
+        ("ADMIN", "GLOBAL", None),
+        (
+            "ADMIN",
+            "ORGANIZATION",
+            "11111111-1111-1111-1111-111111111111",
+        ),
+        ("OPERATOR", "GLOBAL", None),
+        (
+            "VIEWER",
+            "ORGANIZATION",
+            "11111111-1111-1111-1111-111111111111",
+        ),
+    ],
 )
 def test_deserializer_accepts_only_controlled_roles(
     role_code: str,
+    access_scope_mode: str,
+    organization_id: str | None,
 ) -> None:
     result = deserialize_authenticated_user(
         {
@@ -109,16 +124,8 @@ def test_deserializer_accepts_only_controlled_roles(
             "username": "user@example.com",
             "display_name": "Test User",
             "role_code": role_code,
-            "organization_id": (
-                None
-                if role_code == "PLATFORM_ADMIN"
-                else "11111111-1111-1111-1111-111111111111"
-            ),
-            "access_scope_mode": (
-                None
-                if role_code == "PLATFORM_ADMIN"
-                else "ORGANIZATION"
-            ),
+            "organization_id": organization_id,
+            "access_scope_mode": access_scope_mode,
             "site_ids": [],
         }
     )
@@ -132,7 +139,7 @@ def test_session_round_trip_preserves_organization_scope() -> None:
         portal_user_id=42,
         username="orgadmin@example.com",
         display_name="Organization Administrator",
-        role_code="ORG_ADMIN",
+        role_code="ADMIN",
         organization_id="11111111-1111-1111-1111-111111111111",
         access_scope_mode="ORGANIZATION",
         site_ids=(),
@@ -152,7 +159,9 @@ def test_platform_admin_session_allows_null_organization_scope() -> None:
         portal_user_id=1,
         username="platform@example.com",
         display_name="Platform Administrator",
-        role_code="PLATFORM_ADMIN",
+        role_code="ADMIN",
+
+        access_scope_mode="GLOBAL",
         organization_id=None,
     )
 
@@ -168,7 +177,7 @@ def test_tenant_role_session_rejects_missing_organization_scope() -> None:
         "portal_user_id": 42,
         "username": "orgadmin@example.com",
         "display_name": "Organization Administrator",
-        "role_code": "ORG_ADMIN",
+        "role_code": "ADMIN",
         "organization_id": None,
     }
 
@@ -180,7 +189,7 @@ def test_session_rejects_invalid_organization_identifier() -> None:
         "portal_user_id": 42,
         "username": "orgadmin@example.com",
         "display_name": "Organization Administrator",
-        "role_code": "ORG_ADMIN",
+        "role_code": "ADMIN",
         "organization_id": "not-a-uuid",
     }
 
@@ -193,6 +202,7 @@ def test_session_round_trip_preserves_selected_site_scope() -> None:
         username="operator@example.com",
         display_name="Scoped Operator",
         role_code="OPERATOR",
+
         organization_id=(
             "11111111-1111-1111-1111-111111111111"
         ),
@@ -220,7 +230,8 @@ def test_session_round_trip_preserves_organization_scope_mode() -> None:
         portal_user_id=21,
         username="org-admin@example.com",
         display_name="Organization Admin",
-        role_code="ORG_ADMIN",
+        role_code="ADMIN",
+
         organization_id=(
             "11111111-1111-1111-1111-111111111111"
         ),
@@ -261,7 +272,7 @@ def test_organization_scope_rejects_site_ids() -> None:
             "portal_user_id": 23,
             "username": "org-admin@example.com",
             "display_name": "Organization Admin",
-            "role_code": "ORG_ADMIN",
+            "role_code": "ADMIN",
             "organization_id": (
                 "11111111-1111-1111-1111-111111111111"
             ),
@@ -278,7 +289,7 @@ def test_organization_scope_rejects_site_ids() -> None:
 @pytest.mark.parametrize(
     "role_code",
     [
-        "ORG_ADMIN",
+        "ADMIN",
         "OPERATOR",
         "VIEWER",
     ],
@@ -301,13 +312,13 @@ def test_tenant_roles_require_organization(
     assert result is None
 
 
-def test_platform_admin_rejects_tenant_scope() -> None:
+def test_admin_accepts_organization_scope() -> None:
     result = deserialize_authenticated_user(
         {
             "portal_user_id": 31,
-            "username": "platform-admin@example.com",
-            "display_name": "Platform Admin",
-            "role_code": "PLATFORM_ADMIN",
+            "username": "organization-admin@example.com",
+            "display_name": "Organization Admin",
+            "role_code": "ADMIN",
             "organization_id": (
                 "11111111-1111-1111-1111-111111111111"
             ),
@@ -316,4 +327,6 @@ def test_platform_admin_rejects_tenant_scope() -> None:
         }
     )
 
-    assert result is None
+    assert result is not None
+    assert result.role_code == "ADMIN"
+    assert result.access_scope_mode == "ORGANIZATION"

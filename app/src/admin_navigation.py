@@ -23,6 +23,7 @@ _OVERVIEW = NavigationItem(
     href="/administration",
     description="Administration workspace and delivery status.",
 )
+
 _ONBOARDING = NavigationItem(
     key="onboarding",
     label="Onboarding",
@@ -39,15 +40,29 @@ _USER_MANAGEMENT = NavigationItem(
     "Manage platform and tenant users.",
 )
 
-_PLATFORM_ITEMS = (
-    NavigationItem("organizations","Organizations","◉","/administration/organizations","Manage EMS tenants.",
-),
-    _USER_MANAGEMENT,
+_ORGANIZATIONS = NavigationItem(
+    "organizations",
+    "Organizations",
+    "◉",
+    "/administration/organizations",
+    "Manage EMS tenants.",
 )
 
 _TENANT_ITEMS = (
-    NavigationItem("sites", "Sites", "⌖", "/administration/sites", "Manage organization sites."),
-    NavigationItem("locations", "Locations", "⌗", "/administration/locations", "Manage buildings, floors, and spaces."),
+    NavigationItem(
+        "sites",
+        "Sites",
+        "⌖",
+        "/administration/sites",
+        "Manage organization sites.",
+    ),
+    NavigationItem(
+        "locations",
+        "Locations",
+        "⌗",
+        "/administration/locations",
+        "Manage buildings, floors, and spaces.",
+    ),
     NavigationItem(
         "assets",
         "Assets",
@@ -55,41 +70,100 @@ _TENANT_ITEMS = (
         "/administration/assets",
         "Manage independent asset inventory.",
     ),
-    NavigationItem("gateways", "Gateways", "◇", "/administration/gateways", "Register and manage gateways."),
-    NavigationItem("devices", "Devices", "▣", "/administration/devices", "Register and manage devices."),
-    NavigationItem("relationships", "Relationships", "⇄", "/administration/relationships", "Manage asset-device assignments."),
-    NavigationItem("metering-coverage", "Metering coverage", "◫", "/administration/metering-coverage", "Review asset metering policy and configuration coverage."),
+    NavigationItem(
+        "gateways",
+        "Gateways",
+        "◇",
+        "/administration/gateways",
+        "Register and manage gateways.",
+    ),
+    NavigationItem(
+        "devices",
+        "Devices",
+        "▣",
+        "/administration/devices",
+        "Register and manage devices.",
+    ),
+    NavigationItem(
+        "metering-coverage",
+        "Metering coverage",
+        "◫",
+        "/administration/metering-coverage",
+        "Review asset metering policy and configuration coverage.",
+    ),
 )
 
 _OPERATIONS_ITEMS = (
-    NavigationItem("commissioning", "Commissioning", "✓", "/administration/commissioning", "Review readiness and commission entities."),
-    NavigationItem("telemetry-validation", "Telemetry validation", "≈", "/administration/telemetry-validation", "Review device configuration and data health."),
-    NavigationItem("reconciliation", "Reconciliation", "!", "/administration/reconciliation", "Resolve operational configuration and provisioning issues."),
-    NavigationItem("audit", "Audit", "◷", None, "Review administration audit history."),
+    NavigationItem(
+        "commissioning",
+        "Commissioning",
+        "✓",
+        "/administration/commissioning",
+        "Review readiness and commission entities.",
+    ),
+    NavigationItem(
+        "telemetry-validation",
+        "Telemetry validation",
+        "≈",
+        "/administration/telemetry-validation",
+        "Review device configuration and data health.",
+    ),
+    NavigationItem(
+        "reconciliation",
+        "Reconciliation",
+        "!",
+        "/administration/reconciliation",
+        "Resolve operational configuration and provisioning issues.",
+    ),
+    NavigationItem(
+        "audit",
+        "Audit",
+        "◷",
+        None,
+        "Review administration audit history.",
+    ),
 )
 
 
-def administration_navigation(role_code: str | None) -> tuple[NavigationSection, ...]:
-    """Return role-aware administration navigation without granting access."""
+def administration_navigation(
+    role_code: str | None,
+    access_scope_mode: str | None = None,
+) -> tuple[NavigationSection, ...]:
+    """Return role-and-scope-aware navigation without granting access."""
 
     sections: list[NavigationSection] = [
         NavigationSection("Workspace", (_OVERVIEW, _ONBOARDING)),
     ]
 
-    if role_code == "PLATFORM_ADMIN":
-        sections.append(NavigationSection("Platform", _PLATFORM_ITEMS))
-    elif role_code == "ORG_ADMIN":
+    if role_code == "ADMIN":
+        administration_items = (
+            (_ORGANIZATIONS, _USER_MANAGEMENT)
+            if access_scope_mode == "GLOBAL"
+            else (_USER_MANAGEMENT,)
+        )
+
         sections.append(
             NavigationSection(
-                "Organization administration",
-                (_USER_MANAGEMENT,),
+                (
+                    "Platform administration"
+                    if access_scope_mode == "GLOBAL"
+                    else "Organization administration"
+                ),
+                administration_items,
             )
         )
 
     sections.extend(
         (
-            NavigationSection("Tenant administration", _TENANT_ITEMS),
-            NavigationSection("Operations", _OPERATIONS_ITEMS),
+            NavigationSection(
+                "Tenant administration",
+                _TENANT_ITEMS,
+            ),
+            NavigationSection(
+                "Operations",
+                _OPERATIONS_ITEMS,
+            ),
         )
     )
+
     return tuple(sections)

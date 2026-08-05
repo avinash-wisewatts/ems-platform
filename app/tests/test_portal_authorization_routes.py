@@ -7,6 +7,9 @@ from src.auth.service import AuthenticationResult
 
 async def authenticate_as(
     role_code: str,
+    *,
+    access_scope_mode: str,
+    organization_id: str | None,
 ) -> AuthenticationResult:
     return AuthenticationResult(
         authenticated=True,
@@ -15,16 +18,9 @@ async def authenticate_as(
             username=f"{role_code.lower()}@example.com",
             display_name=f"Test {role_code}",
             role_code=role_code,
-            organization_id=(
-                None
-                if role_code == "PLATFORM_ADMIN"
-                else "11111111-1111-1111-1111-111111111111"
-            ),
-            access_scope_mode=(
-                None
-                if role_code == "PLATFORM_ADMIN"
-                else "ORGANIZATION"
-            ),
+
+            organization_id=organization_id,
+            access_scope_mode=access_scope_mode,
             site_ids=(),
         ),
         status=AuthenticationStatus.AUTHENTICATED,
@@ -35,12 +31,37 @@ def login_as(
     portal_client,
     monkeypatch: pytest.MonkeyPatch,
     role_code: str,
+    *,
+    access_scope_mode: str | None = None,
+    organization_id: str | None = None,
 ) -> None:
     async def fake_authenticate(
         username: str,
         password: str,
     ) -> AuthenticationResult:
-        return await authenticate_as(role_code)
+        effective_scope = access_scope_mode
+        effective_organization_id = organization_id
+
+        if effective_scope is None:
+            effective_scope = (
+                "GLOBAL"
+                if role_code == "ADMIN"
+                else "ORGANIZATION"
+            )
+
+        if (
+            effective_scope != "GLOBAL"
+            and effective_organization_id is None
+        ):
+            effective_organization_id = (
+                "11111111-1111-1111-1111-111111111111"
+            )
+
+        return await authenticate_as(
+            role_code,
+            access_scope_mode=effective_scope,
+            organization_id=effective_organization_id,
+        )
 
     monkeypatch.setattr(
         "src.main.authenticate_portal_user",
@@ -134,7 +155,7 @@ def test_platform_admin_unknown_write_route_is_rejected(
     login_as(
         portal_client,
         monkeypatch,
-        "PLATFORM_ADMIN",
+        "ADMIN",
     )
 
     response = portal_client.patch(
@@ -178,7 +199,7 @@ def test_super_admin_organization_write_reaches_router(
     login_as(
         portal_client,
         monkeypatch,
-        "PLATFORM_ADMIN",
+        "ADMIN",
     )
 
     response = portal_client.post(
@@ -186,6 +207,6 @@ def test_super_admin_organization_write_reaches_router(
         data={},
     )
 
-    # PLATFORM_ADMIN passes authorization and reaches the real route.
+    # GLOBAL ADMIN passes authorization and reaches the real route.
     # FastAPI rejects the empty form because required fields are missing.
     assert response.status_code == 422

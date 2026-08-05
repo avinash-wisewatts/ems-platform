@@ -147,3 +147,53 @@ async def commission_gateway(
         blocking_conditions=payload.get("blocking_conditions"),
         audit_transaction_id=payload.get("audit_transaction_id"),
     )
+
+
+async def get_gateway_workspace(
+    *, portal_user_id: int, gateway_id: str
+) -> dict[str, Any] | None:
+    """Return one gateway only when it is accessible to the actor."""
+    async with database_connection() as connection:
+        async with connection.cursor() as cursor:
+            await cursor.execute(
+                "SELECT admin.get_gateway_workspace(%s, %s::uuid) AS result",
+                (portal_user_id, gateway_id),
+            )
+            row = await cursor.fetchone()
+        await connection.rollback()
+    return row["result"] if row else None
+
+
+async def update_gateway_workspace(
+    *,
+    portal_user_id: int,
+    gateway_id: str,
+    gateway_name: str,
+    gateway_model_id: str,
+    lifecycle_status: str,
+    building_id: str | None,
+    floor_id: str | None,
+    space_id: str | None,
+    change_reason: str,
+) -> dict[str, Any]:
+    """Update one gateway without changing organization, site, or external ID."""
+    async with database_connection() as connection:
+        try:
+            async with connection.cursor() as cursor:
+                await cursor.execute(
+                    """
+                    SELECT admin.update_gateway_workspace(
+                        %s, %s::uuid, %s, %s::uuid, %s,
+                        %s::uuid, %s::uuid, %s::uuid, %s
+                    ) AS result
+                    """,
+                    (portal_user_id, gateway_id, gateway_name, gateway_model_id,
+                     lifecycle_status, building_id, floor_id, space_id,
+                     change_reason),
+                )
+                row = await cursor.fetchone()
+            await connection.commit()
+        except DatabaseError:
+            await connection.rollback()
+            raise
+    return row["result"]

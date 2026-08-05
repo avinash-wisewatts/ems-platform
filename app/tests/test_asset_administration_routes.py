@@ -42,7 +42,9 @@ def successful_platform_admin_result() -> AuthenticationResult:
             portal_user_id=500,
             username="admin@example.com",
             display_name="Platform Admin",
-            role_code="PLATFORM_ADMIN",
+            role_code="ADMIN",
+
+            access_scope_mode="GLOBAL",
         ),
         status=AuthenticationStatus.AUTHENTICATED,
     )
@@ -224,7 +226,7 @@ def test_asset_administration_get_renders_inventory_and_form(
     assert "Organization One" in response.text
     assert "Main Site" in response.text
     assert "Plant" in response.text
-    assert "Chiller" in response.text
+    assert "/administration/assets/new" in response.text
     assert "NOT_REQUIRED" in response.text
 
 
@@ -276,10 +278,8 @@ def test_asset_administration_creates_asset_with_optional_links(
         },
     )
 
-    assert response.status_code == 201
-    assert "Asset created" in response.text
-    assert str(NEW_ASSET_ID) in response.text
-    assert "MISSING_DIRECT_METER" in response.text
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/administration/assets/{NEW_ASSET_ID}"
 
     assert captured == {
         "portal_user_id": 500,
@@ -342,7 +342,8 @@ def test_asset_administration_allows_asset_without_optional_links(
         },
     )
 
-    assert response.status_code == 201
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/administration/assets/{NEW_ASSET_ID}"
     assert captured["asset_type_id"] == str(ASSET_TYPE_ID)
     assert captured["parent_asset_id"] is None
     assert captured["building_id"] is None

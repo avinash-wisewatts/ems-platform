@@ -124,9 +124,11 @@ async def test_create_managed_user_commits(
         email="viewer@example.com",
         password_hash="$argon2id$test-placeholder",
         role_code="VIEWER",
+        access_scope_mode="ORGANIZATION",
         organization_id=(
             "11111111-1111-1111-1111-111111111111"
         ),
+        site_ids=(),
     )
 
     assert "admin.create_managed_portal_user" in cursor.statement
@@ -137,7 +139,9 @@ async def test_create_managed_user_commits(
         "viewer@example.com",
         "$argon2id$test-placeholder",
         "VIEWER",
+        "ORGANIZATION",
         "11111111-1111-1111-1111-111111111111",
+        [],
     )
     assert result == 42
     assert connection.committed is True
@@ -156,9 +160,6 @@ async def test_change_managed_user_role_commits(
         actor_portal_user_id=10,
         target_portal_user_id=42,
         role_code="OPERATOR",
-        organization_id=(
-            "11111111-1111-1111-1111-111111111111"
-        ),
     )
 
     assert "admin.change_managed_portal_user_role" in cursor.statement
@@ -166,7 +167,6 @@ async def test_change_managed_user_role_commits(
         10,
         42,
         "OPERATOR",
-        "11111111-1111-1111-1111-111111111111",
     )
     assert connection.committed is True
 
@@ -203,6 +203,7 @@ async def test_set_managed_user_access_scope_commits(
         actor_portal_user_id=10,
         target_portal_user_id=42,
         access_scope_mode="SELECTED_SITES",
+        organization_id="11111111-1111-1111-1111-111111111111",
         site_ids=(
             "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
             "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
@@ -217,6 +218,7 @@ async def test_set_managed_user_access_scope_commits(
         10,
         42,
         "SELECTED_SITES",
+        "11111111-1111-1111-1111-111111111111",
         [
             "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
             "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",

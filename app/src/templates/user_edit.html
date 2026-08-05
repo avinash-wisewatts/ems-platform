@@ -1,1 +1,159 @@
-{% extends "base.html" %}{% block title %}Edit {{ portal_user.display_name }} | WiseWatts EMS{% endblock %}{% block breadcrumb %}<nav class="breadcrumb"><a href="/administration/users">User management</a><span>/</span><a href="/administration/users/{{ portal_user.portal_user_id }}">{{ portal_user.display_name }}</a><span>/</span><span class="breadcrumb-current">Edit</span></nav>{% endblock %}{% block content %}<section class="administration-page"><header class="administration-page-header"><div><p class="eyebrow">USER ACCESS</p><h2>Edit access</h2><p>{{ portal_user.display_name }} · {{ portal_user.email or portal_user.username }}</p></div></header><section class="profile-grid"><form method="post" action="/administration/users/{{ portal_user.portal_user_id }}/role" class="form-card"><h3>Role</h3><label>Role<select name="role_code">{% for role in assignable_roles %}<option value="{{ role }}"{% if portal_user.role_code==role %} selected{% endif %}>{{ role }}</option>{% endfor %}</select></label><input type="hidden" name="organization_id" value="{{ portal_user.organization_id or '' }}"><button type="submit">Save role</button></form>{% if portal_user.role_code != 'PLATFORM_ADMIN' %}<form method="post" action="/administration/users/{{ portal_user.portal_user_id }}/scope" class="form-card"><h3>Access scope</h3><label><input type="radio" name="access_scope_mode" value="ORGANIZATION"{% if portal_user.access_scope_mode != 'SELECTED_SITES' %} checked{% endif %}> Entire organization</label><label><input type="radio" name="access_scope_mode" value="SELECTED_SITES"{% if portal_user.access_scope_mode == 'SELECTED_SITES' %} checked{% endif %}> Selected sites</label><fieldset><legend>Assigned sites</legend>{% for site in sites %}{% if site.organization_id|string == portal_user.organization_id|string %}<label><input type="checkbox" name="site_ids" value="{{ site.id }}"{% if site.id in portal_user.site_ids %} checked{% endif %}> {{ site.site_name }}</label>{% endif %}{% endfor %}</fieldset><button type="submit">Save scope</button></form>{% endif %}<form method="post" action="/administration/users/{{ portal_user.portal_user_id }}/status" class="form-card"><h3>Account status</h3><p>{% if portal_user.is_active %}Deactivation blocks portal access without deleting the identity.{% else %}Reactivation restores the current role and scope.{% endif %}</p><input type="hidden" name="is_active" value="{% if portal_user.is_active %}false{% else %}true{% endif %}"><button type="submit" class="{% if portal_user.is_active %}button-warning{% endif %}">{% if portal_user.is_active %}Deactivate{% else %}Reactivate{% endif %}</button></form></section></section>{% endblock %}
+{% extends "base.html" %}
+{% block title %}Edit {{ portal_user.display_name }} | WiseWatts EMS{% endblock %}
+{% block breadcrumb %}
+<nav class="breadcrumb" aria-label="Breadcrumb">
+    <a href="/administration/users">User management</a>
+    <span aria-hidden="true">/</span>
+    <a href="/administration/users/{{ portal_user.portal_user_id }}">{{ portal_user.display_name }}</a>
+    <span aria-hidden="true">/</span>
+    <span class="breadcrumb-current">Edit access</span>
+</nav>
+{% endblock %}
+{% block content %}
+<section class="administration-page user-access-edit-page">
+    <header class="administration-page-header user-access-edit-header">
+        <div>
+            <p class="eyebrow">USER ACCESS</p>
+            <h2>Edit access</h2>
+            <p>Manage this user's role, access boundary, and account status.</p>
+        </div>
+        <a class="button-link secondary" href="/administration/users/{{ portal_user.portal_user_id }}">View profile</a>
+    </header>
+
+    <section class="user-access-summary" aria-label="User access summary">
+        <div class="user-access-avatar" aria-hidden="true">{{ portal_user.display_name[:1]|upper }}</div>
+        <div class="user-access-summary-identity">
+            <h3>{{ portal_user.display_name }}</h3>
+            <p>{{ portal_user.email or portal_user.username }}</p>
+            {% if portal_user.email and portal_user.username != portal_user.email %}<span>{{ portal_user.username }}</span>{% endif %}
+        </div>
+        <div class="user-access-summary-badges">
+            <span class="role-badge role-badge-{{ portal_user.role_code|lower }}">
+                {% if portal_user.role_code == 'ADMIN' %}Administrator{% elif portal_user.role_code == 'OPERATOR' %}Operator{% else %}Viewer{% endif %}
+            </span>
+            <span class="scope-badge">
+                {% if portal_user.access_scope_mode == 'GLOBAL' %}Global{% elif portal_user.access_scope_mode == 'ORGANIZATION' %}Organization{% else %}Selected sites{% endif %}
+            </span>
+            <span class="status-pill{% if portal_user.is_active %} is-positive{% endif %}">{% if portal_user.is_active %}ACTIVE{% else %}INACTIVE{% endif %}</span>
+        </div>
+    </section>
+
+    <section class="user-access-settings-grid">
+        <form method="post" action="/administration/users/{{ portal_user.portal_user_id }}/role" class="form-card user-access-card">
+            <div class="user-access-card-heading">
+                <div class="user-access-card-step">1</div>
+                <div>
+                    <h3>Role</h3>
+                    <p>Controls which administration actions this user may perform. Changing role does not change scope.</p>
+                </div>
+            </div>
+            <label class="user-access-field">
+                <span>Assigned role</span>
+                <select name="role_code">
+                    {% for role in assignable_roles %}
+                    <option value="{{ role }}"{% if portal_user.role_code == role %} selected{% endif %}>
+                        {% if role == 'ADMIN' %}Administrator{% elif role == 'OPERATOR' %}Operator{% else %}Viewer{% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+            <div class="user-access-card-actions">
+                <button type="submit">Save role</button>
+            </div>
+        </form>
+
+        <form method="post" action="/administration/users/{{ portal_user.portal_user_id }}/scope" class="form-card user-access-card user-access-scope-card" data-user-scope-form>
+            <div class="user-access-card-heading">
+                <div class="user-access-card-step">2</div>
+                <div>
+                    <h3>Access scope</h3>
+                    <p>Defines the organizations and sites this user can access. Available choices are limited by your own scope.</p>
+                </div>
+            </div>
+
+            <fieldset class="scope-choice-group">
+                <legend>Access boundary</legend>
+                <div class="scope-choice-grid">
+                    {% if actor_access_scope_mode == 'GLOBAL' %}
+                    <label class="scope-choice-card">
+                        <input type="radio" name="access_scope_mode" value="GLOBAL"{% if portal_user.access_scope_mode == 'GLOBAL' %} checked{% endif %}>
+                        <span><strong>Global</strong><small>Access every organization and site.</small></span>
+                    </label>
+                    {% endif %}
+                    {% if actor_access_scope_mode in ('GLOBAL', 'ORGANIZATION') %}
+                    <label class="scope-choice-card">
+                        <input type="radio" name="access_scope_mode" value="ORGANIZATION"{% if portal_user.access_scope_mode == 'ORGANIZATION' %} checked{% endif %}>
+                        <span><strong>Organization</strong><small>Access every site in one organization.</small></span>
+                    </label>
+                    {% endif %}
+                    <label class="scope-choice-card">
+                        <input type="radio" name="access_scope_mode" value="SELECTED_SITES"{% if portal_user.access_scope_mode == 'SELECTED_SITES' %} checked{% endif %}>
+                        <span><strong>Selected sites</strong><small>Access only explicitly assigned sites.</small></span>
+                    </label>
+                </div>
+            </fieldset>
+
+            <div class="scope-dependent-fields">
+                {% if actor_access_scope_mode == 'GLOBAL' %}
+                <label class="user-access-field" data-scope-organization-field>
+                    <span>Organization</span>
+                    <select name="organization_id" data-scope-organization>
+                        <option value="">Select an organization</option>
+                        {% for organization in organizations %}
+                        <option value="{{ organization.id }}"{% if portal_user.organization_id|string == organization.id|string %} selected{% endif %}>{{ organization.organization_name }}</option>
+                        {% endfor %}
+                    </select>
+                    <small>Required for Organization and Selected sites scope.</small>
+                </label>
+                {% else %}
+                <input type="hidden" name="organization_id" value="{{ actor_organization_id or '' }}" data-scope-organization>
+                {% endif %}
+
+                <fieldset class="site-assignment-fieldset" data-scope-sites-field>
+                    <legend>Assigned sites</legend>
+                    <p class="site-assignment-help">Choose one or more sites within the selected organization.</p>
+                    <div class="site-assignment-list">
+                        {% for site in sites %}
+                        <label class="site-assignment-option" data-site-organization="{{ site.organization_id }}">
+                            <input type="checkbox" name="site_ids" value="{{ site.id }}"{% if site.id in portal_user.site_ids %} checked{% endif %}>
+                            <span>
+                                <strong>{{ site.site_name }}</strong>
+                                <small>{{ site.organization_name }}</small>
+                            </span>
+                        </label>
+                        {% else %}
+                        <p class="empty-inline-message">No accessible sites are available.</p>
+                        {% endfor %}
+                    </div>
+                    <p class="empty-inline-message" data-no-sites-message hidden>No sites are available for the selected organization.</p>
+                </fieldset>
+            </div>
+
+            <div class="user-access-card-actions">
+                <button type="submit">Save access scope</button>
+            </div>
+        </form>
+
+        <form method="post" action="/administration/users/{{ portal_user.portal_user_id }}/status" class="form-card user-access-card account-status-card{% if portal_user.is_active %} is-danger-zone{% endif %}">
+            <div class="user-access-card-heading">
+                <div class="user-access-card-step">3</div>
+                <div>
+                    <h3>Account status</h3>
+                    <p>{% if portal_user.is_active %}Deactivation immediately blocks portal sign-in without deleting the identity or its assignments.{% else %}Reactivation restores access using the role and scope shown above.{% endif %}</p>
+                </div>
+            </div>
+            <div class="account-status-control">
+                <div>
+                    <span class="status-pill{% if portal_user.is_active %} is-positive{% endif %}">{% if portal_user.is_active %}ACTIVE{% else %}INACTIVE{% endif %}</span>
+                    <p>{% if portal_user.is_active %}The user can currently sign in.{% else %}The user cannot currently sign in.{% endif %}</p>
+                </div>
+                <input type="hidden" name="is_active" value="{% if portal_user.is_active %}false{% else %}true{% endif %}">
+                <button type="submit" class="{% if portal_user.is_active %}button-warning{% endif %}">{% if portal_user.is_active %}Deactivate account{% else %}Reactivate account{% endif %}</button>
+            </div>
+        </form>
+    </section>
+</section>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/user-access-edit.js?v=user-access-edit-1" defer></script>
+{% endblock %}

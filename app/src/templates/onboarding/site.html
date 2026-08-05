@@ -303,6 +303,36 @@
                 </select>
             </label>
 
+            <label>
+                Sector classification
+                <span class="field-info">
+                    <span class="field-info-trigger" tabindex="0" aria-label="More information about site sector" aria-describedby="site_sector_help">i</span>
+                    <span id="site_sector_help" class="field-info-content" role="tooltip">Used for sector-specific dashboards, benchmarks, analytics, and reports.</span>
+                </span>
+                {% set selected_sector = form_data.get('site_sector', 'OTHER') %}
+                <select id="site_sector" name="site_sector" required>
+                    {% for sector in site_sectors %}
+                    <option value="{{ sector }}"{% if selected_sector == sector %} selected{% endif %}>{{ sector }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+
+            <label>
+                Telemetry storage interval
+                <span class="field-info">
+                    <span class="field-info-trigger" tabindex="0" aria-label="More information about telemetry storage interval" aria-describedby="site_capture_interval_help">i</span>
+                    <span id="site_capture_interval_help" class="field-info-content" role="tooltip">Controls how often closed telemetry buckets are stored for this site. Raw and normalized telemetry remain full resolution.</span>
+                </span>
+                {% set selected_interval = form_data.get('telemetry_capture_interval_seconds', '60')|string %}
+                <select id="telemetry_capture_interval_seconds" name="telemetry_capture_interval_seconds" required>
+                    <option value="10"{% if selected_interval == '10' %} selected{% endif %}>10 seconds</option>
+                    <option value="30"{% if selected_interval == '30' %} selected{% endif %}>30 seconds</option>
+                    <option value="60"{% if selected_interval == '60' %} selected{% endif %}>1 minute</option>
+                    <option value="300"{% if selected_interval == '300' %} selected{% endif %}>5 minutes</option>
+                    <option value="900"{% if selected_interval == '900' %} selected{% endif %}>15 minutes</option>
+                </select>
+            </label>
+
             <label class="full-width">
                 Site address
 

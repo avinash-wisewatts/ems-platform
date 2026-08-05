@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Create device | WiseWatts EMS{% endblock %}
+{% block breadcrumb %}<nav class="breadcrumb"><a href="/administration">Administration</a><span>/</span><a href="/administration/devices">Devices</a><span>/</span><span class="breadcrumb-current">Create</span></nav>{% endblock %}
+{% block content %}
+<section class="administration-page form-page device-create-page">
+<header class="administration-page-header"><div><p class="eyebrow">DEVICE ADMINISTRATION</p><h2>Create device</h2><p>Register the device identity, installation context, and telemetry parsing contract.</p></div><a class="button button-secondary" href="/administration/devices">Cancel</a></header>
+{% if error %}<div class="alert alert-error" role="alert">{{ error }}</div>{% endif %}
+<form method="post" action="/administration/devices" class="surface-panel entity-form" data-device-form>
+<section class="form-section">
+  <div class="form-section-heading"><h3>Installation</h3><p>Select an accessible gateway. Device ownership and site are derived from it.</p></div>
+  <div class="form-grid">
+    <label class="field-full"><span>Gateway</span>
+      <select name="gateway_id" required data-device-gateway>
+        <option value="">Select gateway</option>
+        {% for g in gateways %}
+        <option value="{{ g.gateway_id }}" data-site="{{ g.site_id }}" data-building="{{ g.building_id or '' }}" data-floor="{{ g.floor_id or '' }}" data-space="{{ g.space_id or '' }}" data-location-path="{{ g.location_path or g.gateway_location_path or 'Site level' }}"{% if form_data.get('gateway_id')|string == g.gateway_id|string %} selected{% endif %}>{{ g.gateway_name }} — {{ g.external_id }} · {{ g.site_name }}{% if g.location_path or g.gateway_location_path %} · {{ g.location_path or g.gateway_location_path }}{% endif %}</option>
+        {% endfor %}
+      </select>
+      <span class="field-help" data-gateway-context>Select a gateway to load its site and physical-location hierarchy.</span>
+    </label>
+
+    <label class="field-full device-location-inherit-control" for="use_gateway_location">
+      <input id="use_gateway_location" class="device-location-inherit-checkbox" type="checkbox" name="use_gateway_location" data-use-gateway-location{% if form_data.get('use_gateway_location') %} checked{% endif %}>
+      <span class="device-location-inherit-label"><strong>Inherit the gateway's physical location</strong><small>The device will follow future gateway location changes. Clear this to select an explicit location within the same site.</small></span>
+    </label>
+
+    <label><span>Building</span><select name="device_location_building_id" data-building data-selected-value="{{ form_data.get('device_location_building_id','') }}"><option value="">Site level</option></select></label>
+    <label><span>Floor</span><select name="device_location_floor_id" data-floor data-selected-value="{{ form_data.get('device_location_floor_id','') }}"><option value="">No floor</option></select></label>
+    <label><span>Space</span><select name="device_location_space_id" data-space data-selected-value="{{ form_data.get('device_location_space_id','') }}"><option value="">No space</option></select></label>
+    <div class="field-full device-location-summary" data-device-location-summary aria-live="polite">Select a gateway to view location context.</div>
+  </div>
+</section>
+
+<section class="form-section">
+  <div class="form-section-heading"><h3>Device identity</h3></div>
+  <div class="form-grid">
+    <label><span>Device name</span><input name="device_name" maxlength="200" required value="{{ form_data.get('device_name','') }}" autocomplete="off"></label>
+    <label><span>System-created external ID</span><input name="external_id" maxlength="100" value="{{ form_data.get('external_id','') }}" data-device-external-id readonly aria-describedby="device_external_preview_help"><span id="device_external_preview_help" class="field-help">Live preview: <code data-device-external-id-preview>{{ form_data.get('external_id','DEVICE') }}</code>. The database adds a suffix when needed.</span></label>
+    <label><span>Device category</span><select name="device_category_id" required data-device-category><option value="">Select category</option>{% for c in categories %}<option value="{{ c.id }}"{% if form_data.get('device_category_id')|string == c.id|string %} selected{% endif %}>{{ c.name }}</option>{% endfor %}</select></label>
+    <label><span>Device model</span><select name="device_model_id" required data-device-model><option value="">Select a category first</option>{% for m in models %}<option value="{{ m.id }}" data-category="{{ m.device_category_id }}" data-vendor="{{ m.vendor or 'Generic' }}"{% if form_data.get('device_model_id')|string == m.id|string %} selected{% endif %}>{{ m.vendor or 'Generic' }} — {{ m.model }}</option>{% endfor %}</select><span class="field-help" data-model-empty hidden>No active models are compatible with the selected category.</span></label>
+    <label><span>Manufacturer</span><input data-device-manufacturer value="" readonly></label>
+    <label><span>Serial number</span><input name="serial_number" maxlength="200" value="{{ form_data.get('serial_number','') }}"></label>
+  </div>
+</section>
+
+<section class="form-section">
+  <div class="form-section-heading"><h3>Communication and telemetry</h3><p>The profile and UID resolve, parse, normalize, and route incoming telemetry.</p></div>
+  <div class="form-grid">
+    <label><span>Communication protocol</span><select name="protocol" required>{% for protocol in device_protocols %}<option value="{{ protocol }}"{% if form_data.get('protocol','MQTT') == protocol %} selected{% endif %}>{{ protocol }}</option>{% endfor %}</select></label>
+    <label><span>Firmware version</span><input name="firmware_version" maxlength="100" value="{{ form_data.get('firmware_version','') }}"></label>
+    <label class="field-full"><span>Compatible telemetry profile</span><select name="profile_id" required data-device-profile><option value="">Select a category first</option>{% for p in profiles %}<option value="{{ p.id }}" data-categories="{{ p.device_category_ids|join(',') }}"{% if form_data.get('profile_id')|string == p.id|string %} selected{% endif %}>{{ p.profile_name }} — {{ p.profile_code }}</option>{% endfor %}</select><span class="field-help" data-profile-empty hidden>No active telemetry profiles are compatible with the selected category.</span></label>
+    <label><span>Identifier type</span><select name="identifier_type" required>{% for kind in identifier_types %}<option value="{{ kind }}"{% if form_data.get('identifier_type','MQTT_UID') == kind %} selected{% endif %}>{{ kind|replace('_',' ')|title }}</option>{% endfor %}</select></label>
+    <label><span>MQTT UID</span><input name="identifier_value" required maxlength="255" placeholder="80:34:28:16:09:eb:00:01" value="{{ form_data.get('identifier_value','') }}"></label>
+  </div>
+</section>
+
+<section class="form-section"><div class="form-section-heading"><h3>Operational and lifecycle</h3><p>Operational policy determines whether asset assignment is required before commissioning.</p></div><div class="form-grid"><label><span>Operational policy</span><select name="operational_policy" required>{% for policy in operational_policies %}<option value="{{ policy }}"{% if form_data.get('operational_policy','ASSET_ASSIGNED') == policy %} selected{% endif %}>{{ policy|replace('_',' ')|title }}</option>{% endfor %}</select></label><label><span>Initial lifecycle status</span><select name="lifecycle_status" required>{% for status in device_lifecycle_statuses %}{% if status != 'ACTIVE' %}<option value="{{ status }}"{% if form_data.get('lifecycle_status','REGISTERED') == status %} selected{% endif %}>{{ status|replace('_',' ')|title }}</option>{% endif %}{% endfor %}</select></label></div></section>
+<div class="form-actions sticky-actions"><a class="button button-secondary" href="/administration/devices">Cancel</a><button class="button button-primary" type="submit">Create device</button></div>
+</form>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>window.deviceHierarchy={{ hierarchy_rows|tojson }};window.deviceSelected={{ {'gateway_id':form_data.get('gateway_id',''),'building_id':form_data.get('device_location_building_id',''),'floor_id':form_data.get('device_location_floor_id',''),'space_id':form_data.get('device_location_space_id','')}|tojson }};</script>
+<script src="/static/js/device-workspace.js?v=device-workspace-20260802-3"></script>
+{% endblock %}

@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Edit {{ site.site_name }} | Sites{% endblock %}
+{% block breadcrumb %}<nav class="breadcrumb"><a href="/administration">Administration</a><span>/</span><a href="/administration/sites">Sites</a><span>/</span><a href="/administration/sites/{{ site.site_id }}">{{ site.site_name }}</a><span>/</span><span class="breadcrumb-current">Edit</span></nav>{% endblock %}
+{% block content %}
+<section class="administration-page form-page">
+<header class="administration-page-header"><div><p class="eyebrow">SITE ADMINISTRATION</p><h2>Edit site</h2><p>Organization and site code are immutable.</p></div><a class="button button-secondary" href="/administration/sites/{{ site.site_id }}">Cancel</a></header>
+{% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+<form method="post" action="/administration/sites/{{ site.site_id }}/edit" class="surface-panel entity-form">
+<section class="form-section"><div class="form-section-heading"><h3>Identity and lifecycle</h3></div><div class="form-grid">
+<label><span>Organization</span><input value="{{ site.organization_name }}" disabled></label>
+<label><span>Site code</span><input value="{{ site.site_code }}" disabled></label>
+<label><span>Site name</span><input name="site_name" required maxlength="200" value="{{ form_data.get('site_name',site.site_name) }}"></label>
+<label><span>Lifecycle status</span><select name="lifecycle_status">{% for status in lifecycle_statuses %}<option value="{{ status }}"{% if form_data.get('lifecycle_status',site.lifecycle_status) == status %} selected{% endif %}>{{ status|title }}</option>{% endfor %}</select></label>
+</div></section>
+<section class="form-section"><div class="form-section-heading"><h3>Regional settings</h3></div><div class="form-grid">
+<label><span>IANA timezone <span class="field-info"><span class="field-info-trigger" tabindex="0" aria-label="More information about site timezone" aria-describedby="site_edit_timezone_help">i</span><span id="site_edit_timezone_help" class="field-info-content" role="tooltip">Used for site-local timestamps, schedules, reports, and alerts.</span></span></span><select name="site_timezone" required><option value="Asia/Kolkata"{% if form_data.get('site_timezone',site.timezone or 'Asia/Kolkata') == 'Asia/Kolkata' %} selected{% endif %}>Asia/Kolkata — UTC+05:30</option></select></label>
+<label><span>Telemetry storage interval <span class="field-info"><span class="field-info-trigger" tabindex="0" aria-label="More information about telemetry storage interval" aria-describedby="site_capture_interval_help">i</span><span id="site_capture_interval_help" class="field-info-content" role="tooltip">Stores one closed telemetry bucket at this interval. Raw and normalized telemetry remain full resolution.</span></span></span><select name="telemetry_capture_interval_seconds" required>{% set current_interval = form_data.get('telemetry_capture_interval_seconds', site.telemetry_capture_interval_seconds if site is defined else 60)|string %}<option value="10"{% if current_interval == '10' %} selected{% endif %}>10 seconds</option><option value="30"{% if current_interval == '30' %} selected{% endif %}>30 seconds</option><option value="60"{% if current_interval == '60' %} selected{% endif %}>1 minute</option><option value="300"{% if current_interval == '300' %} selected{% endif %}>5 minutes</option><option value="900"{% if current_interval == '900' %} selected{% endif %}>15 minutes</option></select></label>
+<label><span>Country</span><select name="country"><option value="India"{% if form_data.get('country',site.address.get('country') or 'India') == 'India' %} selected{% endif %}>India</option></select></label>
+</div></section>
+<section class="form-section"><div class="form-section-heading"><h3>Address</h3></div><div class="form-grid">
+<label><span>Address line 1</span><input name="address_line1" value="{{ form_data.get('address_line1',site.address.get('line1','')) }}"></label>
+<label><span>Address line 2</span><input name="address_line2" value="{{ form_data.get('address_line2',site.address.get('line2','')) }}"></label>
+<label><span>City</span><input name="city" value="{{ form_data.get('city',site.address.get('city','')) }}"></label>
+<label><span>State / region</span><input name="region" value="{{ form_data.get('region',site.address.get('region','')) }}"></label>
+<label><span>Postal code</span><input name="postal_code" value="{{ form_data.get('postal_code',site.address.get('postal_code','')) }}"></label>
+</div></section>
+<section class="form-section"><label class="field-full"><span>Change reason <span class="field-info"><span class="field-info-trigger" tabindex="0" aria-label="More information about change reason" aria-describedby="site_edit_change_reason_help">i</span><span id="site_edit_change_reason_help" class="field-info-content" role="tooltip">Required for the audit trail, especially for lifecycle changes. Do not enter passwords, credentials, or secrets.</span></span></span><textarea name="change_reason" required rows="4">{{ form_data.get('change_reason','Site administration update') }}</textarea></label></section>
+<div class="form-actions sticky-actions"><a class="button button-secondary" href="/administration/sites/{{ site.site_id }}">Cancel</a><button class="button button-primary" type="submit">Save changes</button></div>
+</form></section>
+{% endblock %}

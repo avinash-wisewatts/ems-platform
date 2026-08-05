@@ -27,7 +27,11 @@ async def _execute_result(query: str, params: tuple) -> dict[str, Any]:
     return build_entity_result(payload, entity_type="ASSET_DEVICE_RELATIONSHIP", entity_id=payload.get("relationship_id"), audit_transaction_id=payload.get("audit_transaction_id"))
 
 async def list_relationship_types() -> list[dict[str, Any]]:
-    return await _read_all("SELECT code,name,description,exclusivity_policy FROM config.asset_device_relationship_types WHERE is_active=TRUE ORDER BY display_order,code")
+    return await _read_all(
+        "SELECT code,name,description,exclusivity_policy "
+        "FROM config.asset_device_relationship_types "
+        "WHERE is_active=TRUE ORDER BY display_order,code"
+    )
 
 async def list_accessible_relationships(*, portal_user_id: int) -> list[dict[str, Any]]:
     return await _read_all("SELECT * FROM admin.list_accessible_asset_device_relationships(%s)", (portal_user_id,))

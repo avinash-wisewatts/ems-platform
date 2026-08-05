@@ -2,7 +2,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SQL = (ROOT / "postgres/migrations/118_device_lifecycle_management.sql").read_text()
-TEMPLATE = (ROOT / "app/src/templates/devices.html").read_text()
+EDIT = (ROOT / "app/src/templates/device_edit.html").read_text()
 MAIN = (ROOT / "app/src/main.py").read_text()
 
 
@@ -30,6 +30,6 @@ def test_decommissioning_preserves_history():
 
 
 def test_portal_exposes_lifecycle_action():
-    assert "/administration/devices/{device_id}/lifecycle" in MAIN
-    assert "Lifecycle action" in TEMPLATE
-    assert "Routine reactivation is blocked" in TEMPLATE
+    assert "/administration/devices/{device_id}/edit" in MAIN
+    assert "Lifecycle status" in EDIT
+    assert "controlled commissioning action" in MAIN

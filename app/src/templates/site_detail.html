@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}{{ site.site_name }} | Sites{% endblock %}
+{% block breadcrumb %}
+<nav class="breadcrumb" aria-label="Breadcrumb">
+    <a href="/administration">Administration</a>
+    <span>/</span>
+    <a href="/administration/sites">Sites</a>
+    <span>/</span>
+    <span class="breadcrumb-current">{{ site.site_name }}</span>
+</nav>
+{% endblock %}
+{% block content %}
+<section class="administration-page site-detail-page">
+    <header class="administration-page-header">
+        <div>
+            <p class="eyebrow">SITE DETAILS</p>
+            <h2>{{ site.site_name }}</h2>
+            <p>{{ site.organization_name }} · {{ site.site_code }}</p>
+        </div>
+        <div class="row-actions">
+            <a class="button button-secondary" href="/administration/sites">Back</a>
+            {% if can_edit %}
+            <a class="button button-primary" href="/administration/sites/{{ site.site_id }}/edit">Edit</a>
+            {% endif %}
+        </div>
+    </header>
+
+    <div class="administration-detail-sections">
+        <section class="surface-panel administration-detail-section">
+            <h3>Identity</h3>
+            <div class="table-scroll">
+                <table class="data-table administration-detail-table">
+                    <tbody>
+                        <tr><th scope="row">Name</th><td>{{ site.site_name }}</td></tr>
+                        <tr><th scope="row">Code</th><td><code>{{ site.site_code }}</code></td></tr>
+                        <tr><th scope="row">Organization</th><td>{{ site.organization_name }}</td></tr>
+                        <tr>
+                            <th scope="row">Lifecycle status</th>
+                            <td><span class="status-pill{% if site.lifecycle_status == 'ACTIVE' %} is-positive{% elif site.lifecycle_status in ('INACTIVE', 'DECOMMISSIONED') %} is-warning{% endif %}">{{ site.lifecycle_status }}</span></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="surface-panel administration-detail-section">
+            <h3>Regional configuration</h3>
+            <div class="table-scroll">
+                <table class="data-table administration-detail-table">
+                    <tbody>
+                        <tr>
+                            <th scope="row">Timezone</th>
+                            <td>{% if site.timezone == 'Asia/Kolkata' %}Asia/Kolkata — UTC+05:30{% else %}{{ site.timezone or '—' }}{% endif %}</td>
+                        </tr>
+                        <tr><th scope="row">Telemetry storage interval</th><td>{% set interval = site.telemetry_capture_interval_seconds|default(60)|int %}{% if interval == 10 %}10 seconds{% elif interval == 30 %}30 seconds{% elif interval == 60 %}1 minute{% elif interval == 300 %}5 minutes{% elif interval == 900 %}15 minutes{% else %}{{ interval }} seconds{% endif %}</td></tr>
+                        <tr><th scope="row">Country</th><td>{{ site.address.get('country') or '—' }}</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="surface-panel administration-detail-section">
+            <h3>Address</h3>
+            <div class="table-scroll">
+                <table class="data-table administration-detail-table">
+                    <tbody>
+                        <tr><th scope="row">Address line 1</th><td>{{ site.address.get('line1') or '—' }}</td></tr>
+                        <tr><th scope="row">Address line 2</th><td>{{ site.address.get('line2') or '—' }}</td></tr>
+                        <tr><th scope="row">City</th><td>{{ site.address.get('city') or '—' }}</td></tr>
+                        <tr><th scope="row">State / region</th><td>{{ site.address.get('region') or '—' }}</td></tr>
+                        <tr><th scope="row">Postal code</th><td>{{ site.address.get('postal_code') or '—' }}</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="surface-panel administration-detail-section">
+            <h3>Record information</h3>
+            <div class="table-scroll">
+                <table class="data-table administration-detail-table">
+                    <tbody>
+                        <tr><th scope="row">Created</th><td>{{ site.created_at|date_time if site.created_at else '—' }}</td></tr>
+                        <tr><th scope="row">Last updated</th><td>{{ site.updated_at|date_time if site.updated_at else '—' }}</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </div>
+</section>
+{% endblock %}

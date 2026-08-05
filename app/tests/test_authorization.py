@@ -14,8 +14,7 @@ from src.auth.models import AuthenticatedPortalUser
 @pytest.mark.parametrize(
     ("role_code", "expected_role"),
     [
-        ("PLATFORM_ADMIN", PortalRole.PLATFORM_ADMIN),
-        ("ORG_ADMIN", PortalRole.ORG_ADMIN),
+        ("ADMIN", PortalRole.ADMIN),
         ("OPERATOR", PortalRole.OPERATOR),
         ("VIEWER", PortalRole.VIEWER),
     ],
@@ -29,6 +28,8 @@ def test_portal_role_resolves_controlled_roles(
         username="user@example.com",
         display_name="Test User",
         role_code=role_code,
+
+        access_scope_mode="GLOBAL",
     )
 
     assert portal_role(user) is expected_role
@@ -40,6 +41,8 @@ def test_unknown_portal_role_fails_closed() -> None:
         username="user@example.com",
         display_name="Test User",
         role_code="UNRECOGNIZED_ROLE",
+
+        access_scope_mode="GLOBAL",
     )
 
     assert portal_role(user) is None
@@ -52,54 +55,24 @@ def test_unknown_portal_role_fails_closed() -> None:
     ("role_code", "permission", "expected"),
     [
         (
-            "PLATFORM_ADMIN",
+            "ADMIN",
             PortalPermission.DASHBOARD_VIEW,
             True,
         ),
         (
-            "PLATFORM_ADMIN",
+            "ADMIN",
             PortalPermission.COMMISSIONING_EXECUTE,
             True,
         ),
         (
-            "PLATFORM_ADMIN",
+            "ADMIN",
             PortalPermission.COMMISSIONING_EXECUTE,
             True,
         ),
         (
-            "PLATFORM_ADMIN",
+            "ADMIN",
             PortalPermission.USER_MANAGE,
             True,
-        ),
-        (
-            "ORG_ADMIN",
-            PortalPermission.DASHBOARD_VIEW,
-            True,
-        ),
-        (
-            "ORG_ADMIN",
-            PortalPermission.COMMISSIONING_EXECUTE,
-            True,
-        ),
-        (
-            "ORG_ADMIN",
-            PortalPermission.COMMISSIONING_EXECUTE,
-            True,
-        ),
-        (
-            "ORG_ADMIN",
-            PortalPermission.ORGANIZATION_MANAGE,
-            False,
-        ),
-        (
-            "ORG_ADMIN",
-            PortalPermission.USER_MANAGE,
-            True,
-        ),
-        (
-            "ORG_ADMIN",
-            PortalPermission.ORGANIZATION_MANAGE,
-            False,
         ),
         (
             "OPERATOR",
@@ -142,7 +115,7 @@ def test_unknown_portal_role_fails_closed() -> None:
             False,
         ),
         (
-            "PLATFORM_ADMIN",
+            "ADMIN",
             PortalPermission.ORGANIZATION_MANAGE,
             True,
         ),
@@ -168,6 +141,8 @@ def test_role_permission_matrix(
         username="user@example.com",
         display_name="Test User",
         role_code=role_code,
+
+        access_scope_mode="GLOBAL",
     )
 
     assert has_permission(user, permission) is expected
@@ -275,13 +250,8 @@ def test_story_3_2_exposes_all_canonical_permissions() -> None:
     ("role", "expected_codes"),
     [
         (
-            PortalRole.PLATFORM_ADMIN,
+            PortalRole.ADMIN,
             CANONICAL_PERMISSION_CODES,
-        ),
-        (
-            PortalRole.ORG_ADMIN,
-            CANONICAL_PERMISSION_CODES
-            - {"organization.manage"},
         ),
         (
             PortalRole.OPERATOR,
@@ -327,6 +297,15 @@ def test_story_3_2_role_permission_mapping_is_declarative(
         ),
         (
             "/administration/locations",
+            PortalPermission.LOCATION_MANAGE,
+        ),
+        (
+            "/administration/locations/new",
+            PortalPermission.LOCATION_MANAGE,
+        ),
+        (
+            "/administration/locations/building/"
+            "33333333-3333-4333-8333-333333333333/edit",
             PortalPermission.LOCATION_MANAGE,
         ),
     ],

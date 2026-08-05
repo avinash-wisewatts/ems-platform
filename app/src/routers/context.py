@@ -69,7 +69,7 @@ async def clear_organization(
     ] = "/administration/organizations",
 ) -> RedirectResponse:
     user = require_authenticated_portal_user(request)
-    if user.role_code != "PLATFORM_ADMIN":
+    if user.access_scope_mode != "GLOBAL":
         return _redirect("/forbidden")
 
     clear_active_organization(request)

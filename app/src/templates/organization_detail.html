@@ -12,38 +12,25 @@
 
 {% block content %}
 <section class="administration-page organization-workspace">
-    <header class="entity-identity-header">
+    <header class="administration-page-header">
         <div>
-            <p class="eyebrow">ORGANIZATION</p>
+            <p class="eyebrow">ORGANIZATION DETAILS</p>
             <h2>{{ organization.organization_name }}</h2>
-            <p class="entity-code">{{ organization.organization_code }}</p>
+            <p>{{ organization.organization_code }}</p>
         </div>
-
-        <div class="identity-actions">
-            <span class="status-pill{% if organization.lifecycle_status == 'ACTIVE' %} is-positive{% else %} is-warning{% endif %}">
-                {{ organization.lifecycle_status }}
-            </span>
+        <div class="row-actions">
+            <a class="button button-secondary" href="/administration/organizations">Back</a>
+            {% if can_edit %}
+            <a class="button button-primary" href="/administration/organizations/{{ organization.organization_id }}/edit">Edit</a>
+            {% endif %}
         </div>
     </header>
-
-    <nav class="workspace-tabs" aria-label="Organization workspace">
-        <a
-            class="is-active"
-            aria-current="page"
-            href="/administration/organizations/{{ organization.organization_id }}"
-        >
-            Overview
-        </a>
-        <a href="/administration/organizations/{{ organization.organization_id }}/edit">
-            Settings
-        </a>
-    </nav>
 
     <div class="organization-overview-sections">
         <section class="surface-panel organization-detail-section">
             <h3>Identity</h3>
             <div class="table-scroll">
-                <table class="data-table organization-detail-table">
+                <table class="data-table organization-detail-table administration-detail-table">
                     <tbody>
                         <tr>
                             <th scope="row">Name</th>
@@ -69,7 +56,7 @@
         <section class="surface-panel organization-detail-section">
             <h3>Regional configuration</h3>
             <div class="table-scroll">
-                <table class="data-table organization-detail-table">
+                <table class="data-table organization-detail-table administration-detail-table">
                     <tbody>
                         <tr>
                             <th scope="row">Timezone</th>
@@ -93,7 +80,7 @@
         <section class="surface-panel organization-detail-section">
             <h3>Primary contact</h3>
             <div class="table-scroll">
-                <table class="data-table organization-detail-table">
+                <table class="data-table organization-detail-table administration-detail-table">
                     <tbody>
                         <tr>
                             <th scope="row">Name</th>
@@ -115,7 +102,7 @@
         <section class="surface-panel organization-detail-section">
             <h3>Address</h3>
             <div class="table-scroll">
-                <table class="data-table organization-detail-table">
+                <table class="data-table organization-detail-table administration-detail-table">
                     <tbody>
                         <tr>
                             <th scope="row">Address line 1</th>
@@ -149,7 +136,7 @@
         <section class="surface-panel organization-detail-section">
             <h3>Record information</h3>
             <div class="table-scroll">
-                <table class="data-table organization-detail-table">
+                <table class="data-table organization-detail-table administration-detail-table">
                     <tbody>
                         <tr>
                             <th scope="row">Created</th>
@@ -211,7 +198,7 @@
             </div>
 
             <div class="table-scroll">
-                <table class="data-table organization-detail-table">
+                <table class="data-table organization-detail-table administration-detail-table">
                     <tbody>
                         <tr>
                             <th scope="row">EMS provisioning</th>
