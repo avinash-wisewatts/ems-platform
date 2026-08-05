@@ -236,3 +236,4 @@ source_file,target_category,target_path,notes
 171_seed_platform_interval_quality_rule.sql,migration,postgres/migrations/171_seed_platform_interval_quality_rule.sql,Seed the required platform fallback interval-quality rule
 172_prevent_non_energy_rows_in_energy_route.sql,migration,postgres/migrations/172_prevent_non_energy_rows_in_energy_route.sql,Prevent non-energy telemetry from entering the energy measurement route
 173_telegraf_schema_privilege_hardening.sql,migration,postgres/migrations/173_telegraf_schema_privilege_hardening.sql,Harden Telegraf to the public insert-only adapter and revoke direct telemetry schema access
+174_short_raw_retention_and_failure_quarantine.sql,migration,postgres/migrations/174_short_raw_retention_and_failure_quarantine.sql,Reduce successful raw retention to seven days and quarantine zero-output normalization failures for thirty days
