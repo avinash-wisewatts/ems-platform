@@ -1,3 +1,7 @@
+-- RETIRED PROTOTYPE FILE — DO NOT EXECUTE.
+-- This file is retained only for historical reference. Use
+-- scripts/deploy_database.sh and docs/operations/TELEMETRY_PIPELINE.md.
+
 CREATE SCHEMA IF NOT EXISTS telemetry;
 
 CREATE OR REPLACE VIEW telemetry.v_rtdata AS

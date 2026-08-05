@@ -48,7 +48,13 @@ SELECT
     a.metadata,
 
     a.created_at,
-    a.updated_at
+    a.updated_at,
+
+    -- Preserve the expanded canonical v_assets contract introduced by
+    -- asset meter coverage. Keeping this column here makes repeated canonical
+    -- deployment idempotent because CREATE OR REPLACE VIEW cannot remove
+    -- columns from an existing view.
+    a.metering_requirement
 
 FROM metadata.grafana_organization_map gom
 
@@ -68,7 +74,7 @@ WHERE gom.is_active = TRUE;
 
 
 COMMENT ON VIEW analytics.v_assets IS
-'Tenant-safe operational asset hierarchy for Grafana variables and asset dashboards.';
+'Tenant-safe operational asset hierarchy for Grafana variables, asset dashboards, and metering-policy analytics.';
 
 
 -- ----------------------------------------------------------------------------

@@ -1,3 +1,7 @@
+-- RETIRED PROTOTYPE FILE — DO NOT EXECUTE.
+-- This file is retained only for historical reference. Use
+-- scripts/deploy_database.sh and docs/operations/TELEMETRY_PIPELINE.md.
+
 -- ============================================================================
 -- WiseWatts EMS
 -- Phase 6 - Ingestion Layer

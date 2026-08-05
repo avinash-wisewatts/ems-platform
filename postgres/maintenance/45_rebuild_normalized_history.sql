@@ -7,7 +7,11 @@
 --   metadata resolution.
 --
 -- Source of truth:
---   public.mqtt_staging
+--   telemetry.raw_messages
+--
+-- Note:
+--   public.mqtt_staging is an INSERT-only compatibility adapter view and must
+--   not be queried for retained telemetry.
 --
 -- Transactional behavior:
 --   Run this script using psql -1. If normalization fails, the TRUNCATE and

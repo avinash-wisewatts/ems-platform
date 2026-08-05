@@ -267,6 +267,8 @@ CREATE TABLE IF NOT EXISTS telemetry.energy_measurements (
     -- Harmonics
     --------------------------------------------------------------------------
 
+    current_thd_total_percent DOUBLE PRECISION,
+
     current_thd_l1_percent DOUBLE PRECISION,
 
     current_thd_l2_percent DOUBLE PRECISION,
@@ -278,6 +280,14 @@ CREATE TABLE IF NOT EXISTS telemetry.energy_measurements (
     voltage_thd_l2_percent DOUBLE PRECISION,
 
     voltage_thd_l3_percent DOUBLE PRECISION,
+
+
+
+    --------------------------------------------------------------------------
+    -- Pulse Counter
+    --------------------------------------------------------------------------
+
+    pulse_count BIGINT,
 
 
 

@@ -94,13 +94,30 @@ BEGIN
             'telegraf_writer unexpectedly has INSERT on telemetry.telegraf_ingest';
     END IF;
 
+    -- telemetry.mqtt_staging belonged to the retired ingestion model.
+    -- The canonical persisted landing table is telemetry.raw_messages, while
+    -- Telegraf inserts only through public.mqtt_staging.
+    IF to_regclass('telemetry.mqtt_staging') IS NOT NULL THEN
+        RAISE EXCEPTION
+            'retired relation telemetry.mqtt_staging unexpectedly exists';
+    END IF;
+
     IF has_table_privilege(
         'telegraf_writer',
-        'telemetry.mqtt_staging',
+        'telemetry.raw_messages',
         'INSERT'
     ) THEN
         RAISE EXCEPTION
-            'telegraf_writer unexpectedly has INSERT on telemetry.mqtt_staging';
+            'telegraf_writer unexpectedly has direct INSERT on telemetry.raw_messages';
+    END IF;
+
+    IF has_table_privilege(
+        'telegraf_writer',
+        'telemetry.raw_messages',
+        'SELECT'
+    ) THEN
+        RAISE EXCEPTION
+            'telegraf_writer unexpectedly has SELECT on telemetry.raw_messages';
     END IF;
 END
 $$;
@@ -255,13 +272,30 @@ BEGIN
             'telegraf_writer must not insert into telemetry.telegraf_ingest';
     END IF;
 
+    -- The retired telemetry.mqtt_staging relation must not reappear.
+    IF to_regclass('telemetry.mqtt_staging') IS NOT NULL THEN
+        RAISE EXCEPTION
+            'retired relation telemetry.mqtt_staging unexpectedly exists';
+    END IF;
+
+    -- Telegraf must not bypass the public adapter and write directly
+    -- to the canonical raw table.
     IF has_table_privilege(
         'telegraf_writer',
-        'telemetry.mqtt_staging',
+        'telemetry.raw_messages',
         'INSERT'
     ) THEN
         RAISE EXCEPTION
-            'telegraf_writer must not insert into telemetry.mqtt_staging';
+            'telegraf_writer must not insert directly into telemetry.raw_messages';
+    END IF;
+
+    IF has_table_privilege(
+        'telegraf_writer',
+        'telemetry.raw_messages',
+        'SELECT'
+    ) THEN
+        RAISE EXCEPTION
+            'telegraf_writer must not read telemetry.raw_messages';
     END IF;
 END
 $$;

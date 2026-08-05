@@ -3,7 +3,8 @@
 # WiseWatts EMS — Live MQTT Energy Pipeline Smoke Test
 #
 # Validates:
-#   HiveMQ -> Telegraf -> public.mqtt_staging
+#   HiveMQ -> Telegraf -> public.mqtt_staging (insert-only adapter)
+#   -> telemetry.raw_messages (canonical persisted landing table)
 #   -> telemetry.normalized_points
 #   -> telemetry.energy_measurements
 #
@@ -213,13 +214,19 @@ mosquitto_pub \
 pass "MQTT message published successfully"
 
 wait_for_value \
-    "Message reached public.mqtt_staging" \
+    "Message persisted in telemetry.raw_messages" \
     "
     SELECT count(*)::text
-    FROM public.mqtt_staging
-    WHERE tags ->> 'topic' = '${TEST_TOPIC}'
-      AND fields ->> 'value' LIKE '%\"ts\": ${TEST_TS}%'
-      AND fields ->> 'value' LIKE '%\"P\": ${TEST_POWER}%';
+    FROM telemetry.raw_messages rm
+    WHERE rm.source_protocol = 'MQTT'
+      AND rm.source_topic = '${TEST_TOPIC}'
+      AND EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements(rm.payload -> 'rtdata') AS item(value)
+          WHERE item.value ->> 'uid' = '${TEST_UID}'
+            AND item.value ->> 'ts' = '${TEST_TS}'
+            AND (item.value ->> 'P')::numeric = ${TEST_POWER}::numeric
+      );
     " \
     "1"
 
