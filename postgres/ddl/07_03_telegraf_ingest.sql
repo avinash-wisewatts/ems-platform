@@ -1,19 +1,13 @@
--- ============================================================================
--- WiseWatts EMS
--- Telegraf landing table
+-- RETIRED CANONICAL ARTIFACT — DO NOT EXECUTE.
 --
--- Purpose:
---   Accept raw MQTT messages from Telegraf.
---   SQL layer converts these into mqtt_staging JSONB.
--- ============================================================================
-
-CREATE TABLE IF NOT EXISTS telemetry.telegraf_ingest
-(
-    id BIGINT GENERATED ALWAYS AS IDENTITY,
-
-    received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-
-    topic TEXT,
-
-    value TEXT NOT NULL
-);
+-- telemetry.telegraf_ingest belonged to the retired bridge-based ingestion
+-- model.
+--
+-- Current canonical persisted ingestion path:
+--
+--   Telegraf
+--      -> public.mqtt_staging insert-only adapter view
+--      -> telemetry.raw_messages
+--
+-- This file intentionally contains no executable SQL. It remains only to
+-- document the retired object name and historical deployment sequence.

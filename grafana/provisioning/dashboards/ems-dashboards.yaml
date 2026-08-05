@@ -1,39 +1,11 @@
-# ============================================================================
-# EMS dashboard provisioning
+# Dashboard provisioning is tenant-managed by the EMS admin portal.
 #
-# Dashboards are stored in Git-controlled JSON files and loaded automatically
-# into each configured Grafana organization.
-# ============================================================================
+# The admin portal creates dashboards in the Grafana organization mapped in:
+#   metadata.grafana_organization_map
+#
+# Do not add fixed orgId values here. Grafana organizations are created and
+# reconciled dynamically and their numeric IDs differ between environments.
 
 apiVersion: 1
 
-providers:
-  # WiseWatts Demo / platform administration organization
-  - name: EMS Dashboards Org 1
-    orgId: 1
-    folder: EMS
-    folderUid: ems
-    type: file
-    disableDeletion: true
-    editable: false
-    updateIntervalSeconds: 30
-    allowUiUpdates: false
-
-    options:
-      path: /var/lib/grafana/dashboards
-      foldersFromFilesStructure: false
-
-  # GOOD LUCK INC tenant organization
-  - name: EMS Dashboards Org 2
-    orgId: 2
-    folder: EMS
-    folderUid: ems
-    type: file
-    disableDeletion: true
-    editable: false
-    updateIntervalSeconds: 30
-    allowUiUpdates: false
-
-    options:
-      path: /var/lib/grafana/dashboards
-      foldersFromFilesStructure: false
+providers: []

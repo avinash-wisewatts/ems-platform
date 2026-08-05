@@ -8,7 +8,7 @@
 --
 -- Reliability model:
 --
---   1. The checkpoint uses mqtt_staging.received_at, which represents arrival
+--   1. The checkpoint uses raw_messages.received_at, which represents arrival
 --      at the database rather than the device clock.
 --
 --   2. Every execution reprocesses an overlap window. This protects against:
@@ -33,11 +33,11 @@
 
 
 -- ----------------------------------------------------------------------------
--- 1. Ensure the raw landing table can be searched efficiently by arrival time.
+-- 1. Ensure the canonical raw-message hypertable can be searched efficiently by arrival time.
 -- ----------------------------------------------------------------------------
 
-CREATE INDEX IF NOT EXISTS idx_mqtt_staging_received_at
-ON public.mqtt_staging (received_at);
+CREATE INDEX IF NOT EXISTS idx_raw_messages_received_at
+ON telemetry.raw_messages (received_at);
 
 
 -- ----------------------------------------------------------------------------
@@ -193,7 +193,7 @@ BEGIN
     -- Rows arriving after this MAX() are intentionally left for the next run.
     SELECT MAX(received_at)
     INTO v_window_end
-    FROM public.mqtt_staging;
+    FROM telemetry.raw_messages;
 
 
     IF v_window_end IS NULL THEN
@@ -206,7 +206,7 @@ BEGIN
             updated_at = now()
         WHERE pipeline_name = v_pipeline_name;
 
-        RAISE NOTICE 'No rows exist in public.mqtt_staging';
+        RAISE NOTICE 'No rows exist in telemetry.raw_messages';
 
         RETURN;
     END IF;

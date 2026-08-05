@@ -3,7 +3,7 @@
 -- Purpose: Canonical telemetry parsing views.
 --
 -- Architectural role:
---   public.mqtt_staging
+--   telemetry.raw_messages
 --          |
 --          v
 --   telemetry.v_rtdata
@@ -23,57 +23,39 @@
 -- VIEW: telemetry.v_rtdata
 -- ============================================================================
 --
--- Expected Telegraf staging structure:
+-- Expected canonical raw-message structure:
 --
---   fields = {
---       "value": "{\"rtdata\":[...]} "
+--   telemetry.raw_messages.payload = {
+--       "rtdata": [...]
 --   }
 --
 -- Output:
 --   One row per element in the rtdata JSON array.
 --
 -- Invalid input handling:
---   - NULL payload strings are excluded.
---   - Invalid JSON strings are excluded using pg_input_is_valid().
+--   - Invalid Telegraf JSON is preserved by the adapter as a diagnostic object.
 --   - Payloads without an rtdata array are excluded.
+--   - A malformed device timestamp becomes NULL rather than failing the view.
 -- ============================================================================
 
 CREATE OR REPLACE VIEW telemetry.v_rtdata AS
 
-WITH valid_messages AS
+WITH messages_with_rtdata AS
 (
     SELECT
         received_at,
-        tags,
-        (fields ->> 'value')::JSONB AS payload_json
+        source_topic,
+        payload
 
-    FROM public.mqtt_staging
+    FROM telemetry.raw_messages
 
-    WHERE
-        fields ->> 'value' IS NOT NULL
-
-        AND pg_input_is_valid(
-            fields ->> 'value',
-            'jsonb'
-        )
-),
-
-messages_with_rtdata AS
-(
-    SELECT
-        received_at,
-        tags,
-        payload_json
-
-    FROM valid_messages
-
-    WHERE jsonb_typeof(payload_json -> 'rtdata') = 'array'
+    WHERE jsonb_typeof(payload -> 'rtdata') = 'array'
 )
 
 SELECT
     m.received_at,
 
-    m.tags ->> 'topic' AS mqtt_topic,
+    m.source_topic AS mqtt_topic,
 
     r.value ->> 'uid' AS device_uid,
 
@@ -81,7 +63,7 @@ SELECT
 
     CASE
         WHEN r.value ->> 'ts' IS NULL
-            THEN NULL
+            THEN NULL::TIMESTAMPTZ
 
         WHEN pg_input_is_valid(
             r.value ->> 'ts',
@@ -91,7 +73,7 @@ SELECT
                 (r.value ->> 'ts')::DOUBLE PRECISION
             )
 
-        ELSE NULL
+        ELSE NULL::TIMESTAMPTZ
     END AS source_timestamp,
 
     r.value AS payload
@@ -99,7 +81,7 @@ SELECT
 FROM messages_with_rtdata m
 
 CROSS JOIN LATERAL jsonb_array_elements(
-    m.payload_json -> 'rtdata'
+    m.payload -> 'rtdata'
 ) AS r(value);
 
 -- ============================================================================
