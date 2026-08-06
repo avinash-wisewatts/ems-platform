@@ -24,8 +24,8 @@ def test_all_story_1_1_domains_are_defined() -> None:
     }
 
 
-def test_definitions_contain_51_canonical_codes() -> None:
-    assert sum(len(options) for options in STATUS_DEFINITIONS.values()) == 51
+def test_definitions_contain_48_canonical_codes() -> None:
+    assert sum(len(options) for options in STATUS_DEFINITIONS.values()) == 48
 
 
 def test_metering_requirement_codes_are_canonical() -> None:
@@ -52,3 +52,12 @@ def test_unknown_domain_is_rejected() -> None:
 def test_definition_mapping_is_immutable() -> None:
     with pytest.raises(TypeError):
         STATUS_DEFINITIONS["NEW_DOMAIN"] = ()
+
+
+def test_device_lifecycle_is_intentionally_minimal() -> None:
+    assert status_codes("DEVICE_LIFECYCLE") == {
+        "REGISTERED",
+        "ACTIVE",
+        "INACTIVE",
+        "DECOMMISSIONED",
+    }

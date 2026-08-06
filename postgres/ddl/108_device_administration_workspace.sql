@@ -397,8 +397,7 @@ BEGIN
             USING ERRCODE='22023';
     END IF;
     IF v_status NOT IN (
-        'DISCOVERED','REGISTERED','UNASSIGNED','COMMISSIONING',
-        'ACTIVE','INACTIVE','DECOMMISSIONED'
+        'REGISTERED','ACTIVE','INACTIVE','DECOMMISSIONED'
     ) THEN
         RAISE EXCEPTION 'Select a valid device lifecycle status.'
             USING ERRCODE='22023';

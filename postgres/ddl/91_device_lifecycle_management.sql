@@ -44,7 +44,7 @@ BEGIN
     IF NOT admin.portal_user_can_access_site(p_actor_portal_user_id,v_gateway_site_id) THEN
         RAISE EXCEPTION 'Portal actor cannot access the device site.' USING ERRCODE='42501';
     END IF;
-    IF v_new_status NOT IN ('DISCOVERED','REGISTERED','UNASSIGNED','COMMISSIONING','ACTIVE','INACTIVE','DECOMMISSIONED') THEN
+    IF v_new_status NOT IN ('REGISTERED','ACTIVE','INACTIVE','DECOMMISSIONED') THEN
         RAISE EXCEPTION 'Select a valid device lifecycle status.' USING ERRCODE='22023';
     END IF;
     IF v_device.lifecycle_status='DECOMMISSIONED' AND v_new_status<>'DECOMMISSIONED' THEN
@@ -57,17 +57,11 @@ BEGIN
         RAISE EXCEPTION 'Use the controlled commissioning action to activate a device.' USING ERRCODE='22023';
     END IF;
 
-    IF v_device.lifecycle_status='DISCOVERED' AND v_new_status NOT IN ('REGISTERED','UNASSIGNED','INACTIVE','DECOMMISSIONED') THEN
-        RAISE EXCEPTION 'Invalid device lifecycle transition.' USING ERRCODE='22023';
-    ELSIF v_device.lifecycle_status='REGISTERED' AND v_new_status NOT IN ('UNASSIGNED','COMMISSIONING','INACTIVE','DECOMMISSIONED') THEN
-        RAISE EXCEPTION 'Invalid device lifecycle transition.' USING ERRCODE='22023';
-    ELSIF v_device.lifecycle_status='UNASSIGNED' AND v_new_status NOT IN ('REGISTERED','COMMISSIONING','INACTIVE','DECOMMISSIONED') THEN
-        RAISE EXCEPTION 'Invalid device lifecycle transition.' USING ERRCODE='22023';
-    ELSIF v_device.lifecycle_status='COMMISSIONING' AND v_new_status NOT IN ('REGISTERED','UNASSIGNED','INACTIVE','DECOMMISSIONED') THEN
+    IF v_device.lifecycle_status='REGISTERED' AND v_new_status NOT IN ('INACTIVE','DECOMMISSIONED') THEN
         RAISE EXCEPTION 'Invalid device lifecycle transition.' USING ERRCODE='22023';
     ELSIF v_device.lifecycle_status='ACTIVE' AND v_new_status NOT IN ('INACTIVE','DECOMMISSIONED') THEN
         RAISE EXCEPTION 'Invalid device lifecycle transition.' USING ERRCODE='22023';
-    ELSIF v_device.lifecycle_status='INACTIVE' AND v_new_status NOT IN ('REGISTERED','UNASSIGNED','COMMISSIONING','DECOMMISSIONED') THEN
+    ELSIF v_device.lifecycle_status='INACTIVE' AND v_new_status NOT IN ('REGISTERED','DECOMMISSIONED') THEN
         RAISE EXCEPTION 'Invalid device lifecycle transition.' USING ERRCODE='22023';
     END IF;
 

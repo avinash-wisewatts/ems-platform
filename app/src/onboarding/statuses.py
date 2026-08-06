@@ -50,12 +50,9 @@ _STATUS_DEFINITIONS = {
         _definition("DECOMMISSIONED", "Decommissioned", "Gateway has been retired while history is retained."),
     ),
     "DEVICE_LIFECYCLE": (
-        _definition("DISCOVERED", "Discovered", "Device was detected but has not been formally registered."),
-        _definition("REGISTERED", "Registered", "Device identity and core metadata have been saved."),
-        _definition("UNASSIGNED", "Unassigned", "Device is tenant-owned and valid but has no functional assignment."),
-        _definition("COMMISSIONING", "Commissioning", "Device profile, channels, relationships, or telemetry are being validated."),
-        _definition("ACTIVE", "Active", "Device is approved for operational use."),
-        _definition("INACTIVE", "Inactive", "Device is intentionally disabled or temporarily removed from service."),
+        _definition("REGISTERED", "Registered", "Device identity and core metadata are saved, but commissioning is not complete."),
+        _definition("ACTIVE", "Active", "Device has been commissioned and is approved for operational use."),
+        _definition("INACTIVE", "Inactive", "Device is temporarily removed from operational use while history is retained."),
         _definition("DECOMMISSIONED", "Decommissioned", "Device has been permanently retired while history is retained."),
     ),
     "COMMISSIONING_STATUS": (

@@ -84,7 +84,7 @@ BEGIN
     IF v_protocol NOT IN ('MQTT','MODBUS TCP','MODBUS RTU','BACNET IP','BACNET MS/TP','OPC-UA','HTTP API') THEN
         RAISE EXCEPTION 'Select a supported device communication protocol.' USING ERRCODE='22023';
     END IF;
-    IF v_lifecycle NOT IN ('DISCOVERED','REGISTERED','UNASSIGNED','COMMISSIONING','INACTIVE','DECOMMISSIONED') THEN
+    IF v_lifecycle NOT IN ('REGISTERED','INACTIVE','DECOMMISSIONED') THEN
         RAISE EXCEPTION 'Select a valid initial device lifecycle status.' USING ERRCODE='22023';
     END IF;
     IF v_policy NOT IN ('STANDALONE','ASSET_ASSIGNED') THEN

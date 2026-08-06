@@ -50,14 +50,13 @@ def test_device_creation_cannot_start_active():
         validate_device_submission(**v)
 
 
-def test_unassigned_is_a_valid_lifecycle_update():
-    payload = validate_device_lifecycle_update(
-        lifecycle_status=" unassigned ", change_reason="Awaiting asset assignment"
-    )
-    assert payload == {
-        "lifecycle_status": "UNASSIGNED",
-        "change_reason": "Awaiting asset assignment",
-    }
+@pytest.mark.parametrize("obsolete_status", ["DISCOVERED", "UNASSIGNED", "COMMISSIONING"])
+def test_obsolete_device_lifecycle_statuses_are_rejected(obsolete_status):
+    with pytest.raises(DeviceManagementValidationError, match="valid device lifecycle"):
+        validate_device_lifecycle_update(
+            lifecycle_status=obsolete_status,
+            change_reason="Lifecycle cleanup validation",
+        )
 
 
 def test_lifecycle_update_rejects_active():

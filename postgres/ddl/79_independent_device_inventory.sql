@@ -81,7 +81,7 @@ BEGIN
     IF v_external_id IS NULL OR v_external_id='' OR v_external_id !~ '^[A-Z0-9_]+$' OR length(v_external_id)>100 THEN
         RAISE EXCEPTION 'Device external ID may contain only letters, numbers, and underscores.' USING ERRCODE='22023';
     END IF;
-    IF v_lifecycle NOT IN ('DISCOVERED','REGISTERED','UNASSIGNED','COMMISSIONING','ACTIVE','INACTIVE','DECOMMISSIONED') THEN
+    IF v_lifecycle NOT IN ('REGISTERED','ACTIVE','INACTIVE','DECOMMISSIONED') THEN
         RAISE EXCEPTION 'Select a valid device lifecycle status.' USING ERRCODE='22023';
     END IF;
     IF NOT EXISTS (SELECT 1 FROM metadata.device_models dm

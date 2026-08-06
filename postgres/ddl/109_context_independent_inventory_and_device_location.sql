@@ -116,7 +116,7 @@ BEGIN
     IF v_protocol NOT IN ('MQTT','MODBUS TCP','MODBUS RTU','BACNET IP','BACNET MS/TP','OPC-UA','HTTP API') THEN
         RAISE EXCEPTION 'Select a supported device communication protocol.' USING ERRCODE='22023';
     END IF;
-    IF v_lifecycle NOT IN ('DISCOVERED','REGISTERED','UNASSIGNED','COMMISSIONING','INACTIVE','DECOMMISSIONED') THEN
+    IF v_lifecycle NOT IN ('REGISTERED','INACTIVE','DECOMMISSIONED') THEN
         RAISE EXCEPTION 'Select a valid initial device lifecycle status.' USING ERRCODE='22023';
     END IF;
     IF v_policy NOT IN ('STANDALONE','ASSET_ASSIGNED') THEN
@@ -418,7 +418,7 @@ BEGIN
     END IF;
     IF v_name='' OR length(v_name)>200 THEN RAISE EXCEPTION 'Device name is required and must not exceed 200 characters.' USING ERRCODE='22023'; END IF;
     IF v_protocol NOT IN ('MQTT','MODBUS TCP','MODBUS RTU','BACNET IP','BACNET MS/TP','OPC-UA','HTTP API') THEN RAISE EXCEPTION 'Select a supported device communication protocol.' USING ERRCODE='22023'; END IF;
-    IF v_status NOT IN ('DISCOVERED','REGISTERED','UNASSIGNED','COMMISSIONING','ACTIVE','INACTIVE','DECOMMISSIONED') THEN RAISE EXCEPTION 'Select a valid device lifecycle status.' USING ERRCODE='22023'; END IF;
+    IF v_status NOT IN ('REGISTERED','ACTIVE','INACTIVE','DECOMMISSIONED') THEN RAISE EXCEPTION 'Select a valid device lifecycle status.' USING ERRCODE='22023'; END IF;
     IF v_status='ACTIVE' AND v_before.lifecycle_status<>'ACTIVE' THEN RAISE EXCEPTION 'Use the controlled commissioning action to activate a device.' USING ERRCODE='23514'; END IF;
     IF v_policy NOT IN ('STANDALONE','ASSET_ASSIGNED') THEN RAISE EXCEPTION 'Select a valid operational policy.' USING ERRCODE='22023'; END IF;
     IF v_reason='' OR length(v_reason)>1000 THEN RAISE EXCEPTION 'Change reason is required and must not exceed 1000 characters.' USING ERRCODE='22023'; END IF;

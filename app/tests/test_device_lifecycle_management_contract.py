@@ -12,8 +12,7 @@ def test_device_lifecycle_update_is_controlled_and_audited():
     assert "onboarding_audit" in SQL
 
 
-def test_unassigned_is_valid_and_active_requires_commissioning():
-    assert "'UNASSIGNED'" in SQL
+def test_active_requires_commissioning():
     assert "controlled commissioning action" in SQL
     assert "reject_uncommissioned_active_device" in SQL
 

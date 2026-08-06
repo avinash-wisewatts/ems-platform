@@ -1,19 +1,12 @@
-# Device commissioning scope patch
+# Device lifecycle cleanup
 
-Implements:
-- explicit commissioning status in Device View and Device Edit headers;
-- header links to the Device View Operational and lifecycle section;
-- compact lifecycle section with an inline expandable readiness panel;
-- Asset assignment requirement terminology while preserving operational_policy internally;
-- Commission button shown only when the device is uncommissioned, ready, and authorized;
-- actionable readiness blockers and contextual commissioning errors;
-- commissioning-pending notice in onboarding Device step and final confirmation Device section;
-- standalone-device creation redirect to commissioning context;
-- secure repair for controlled activation while preserving the direct-ACTIVE guard;
-- contract tests.
+This patch reduces device lifecycle values to:
 
-## Install
+- `REGISTERED`
+- `ACTIVE`
+- `INACTIVE`
+- `DECOMMISSIONED`
 
-From `/opt/ems-platform`, back up first, then extract this archive over the repository.
+Existing `DISCOVERED`, `UNASSIGNED`, and `COMMISSIONING` device rows are migrated to `REGISTERED`. Commissioning readiness/status and asset assignment remain separate derived concepts. `ACTIVE` remains available only through the controlled commissioning action.
 
-Apply migration 177 to the test database before production. Rebuild `admin-portal` only after tests and migration validation pass.
+Apply migration 179 to `ems_test` first, run the focused tests, then back up and apply to production.

@@ -460,7 +460,7 @@ CREATE TABLE IF NOT EXISTS metadata.devices (
 
     lifecycle_status TEXT NOT NULL DEFAULT 'REGISTERED'
         CONSTRAINT devices_lifecycle_status_chk
-        CHECK (lifecycle_status IN ('DISCOVERED', 'REGISTERED', 'UNASSIGNED', 'COMMISSIONING', 'ACTIVE', 'INACTIVE', 'DECOMMISSIONED')),
+        CHECK (lifecycle_status IN ('REGISTERED', 'ACTIVE', 'INACTIVE', 'DECOMMISSIONED')),
 
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 
