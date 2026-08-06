@@ -2480,6 +2480,53 @@ async def render_device_administration(
     )
 
 
+DEVICE_COMMISSIONING_BLOCKERS = {
+    "DEVICE_DECOMMISSIONED": {"title": "Device decommissioned", "message": "A decommissioned device cannot be commissioned.", "action_label": None, "action_path": None},
+    "GATEWAY_REQUIRED": {"title": "Gateway required", "message": "Assign the device to a gateway before commissioning.", "action_label": "Edit device", "action_path": "edit"},
+    "DEVICE_MODEL_REQUIRED": {"title": "Device model required", "message": "Select a device model before commissioning.", "action_label": "Edit device", "action_path": "edit"},
+    "DEVICE_PROFILE_REQUIRED": {"title": "Telemetry profile required", "message": "Select a compatible telemetry profile before commissioning.", "action_label": "Edit profile", "action_path": "edit"},
+    "PROFILE_CATEGORY_INCOMPATIBLE": {"title": "Profile is incompatible", "message": "The selected telemetry profile is not compatible with the device category.", "action_label": "Edit profile", "action_path": "edit"},
+    "REQUIRED_TELEMETRY_POINTS_NOT_VALIDATED": {"title": "Required telemetry is not validated", "message": "Receive and validate all required telemetry points before commissioning.", "action_label": "Open telemetry diagnostics", "action_path": "/administration/telemetry-validation"},
+    "ASSET_ASSIGNMENT_REQUIRED_BY_POLICY": {"title": "Asset assignment required", "message": "This device must be assigned to an asset before it can be commissioned.", "action_label": "Assign device to asset", "action_path": "#asset-assignments"},
+    "READINESS_UNAVAILABLE": {"title": "Readiness unavailable", "message": "Commissioning readiness could not be evaluated. Review device configuration and try again.", "action_label": "Edit device", "action_path": "edit"},
+}
+
+def _device_commissioning_context(device: dict) -> dict:
+    lifecycle = str(device.get("lifecycle_status") or "REGISTERED").upper()
+    if lifecycle == "ACTIVE":
+        status = "Commissioned"
+        readiness = "Not applicable"
+    elif lifecycle == "DECOMMISSIONED":
+        status = "Decommissioned"
+        readiness = "Not applicable"
+    else:
+        status = "Not commissioned"
+        readiness = "Ready" if device.get("is_ready") else "Not ready"
+    blockers = []
+    for code in device.get("blocking_reason_codes") or []:
+        detail = dict(DEVICE_COMMISSIONING_BLOCKERS.get(code, {
+            "title": str(code).replace("_", " ").title(),
+            "message": "Resolve this commissioning requirement and check readiness again.",
+            "action_label": None,
+            "action_path": None,
+        }))
+        path = detail.get("action_path")
+        if path == "edit":
+            detail["action_path"] = f"/administration/devices/{device['device_id']}/edit"
+        detail["code"] = code
+        blockers.append(detail)
+    return {
+        "commissioning_display_status": status,
+        "commissioning_readiness_display": readiness,
+        "commissioning_blockers": blockers,
+        "asset_assignment_requirement": (
+            "Required before commissioning"
+            if device.get("operational_policy") == "ASSET_ASSIGNED"
+            else "Optional"
+        ),
+    }
+
+
 async def _device_form_catalog(request: Request) -> dict:
     """Return accessible and controlled catalogs used by Device forms."""
     user = require_authenticated_portal_user(request)
@@ -2643,7 +2690,7 @@ async def create_device_administration(
             status_code=409,
         )
     return RedirectResponse(
-        f"/administration/devices/{result['entity_id']}",
+        f"/administration/devices/{result['entity_id']}?commissioning_notice=created#operational-lifecycle",
         status_code=303,
     )
 
@@ -2698,6 +2745,9 @@ async def device_detail_page(request: Request, device_id: UUID) -> Response:
             "can_commission": has_permission(
                 user, PortalPermission.COMMISSIONING_EXECUTE
             ),
+            "commissioning_notice": request.query_params.get("commissioning_notice"),
+            "commissioning_error": request.query_params.get("commissioning_error"),
+            **_device_commissioning_context(device),
         },
     )
 
@@ -2877,6 +2927,7 @@ async def device_edit_page(request: Request, device_id: UUID) -> Response:
             "device_site_id": device_site_id,
             "form_data": {"use_gateway_location": inherited},
             "error": None,
+            **_device_commissioning_context(device),
             **catalog,
         },
     )
@@ -2952,6 +3003,7 @@ async def device_edit_submit(
         "gateway": gateway or {},
         "device_site_id": device_site_id,
         "form_data": submitted,
+        **_device_commissioning_context(device),
         **catalog,
     }
     try:
@@ -3097,16 +3149,17 @@ async def commission_device_administration(
             device_id=str(device_id),
         )
     except DatabaseError as exc:
-        return await render_device_administration(
-            request,
-            error=user_facing_database_error(
-                exc,
-                fallback="The database rejected device commissioning.",
-            ),
-            status_code=409,
+        from urllib.parse import quote
+        message = user_facing_database_error(
+            exc,
+            fallback="Commissioning could not be completed. Review readiness and try again.",
+        )
+        return RedirectResponse(
+            f"/administration/devices/{device_id}?commissioning_error={quote(message)}#operational-lifecycle",
+            status_code=303,
         )
     return RedirectResponse(
-        f"/administration/devices/{device_id}",
+        f"/administration/devices/{device_id}?commissioning_notice=commissioned#operational-lifecycle",
         status_code=303,
     )
 

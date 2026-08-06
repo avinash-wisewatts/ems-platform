@@ -43,7 +43,7 @@ def test_detail_and_edit_expose_profile_and_identifier():
     assert 'name="identifier_value"' in EDIT
     assert 'name="profile_id"' in EDIT
     assert "Reason for change" in EDIT
-    assert "Operational policy" in DETAIL
+    assert "Asset assignment requirement" in DETAIL
     assert "location_mode" in DETAIL
 
 

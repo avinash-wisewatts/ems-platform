@@ -3487,3 +3487,24 @@ textarea {
 .telemetry-point-reset{margin-top:1.5rem}
 .telemetry-point-reset form{display:flex;align-items:end;gap:1rem;flex-wrap:wrap}
 .telemetry-point-reset label{min-width:min(28rem,100%);flex:1}
+
+/* Device commissioning workspace */
+.device-header-statuses{display:flex;gap:.75rem;flex-wrap:wrap;margin-top:.8rem}
+.status-link{display:inline-flex;align-items:center;gap:.5rem;text-decoration:none;color:inherit}
+.status-link:not(.is-static):hover .status-pill{text-decoration:underline}
+.status-label{font-size:.78rem;font-weight:800;color:var(--ww-text-muted);text-transform:uppercase;letter-spacing:.04em}
+.section-action-heading{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:1rem}
+.section-action-heading h3{margin:0}
+.operational-lifecycle-section{scroll-margin-top:5rem}
+.commissioning-readiness-details summary{display:flex;align-items:center;gap:.75rem;cursor:pointer;list-style:none}
+.commissioning-readiness-details summary::-webkit-details-marker{display:none}
+.details-hint{font-size:.82rem;color:var(--ww-text-muted);font-weight:700}
+.readiness-panel{margin-top:.85rem;padding:1rem;border:1px solid var(--ww-border);border-radius:.75rem;background:#f8fafc;max-width:48rem}
+.readiness-panel>p:first-child{margin-top:0}
+.readiness-item{padding:.9rem 0;border-top:1px solid var(--ww-border)}
+.readiness-item:first-of-type{border-top:0}
+.readiness-item h4,.readiness-item p{margin:.15rem 0 .55rem}
+.readiness-warnings{margin-top:1rem;padding-top:1rem;border-top:1px solid var(--ww-border)}
+.onboarding-inline-note,.result-note{display:grid;gap:.3rem;padding:.9rem 1rem;border-left:4px solid #2563eb;background:#eff6ff;color:#17335c;border-radius:.35rem}
+.result-note-full{grid-column:1/-1}
+@media(max-width:700px){.section-action-heading{align-items:flex-start;flex-direction:column}.device-header-statuses{flex-direction:column;align-items:flex-start}}

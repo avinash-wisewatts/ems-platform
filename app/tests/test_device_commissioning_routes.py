@@ -14,4 +14,4 @@ def test_device_commissioning_route_and_service():
 def test_device_operational_policy_route():
     assert "/administration/devices/{device_id}/operational-policy" in MAIN
     assert "set_device_operational_policy(" in SERVICE
-    assert "ASSET_ASSIGNED" in DETAIL
+    assert "Asset assignment requirement" in DETAIL

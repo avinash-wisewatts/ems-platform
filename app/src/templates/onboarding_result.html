@@ -64,6 +64,11 @@
             <dd>{{ result.device_id }}</dd>
         </div>
 
+        <div class="result-note result-note-full">
+            <dt>Commissioning pending</dt>
+            <dd>The device was created successfully. Open it from the <a href="/administration/devices/{{ result.device_id }}#operational-lifecycle">Devices tab</a> to review readiness and complete commissioning.</dd>
+        </div>
+
         <div>
             <dt>Device profile</dt>
             <dd>{{ result.profile_code }}</dd>
