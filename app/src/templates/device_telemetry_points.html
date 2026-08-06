@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-stack">
+  <header class="page-header">
+    <div>
+      <p class="eyebrow">Device configuration</p>
+      <h1>Enabled telemetry points</h1>
+      <p class="page-summary">{{ device.device_name }} · <code>{{ device.external_id }}</code></p>
+    </div>
+    <div class="page-actions">
+      <a class="button button-secondary" href="/administration/devices/{{ device.device_id }}">Back to device</a>
+    </div>
+  </header>
+
+  {% if notice %}<div class="notice notice-success">{{ notice }}</div>{% endif %}
+  {% if error %}<div class="notice notice-error">{{ error }}</div>{% endif %}
+
+  <section class="panel">
+    <div class="panel-heading telemetry-point-heading">
+      <div>
+        <h2>Point selection</h2>
+        <p>Enabled points are normalized, retained, and included in completeness checks. Disabled points remain only in the short-retention raw message.</p>
+      </div>
+      <div class="telemetry-point-summary">
+        <strong data-enabled-count>{{ enabled_count }}</strong> of {{ points|length }} enabled
+      </div>
+    </div>
+
+    {% if points %}
+    <form method="post" action="/administration/devices/{{ device.device_id }}/telemetry-points" data-point-form>
+      {% if can_manage %}
+      <div class="telemetry-point-actions">
+        <button class="button button-secondary button-compact" type="button" data-enable-all>Enable all</button>
+        <button class="button button-secondary button-compact" type="button" data-disable-all>Disable all</button>
+      </div>
+      {% endif %}
+
+      <div class="table-scroll">
+        <table class="data-table compact-administration-table telemetry-point-table">
+          <thead><tr><th>Enabled</th><th>Logical point</th><th>Raw field</th><th>Unit</th><th>Type</th><th>Source</th></tr></thead>
+          <tbody>
+          {% for point in points %}
+            <tr>
+              <td>
+                <input type="checkbox" name="enabled_logical_point_ids" value="{{ point.logical_point_id }}" {% if point.is_enabled %}checked{% endif %} {% if not can_manage %}disabled{% endif %} data-point-toggle aria-label="Enable {{ point.logical_point_name }}">
+              </td>
+              <td><strong>{{ point.logical_point_name }}</strong>{% if point.logical_point_description %}<div class="field-help">{{ point.logical_point_description }}</div>{% endif %}</td>
+              <td><code>{{ point.raw_field_name }}</code></td>
+              <td>{{ point.engineering_unit or '—' }}</td>
+              <td>{{ point.data_type|title }}</td>
+              <td>{{ point.mapping_source|replace('_',' ')|title }}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      {% if can_manage %}
+      <div class="form-grid telemetry-point-save">
+        <label class="field-wide"><span>Change reason</span><textarea name="change_reason" rows="2" maxlength="1000" required placeholder="Example: Disabled unused pulse and analogue inputs during commissioning"></textarea></label>
+        <div class="form-actions field-wide"><button class="button button-primary" type="submit">Save telemetry points</button></div>
+      </div>
+      {% endif %}
+    </form>
+
+    {% if can_manage %}
+    <details class="danger-zone telemetry-point-reset">
+      <summary>Reset from profile</summary>
+      <p>This rebuilds the device configuration from its current profile and device-specific mappings, enabling every available point.</p>
+      <form method="post" action="/administration/devices/{{ device.device_id }}/telemetry-points/reset">
+        <label><span>Change reason</span><input name="change_reason" maxlength="1000" required value="Reset telemetry points from current profile"></label>
+        <button class="button button-secondary" type="submit">Reset and enable all</button>
+      </form>
+    </details>
+    {% endif %}
+    {% else %}
+      <div class="empty-state"><h3>No telemetry points configured</h3><p>Assign a compatible device profile or device-specific field mapping first.</p></div>
+    {% endif %}
+  </section>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+(() => {
+  const form=document.querySelector('[data-point-form]');
+  if(!form)return;
+  const boxes=[...form.querySelectorAll('[data-point-toggle]')];
+  const count=document.querySelector('[data-enabled-count]');
+  const update=()=>{if(count)count.textContent=String(boxes.filter(box=>box.checked).length)};
+  document.querySelector('[data-enable-all]')?.addEventListener('click',()=>{boxes.forEach(box=>box.checked=true);update()});
+  document.querySelector('[data-disable-all]')?.addEventListener('click',()=>{boxes.forEach(box=>box.checked=false);update()});
+  boxes.forEach(box=>box.addEventListener('change',update));
+})();
+</script>
+{% endblock %}

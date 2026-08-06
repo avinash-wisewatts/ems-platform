@@ -3477,3 +3477,13 @@ textarea {
     cursor: not-allowed;
     opacity: 0.68;
 }
+
+/* Device telemetry-point administration */
+.telemetry-point-heading,.telemetry-point-actions{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap}
+.telemetry-point-summary{white-space:nowrap}
+.telemetry-point-actions{justify-content:flex-start;margin:1rem 0}
+.telemetry-point-table td:first-child,.telemetry-point-table th:first-child{text-align:center;width:6rem}
+.telemetry-point-save{margin-top:1.25rem}
+.telemetry-point-reset{margin-top:1.5rem}
+.telemetry-point-reset form{display:flex;align-items:end;gap:1rem;flex-wrap:wrap}
+.telemetry-point-reset label{min-width:min(28rem,100%);flex:1}

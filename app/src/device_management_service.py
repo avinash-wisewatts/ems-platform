@@ -199,3 +199,72 @@ async def commission_device(
         blocking_conditions=payload.get("blocking_conditions"),
         audit_transaction_id=payload.get("audit_transaction_id"),
     )
+
+async def list_device_point_configuration(
+    *, portal_user_id: int, device_id: str
+) -> list[dict[str, Any]]:
+    """Return the explicit point enablement contract for one device."""
+    async with database_connection() as connection:
+        async with connection.cursor() as cursor:
+            await cursor.execute(
+                """
+                SELECT *
+                FROM admin.list_device_point_configuration(%s, %s::uuid)
+                """,
+                (portal_user_id, device_id),
+            )
+            rows = await cursor.fetchall()
+        await connection.rollback()
+    return rows
+
+
+async def update_device_point_configuration(
+    *, portal_user_id: int, device_id: str,
+    enabled_logical_point_ids: list[str], change_reason: str,
+) -> dict[str, Any]:
+    """Replace the enabled point set for one device atomically."""
+    async with database_connection() as connection:
+        try:
+            async with connection.cursor() as cursor:
+                await cursor.execute(
+                    """
+                    SELECT admin.update_device_point_configuration(
+                        %s, %s::uuid, %s::uuid[], %s
+                    ) AS result
+                    """,
+                    (
+                        portal_user_id,
+                        device_id,
+                        enabled_logical_point_ids,
+                        change_reason,
+                    ),
+                )
+                row = await cursor.fetchone()
+            await connection.commit()
+        except DatabaseError:
+            await connection.rollback()
+            raise
+    return row["result"]
+
+
+async def reset_device_point_configuration(
+    *, portal_user_id: int, device_id: str, change_reason: str,
+) -> dict[str, Any]:
+    """Reset one device to all points supplied by its current mappings."""
+    async with database_connection() as connection:
+        try:
+            async with connection.cursor() as cursor:
+                await cursor.execute(
+                    """
+                    SELECT admin.reset_device_point_configuration(
+                        %s, %s::uuid, %s
+                    ) AS result
+                    """,
+                    (portal_user_id, device_id, change_reason),
+                )
+                row = await cursor.fetchone()
+            await connection.commit()
+        except DatabaseError:
+            await connection.rollback()
+            raise
+    return row["result"]

@@ -270,3 +270,30 @@ def validate_device_lifecycle_update(
         "lifecycle_status": lifecycle,
         "change_reason": reason or None,
     }
+
+def validate_device_point_configuration_update(
+    *, enabled_logical_point_ids: list[str], change_reason: str
+) -> dict[str, Any]:
+    """Validate an explicit device telemetry-point enablement update."""
+    normalized_ids: list[str] = []
+    seen: set[str] = set()
+    for value in enabled_logical_point_ids:
+        normalized = _required_uuid(value, "Logical point")
+        if normalized not in seen:
+            seen.add(normalized)
+            normalized_ids.append(normalized)
+
+    reason = change_reason.strip()
+    if not reason:
+        raise DeviceManagementValidationError(
+            "Change reason is required."
+        )
+    if len(reason) > 1000:
+        raise DeviceManagementValidationError(
+            "Change reason must not exceed 1000 characters."
+        )
+
+    return {
+        "enabled_logical_point_ids": normalized_ids,
+        "change_reason": reason,
+    }

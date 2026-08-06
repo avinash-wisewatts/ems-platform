@@ -215,6 +215,7 @@ from src.device_management import (
     DEVICE_PROTOCOLS,
     DeviceManagementValidationError,
     validate_device_lifecycle_update,
+    validate_device_point_configuration_update,
     validate_device_submission,
     validate_device_workspace_update,
 )
@@ -223,8 +224,11 @@ from src.device_management_service import (
     create_device,
     get_device_workspace,
     list_accessible_devices,
+    list_device_point_configuration,
+    reset_device_point_configuration,
     set_device_operational_policy,
     update_device_lifecycle,
+    update_device_point_configuration,
     update_device_workspace,
 )
 
@@ -2697,6 +2701,141 @@ async def device_detail_page(request: Request, device_id: UUID) -> Response:
         },
     )
 
+
+
+async def _render_device_point_configuration(
+    request: Request,
+    device_id: UUID,
+    *,
+    error: str | None = None,
+    status_code: int = 200,
+) -> Response:
+    user = require_authenticated_portal_user(request)
+    device = await _accessible_device_or_none(request, device_id)
+    if device is None:
+        return RedirectResponse("/forbidden", status_code=303)
+    points = await list_device_point_configuration(
+        portal_user_id=user.portal_user_id,
+        device_id=str(device_id),
+    )
+    return templates.TemplateResponse(
+        request=request,
+        name="device_telemetry_points.html",
+        context={
+            "environment": settings.app_env,
+            "page_title": f"Telemetry points · {device['device_name']}",
+            "active_navigation_key": "devices",
+            "device": device,
+            "points": points,
+            "enabled_count": sum(1 for row in points if row.get("is_enabled")),
+            "can_manage": has_permission(
+                user, PortalPermission.DEVICE_MANAGE
+            ),
+            "notice": request.query_params.get("point_notice"),
+            "error": error,
+        },
+        status_code=status_code,
+    )
+
+
+@app.get(
+    "/administration/devices/{device_id}/telemetry-points",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def device_point_configuration_page(
+    request: Request, device_id: UUID
+) -> Response:
+    return await _render_device_point_configuration(request, device_id)
+
+
+@app.post(
+    "/administration/devices/{device_id}/telemetry-points",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def device_point_configuration_submit(
+    request: Request, device_id: UUID
+) -> Response:
+    user = require_authenticated_portal_user(request)
+    if not has_permission(user, PortalPermission.DEVICE_MANAGE):
+        return RedirectResponse("/forbidden", status_code=303)
+    form = await request.form()
+    try:
+        validated = validate_device_point_configuration_update(
+            enabled_logical_point_ids=[
+                str(value) for value in form.getlist("enabled_logical_point_ids")
+            ],
+            change_reason=str(form.get("change_reason") or ""),
+        )
+        await update_device_point_configuration(
+            portal_user_id=user.portal_user_id,
+            device_id=str(device_id),
+            **validated,
+        )
+    except DeviceManagementValidationError as exc:
+        return await _render_device_point_configuration(
+            request, device_id, error=str(exc), status_code=400
+        )
+    except DatabaseError as exc:
+        return await _render_device_point_configuration(
+            request,
+            device_id,
+            error=user_facing_database_error(
+                exc,
+                fallback="The database rejected the telemetry-point update.",
+            ),
+            status_code=409,
+        )
+    return RedirectResponse(
+        f"/administration/devices/{device_id}/telemetry-points"
+        "?point_notice=Telemetry+point+configuration+saved.",
+        status_code=303,
+    )
+
+
+@app.post(
+    "/administration/devices/{device_id}/telemetry-points/reset",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def device_point_configuration_reset(
+    request: Request,
+    device_id: UUID,
+    change_reason: Annotated[str, Form()],
+) -> Response:
+    user = require_authenticated_portal_user(request)
+    if not has_permission(user, PortalPermission.DEVICE_MANAGE):
+        return RedirectResponse("/forbidden", status_code=303)
+    try:
+        validated = validate_device_point_configuration_update(
+            enabled_logical_point_ids=[],
+            change_reason=change_reason,
+        )
+        await reset_device_point_configuration(
+            portal_user_id=user.portal_user_id,
+            device_id=str(device_id),
+            change_reason=validated["change_reason"],
+        )
+    except DeviceManagementValidationError as exc:
+        return await _render_device_point_configuration(
+            request, device_id, error=str(exc), status_code=400
+        )
+    except DatabaseError as exc:
+        return await _render_device_point_configuration(
+            request,
+            device_id,
+            error=user_facing_database_error(
+                exc,
+                fallback="The database rejected the telemetry-point reset.",
+            ),
+            status_code=409,
+        )
+    return RedirectResponse(
+        f"/administration/devices/{device_id}/telemetry-points"
+        "?point_notice=Telemetry+points+reset+from+the+current+profile.",
+        status_code=303,
+    )
 
 @app.get(
     "/administration/devices/{device_id}/edit",
