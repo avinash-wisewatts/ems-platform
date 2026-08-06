@@ -237,3 +237,4 @@ source_file,target_category,target_path,notes
 172_prevent_non_energy_rows_in_energy_route.sql,migration,postgres/migrations/172_prevent_non_energy_rows_in_energy_route.sql,Prevent non-energy telemetry from entering the energy measurement route
 173_telegraf_schema_privilege_hardening.sql,migration,postgres/migrations/173_telegraf_schema_privilege_hardening.sql,Harden Telegraf to the public insert-only adapter and revoke direct telemetry schema access
 174_short_raw_retention_and_failure_quarantine.sql,migration,postgres/migrations/174_short_raw_retention_and_failure_quarantine.sql,Reduce successful raw retention to seven days and quarantine zero-output normalization failures for thirty days
+175_device_point_configuration_and_partial_normalization.sql,migration,postgres/migrations/175_device_point_configuration_and_partial_normalization.sql,Add device-level enabled telemetry points and detect unresolved elements and partial normalization
