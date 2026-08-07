@@ -1,3 +1,10 @@
+-- RETIRED LEGACY SQL
+--
+-- This helper belonged to the previous Telegraf bridge ingestion path.
+-- It is retained for historical reference only and must not be executed
+-- by the canonical deployment or migration runner.
+--
+
 -- RETIRED PROTOTYPE FILE — DO NOT EXECUTE.
 -- This file is retained only for historical reference. Use
 -- scripts/deploy_database.sh and docs/operations/TELEMETRY_PIPELINE.md.

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-MIGRATION = (ROOT / "postgres/migrations/179_simplify_device_lifecycle_statuses.sql").read_text()
+MIGRATION = (ROOT / "postgres/archive/prebaseline_20260807/migrations/179_simplify_device_lifecycle_statuses.sql").read_text()
 
 
 def test_legacy_device_states_are_migrated_to_registered():

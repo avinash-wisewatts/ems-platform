@@ -1,5 +1,5 @@
 from pathlib import Path
-SQL=(Path(__file__).parents[2]/"postgres/migrations/127_site_energy_role_administration.sql").read_text()
+SQL=(Path(__file__).parents[2]/"postgres/archive/prebaseline_20260807/migrations/127_site_energy_role_administration.sql").read_text()
 def test_reference_roles():
     assert "CREATE TABLE IF NOT EXISTS config.site_energy_roles" in SQL
     for role in ("GRID_IMPORT","GRID_EXPORT","SITE_CONSUMPTION","SOLAR_GENERATION","GENERATOR_OUTPUT","BATTERY_CHARGE","BATTERY_DISCHARGE"):

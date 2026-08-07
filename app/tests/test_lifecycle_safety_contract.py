@@ -1,6 +1,6 @@
 from pathlib import Path
 
-SQL = Path("postgres/migrations/126_audit_lifecycle_safety.sql").read_text()
+SQL = Path("postgres/archive/prebaseline_20260807/migrations/126_audit_lifecycle_safety.sql").read_text()
 
 
 def test_shared_transition_contract_exists():

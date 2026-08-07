@@ -1,6 +1,6 @@
 from pathlib import Path
 
-SQL = Path('postgres/migrations/122_commissioning_readiness_asset_action.sql').read_text()
+SQL = Path('postgres/archive/prebaseline_20260807/migrations/122_commissioning_readiness_asset_action.sql').read_text()
 
 
 def test_unified_readiness_view_and_scope_function_exist():

@@ -1,5 +1,5 @@
 from pathlib import Path
-SQL=(Path(__file__).parents[2]/"postgres/migrations/119_asset_device_relationship_management.sql").read_text()
+SQL=(Path(__file__).parents[2]/"postgres/archive/prebaseline_20260807/migrations/119_asset_device_relationship_management.sql").read_text()
 
 def test_database_controls_relationship_types_and_compatibility():
     assert "asset_device_relationship_types" in SQL

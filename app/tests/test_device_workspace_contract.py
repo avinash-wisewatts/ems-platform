@@ -7,7 +7,7 @@ CREATE = (ROOT / "app/src/templates/device_create.html").read_text()
 DETAIL = (ROOT / "app/src/templates/device_detail.html").read_text()
 EDIT = (ROOT / "app/src/templates/device_edit.html").read_text()
 MIGRATION = (
-    ROOT / "postgres/migrations/155_device_administration_workspace.sql"
+    ROOT / "postgres/archive/prebaseline_20260807/migrations/155_device_administration_workspace.sql"
 ).read_text()
 
 
@@ -62,7 +62,7 @@ def test_service_uses_new_controlled_functions():
 
 
 def test_context_independent_inventory_and_inheritance_contract():
-    migration = (ROOT / "postgres/migrations/156_context_independent_inventory_and_device_location.sql").read_text()
+    migration = (ROOT / "postgres/archive/prebaseline_20260807/migrations/156_context_independent_inventory_and_device_location.sql").read_text()
     assert "location_mode" in migration
     assert "GATEWAY" in migration
     assert "operational_policy" in migration

@@ -9,7 +9,7 @@ from src.device_management import (
 )
 
 ROOT = Path(__file__).resolve().parents[2]
-SQL = (ROOT / "postgres/migrations/176_device_telemetry_point_administration.sql").read_text()
+SQL = (ROOT / "postgres/archive/prebaseline_20260807/migrations/176_device_telemetry_point_administration.sql").read_text()
 MAIN = (ROOT / "app/src/main.py").read_text()
 TEMPLATE = (ROOT / "app/src/templates/device_telemetry_points.html").read_text()
 SERVICE = (ROOT / "app/src/device_management_service.py").read_text()

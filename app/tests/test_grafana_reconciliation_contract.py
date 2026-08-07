@@ -1,5 +1,5 @@
 from pathlib import Path
-SQL=(Path(__file__).parents[2]/"postgres/migrations/150_three_role_scope_model.sql").read_text()
+SQL=(Path(__file__).parents[2]/"postgres/archive/prebaseline_20260807/migrations/150_three_role_scope_model.sql").read_text()
 
 def test_reconciliation_contract_is_audited_and_safe():
     assert "get_grafana_reconciliation_context" in SQL

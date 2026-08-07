@@ -9,7 +9,7 @@ CREATE = Path("app/src/templates/device_create.html").read_text()
 ONBOARDING = Path("app/src/templates/onboarding.html").read_text()
 RESULT = Path("app/src/templates/onboarding_result.html").read_text()
 SQL = Path(
-    "postgres/migrations/177_device_commissioning_experience_and_controlled_activation.sql"
+    "postgres/archive/prebaseline_20260807/migrations/177_device_commissioning_experience_and_controlled_activation.sql"
 ).read_text()
 
 

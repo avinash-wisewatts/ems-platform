@@ -46,8 +46,8 @@ BEGIN
     SELECT count(*) INTO v_count
     FROM config.status_definitions
     WHERE status_domain = 'DEVICE_LIFECYCLE';
-    IF v_count <> 7 THEN
-        RAISE EXCEPTION 'Expected 7 device lifecycle definitions, found %', v_count;
+    IF v_count <> 4 THEN
+        RAISE EXCEPTION 'Expected 4 device lifecycle definitions, found %', v_count;
     END IF;
 
     SELECT count(*) INTO v_count
@@ -201,9 +201,15 @@ BEGIN
         UPDATE metadata.devices
         SET lifecycle_status = 'INVALID'
         WHERE id = v_device_id;
+
         RAISE EXCEPTION 'Invalid device lifecycle value was accepted';
-    EXCEPTION WHEN check_violation THEN
-        NULL;
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLERRM NOT LIKE
+                'Select Registered, Inactive, or Decommissioned.%'
+            THEN
+                RAISE;
+            END IF;
     END;
 END;
 $$;

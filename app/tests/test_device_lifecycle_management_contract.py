@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SQL = (ROOT / "postgres/migrations/118_device_lifecycle_management.sql").read_text()
+SQL = (ROOT / "postgres/archive/prebaseline_20260807/migrations/118_device_lifecycle_management.sql").read_text()
 EDIT = (ROOT / "app/src/templates/device_edit.html").read_text()
 MAIN = (ROOT / "app/src/main.py").read_text()
 

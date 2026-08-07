@@ -1,12 +1,17 @@
-# Device lifecycle cleanup
+# EMS pre-production migration baseline patch
 
-This patch reduces device lifecycle values to:
+This patch archives the pre-baseline migration history and introduces baseline
+`001_ems_platform_baseline_20260807.sql`. Do not reset the production migration
+ledger until a clean disposable database has passed the complete integration
+workflow.
 
-- `REGISTERED`
-- `ACTIVE`
-- `INACTIVE`
-- `DECOMMISSIONED`
+Installation sequence:
 
-Existing `DISCOVERED`, `UNASSIGNED`, and `COMMISSIONING` device rows are migrated to `REGISTERED`. Commissioning readiness/status and asset assignment remain separate derived concepts. `ACTIVE` remains available only through the controlled commissioning action.
-
-Apply migration 179 to `ems_test` first, run the focused tests, then back up and apply to production.
+1. Extract into `/opt/ems-platform`.
+2. Run `scripts/baseline/install_baseline_repository_layout.sh`.
+3. Run repository contract tests.
+4. Reset and rebuild `ems_test` from canonical deployment plus baseline 001.
+5. Run the complete integration workflow.
+6. Back up production.
+7. Reset the existing production migration ledger using the guarded cutover
+   script. Do not execute baseline SQL on the already-upgraded production DB.

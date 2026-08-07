@@ -94,3 +94,8 @@ grafana/dashboard-backups/
 .env.*
 **/.env
 **/.env.*
+
+# Preserve the immutable pre-production migration baseline archive
+!postgres/archive/
+!postgres/archive/prebaseline_20260807/
+!postgres/archive/prebaseline_20260807/**

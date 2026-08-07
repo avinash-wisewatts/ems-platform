@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-MIGRATION = ROOT / "postgres/migrations/116_gateway_lifecycle_connectivity.sql"
+MIGRATION = ROOT / "postgres/archive/prebaseline_20260807/migrations/116_gateway_lifecycle_connectivity.sql"
 
 
 def migration_sql() -> str:

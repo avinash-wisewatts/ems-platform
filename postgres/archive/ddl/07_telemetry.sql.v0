@@ -1,0 +1,47 @@
+-- ============================================================================
+-- File: 07_telemetry.sql
+-- Purpose: Telemetry storage layer for the WiseWatts EMS platform.
+--
+-- Architecture:
+--   • Immutable raw message archive
+--   • Domain-specific TimescaleDB hypertables
+--   • Optimized for Grafana dashboards
+--
+-- Domains:
+--   • raw_messages
+--   • energy_measurements
+--   • environment_measurements
+--   • water_measurements
+--   • asset_health
+--   • device_status
+-- ============================================================================
+
+-- ============================================================================
+-- RAW MESSAGE ARCHIVE
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS telemetry.raw_messages (
+
+    id BIGSERIAL,
+
+    received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    source_protocol TEXT NOT NULL,
+
+    mqtt_topic TEXT,
+
+    organization_id UUID,
+
+    site_id UUID,
+
+    gateway_id UUID,
+
+    payload JSONB NOT NULL
+
+);
+
+SELECT create_hypertable(
+    'telemetry.raw_messages',
+    'received_at',
+    if_not_exists => TRUE
+);

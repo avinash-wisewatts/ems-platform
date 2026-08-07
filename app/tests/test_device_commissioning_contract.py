@@ -1,6 +1,6 @@
 from pathlib import Path
 
-SQL = Path("postgres/migrations/124_device_commissioning_action.sql").read_text()
+SQL = Path("postgres/archive/prebaseline_20260807/migrations/124_device_commissioning_action.sql").read_text()
 
 def test_device_commissioning_contract():
     assert "CREATE OR REPLACE FUNCTION admin.commission_device" in SQL
@@ -15,4 +15,4 @@ def test_device_commissioning_contract():
     assert "drp.validated_required_point_count = drp.required_point_count" in SQL
 
 def test_canonical_matches_migration():
-    assert Path("postgres/ddl/97_device_commissioning_action.sql").read_bytes() == Path("postgres/migrations/124_device_commissioning_action.sql").read_bytes()
+    assert Path("postgres/ddl/97_device_commissioning_action.sql").read_bytes() == Path("postgres/archive/prebaseline_20260807/migrations/124_device_commissioning_action.sql").read_bytes()

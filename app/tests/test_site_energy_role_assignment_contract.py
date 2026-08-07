@@ -1,5 +1,5 @@
 from pathlib import Path
-SQL=(Path(__file__).parents[2]/"postgres/migrations/127_site_energy_role_administration.sql").read_text()
+SQL=(Path(__file__).parents[2]/"postgres/archive/prebaseline_20260807/migrations/127_site_energy_role_administration.sql").read_text()
 def test_qualifying_meter_and_tenant_site_validation():
     assert "lower(v_category)<>'energy meter'" in SQL
     assert "Device and site must belong to the same tenant and site." in SQL

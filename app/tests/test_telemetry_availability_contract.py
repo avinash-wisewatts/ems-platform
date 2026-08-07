@@ -1,6 +1,6 @@
 from pathlib import Path
 
-SQL = Path("postgres/migrations/125_telemetry_availability_validation.sql").read_text()
+SQL = Path("postgres/archive/prebaseline_20260807/migrations/125_telemetry_availability_validation.sql").read_text()
 
 def test_last_seen_and_states_contract():
     assert "analytics.v_device_telemetry_availability" in SQL

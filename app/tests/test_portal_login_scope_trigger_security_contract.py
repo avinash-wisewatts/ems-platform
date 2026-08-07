@@ -2,7 +2,7 @@ from pathlib import Path
 
 MIGRATION = (
     Path(__file__).parents[2]
-    / "postgres/migrations/130_portal_login_scope_trigger_security.sql"
+    / "postgres/archive/prebaseline_20260807/migrations/130_portal_login_scope_trigger_security.sql"
 ).read_text(encoding="utf-8")
 
 

@@ -21,9 +21,9 @@ set -Eeuo pipefail
 #
 # Governance
 # ----------
-# * Canonical DDL represents the complete clean-install state.
-# * Historical migrations are baselined once on an existing canonical database.
-# * New forward migrations are executed exactly once.
+# * Canonical DDL represents the clean-install foundation.
+# * Baseline 001 consolidates all pre-production forward migrations.
+# * New forward migrations 002+ are executed exactly once.
 # * Editing an already recorded migration causes a hard checksum failure.
 # * Each executed migration and its ledger insert occur in one transaction.
 # =============================================================================

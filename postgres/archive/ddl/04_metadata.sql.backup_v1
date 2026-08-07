@@ -1,0 +1,310 @@
+-- ============================================================================
+-- File: 04_metadata.sql
+-- Purpose: Core EMS metadata model.
+--
+-- Design principles:
+--   - Organization-based multi-tenancy.
+--   - Asset-centric business model.
+--   - Late-binding telemetry architecture.
+--   - UUID primary keys.
+--   - Metadata defines meaning; telemetry stores measurements.
+--
+-- Execution order:
+--   This script runs after:
+--       00_extensions.sql
+--       01_schemas.sql
+--       02_roles.sql
+--       03_admin.sql
+-- ============================================================================
+
+
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+
+-- ============================================================================
+-- TENANT HIERARCHY
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS metadata.organizations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    name TEXT NOT NULL,
+    code TEXT UNIQUE NOT NULL,
+
+    description TEXT,
+
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+
+CREATE TABLE IF NOT EXISTS metadata.sites (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    organization_id UUID NOT NULL
+        REFERENCES metadata.organizations(id),
+
+    name TEXT NOT NULL,
+    code TEXT NOT NULL,
+
+    timezone TEXT NOT NULL DEFAULT 'Asia/Kolkata',
+
+    address JSONB,
+
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    UNIQUE (organization_id, code)
+);
+
+
+CREATE TABLE IF NOT EXISTS metadata.buildings (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    site_id UUID NOT NULL
+        REFERENCES metadata.sites(id),
+
+    name TEXT NOT NULL,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+
+CREATE TABLE IF NOT EXISTS metadata.floors (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    building_id UUID NOT NULL
+        REFERENCES metadata.buildings(id),
+
+    name TEXT NOT NULL,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+
+CREATE TABLE IF NOT EXISTS metadata.spaces (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    floor_id UUID NOT NULL
+        REFERENCES metadata.floors(id),
+
+    name TEXT NOT NULL,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+
+
+-- ============================================================================
+-- ASSET MODEL
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS metadata.asset_types (
+
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    organization_id UUID
+        REFERENCES metadata.organizations(id),
+
+    name TEXT NOT NULL,
+
+    description TEXT,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+
+CREATE TABLE IF NOT EXISTS metadata.assets (
+
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    organization_id UUID NOT NULL
+        REFERENCES metadata.organizations(id),
+
+    site_id UUID NOT NULL
+        REFERENCES metadata.sites(id),
+
+    asset_type_id UUID
+        REFERENCES metadata.asset_types(id),
+
+    parent_asset_id UUID
+        REFERENCES metadata.assets(id),
+
+    name TEXT NOT NULL,
+
+    manufacturer TEXT,
+
+    model TEXT,
+
+    serial_number TEXT,
+
+    status TEXT DEFAULT 'active',
+
+    metadata JSONB,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+
+
+-- ============================================================================
+-- DEVICE MODEL
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS metadata.gateway_models (
+
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    vendor TEXT,
+    model TEXT NOT NULL,
+
+    protocol TEXT,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+
+CREATE TABLE IF NOT EXISTS metadata.gateways (
+
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    organization_id UUID NOT NULL
+        REFERENCES metadata.organizations(id),
+
+    site_id UUID NOT NULL
+        REFERENCES metadata.sites(id),
+
+    gateway_model_id UUID
+        REFERENCES metadata.gateway_models(id),
+
+    name TEXT NOT NULL,
+
+    external_id TEXT,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+
+CREATE TABLE IF NOT EXISTS metadata.device_models (
+
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    vendor TEXT,
+
+    model TEXT NOT NULL,
+
+    device_type TEXT,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+
+CREATE TABLE IF NOT EXISTS metadata.devices (
+
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    organization_id UUID NOT NULL
+        REFERENCES metadata.organizations(id),
+
+    gateway_id UUID
+        REFERENCES metadata.gateways(id),
+
+    device_model_id UUID
+        REFERENCES metadata.device_models(id),
+
+    name TEXT NOT NULL,
+
+    external_id TEXT,
+
+    serial_number TEXT,
+
+    firmware_version TEXT,
+
+    protocol TEXT,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+
+
+-- ============================================================================
+-- SEMANTIC MEASUREMENT MODEL
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS metadata.engineering_units (
+
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    symbol TEXT UNIQUE NOT NULL,
+
+    description TEXT,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+
+CREATE TABLE IF NOT EXISTS metadata.logical_points (
+
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    name TEXT NOT NULL,
+
+    description TEXT,
+
+    unit_id UUID
+        REFERENCES metadata.engineering_units(id),
+
+    data_type TEXT NOT NULL DEFAULT 'numeric',
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+
+
+CREATE TABLE IF NOT EXISTS metadata.asset_points (
+
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    asset_id UUID NOT NULL
+        REFERENCES metadata.assets(id),
+
+    logical_point_id UUID NOT NULL
+        REFERENCES metadata.logical_points(id),
+
+    point_role TEXT,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    UNIQUE(asset_id, logical_point_id)
+);
+
+
+
+CREATE TABLE IF NOT EXISTS metadata.device_field_mapping (
+
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    device_id UUID NOT NULL
+        REFERENCES metadata.devices(id),
+
+    raw_field_name TEXT NOT NULL,
+
+    logical_point_id UUID NOT NULL
+        REFERENCES metadata.logical_points(id),
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    UNIQUE(device_id, raw_field_name)
+);
+
+
