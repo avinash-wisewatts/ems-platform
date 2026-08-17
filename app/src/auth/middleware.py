@@ -1,7 +1,7 @@
 from urllib.parse import quote
 
 from starlette.datastructures import MutableHeaders
-from starlette.types import ASGIApp, Message, Receive, Scope, Send
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from src.auth.authorization import (
     has_permission,

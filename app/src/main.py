@@ -163,6 +163,10 @@ from src.location_management import (
     validate_floor_submission,
     validate_site_submission,
     TELEMETRY_CAPTURE_INTERVALS,
+    DEMAND_INTERVALS,
+    DEMAND_BASES,
+    DEMAND_SOURCE_ROLES,
+    validate_site_demand_submission,
     validate_space_submission,
 )
 from src.location_management_service import (
@@ -1369,6 +1373,10 @@ async def edit_site_submit(
     address_line2: Annotated[str, Form()] = "", city: Annotated[str, Form()] = "",
     region: Annotated[str, Form()] = "", postal_code: Annotated[str, Form()] = "", country: Annotated[str, Form()] = "",
     telemetry_capture_interval_seconds: Annotated[str, Form()] = "60",
+    demand_monitoring_enabled: Annotated[str | None, Form()] = None,
+    demand_interval_seconds: Annotated[str, Form()] = "900",
+    demand_basis: Annotated[str, Form()] = "ACTIVE_POWER_KW",
+    site_demand_source_role: Annotated[str, Form()] = "GRID_IMPORT",
 ) -> Response:
     user = require_authenticated_portal_user(request)
     site = await _accessible_site_or_none(request, site_id)
@@ -1378,9 +1386,22 @@ async def edit_site_submit(
     try:
         validated = validate_site_submission(organization_id=str(site["organization_id"]),
             site_name=site_name, site_code=site["site_code"], site_timezone=site_timezone, lifecycle_status=lifecycle_status, telemetry_capture_interval_seconds=telemetry_capture_interval_seconds)
+        demand = validate_site_demand_submission(
+            demand_monitoring_enabled=demand_monitoring_enabled,
+            demand_interval_seconds=demand_interval_seconds,
+            demand_basis=demand_basis,
+            site_demand_source_role=site_demand_source_role,
+        )
         result = await update_site_workspace(portal_user_id=user.portal_user_id, site_id=str(site_id),
             name=validated["name"], timezone=validated["timezone"], lifecycle_status=validated["lifecycle_status"],
-            address=_site_address_from_form(address_line1,address_line2,city,region,postal_code,country), change_reason=change_reason, telemetry_capture_interval_seconds=validated["telemetry_capture_interval_seconds"])
+            address=_site_address_from_form(address_line1,address_line2,city,region,postal_code,country), change_reason=change_reason,
+            telemetry_capture_interval_seconds=validated["telemetry_capture_interval_seconds"],
+            demand_monitoring_enabled=demand["is_enabled"],
+            demand_interval_seconds=demand["demand_interval_seconds"],
+            demand_basis=demand["demand_basis"],
+            site_demand_source_role=demand["site_demand_source_role"],
+            demand_minimum_coverage_percent=demand["minimum_coverage_percent"],
+            demand_late_arrival_tolerance_seconds=demand["late_arrival_tolerance_seconds"])
         if not result.get("success", False):
             raise LocationManagementValidationError(result.get("failure_reason", "The lifecycle transition was rejected."))
     except (LocationManagementValidationError, DatabaseError) as exc:
@@ -3961,7 +3982,7 @@ async def retry_organization_grafana_provisioning(
         )
 
     try:
-        provisioning = await provision_grafana_for_organization(
+        await provision_grafana_for_organization(
             organization_id=str(organization_id),
             organization_name=organization["organization_name"],
         )
@@ -6383,7 +6404,7 @@ async def asset_step(
             draft_record=draft_record,
             form_data=form_data,
         )
-    except AssetStepValidationError as exc:
+    except AssetStepValidationError:
         return RedirectResponse(
             url=(
                 "/onboarding/device"

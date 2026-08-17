@@ -2,20 +2,28 @@
 # Environment
 ###############################################################################
 .env
+.env.*
 **/.env
+**/.env.*
+grafana/.env
+grafana/live-stream.env
 
 ###############################################################################
 # PostgreSQL
 ###############################################################################
 postgres/data/
-postgres/data/**
+postgres/backups/
 *.sql.backup
 
 ###############################################################################
 # Grafana
 ###############################################################################
 grafana/data/
-grafana/data/**
+grafana/plugins/
+grafana/dashboard-backups/
+node_modules/
+grafana/plugin-src/**/dist
+wisewatts_live_datasource_linux_amd64
 
 ###############################################################################
 # Logs
@@ -31,6 +39,9 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+.venv-test/
+.pytest_cache/
+.coverage
 
 ###############################################################################
 # IDE
@@ -45,57 +56,20 @@ venv/
 Thumbs.db
 
 ###############################################################################
-# Temporary
+# Local safety copies and editor artifacts
 ###############################################################################
 *.tmp
 *.swp
-# Runtime data
-postgres/data/
-grafana/data/
-logs/
-telegraf/logs/
-
-# Backups
-postgres/backups/
-
-# Archives
-postgres/archive/
-
-# Environment
-.env
-**/.env
-grafana/.env
-*.bak
-*.backup
-*.before-*
-*.failed-*
 *~
-grafana/plugins/
-grafana/dashboard-backups/
-
-# Test artifacts
-.venv-test/
-.coverage
-*.bak-*
-# Local safety copies and editor artifacts
-*.before-*
 *.orig
 *.bak
+*.bak-*
 *.backup
-*.tmp
-*.swp
-*~
+*.before-*
+*.broken-*
+*.failed-*
 
+###############################################################################
 # Repository-local backup bundles
+###############################################################################
 /backups/
-
-# Local environment files and historical copies
-.env
-.env.*
-**/.env
-**/.env.*
-
-# Preserve the immutable pre-production migration baseline archive
-!postgres/archive/
-!postgres/archive/prebaseline_20260807/
-!postgres/archive/prebaseline_20260807/**
