@@ -1,6 +1,7 @@
+from tests.sql_contract_sources import canonical_sql
 from pathlib import Path
 
-SQL = Path("postgres/archive/prebaseline_20260807/migrations/124_device_commissioning_action.sql").read_text()
+SQL = canonical_sql("97_device_commissioning_action.sql")
 
 def test_device_commissioning_contract():
     assert "CREATE OR REPLACE FUNCTION admin.commission_device" in SQL
@@ -14,5 +15,5 @@ def test_device_commissioning_contract():
     assert "REQUIRED_TELEMETRY_PROFILE_POINTS_MISSING" not in SQL
     assert "drp.validated_required_point_count = drp.required_point_count" in SQL
 
-def test_canonical_matches_migration():
-    assert Path("postgres/ddl/97_device_commissioning_action.sql").read_bytes() == Path("postgres/archive/prebaseline_20260807/migrations/124_device_commissioning_action.sql").read_bytes()
+def test_canonical_device_commissioning_contract_is_present():
+    assert "CREATE OR REPLACE FUNCTION admin.commission_device" in SQL

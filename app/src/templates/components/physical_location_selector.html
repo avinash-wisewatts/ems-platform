@@ -5,7 +5,8 @@
     selected_building_id="",
     selected_floor_id="",
     selected_space_id="",
-    required_site=true
+    required_site=true,
+    locked_site_label=none
 ) %}
 <fieldset
     class="physical-location-selector"
@@ -20,6 +21,17 @@
 
     <label>
         Site
+        {% if locked_site_label %}
+        <select
+            name="{{ field_prefix }}_site_id"
+            data-location-level="site"
+            required
+        >
+            <option value="{{ selected_site_id }}" selected>
+                {{ locked_site_label }}
+            </option>
+        </select>
+        {% else %}
         <select
             name="{{ field_prefix }}_site_id"
             data-location-level="site"
@@ -46,6 +58,7 @@
                 {% endif %}
             {% endfor %}
         </select>
+        {% endif %}
     </label>
 
     <label>

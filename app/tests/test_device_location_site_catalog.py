@@ -2,20 +2,48 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = (ROOT / "src/templates/device_edit.html").read_text()
-SCRIPT = (ROOT / "src/static/js/device-workspace.js").read_text()
+LOCATION_PICKER = (ROOT / "src/static/js/location-picker.js").read_text()
+DEVICE_WORKSPACE = (ROOT / "src/static/js/device-workspace.js").read_text()
 
 
-def test_device_edit_renders_server_side_building_floor_space_options() -> None:
-    assert "seen_buildings" in TEMPLATE
-    assert 'data-building="{{ row.building_id }}"' in TEMPLATE
-    assert 'data-floor="{{ row.floor_id }}"' in TEMPLATE
+def test_device_edit_uses_shared_location_picker_json_catalog() -> None:
+    """device_edit.html no longer hand-pre-renders building/floor/space
+    options in Jinja. It delegates to the same [data-physical-location-selector]
+    + <script type="application/json" data-location-options> contract that
+    gateway and asset forms use, populated by the shared location-picker.js.
+    """
+
+    assert "data-physical-location-selector" in TEMPLATE
+    assert "data-location-options" in TEMPLATE
+    assert 'data-location-level="building"' in TEMPLATE
+    assert 'data-location-level="floor"' in TEMPLATE
+    assert 'data-location-level="space"' in TEMPLATE
+    assert "/static/js/location-picker.js" in TEMPLATE
     assert "/static/js/device-workspace.js" in TEMPLATE
-
-
-def test_device_location_cascade_uses_rendered_option_parent_ids() -> None:
-    assert "editFloorCatalog" in SCRIPT
-    assert "editSpaceCatalog" in SCRIPT
-    assert "rebuildCatalog(" in SCRIPT
-    assert "option.dataset.building" in SCRIPT
-    assert "option.dataset.floor" in SCRIPT
     assert "window.deviceHierarchy" not in TEMPLATE
+    assert "seen_buildings" not in TEMPLATE
+    assert "seen_floors" not in TEMPLATE
+    assert "seen_spaces" not in TEMPLATE
+
+    # location-picker.js's <script> tag must precede device-workspace.js's:
+    # device-workspace.js relies on the selects already being populated by
+    # the time its own change listeners and init code run.
+    picker_index = TEMPLATE.index("/static/js/location-picker.js")
+    workspace_index = TEMPLATE.index("/static/js/device-workspace.js")
+    assert picker_index < workspace_index
+
+
+def test_device_location_cascade_lives_in_shared_location_picker() -> None:
+    """The Building -> Floor -> Space cascade is owned by location-picker.js,
+    not duplicated inside device-workspace.js anymore."""
+
+    assert "data-location-options" in LOCATION_PICKER
+    assert 'data-location-level="building"' in LOCATION_PICKER
+    assert 'data-location-level="floor"' in LOCATION_PICKER
+    assert 'data-location-level="space"' in LOCATION_PICKER
+
+    assert "editFloorCatalog" not in DEVICE_WORKSPACE
+    assert "editSpaceCatalog" not in DEVICE_WORKSPACE
+    assert "rebuildEditFloors" not in DEVICE_WORKSPACE
+    assert "rebuildEditSpaces" not in DEVICE_WORKSPACE
+    assert "rebuildBuildings" not in DEVICE_WORKSPACE

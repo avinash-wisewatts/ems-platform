@@ -55,6 +55,10 @@ sudo tar \
     --exclude='*/.venv-*' \
     --exclude='*/venv' \
     --exclude='*/node_modules' \
+    --exclude='*/dist' \
+    --exclude='*linux_amd64' \
+    --exclude='*windows_amd64.exe' \
+    --exclude='*darwin_amd64' \
     --exclude='*/.pytest_cache' \
     --exclude='*/.mypy_cache' \
     --exclude='*/.ruff_cache' \
@@ -108,6 +112,7 @@ echo "Verifying snapshot exclusions..."
 
 tar -tzf "$OUTPUT" > "$LISTING_FILE"
 
+# Verifying standard heavy/runtime paths are excluded
 FORBIDDEN_PATTERN='(^|/)(\.git|backups|postgres/data|postgres/backups|postgres/archive|grafana/data|grafana/plugins|grafana/dashboard-backups|node_modules|\.venv[^/]*|venv|\.pytest_cache|\.mypy_cache|\.ruff_cache|__pycache__|logs|telegraf/logs)(/|$)'
 
 if grep -Eq "$FORBIDDEN_PATTERN" "$LISTING_FILE"; then
@@ -117,6 +122,7 @@ if grep -Eq "$FORBIDDEN_PATTERN" "$LISTING_FILE"; then
     exit 1
 fi
 
+# Verifying secret-bearing files are excluded
 SECRET_NAME_PATTERN='(^|/)\.env($|\.)|(^|/)(secrets|credentials)/|\.key$|\.p12$|\.pfx$|\.jks$|\.keystore$|(^|/)id_(rsa|ed25519)$|(^|/)(service-account|credentials)[^/]*\.json$'
 
 if grep -Eiq "$SECRET_NAME_PATTERN" "$LISTING_FILE"; then

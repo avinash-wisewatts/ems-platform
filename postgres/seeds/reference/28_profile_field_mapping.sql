@@ -38,6 +38,12 @@ CREATE TABLE IF NOT EXISTS config.profile_field_mapping (
 
     transform_expression TEXT,
 
+    source_unit_symbol TEXT,
+
+    scale_to_canonical_unit NUMERIC(20,9) NOT NULL DEFAULT 1,
+
+    offset_to_canonical_unit NUMERIC(20,9) NOT NULL DEFAULT 0,
+
     is_required BOOLEAN NOT NULL DEFAULT TRUE,
 
     display_order INTEGER NOT NULL DEFAULT 0,
@@ -60,6 +66,15 @@ COMMENT ON COLUMN config.profile_field_mapping.json_path IS
 
 COMMENT ON COLUMN config.profile_field_mapping.transform_expression IS
 'Optional SQL expression used to transform incoming values.';
+
+COMMENT ON COLUMN config.profile_field_mapping.source_unit_symbol IS
+'Source engineering unit emitted by the mapped field. NULL means unspecified.';
+
+COMMENT ON COLUMN config.profile_field_mapping.scale_to_canonical_unit IS
+'Multiplier used by the live path to convert numeric source values to the logical-point engineering unit.';
+
+COMMENT ON COLUMN config.profile_field_mapping.offset_to_canonical_unit IS
+'Offset added after live-path scaling to the logical-point engineering unit.';
 
 CREATE INDEX IF NOT EXISTS idx_profile_field_mapping_profile
 ON config.profile_field_mapping(profile_id);

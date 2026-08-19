@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-MIGRATION = ROOT / "postgres/archive/prebaseline_20260807/migrations/121_asset_metering_policy_coverage.sql"
+MIGRATION = ROOT / "postgres/ddl/94_asset_metering_policy_coverage.sql"
 MAIN = ROOT / "app/src/main.py"
 NAV = ROOT / "app/src/admin_navigation.py"
 

@@ -10,13 +10,82 @@
 <label><span>Organization</span><input value="{{ site.organization_name }}" disabled></label>
 <label><span>Site code</span><input value="{{ site.site_code }}" disabled></label>
 <label><span>Site name</span><input name="site_name" required maxlength="200" value="{{ form_data.get('site_name',site.site_name) }}"></label>
+<label><span>Sector</span><select id="sector_id" data-sub-sector-source>{% for sector in sectors %}<option value="{{ sector.id }}"{% if selected_sector_id and selected_sector_id|string == sector.id|string %} selected{% endif %}>{{ sector.name }}</option>{% endfor %}</select></label>
+<label><span>Sub-sector</span><select name="sub_sector_id" id="sub_sector_id" required data-selected-value="{{ selected_sub_sector_id }}"><option value="">Select a sector first</option></select></label>
 <label><span>Lifecycle status</span><select name="lifecycle_status">{% for status in lifecycle_statuses %}<option value="{{ status }}"{% if form_data.get('lifecycle_status',site.lifecycle_status) == status %} selected{% endif %}>{{ status|title }}</option>{% endfor %}</select></label>
 </div></section>
 <section class="form-section"><div class="form-section-heading"><h3>Regional settings</h3></div><div class="form-grid">
 <label><span>IANA timezone <span class="field-info"><span class="field-info-trigger" tabindex="0" aria-label="More information about site timezone" aria-describedby="site_edit_timezone_help">i</span><span id="site_edit_timezone_help" class="field-info-content" role="tooltip">Used for site-local timestamps, schedules, reports, and alerts.</span></span></span><select name="site_timezone" required><option value="Asia/Kolkata"{% if form_data.get('site_timezone',site.timezone or 'Asia/Kolkata') == 'Asia/Kolkata' %} selected{% endif %}>Asia/Kolkata — UTC+05:30</option></select></label>
-<label><span>Telemetry storage interval <span class="field-info"><span class="field-info-trigger" tabindex="0" aria-label="More information about telemetry storage interval" aria-describedby="site_capture_interval_help">i</span><span id="site_capture_interval_help" class="field-info-content" role="tooltip">Stores one closed telemetry bucket at this interval. Raw and normalized telemetry remain full resolution.</span></span></span><select name="telemetry_capture_interval_seconds" required>{% set current_interval = form_data.get('telemetry_capture_interval_seconds', site.telemetry_capture_interval_seconds if site is defined else 60)|string %}<option value="10"{% if current_interval == '10' %} selected{% endif %}>10 seconds</option><option value="30"{% if current_interval == '30' %} selected{% endif %}>30 seconds</option><option value="60"{% if current_interval == '60' %} selected{% endif %}>1 minute</option><option value="300"{% if current_interval == '300' %} selected{% endif %}>5 minutes</option><option value="900"{% if current_interval == '900' %} selected{% endif %}>15 minutes</option></select></label>
+<label><span>Telemetry storage interval <span class="field-info"><span class="field-info-trigger" tabindex="0" aria-label="More information about telemetry storage interval" aria-describedby="site_capture_interval_help">i</span><span id="site_capture_interval_help" class="field-info-content" role="tooltip">Raw MQTT telemetry is retained temporarily at source resolution. This setting controls the long-term normalized telemetry resolution for the site.</span></span></span><select name="telemetry_capture_interval_seconds" required>{% set current_interval = form_data.get('telemetry_capture_interval_seconds', site.telemetry_capture_interval_seconds if site is defined else 60)|string %}<option value="10"{% if current_interval == '10' %} selected{% endif %}>10 seconds</option><option value="30"{% if current_interval == '30' %} selected{% endif %}>30 seconds</option><option value="60"{% if current_interval == '60' %} selected{% endif %}>1 minute</option><option value="300"{% if current_interval == '300' %} selected{% endif %}>5 minutes</option><option value="900"{% if current_interval == '900' %} selected{% endif %}>15 minutes</option></select></label>
 <label><span>Country</span><select name="country"><option value="India"{% if form_data.get('country',site.address.get('country') or 'India') == 'India' %} selected{% endif %}>India</option></select></label>
 </div></section>
+
+{% set demand_policy = site.demand_policy or {} %}
+{% set demand_readiness = site.demand_readiness or {} %}
+{% set demand_enabled = form_data.get(
+    'demand_monitoring_enabled',
+    'ENABLED' if demand_policy.get('is_enabled') else 'DISABLED'
+) %}
+{% set current_demand_interval = form_data.get('demand_interval_seconds', demand_policy.get('demand_interval_seconds', 900))|string %}
+{% set current_demand_basis = form_data.get('demand_basis', demand_policy.get('demand_basis', 'ACTIVE_POWER_KW')) %}
+{% set current_demand_source = form_data.get('site_demand_source_role', demand_policy.get('site_demand_source_role', 'GRID_IMPORT')) %}
+
+<section class="form-section">
+    <div class="form-section-heading">
+        <h3>Demand monitoring</h3>
+        <p>Configure how this site measures electrical demand.</p>
+    </div>
+
+    <div class="form-grid">
+        <label>
+            <span>Demand monitoring</span>
+            <select name="demand_monitoring_enabled">
+                <option value="ENABLED"{% if demand_enabled == 'ENABLED' %} selected{% endif %}>Enabled</option>
+                <option value="DISABLED"{% if demand_enabled == 'DISABLED' %} selected{% endif %}>Disabled</option>
+            </select>
+        </label>
+
+        <label>
+            <span>Demand interval</span>
+            <select name="demand_interval_seconds">
+                <option value="900"{% if current_demand_interval == '900' %} selected{% endif %}>15 minutes</option>
+                <option value="1800"{% if current_demand_interval == '1800' %} selected{% endif %}>30 minutes</option>
+            </select>
+        </label>
+
+        <label>
+            <span>Demand basis</span>
+            <select name="demand_basis">
+                <option value="ACTIVE_POWER_KW"{% if current_demand_basis == 'ACTIVE_POWER_KW' %} selected{% endif %}>Active power (kW)</option>
+                <option value="APPARENT_POWER_KVA"{% if current_demand_basis == 'APPARENT_POWER_KVA' %} selected{% endif %}>Apparent power (kVA)</option>
+            </select>
+        </label>
+
+        <label>
+            <span>Demand source</span>
+            <select name="site_demand_source_role">
+                <option value="GRID_IMPORT"{% if current_demand_source == 'GRID_IMPORT' %} selected{% endif %}>Utility / grid meter</option>
+                <option value="SITE_CONSUMPTION"{% if current_demand_source == 'SITE_CONSUMPTION' %} selected{% endif %}>Total site consumption meter</option>
+            </select>
+        </label>
+    </div>
+
+    <div class="alert{% if demand_readiness.get('readiness_status') == 'READY' %} alert-success{% elif demand_readiness.get('readiness_status') in ('SOURCE_NOT_CONFIGURED', 'NOT_CONFIGURED') %} alert-warning{% endif %}">
+        {% set readiness = demand_readiness.get('readiness_status', 'NOT_CONFIGURED') %}
+        <strong>Demand monitoring status:</strong>
+        {% if readiness == 'READY' %}
+            Ready
+        {% elif readiness == 'SOURCE_NOT_CONFIGURED' %}
+            Source meter not configured
+            <div>An authoritative {{ 'utility / grid meter' if current_demand_source == 'GRID_IMPORT' else 'total site consumption meter' }} must be assigned before demand monitoring can begin.</div>
+        {% elif readiness == 'DISABLED' %}
+            Disabled
+        {% else %}
+            Not configured
+        {% endif %}
+    </div>
+</section>
+
 <section class="form-section"><div class="form-section-heading"><h3>Address</h3></div><div class="form-grid">
 <label><span>Address line 1</span><input name="address_line1" value="{{ form_data.get('address_line1',site.address.get('line1','')) }}"></label>
 <label><span>Address line 2</span><input name="address_line2" value="{{ form_data.get('address_line2',site.address.get('line2','')) }}"></label>
@@ -28,3 +97,4 @@
 <div class="form-actions sticky-actions"><a class="button button-secondary" href="/administration/sites/{{ site.site_id }}">Cancel</a><button class="button button-primary" type="submit">Save changes</button></div>
 </form></section>
 {% endblock %}
+{% block scripts %}<script src="{{ url_for('static',path='/js/sector-sub-sector-selector.js') }}" defer></script>{% endblock %}

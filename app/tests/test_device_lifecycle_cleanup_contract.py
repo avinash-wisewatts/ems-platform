@@ -1,7 +1,8 @@
+from tests.sql_contract_sources import baseline_migration_sql
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-MIGRATION = (ROOT / "postgres/archive/prebaseline_20260807/migrations/179_simplify_device_lifecycle_statuses.sql").read_text()
+MIGRATION = baseline_migration_sql("179_simplify_device_lifecycle_statuses.sql")
 
 
 def test_legacy_device_states_are_migrated_to_registered():

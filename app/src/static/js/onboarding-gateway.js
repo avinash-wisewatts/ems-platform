@@ -29,16 +29,8 @@ document.addEventListener("DOMContentLoaded", () => {
         "gateway_name"
     );
 
-    const gatewayVendor = document.getElementById(
-        "gateway_vendor"
-    );
-
-    const gatewayModel = document.getElementById(
-        "gateway_model"
-    );
-
-    const gatewayProtocol = document.getElementById(
-        "gateway_protocol"
+    const gatewayModelId = document.getElementById(
+        "gateway_model_id"
     );
 
     const setSectionEnabled = (
@@ -81,41 +73,8 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         gatewayName.required = !useExisting;
-        gatewayVendor.required = !useExisting;
-        gatewayModel.required = !useExisting;
-        gatewayProtocol.required = !useExisting;
+        gatewayModelId.required = !useExisting;
     };
-
-    gatewayModel.addEventListener("change", () => {
-        const modelOptions = Array.from(
-            document.querySelectorAll(
-                "#gateway_model_catalog option"
-            )
-        );
-
-        const selectedModel = modelOptions.find(
-            (option) =>
-                option.value.toLowerCase()
-                === gatewayModel.value.trim().toLowerCase()
-        );
-
-        if (!selectedModel) {
-            return;
-        }
-
-        if (
-            !gatewayVendor.value.trim()
-            && selectedModel.dataset.vendor
-        ) {
-            gatewayVendor.value =
-                selectedModel.dataset.vendor;
-        }
-
-        if (selectedModel.dataset.protocol) {
-            gatewayProtocol.value =
-                selectedModel.dataset.protocol;
-        }
-    });
 
     modeInputs.forEach((input) => {
         input.addEventListener("change", updateMode);

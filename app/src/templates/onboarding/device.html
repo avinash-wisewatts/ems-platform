@@ -275,49 +275,69 @@
             </label>
 
             <label>
-                Manufacturer
+                Device model
 
-                <input
-                    id="device_vendor"
-                    name="device_vendor"
-                    type="text"
-                    maxlength="200"
-                    list="device_vendor_catalog"
-                    placeholder="ENISCOPE"
-                    value="{{ form_data.get('device_vendor', '') }}"
+                <span class="field-info">
+                    <span
+                        class="field-info-trigger"
+                        tabindex="0"
+                        aria-label="More information about this field"
+                        aria-describedby="device_model_id_help"
+                    >i</span>
+                    <span
+                        id="device_model_id_help"
+                        class="field-info-content"
+                        role="tooltip"
+                    >
+                        Models are filtered to the selected device
+                        category.
+                    </span>
+                </span>
+
+                <select
+                    id="device_model_id"
+                    name="device_model_id"
+                    data-device-model
                 >
+                    <option value="">
+                        Select a category first
+                    </option>
 
-                <datalist id="device_vendor_catalog">
                     {% for model in device_models %}
-                    {% if model.vendor %}
-                    <option value="{{ model.vendor }}"></option>
-                    {% endif %}
+                    <option
+                        value="{{ model.id }}"
+                        data-category="{{ model.device_category_id or '' }}"
+                        data-vendor="{{ model.vendor or 'Generic' }}"
+                        {% if form_data.get(
+                            'device_model_id'
+                        ) == model.id|string %}
+                        selected
+                        {% endif %}
+                    >
+                        {{ model.vendor or 'Generic' }}
+                        — {{ model.model }}
+                    </option>
                     {% endfor %}
-                </datalist>
+                </select>
+
+                <span
+                    class="field-help"
+                    data-model-empty
+                    hidden
+                >
+                    No active models are compatible with the selected
+                    category.
+                </span>
             </label>
 
             <label>
-                Model
+                Manufacturer
 
                 <input
-                    id="device_model"
-                    name="device_model"
-                    type="text"
-                    maxlength="200"
-                    list="device_model_catalog"
-                    placeholder="Eniscope Energy Meter"
-                    value="{{ form_data.get('device_model', '') }}"
+                    data-device-manufacturer
+                    value=""
+                    readonly
                 >
-
-                <datalist id="device_model_catalog">
-                    {% for model in device_models %}
-                    <option
-                        value="{{ model.model }}"
-                        data-vendor="{{ model.vendor or '' }}"
-                        data-category-id="{{ model.device_category_id or '' }}"
-                    ></option>
-                    {% endfor %}
-                </datalist>
             </label>
 
             <label>
@@ -395,6 +415,71 @@
                         ''
                     ) }}"
                 >
+            </label>
+
+            <label>
+                Serial number
+
+                <input
+                    id="serial_number"
+                    name="serial_number"
+                    type="text"
+                    maxlength="200"
+                    value="{{ form_data.get(
+                        'serial_number',
+                        ''
+                    ) }}"
+                >
+            </label>
+
+            <label>
+                Asset assignment requirement
+
+                <span class="field-info">
+                    <span
+                        class="field-info-trigger"
+                        tabindex="0"
+                        aria-label="More information about this field"
+                        aria-describedby="operational_policy_help"
+                    >i</span>
+                    <span
+                        id="operational_policy_help"
+                        class="field-info-content"
+                        role="tooltip"
+                    >
+                        Required before commissioning means the device
+                        must have a valid asset assignment. Optional
+                        allows commissioning without one.
+                    </span>
+                </span>
+
+                <select
+                    id="operational_policy"
+                    name="operational_policy"
+                >
+                    <option
+                        value="ASSET_ASSIGNED"
+                        {% if form_data.get(
+                            'operational_policy',
+                            'ASSET_ASSIGNED'
+                        ) == 'ASSET_ASSIGNED' %}
+                        selected
+                        {% endif %}
+                    >
+                        Required before commissioning
+                    </option>
+                    <option
+                        value="STANDALONE"
+                        {% if form_data.get(
+                            'operational_policy',
+                            'ASSET_ASSIGNED'
+                        ) == 'STANDALONE' %}
+                        selected
+                        {% endif %}
+                    >
+                        Optional
+                    </option>
+                </select>
             </label>
 
             <label>

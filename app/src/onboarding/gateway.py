@@ -9,12 +9,6 @@ GATEWAY_EXTERNAL_ID_PATTERN = re.compile(
     r"^[A-Z0-9_]+$"
 )
 
-ALLOWED_UPLINK_PROTOCOLS = {
-    "MQTT",
-    "HTTP API",
-    "OPC-UA",
-}
-
 
 class GatewayStepValidationError(ValueError):
     """Validation failure for the Gateway onboarding step."""
@@ -26,9 +20,7 @@ def validate_gateway_step(
     existing_gateway_id: str,
     gateway_name: str,
     gateway_external_id: str,
-    gateway_vendor: str,
-    gateway_model: str,
-    gateway_protocol: str,
+    gateway_model_id: str,
     organization_mode: str,
     site_mode: str,
 ) -> dict[str, Any]:
@@ -72,15 +64,10 @@ def validate_gateway_step(
             "existing_gateway_id": gateway_id,
             "name": None,
             "external_id": None,
-            "vendor": None,
-            "model": None,
-            "protocol": None,
+            "gateway_model_id": None,
         }
 
     name = gateway_name.strip()
-    vendor = gateway_vendor.strip()
-    model = gateway_model.strip()
-    protocol = gateway_protocol.strip().upper()
 
     if not name:
         raise GatewayStepValidationError(
@@ -99,37 +86,19 @@ def validate_gateway_step(
             "Gateway name must contain at least one letter or number."
         )
 
-    if not vendor:
-        raise GatewayStepValidationError(
-            "Gateway manufacturer is required."
+    try:
+        normalized_gateway_model_id = str(
+            UUID(gateway_model_id.strip())
         )
-
-    if len(vendor) > 200:
+    except ValueError as exc:
         raise GatewayStepValidationError(
-            "Gateway manufacturer must not exceed 200 characters."
-        )
-
-    if not model:
-        raise GatewayStepValidationError(
-            "Gateway model is required."
-        )
-
-    if len(model) > 200:
-        raise GatewayStepValidationError(
-            "Gateway model must not exceed 200 characters."
-        )
-
-    if protocol not in ALLOWED_UPLINK_PROTOCOLS:
-        raise GatewayStepValidationError(
-            "Select a supported cloud uplink protocol."
-        )
+            "Select a gateway model from the catalog."
+        ) from exc
 
     return {
         "mode": "CREATE_NEW",
         "existing_gateway_id": None,
         "name": name,
         "external_id": external_id,
-        "vendor": vendor,
-        "model": model,
-        "protocol": protocol,
+        "gateway_model_id": normalized_gateway_model_id,
     }

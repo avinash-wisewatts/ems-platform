@@ -54,6 +54,11 @@ services:
 
     env_file:
       - ./grafana/.env
+      - ./grafana/live-stream.env
+
+    environment:
+      GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: wisewatts-live-datasource
+      EMS_LIVE_TELEMETRY_WS_BASE_URL: ws://live-telemetry:8090
 
     depends_on:
       timescaledb:
@@ -90,6 +95,43 @@ services:
       timeout: 5s
       retries: 10
       start_period: 30s
+
+  live-telemetry:
+    # Dedicated server-side real-time path. Grafana/browser never receives
+    # MQTT credentials or vendor topic knowledge.
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+
+    container_name: ems-live-telemetry
+    restart: unless-stopped
+
+    env_file:
+      - ./app/.env
+      - ./app/live-telemetry.env
+
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+
+    command: ["uvicorn", "src.live_main:app", "--host", "0.0.0.0", "--port", "8090"]
+
+    ports:
+      - "127.0.0.1:8090:8090"
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import json,urllib.request; data=json.load(urllib.request.urlopen('http://localhost:8090/health', timeout=3)); raise SystemExit(0 if data.get('status') == 'ok' else 1)"
+        ]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
 
   admin-portal:
     # WiseWatts EMS metadata and tenant onboarding interface.

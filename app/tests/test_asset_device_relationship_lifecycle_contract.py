@@ -1,5 +1,6 @@
+from tests.sql_contract_sources import canonical_sql
 from pathlib import Path
-SQL=Path("postgres/archive/prebaseline_20260807/migrations/120_asset_device_relationship_lifecycle.sql").read_text()
+SQL=canonical_sql("93_asset_device_relationship_lifecycle.sql")
 def test_relationship_history_is_immutable_snapshot_contract():
     assert "asset_device_relationship_history" in SQL and "archive_action" in SQL and "audit_transaction_id" in SQL
 def test_direct_meter_removal_guard_exists():

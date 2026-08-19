@@ -35,22 +35,22 @@ FROM
 (
 VALUES
 
-('ENERGY_ACTIVE_POWER_TOTAL',
+('ACTIVE_POWER_TOTAL',
  'Total active power consumption',
  'kW',
  'numeric'),
 
-('ENERGY_ACTIVE_POWER_L1',
+('ACTIVE_POWER_L1',
  'Phase 1 active power',
  'kW',
  'numeric'),
 
-('ENERGY_ACTIVE_POWER_L2',
+('ACTIVE_POWER_L2',
  'Phase 2 active power',
  'kW',
  'numeric'),
 
-('ENERGY_ACTIVE_POWER_L3',
+('ACTIVE_POWER_L3',
  'Phase 3 active power',
  'kW',
  'numeric'),

@@ -18,6 +18,7 @@ DRAFT_TOKEN = UUID("12121212-1212-4212-8212-121212121212")
 ORGANIZATION_ID = UUID("23232323-2323-4232-8232-232323232323")
 SITE_ID = UUID("34343434-3434-4343-8343-343434343434")
 GATEWAY_ID = UUID("45454545-4545-4454-8454-454545454545")
+GATEWAY_MODEL_ID = UUID("90909090-9090-4909-8909-909090909090")
 
 OTHER_ORGANIZATION_ID = UUID(
     "56565656-5656-4565-8565-565656565656"
@@ -103,9 +104,7 @@ def create_new_parent_draft(
             "existing_gateway_id": None,
             "name": "Restored Gateway",
             "external_id": "RESTORED_GATEWAY",
-            "vendor": "Restored Vendor",
-            "model": "Restored Model",
-            "protocol": "HTTP API",
+            "gateway_model_id": str(GATEWAY_MODEL_ID),
         }
 
     return {
@@ -139,9 +138,7 @@ def existing_parent_draft(
             "existing_gateway_id": str(GATEWAY_ID),
             "name": None,
             "external_id": None,
-            "vendor": None,
-            "model": None,
-            "protocol": None,
+            "gateway_model_id": None,
         }
 
     return {
@@ -199,9 +196,7 @@ def install_gateway_lists(
                 "space_id": None,
                 "space_code": None,
                 "space_name": None,
-                "gateway_model_id": UUID(
-                    "89898989-8989-4898-8898-898989898989"
-                ),
+                "gateway_model_id": GATEWAY_MODEL_ID,
                 "gateway_vendor": "Eniscope",
                 "gateway_model": "Eniscope Gateway",
                 "gateway_protocol": "MQTT",
@@ -231,9 +226,7 @@ def install_gateway_lists(
     async def fake_list_gateway_models() -> list[dict]:
         return [
             {
-                "id": UUID(
-                    "90909090-9090-4909-8909-909090909090"
-                ),
+                "id": GATEWAY_MODEL_ID,
                 "vendor": "Eniscope",
                 "model": "Eniscope Gateway",
                 "protocol": "MQTT",
@@ -367,6 +360,10 @@ def test_gateway_get_renders_create_new_context_and_models(
     assert "NEW_SITE" in response.text
     assert "Eniscope Gateway" in response.text
     assert "New site or no existing gateways" in response.text
+    assert f'value="{GATEWAY_MODEL_ID}"' in response.text
+    assert 'name="gateway_vendor"' not in response.text
+    assert 'name="gateway_model"' not in response.text
+    assert 'name="gateway_protocol"' not in response.text
 
 
 def test_gateway_get_filters_existing_gateways_by_tenant_and_site(
@@ -392,7 +389,6 @@ def test_gateway_get_filters_existing_gateways_by_tenant_and_site(
     assert "OTHER_GATEWAY" not in response.text
 
 
-
 def test_gateway_get_restores_saved_values(
     portal_client,
     monkeypatch: pytest.MonkeyPatch,
@@ -410,10 +406,22 @@ def test_gateway_get_restores_saved_values(
 
     assert response.status_code == 200
     assert "Restored Gateway" in response.text
-    assert "Restored Vendor" in response.text
-    assert "Restored Model" in response.text
-    assert "HTTP API" in response.text
     assert 'name="gateway_external_id"' not in response.text
+
+    model_option_index = response.text.index(
+        f'value="{GATEWAY_MODEL_ID}"'
+    )
+    selected_index = response.text.index(
+        "selected", model_option_index
+    )
+    next_option_index = response.text.find(
+        "<option", model_option_index + 1
+    )
+    assert (
+        next_option_index == -1
+        or selected_index < next_option_index
+    )
+
 
 def test_gateway_post_create_new_saves_and_redirects(
     portal_client,
@@ -459,9 +467,7 @@ def test_gateway_post_create_new_saves_and_redirects(
             "existing_gateway_id": "",
             "gateway_name": "  Chiller Gateway  ",
             "gateway_external_id": "  chiller_gateway  ",
-            "gateway_vendor": "  Eniscope  ",
-            "gateway_model": "  Eniscope Gateway  ",
-            "gateway_protocol": "  mqtt  ",
+            "gateway_model_id": str(GATEWAY_MODEL_ID),
         },
     )
 
@@ -478,12 +484,41 @@ def test_gateway_post_create_new_saves_and_redirects(
             "existing_gateway_id": None,
             "name": "Chiller Gateway",
             "external_id": "CHILLER_GATEWAY",
-            "vendor": "Eniscope",
-            "model": "Eniscope Gateway",
-            "protocol": "MQTT",
+            "gateway_model_id": str(GATEWAY_MODEL_ID),
         },
         "next_step": "device",
     }
+
+
+def test_gateway_post_rejects_unknown_gateway_model(
+    portal_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login_operator(portal_client, monkeypatch)
+    install_visible_draft(
+        monkeypatch,
+        create_new_parent_draft(),
+    )
+    install_gateway_lists(monkeypatch)
+
+    unknown_model_id = UUID(
+        "92929292-9292-4929-8929-929292929292"
+    )
+
+    response = portal_client.post(
+        "/onboarding/gateway",
+        data={
+            "draft_token": str(DRAFT_TOKEN),
+            "gateway_mode": "CREATE_NEW",
+            "existing_gateway_id": "",
+            "gateway_name": "Chiller Gateway",
+            "gateway_external_id": "chiller_gateway",
+            "gateway_model_id": str(unknown_model_id),
+        },
+    )
+
+    assert response.status_code == 422
+    assert "Select a gateway model from the catalog." in response.text
 
 
 def test_gateway_post_use_existing_saves_only_identity(
@@ -526,9 +561,7 @@ def test_gateway_post_use_existing_saves_only_identity(
             "existing_gateway_id": str(GATEWAY_ID),
             "gateway_name": "Discarded",
             "gateway_external_id": "DISCARDED",
-            "gateway_vendor": "Discarded",
-            "gateway_model": "Discarded",
-            "gateway_protocol": "MQTT",
+            "gateway_model_id": "Discarded",
         },
     )
 
@@ -538,9 +571,7 @@ def test_gateway_post_use_existing_saves_only_identity(
         "existing_gateway_id": str(GATEWAY_ID),
         "name": None,
         "external_id": None,
-        "vendor": None,
-        "model": None,
-        "protocol": None,
+        "gateway_model_id": None,
     }
 
 
@@ -628,7 +659,6 @@ def test_gateway_post_rejects_cross_tenant_gateway(
     )
 
 
-
 def test_gateway_post_validation_error_preserves_form(
     portal_client,
     monkeypatch: pytest.MonkeyPatch,
@@ -648,19 +678,16 @@ def test_gateway_post_validation_error_preserves_form(
             "existing_gateway_id": "",
             "gateway_name": "Preserved Gateway",
             "gateway_external_id": "FORGED-CLIENT-ID",
-            "gateway_vendor": "Preserved Vendor",
-            "gateway_model": "Preserved Model",
-            "gateway_protocol": "COAP",
+            "gateway_model_id": "",
         },
     )
 
     assert response.status_code == 422
     assert "Preserved Gateway" in response.text
-    assert "Preserved Vendor" in response.text
-    assert "Preserved Model" in response.text
-    assert "supported cloud uplink protocol" in response.text
+    assert "Select a gateway model from the catalog." in response.text
     assert "FORGED-CLIENT-ID" not in response.text
     assert 'name="gateway_external_id"' not in response.text
+
 
 def test_gateway_post_database_failure_returns_controlled_conflict(
     portal_client,
@@ -689,9 +716,7 @@ def test_gateway_post_database_failure_returns_controlled_conflict(
             "existing_gateway_id": "",
             "gateway_name": "Database Failure Gateway",
             "gateway_external_id": "DATABASE_FAILURE_GATEWAY",
-            "gateway_vendor": "Eniscope",
-            "gateway_model": "Eniscope Gateway",
-            "gateway_protocol": "MQTT",
+            "gateway_model_id": str(GATEWAY_MODEL_ID),
         },
     )
 

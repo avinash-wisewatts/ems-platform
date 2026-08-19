@@ -170,18 +170,19 @@ async def submit_onboarding_draft(
                             "Onboarding site telemetry storage interval",
                         ),
                     )
-                    await cursor.execute(
-                        """
-                        SELECT admin.set_site_sector(
-                            %s, %s::uuid, %s
+                    if site_payload.get("sub_sector_id"):
+                        await cursor.execute(
+                            """
+                            SELECT admin.set_site_sub_sector(
+                                %s, %s::uuid, %s::uuid
+                            )
+                            """,
+                            (
+                                portal_user_id,
+                                str(onboarding_result["site_id"]),
+                                str(site_payload["sub_sector_id"]),
+                            ),
                         )
-                        """,
-                        (
-                            portal_user_id,
-                            str(onboarding_result["site_id"]),
-                            str(site_payload.get("sector_code") or "OTHER"),
-                        ),
-                    )
 
             await connection.commit()
 

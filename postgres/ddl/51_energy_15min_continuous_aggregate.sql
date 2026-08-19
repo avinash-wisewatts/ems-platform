@@ -53,7 +53,7 @@ SELECT
     time_bucket
     (
         INTERVAL '15 minutes',
-        received_at
+        bucket_start
     ) AS bucket_start,
 
     organization_id,

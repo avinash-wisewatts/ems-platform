@@ -19,6 +19,7 @@ ORGANIZATION_ID = UUID("20202020-2020-4020-8020-202020202020")
 SITE_ID = UUID("30303030-3030-4030-8030-303030303030")
 GATEWAY_ID = UUID("40404040-4040-4040-8040-404040404040")
 OTHER_GATEWAY_ID = UUID("50505050-5050-4050-8050-505050505050")
+GATEWAY_MODEL_ID = UUID("41414141-4141-4141-8141-414141414141")
 
 DEVICE_ID = UUID("60606060-6060-4060-8060-606060606060")
 INCOMPLETE_DEVICE_ID = UUID(
@@ -31,6 +32,7 @@ OTHER_CATEGORY_ID = UUID(
     "abababab-abab-4bab-8bab-abababababab"
 )
 PROFILE_ID = UUID("bcbcbcbc-bcbc-4cbc-8cbc-bcbcbcbcbcbc")
+DEVICE_MODEL_ID = UUID("efefefef-efef-4fef-8fef-efefefefefef")
 
 
 def successful_result() -> AuthenticationResult:
@@ -102,9 +104,7 @@ def create_new_gateway_draft(
             "existing_gateway_id": None,
             "name": "New Gateway",
             "external_id": "NEW_GATEWAY",
-            "vendor": "Eniscope",
-            "model": "Eniscope Gateway",
-            "protocol": "MQTT",
+            "gateway_model_id": str(GATEWAY_MODEL_ID),
         },
     }
 
@@ -115,8 +115,7 @@ def create_new_gateway_draft(
             "name": "Restored Energy Meter",
             "external_id": "RESTORED_ENERGY_METER",
             "device_category_id": str(CATEGORY_ID),
-            "model_vendor": "Eniscope",
-            "model": "Eniscope Energy Meter",
+            "device_model_id": str(DEVICE_MODEL_ID),
             "protocol": "MQTT",
             "profile_code": "ENISCOPE_V4",
             "firmware_version": "4.2",
@@ -225,6 +224,25 @@ def device_profiles(
     ]
 
 
+def device_models(
+    *,
+    category_id: UUID | None = None,
+) -> list[dict]:
+    return [
+        {
+            "id": DEVICE_MODEL_ID,
+            "vendor": "Eniscope",
+            "model": "Eniscope Energy Meter",
+            "device_type": "ENERGY_METER",
+            "created_at": None,
+            "device_category_id": (
+                category_id if category_id is not None else CATEGORY_ID
+            ),
+            "device_category_name": "Energy Meter",
+        }
+    ]
+
+
 def all_devices() -> list[dict]:
     return [
         {
@@ -320,6 +338,7 @@ def install_device_catalogs(
     *,
     categories: list[dict] | None = None,
     profiles: list[dict] | None = None,
+    models: list[dict] | None = None,
     devices: list[dict] | None = None,
 ) -> None:
     async def fake_list_gateways() -> list[dict]:
@@ -344,19 +363,7 @@ def install_device_catalogs(
         )
 
     async def fake_list_models() -> list[dict]:
-        return [
-            {
-                "id": UUID(
-                    "efefefef-efef-4fef-8fef-efefefefefef"
-                ),
-                "vendor": "Eniscope",
-                "model": "Eniscope Energy Meter",
-                "device_type": "ENERGY_METER",
-                "created_at": None,
-                "device_category_id": CATEGORY_ID,
-                "device_category_name": "Energy Meter",
-            }
-        ]
+        return device_models() if models is None else models
 
     async def fake_list_profiles() -> list[dict]:
         return (
@@ -507,6 +514,11 @@ def test_device_get_renders_create_new_context_and_catalogs(
     assert "Eniscope Energy Meter" in response.text
     assert "ENISCOPE_V4" in response.text
     assert "New gateway or no existing devices" in response.text
+    assert f'value="{DEVICE_MODEL_ID}"' in response.text
+    assert 'name="device_vendor"' not in response.text
+    assert 'name="device_model"' not in response.text or (
+        'name="device_model_id"' in response.text
+    )
 
 
 def test_device_get_filters_incomplete_and_other_gateway_devices(
@@ -541,7 +553,6 @@ def test_device_get_filters_incomplete_and_other_gateway_devices(
     )[1].split('id="create_device_fields"', 1)[0]
 
 
-
 def test_device_get_restores_saved_device_values(
     portal_client,
     monkeypatch: pytest.MonkeyPatch,
@@ -564,6 +575,21 @@ def test_device_get_restores_saved_device_values(
     assert "4.2" in response.text
     assert "80:34:28:16:09:eb:00:01" in response.text
     assert 'name="device_external_id"' not in response.text
+
+    model_option_index = response.text.index(
+        f'value="{DEVICE_MODEL_ID}"'
+    )
+    selected_index = response.text.index(
+        "selected", model_option_index
+    )
+    next_option_index = response.text.find(
+        "<option", model_option_index + 1
+    )
+    assert (
+        next_option_index == -1
+        or selected_index < next_option_index
+    )
+
 
 def test_device_post_create_new_saves_and_redirects(
     portal_client,
@@ -610,8 +636,7 @@ def test_device_post_create_new_saves_and_redirects(
             "device_name": "  Chiller Energy Meter  ",
             "device_external_id": "  chiller_energy_meter  ",
             "device_category_id": str(CATEGORY_ID),
-            "device_vendor": "  Eniscope  ",
-            "device_model": "  Eniscope Energy Meter  ",
+            "device_model_id": str(DEVICE_MODEL_ID),
             "device_protocol": "  mqtt  ",
             "profile_code": "  eniscope_v4  ",
             "firmware_version": "  4.2  ",
@@ -634,11 +659,12 @@ def test_device_post_create_new_saves_and_redirects(
             "name": "Chiller Energy Meter",
             "external_id": "CHILLER_ENERGY_METER",
             "device_category_id": str(CATEGORY_ID),
-            "model_vendor": "Eniscope",
-            "model": "Eniscope Energy Meter",
+            "device_model_id": str(DEVICE_MODEL_ID),
             "protocol": "MQTT",
             "profile_code": "ENISCOPE_V4",
             "firmware_version": "4.2",
+            "serial_number": None,
+            "operational_policy": "ASSET_ASSIGNED",
             "identifier": {
                 "type": "MQTT_UID",
                 "value": "80:34:28:16:09:eb:00:01",
@@ -646,6 +672,79 @@ def test_device_post_create_new_saves_and_redirects(
         },
         "next_step": "asset",
     }
+
+
+def test_device_post_rejects_unknown_device_model(
+    portal_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login_operator(portal_client, monkeypatch)
+    install_visible_draft(
+        monkeypatch,
+        create_new_gateway_draft(),
+    )
+    install_device_catalogs(monkeypatch)
+
+    unknown_model_id = UUID(
+        "fafafafa-fafa-4afa-8afa-fafafafafafa"
+    )
+
+    response = portal_client.post(
+        "/onboarding/device",
+        data={
+            "draft_token": str(DRAFT_TOKEN),
+            "device_mode": "CREATE_NEW",
+            "device_name": "Energy Meter",
+            "device_external_id": "ENERGY_METER",
+            "device_category_id": str(CATEGORY_ID),
+            "device_model_id": str(unknown_model_id),
+            "device_protocol": "MQTT",
+            "profile_code": "ENISCOPE_V4",
+            "identifier_type": "MQTT_UID",
+            "identifier_value": "80:34:28:16:09:eb:00:01",
+        },
+    )
+
+    assert response.status_code == 422
+    assert "Select a device model from the catalog." in response.text
+
+
+def test_device_post_rejects_model_from_another_category(
+    portal_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login_operator(portal_client, monkeypatch)
+    install_visible_draft(
+        monkeypatch,
+        create_new_gateway_draft(),
+    )
+    install_device_catalogs(
+        monkeypatch,
+        models=device_models(category_id=OTHER_CATEGORY_ID),
+    )
+
+    response = portal_client.post(
+        "/onboarding/device",
+        data={
+            "draft_token": str(DRAFT_TOKEN),
+            "device_mode": "CREATE_NEW",
+            "device_name": "Energy Meter",
+            "device_external_id": "ENERGY_METER",
+            "device_category_id": str(CATEGORY_ID),
+            "device_model_id": str(DEVICE_MODEL_ID),
+            "device_protocol": "MQTT",
+            "profile_code": "ENISCOPE_V4",
+            "identifier_type": "MQTT_UID",
+            "identifier_value": "80:34:28:16:09:eb:00:01",
+        },
+    )
+
+    assert response.status_code == 422
+    assert (
+        "The selected device model does not belong to the "
+        "chosen device category."
+        in response.text
+    )
 
 
 def test_device_post_use_existing_uses_stored_identity_and_ignores_tampering(
@@ -695,11 +794,12 @@ def test_device_post_use_existing_uses_stored_identity_and_ignores_tampering(
         "name": None,
         "external_id": None,
         "device_category_id": None,
-        "model_vendor": None,
-        "model": None,
+        "device_model_id": None,
         "protocol": None,
         "profile_code": None,
         "firmware_version": None,
+        "serial_number": None,
+        "operational_policy": None,
         "identifier": {
             "type": "MQTT_UID",
             "value": "80:34:28:16:09:eb:00:01",
@@ -815,8 +915,7 @@ def test_device_post_rejects_unknown_category(
             "device_name": "Energy Meter",
             "device_external_id": "ENERGY_METER",
             "device_category_id": str(CATEGORY_ID),
-            "device_vendor": "Eniscope",
-            "device_model": "Eniscope Energy Meter",
+            "device_model_id": str(DEVICE_MODEL_ID),
             "device_protocol": "MQTT",
             "profile_code": "ENISCOPE_V4",
             "identifier_type": "MQTT_UID",
@@ -850,8 +949,7 @@ def test_device_post_rejects_unknown_profile(
             "device_name": "Energy Meter",
             "device_external_id": "ENERGY_METER",
             "device_category_id": str(CATEGORY_ID),
-            "device_vendor": "Eniscope",
-            "device_model": "Eniscope Energy Meter",
+            "device_model_id": str(DEVICE_MODEL_ID),
             "device_protocol": "MQTT",
             "profile_code": "ENISCOPE_V4",
             "identifier_type": "MQTT_UID",
@@ -890,8 +988,7 @@ def test_device_post_rejects_incompatible_profile(
             "device_name": "Energy Meter",
             "device_external_id": "ENERGY_METER",
             "device_category_id": str(CATEGORY_ID),
-            "device_vendor": "Eniscope",
-            "device_model": "Eniscope Energy Meter",
+            "device_model_id": str(DEVICE_MODEL_ID),
             "device_protocol": "MQTT",
             "profile_code": "ENISCOPE_V4",
             "identifier_type": "MQTT_UID",
@@ -905,7 +1002,6 @@ def test_device_post_rejects_incompatible_profile(
         "with the chosen device category."
         in response.text
     )
-
 
 
 def test_device_post_validation_error_preserves_form(
@@ -927,8 +1023,7 @@ def test_device_post_validation_error_preserves_form(
             "device_name": "Preserved Device",
             "device_external_id": "FORGED-CLIENT-ID",
             "device_category_id": str(CATEGORY_ID),
-            "device_vendor": "Preserved Vendor",
-            "device_model": "Preserved Model",
+            "device_model_id": str(DEVICE_MODEL_ID),
             "device_protocol": "COAP",
             "profile_code": "ENISCOPE_V4",
             "firmware_version": "4.5",
@@ -939,12 +1034,11 @@ def test_device_post_validation_error_preserves_form(
 
     assert response.status_code == 422
     assert "Preserved Device" in response.text
-    assert "Preserved Vendor" in response.text
-    assert "Preserved Model" in response.text
     assert "4.5" in response.text
     assert "supported device communication protocol" in response.text
     assert "FORGED-CLIENT-ID" not in response.text
     assert 'name="device_external_id"' not in response.text
+
 
 def test_device_post_database_failure_returns_controlled_conflict(
     portal_client,
@@ -973,8 +1067,7 @@ def test_device_post_database_failure_returns_controlled_conflict(
             "device_name": "Database Failure Device",
             "device_external_id": "DATABASE_FAILURE_DEVICE",
             "device_category_id": str(CATEGORY_ID),
-            "device_vendor": "Eniscope",
-            "device_model": "Eniscope Energy Meter",
+            "device_model_id": str(DEVICE_MODEL_ID),
             "device_protocol": "MQTT",
             "profile_code": "ENISCOPE_V4",
             "firmware_version": "",

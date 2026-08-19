@@ -85,6 +85,8 @@ def test_create_asset_normalizes_relationship_and_metadata() -> None:
         "metadata": {
             "operational_notes": "Main chiller energy meter",
         },
+        "lifecycle_status": "ACTIVE",
+        "parent_asset_id": None,
     }
 
 
@@ -165,6 +167,8 @@ def test_existing_asset_preserves_relationship_only() -> None:
         "metering_requirement": None,
         "relationship_type": "PRIMARY_METER",
         "metadata": {},
+        "lifecycle_status": None,
+        "parent_asset_id": None,
     }
 
 

@@ -21,6 +21,26 @@ OTHER_ORGANIZATION_ID = UUID(
 )
 SITE_ID = UUID("66666666-6666-4666-8666-666666666666")
 OTHER_SITE_ID = UUID("77777777-7777-4777-8777-777777777777")
+SECTOR_ID = UUID("88888888-8888-4888-8888-888888888801")
+SUB_SECTOR_ID = UUID("88888888-8888-4888-8888-888888888802")
+
+
+@pytest.fixture(autouse=True)
+def sector_reads(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def sectors() -> list[dict]:
+        return [{"id": SECTOR_ID, "name": "Commercial Real Estate"}]
+
+    async def sub_sectors(sector_id=None) -> list[dict]:
+        return [
+            {
+                "id": SUB_SECTOR_ID,
+                "sector_id": SECTOR_ID,
+                "name": "Hotels & Hospitality",
+            }
+        ]
+
+    monkeypatch.setattr("src.main.list_sectors", sectors)
+    monkeypatch.setattr("src.main.list_sub_sectors", sub_sectors)
 
 
 def successful_result() -> AuthenticationResult:
@@ -93,6 +113,7 @@ def create_new_organization_draft(
             "address": {
                 "full_address": "Restored test address"
             },
+            "sub_sector_id": str(SUB_SECTOR_ID),
         }
 
     return {
@@ -340,6 +361,8 @@ def test_site_get_restores_saved_site_values(
     assert "RESTORED_SITE" in response.text
     assert "Asia/Dubai" in response.text
     assert "Restored test address" in response.text
+    assert f'data-selected-value="{SUB_SECTOR_ID}"' in response.text
+    assert "Commercial Real Estate" in response.text
 
 
 def test_site_post_create_new_saves_and_redirects(
@@ -387,6 +410,7 @@ def test_site_post_create_new_saves_and_redirects(
             "site_code": "IGNORED_CLIENT_VALUE",
             "site_timezone": "  Asia/Kolkata  ",
             "site_address": "  Test site address  ",
+            "sub_sector_id": str(SUB_SECTOR_ID),
         },
     )
 
@@ -404,11 +428,11 @@ def test_site_post_create_new_saves_and_redirects(
             "name": "Hyderabad Hotel",
             "code": "HYDERABAD_HOTEL",
             "timezone": "Asia/Kolkata",
-            "sector_code": "OTHER",
             "telemetry_capture_interval_seconds": 60,
             "address": {
                 "full_address": "Test site address"
             },
+            "sub_sector_id": str(SUB_SECTOR_ID),
         },
         "next_step": "location",
     }
@@ -466,9 +490,9 @@ def test_site_post_use_existing_saves_only_site_identity(
         "name": None,
         "code": None,
         "timezone": None,
-        "sector_code": None,
         "address": None,
         "telemetry_capture_interval_seconds": 60,
+        "sub_sector_id": None,
     }
 
 
@@ -575,6 +599,44 @@ def test_site_post_validation_error_preserves_form_data(
     assert "IGNORED_CLIENT_VALUE" not in response.text
 
 
+def test_site_post_create_new_requires_sub_sector(
+    portal_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login_operator(portal_client, monkeypatch)
+    install_visible_draft(
+        monkeypatch,
+        create_new_organization_draft(),
+    )
+
+    async def unexpected_save(*args, **kwargs):
+        raise AssertionError(
+            "A site missing its sub-sector must not be persisted."
+        )
+
+    monkeypatch.setattr(
+        "src.main.save_owned_onboarding_draft_step",
+        unexpected_save,
+    )
+
+    response = portal_client.post(
+        "/onboarding/site",
+        data={
+            "draft_token": str(DRAFT_TOKEN),
+            "site_mode": "CREATE_NEW",
+            "existing_site_id": "",
+            "site_name": "Hyderabad Hotel",
+            "site_code": "IGNORED_CLIENT_VALUE",
+            "site_timezone": "Asia/Kolkata",
+            "site_address": "Test site address",
+            "sub_sector_id": "",
+        },
+    )
+
+    assert response.status_code == 422
+    assert "Select a sub-sector." in response.text
+
+
 def test_site_post_database_failure_returns_controlled_conflict(
     portal_client,
     monkeypatch: pytest.MonkeyPatch,
@@ -603,6 +665,7 @@ def test_site_post_database_failure_returns_controlled_conflict(
             "site_code": "IGNORED_CLIENT_VALUE",
             "site_timezone": "Asia/Kolkata",
             "site_address": "Preserved address",
+            "sub_sector_id": str(SUB_SECTOR_ID),
         },
     )
 

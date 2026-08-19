@@ -2,8 +2,6 @@ import re
 from typing import Any
 from uuid import UUID
 
-from src.location_management import SITE_SECTORS
-
 
 SITE_CODE_PATTERN = re.compile(r"^[A-Z0-9_]+$")
 TELEMETRY_CAPTURE_INTERVALS = (10, 30, 60, 300, 900)
@@ -20,10 +18,10 @@ def validate_site_step(
     site_name: str,
     site_code: str,
     site_timezone: str,
-    site_sector: str = "OTHER",
     site_address: str = "",
     organization_mode: str,
     telemetry_capture_interval_seconds: str = "60",
+    sub_sector_id: str = "",
 ) -> dict[str, Any]:
     """
     Validate and normalize the Site wizard step.
@@ -71,15 +69,14 @@ def validate_site_step(
             "name": None,
             "code": None,
             "timezone": None,
-            "sector_code": None,
             "address": None,
             "telemetry_capture_interval_seconds": capture_interval,
+            "sub_sector_id": None,
         }
 
     name = site_name.strip()
     code = site_code.strip().upper()
     timezone = site_timezone.strip()
-    sector_code = site_sector.strip().upper()
     address = site_address.strip()
 
     if not name:
@@ -117,15 +114,17 @@ def validate_site_step(
             "Site timezone must not exceed 100 characters."
         )
 
-    if sector_code not in SITE_SECTORS:
-        raise SiteStepValidationError(
-            "Select a valid site sector."
-        )
-
     if len(address) > 1000:
         raise SiteStepValidationError(
             "Site address must not exceed 1000 characters."
         )
+
+    try:
+        normalized_sub_sector_id = str(UUID(sub_sector_id.strip()))
+    except ValueError as exc:
+        raise SiteStepValidationError(
+            "Select a sub-sector."
+        ) from exc
 
     return {
         "mode": "CREATE_NEW",
@@ -133,11 +132,11 @@ def validate_site_step(
         "name": name,
         "code": code,
         "timezone": timezone,
-        "sector_code": sector_code,
         "telemetry_capture_interval_seconds": capture_interval,
         "address": (
             {"full_address": address}
             if address
             else {}
         ),
+        "sub_sector_id": normalized_sub_sector_id,
     }

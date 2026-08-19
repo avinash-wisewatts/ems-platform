@@ -9,6 +9,14 @@ from src.onboarding.statuses import status_codes
 
 METERING_REQUIREMENTS = status_codes("METERING_REQUIREMENT")
 
+ASSET_LIFECYCLE_STATUSES = {
+    "DRAFT",
+    "COMMISSIONING",
+    "ACTIVE",
+    "INACTIVE",
+    "DECOMMISSIONED",
+}
+
 ASSET_EXTERNAL_ID_PATTERN = re.compile(
     r"^[A-Z0-9][A-Z0-9_]*$"
 )
@@ -96,6 +104,8 @@ def validate_asset_step(
     device_category_name: str,
     organization_mode: str,
     site_mode: str,
+    lifecycle_status: str = "ACTIVE",
+    parent_asset_id: str = "",
 ) -> dict[str, Any]:
     """Validate and normalize the Asset wizard step."""
 
@@ -166,6 +176,8 @@ def validate_asset_step(
             "metering_requirement": None,
             "relationship_type": normalized_relationship,
             "metadata": {},
+            "lifecycle_status": None,
+            "parent_asset_id": None,
         }
 
     normalized_metering_requirement = (
@@ -210,6 +222,27 @@ def validate_asset_step(
     if notes:
         metadata["operational_notes"] = notes
 
+    normalized_lifecycle_status = (
+        lifecycle_status.strip().upper() or "ACTIVE"
+    )
+
+    if normalized_lifecycle_status not in ASSET_LIFECYCLE_STATUSES:
+        raise AssetStepValidationError(
+            "Select a valid asset lifecycle status."
+        )
+
+    normalized_parent_asset_id: str | None = None
+
+    if parent_asset_id.strip():
+        try:
+            normalized_parent_asset_id = str(
+                UUID(parent_asset_id.strip())
+            )
+        except ValueError as exc:
+            raise AssetStepValidationError(
+                "Select a valid parent asset."
+            ) from exc
+
     return {
         "mode": "CREATE_NEW",
         "existing_asset_id": None,
@@ -219,4 +252,6 @@ def validate_asset_step(
         "metering_requirement": normalized_metering_requirement,
         "relationship_type": normalized_relationship,
         "metadata": metadata,
+        "lifecycle_status": normalized_lifecycle_status,
+        "parent_asset_id": normalized_parent_asset_id,
     }

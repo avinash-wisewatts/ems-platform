@@ -1,6 +1,7 @@
+from tests.sql_contract_sources import canonical_sql
 from pathlib import Path
 
-SQL = Path("postgres/archive/prebaseline_20260807/migrations/125_telemetry_availability_validation.sql").read_text()
+SQL = canonical_sql("98_telemetry_availability_validation.sql")
 
 def test_last_seen_and_states_contract():
     assert "analytics.v_device_telemetry_availability" in SQL

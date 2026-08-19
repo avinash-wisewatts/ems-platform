@@ -21,6 +21,11 @@ ALLOWED_DEVICE_PROTOCOLS = {
     "HTTP API",
 }
 
+ALLOWED_OPERATIONAL_POLICIES = {
+    "ASSET_ASSIGNED",
+    "STANDALONE",
+}
+
 
 class DeviceStepValidationError(ValueError):
     """Validation failure for the Device onboarding step."""
@@ -33,14 +38,15 @@ def validate_device_step(
     device_name: str,
     device_external_id: str,
     device_category_id: str,
-    device_vendor: str,
-    device_model: str,
+    device_model_id: str,
     device_protocol: str,
     profile_code: str,
     firmware_version: str,
     identifier_type: str,
     identifier_value: str,
     gateway_mode: str,
+    serial_number: str = "",
+    operational_policy: str = "ASSET_ASSIGNED",
 ) -> dict[str, Any]:
     """Validate and normalize the Device wizard step."""
 
@@ -78,11 +84,12 @@ def validate_device_step(
             "name": None,
             "external_id": None,
             "device_category_id": None,
-            "model_vendor": None,
-            "model": None,
+            "device_model_id": None,
             "protocol": None,
             "profile_code": None,
             "firmware_version": None,
+            "serial_number": None,
+            "operational_policy": None,
             "identifier": {
                 "type": None,
                 "value": None,
@@ -90,8 +97,6 @@ def validate_device_step(
         }
 
     name = device_name.strip()
-    vendor = device_vendor.strip()
-    model = device_model.strip()
     protocol = device_protocol.strip().upper()
     normalized_profile_code = profile_code.strip().upper()
     firmware = firmware_version.strip()
@@ -126,15 +131,14 @@ def validate_device_step(
             "Select a controlled device category."
         ) from exc
 
-    if not vendor:
-        raise DeviceStepValidationError(
-            "Device manufacturer is required."
+    try:
+        normalized_device_model_id = str(
+            UUID(device_model_id.strip())
         )
-
-    if not model:
+    except ValueError as exc:
         raise DeviceStepValidationError(
-            "Device model is required."
-        )
+            "Select a device model from the catalog."
+        ) from exc
 
     if protocol not in ALLOWED_DEVICE_PROTOCOLS:
         raise DeviceStepValidationError(
@@ -144,6 +148,16 @@ def validate_device_step(
     if not normalized_profile_code:
         raise DeviceStepValidationError(
             "Select a compatible telemetry profile."
+        )
+
+    normalized_serial_number = serial_number.strip()
+    normalized_operational_policy = (
+        operational_policy.strip().upper() or "ASSET_ASSIGNED"
+    )
+
+    if normalized_operational_policy not in ALLOWED_OPERATIONAL_POLICIES:
+        raise DeviceStepValidationError(
+            "Select a valid asset-assignment requirement."
         )
 
     if not normalized_identifier_type:
@@ -175,11 +189,12 @@ def validate_device_step(
         "name": name,
         "external_id": external_id,
         "device_category_id": normalized_category_id,
-        "model_vendor": vendor,
-        "model": model,
+        "device_model_id": normalized_device_model_id,
         "protocol": protocol,
         "profile_code": normalized_profile_code,
         "firmware_version": firmware or None,
+        "serial_number": normalized_serial_number or None,
+        "operational_policy": normalized_operational_policy,
         "identifier": {
             "type": normalized_identifier_type,
             "value": normalized_identifier_value,

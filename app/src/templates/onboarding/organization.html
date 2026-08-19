@@ -245,6 +245,154 @@
                     ''
                 ) }}</textarea>
             </label>
+
+            <label>
+                Legal name
+                <input
+                    name="legal_name"
+                    type="text"
+                    maxlength="250"
+                    value="{{ form_data.get('legal_name', '') }}"
+                >
+            </label>
+
+            <label>
+                Lifecycle status
+                <select name="organization_lifecycle_status">
+                    {% for status in lifecycle_statuses %}
+                    <option
+                        value="{{ status }}"
+                        {% if form_data.get(
+                            'organization_lifecycle_status',
+                            'ACTIVE'
+                        ) == status %}
+                        selected
+                        {% endif %}
+                    >{{ status|title }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+
+            <label>
+                Default timezone
+                <input
+                    name="organization_timezone"
+                    type="text"
+                    value="{{ form_data.get('organization_timezone', 'Asia/Kolkata') }}"
+                >
+            </label>
+
+            <label>
+                Locale
+                <input
+                    name="locale"
+                    type="text"
+                    value="{{ form_data.get('locale', 'en-US') }}"
+                >
+            </label>
+        </div>
+
+        <div class="section-heading">
+            <div>
+                <h4>Primary contact</h4>
+            </div>
+        </div>
+        <div class="form-grid">
+            <label>
+                Contact name
+                <input
+                    name="contact_name"
+                    type="text"
+                    value="{{ form_data.get('contact_name', '') }}"
+                >
+            </label>
+
+            <label>
+                Contact email
+                <input
+                    name="contact_email"
+                    type="email"
+                    value="{{ form_data.get('contact_email', '') }}"
+                >
+            </label>
+
+            <label>
+                Contact phone
+                <input
+                    name="contact_phone"
+                    type="text"
+                    value="{{ form_data.get('contact_phone', '') }}"
+                >
+            </label>
+        </div>
+
+        <div class="section-heading">
+            <div>
+                <h4>Address</h4>
+            </div>
+        </div>
+        <div class="form-grid">
+            <label>
+                Address line 1
+                <input
+                    name="address_line1"
+                    type="text"
+                    value="{{ form_data.get('address_line1', '') }}"
+                >
+            </label>
+
+            <label>
+                Address line 2
+                <input
+                    name="address_line2"
+                    type="text"
+                    value="{{ form_data.get('address_line2', '') }}"
+                >
+            </label>
+
+            <label>
+                City
+                <input
+                    name="city"
+                    type="text"
+                    value="{{ form_data.get('city', '') }}"
+                >
+            </label>
+
+            <label>
+                State / region
+                <input
+                    name="region"
+                    type="text"
+                    value="{{ form_data.get('region', '') }}"
+                >
+            </label>
+
+            <label>
+                Postal code
+                <input
+                    name="postal_code"
+                    type="text"
+                    value="{{ form_data.get('postal_code', '') }}"
+                >
+            </label>
+
+            <label>
+                Country
+                <input
+                    name="country"
+                    type="text"
+                    value="{{ form_data.get('country', '') }}"
+                >
+            </label>
+
+            <label class="full-width">
+                Notes
+                <textarea
+                    name="notes"
+                    rows="4"
+                >{{ form_data.get('notes', '') }}</textarea>
+            </label>
         </div>
     </div>
 

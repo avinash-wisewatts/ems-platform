@@ -554,6 +554,12 @@ CREATE TABLE IF NOT EXISTS metadata.device_field_mapping (
     logical_point_id UUID NOT NULL
         REFERENCES metadata.logical_points(id),
 
+    source_unit_symbol TEXT,
+
+    scale_to_canonical_unit NUMERIC(20,9) NOT NULL DEFAULT 1,
+
+    offset_to_canonical_unit NUMERIC(20,9) NOT NULL DEFAULT 0,
+
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 
     UNIQUE(device_id, raw_field_name)

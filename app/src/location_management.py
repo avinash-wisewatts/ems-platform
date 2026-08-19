@@ -9,23 +9,19 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 CODE_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
 TELEMETRY_CAPTURE_INTERVALS = (10, 30, 60, 300, 900)
 
+DEMAND_INTERVALS = (900, 1800)
+DEMAND_BASES = ("ACTIVE_POWER_KW", "APPARENT_POWER_KVA")
+DEMAND_SOURCE_ROLES = ("GRID_IMPORT", "SITE_CONSUMPTION")
+
+# Platform-managed demand quality defaults.
+DEMAND_MINIMUM_COVERAGE_PERCENT = 90.0
+DEMAND_LATE_ARRIVAL_TOLERANCE_SECONDS = 30
+
 LIFECYCLE_STATUSES = (
     "DRAFT",
     "ACTIVE",
     "INACTIVE",
     "DECOMMISSIONED",
-)
-
-SITE_SECTORS = (
-    "HOSPITALITY",
-    "HEALTHCARE",
-    "MANUFACTURING",
-    "RETAIL",
-    "FOOD&BEVERAGE",
-    "COMMERCIAL",
-    "EDUCATION",
-    "DATA CENTER",
-    "OTHER",
 )
 
 
@@ -87,8 +83,8 @@ def validate_site_submission(
     site_code: str,
     site_timezone: str,
     lifecycle_status: str,
-    site_sector: str = "OTHER",
     telemetry_capture_interval_seconds: str = "60",
+    sub_sector_id: str = "",
 ) -> dict[str, Any]:
     """Validate and normalize an independent site request."""
 
@@ -124,17 +120,13 @@ def validate_site_submission(
         )
 
     normalized_status = lifecycle_status.strip().upper()
-    normalized_sector = site_sector.strip().upper()
-
-    if normalized_sector not in SITE_SECTORS:
-        raise LocationManagementValidationError(
-            "Select a valid site sector."
-        )
 
     if normalized_status not in LIFECYCLE_STATUSES:
         raise LocationManagementValidationError(
             "Select a valid lifecycle status."
         )
+
+    normalized_sub_sector_id = _required_uuid(sub_sector_id, "Sub-sector")
 
     return {
         "organization_id": _required_uuid(
@@ -145,8 +137,68 @@ def validate_site_submission(
         "code": _required_code(site_code, "Site code"),
         "timezone": timezone,
         "lifecycle_status": normalized_status,
-        "sector_code": normalized_sector,
         "telemetry_capture_interval_seconds": capture_interval,
+        "sub_sector_id": normalized_sub_sector_id,
+    }
+
+
+def validate_site_demand_submission(
+    *,
+    demand_monitoring_enabled: str | None,
+    demand_interval_seconds: str = "900",
+    demand_basis: str = "ACTIVE_POWER_KW",
+    site_demand_source_role: str = "GRID_IMPORT",
+) -> dict[str, Any]:
+    """Validate the user-facing site demand monitoring configuration."""
+
+    normalized_enabled = str(
+        demand_monitoring_enabled or "DISABLED"
+    ).strip().upper()
+
+    enabled_values = {"1", "TRUE", "YES", "ON", "ENABLED"}
+    disabled_values = {"0", "FALSE", "NO", "OFF", "DISABLED", ""}
+
+    if normalized_enabled in enabled_values:
+        enabled = True
+    elif normalized_enabled in disabled_values:
+        enabled = False
+    else:
+        raise LocationManagementValidationError(
+            "Select Enabled or Disabled for demand monitoring."
+        )
+
+    try:
+        interval_seconds = int(demand_interval_seconds.strip())
+    except (TypeError, ValueError) as exc:
+        raise LocationManagementValidationError(
+            "Select a valid demand interval."
+        ) from exc
+
+    if interval_seconds not in DEMAND_INTERVALS:
+        raise LocationManagementValidationError(
+            "Demand interval must be 15 or 30 minutes."
+        )
+
+    normalized_basis = demand_basis.strip().upper()
+    if normalized_basis not in DEMAND_BASES:
+        raise LocationManagementValidationError(
+            "Select a valid demand basis."
+        )
+
+    normalized_source_role = site_demand_source_role.strip().upper()
+    if normalized_source_role not in DEMAND_SOURCE_ROLES:
+        raise LocationManagementValidationError(
+            "Select a valid site demand source."
+        )
+
+    return {
+        "is_enabled": enabled,
+        "demand_interval_seconds": interval_seconds,
+        "demand_basis": normalized_basis,
+        "site_demand_source_role": normalized_source_role,
+        "minimum_coverage_percent": DEMAND_MINIMUM_COVERAGE_PERCENT,
+        "late_arrival_tolerance_seconds":
+            DEMAND_LATE_ARRIVAL_TOLERANCE_SECONDS,
     }
 
 

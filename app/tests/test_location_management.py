@@ -13,6 +13,7 @@ ORG_ID = "11111111-1111-1111-1111-111111111111"
 SITE_ID = "22222222-2222-2222-2222-222222222222"
 BUILDING_ID = "33333333-3333-3333-3333-333333333333"
 FLOOR_ID = "44444444-4444-4444-4444-444444444444"
+SUB_SECTOR_ID = "55555555-5555-5555-5555-555555555555"
 
 
 def test_validate_site_submission_normalizes_values() -> None:
@@ -22,14 +23,15 @@ def test_validate_site_submission_normalizes_values() -> None:
         site_code=" main_site ",
         site_timezone="Europe/London",
         lifecycle_status=" active ",
+        sub_sector_id=SUB_SECTOR_ID,
     ) == {
         "organization_id": ORG_ID,
         "name": "Main Site",
         "code": "MAIN_SITE",
         "timezone": "Europe/London",
         "lifecycle_status": "ACTIVE",
-        "sector_code": "OTHER",
         "telemetry_capture_interval_seconds": 60,
+        "sub_sector_id": SUB_SECTOR_ID,
     }
 
 
@@ -77,6 +79,7 @@ def test_validate_site_submission_rejects_invalid_values(
         "site_code": "MAIN_SITE",
         "site_timezone": "Europe/London",
         "lifecycle_status": "ACTIVE",
+        "sub_sector_id": SUB_SECTOR_ID,
     }
     values[field] = value
 
@@ -157,6 +160,7 @@ def test_validate_site_submission_accepts_canonical_statuses(
         site_code="MAIN_SITE",
         site_timezone="Europe/London",
         lifecycle_status=lifecycle_status,
+        sub_sector_id=SUB_SECTOR_ID,
     )
 
     assert result["lifecycle_status"] == lifecycle_status
@@ -173,4 +177,5 @@ def test_validate_site_submission_rejects_organization_only_status() -> None:
             site_code="MAIN_SITE",
             site_timezone="Europe/London",
             lifecycle_status="SUSPENDED",
+            sub_sector_id=SUB_SECTOR_ID,
         )

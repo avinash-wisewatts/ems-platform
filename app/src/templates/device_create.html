@@ -24,9 +24,12 @@
       <span class="device-location-inherit-label"><strong>Inherit the gateway's physical location</strong><small>The device will follow future gateway location changes. Clear this to select an explicit location within the same site.</small></span>
     </label>
 
-    <label><span>Building</span><select name="device_location_building_id" data-building data-selected-value="{{ form_data.get('device_location_building_id','') }}"><option value="">Site level</option></select></label>
-    <label><span>Floor</span><select name="device_location_floor_id" data-floor data-selected-value="{{ form_data.get('device_location_floor_id','') }}"><option value="">No floor</option></select></label>
-    <label><span>Space</span><select name="device_location_space_id" data-space data-selected-value="{{ form_data.get('device_location_space_id','') }}"><option value="">No space</option></select></label>
+    <div style="display:contents" data-physical-location-selector data-label-style="breadcrumb" data-location-scope-source="[data-device-gateway]">
+      <label><span>Building</span><select name="device_location_building_id" data-location-level="building" data-selected-value="{{ form_data.get('device_location_building_id','') }}"><option value="">Site level</option></select></label>
+      <label><span>Floor</span><select name="device_location_floor_id" data-location-level="floor" data-selected-value="{{ form_data.get('device_location_floor_id','') }}"><option value="">No floor</option></select></label>
+      <label><span>Space</span><select name="device_location_space_id" data-location-level="space" data-selected-value="{{ form_data.get('device_location_space_id','') }}"><option value="">No space</option></select></label>
+      <script type="application/json" data-location-options>{{ hierarchy_rows|tojson }}</script>
+    </div>
     <div class="field-full device-location-summary" data-device-location-summary aria-live="polite">Select a gateway to view location context.</div>
   </div>
 </section>
@@ -60,6 +63,6 @@
 </section>
 {% endblock %}
 {% block scripts %}
-<script>window.deviceHierarchy={{ hierarchy_rows|tojson }};window.deviceSelected={{ {'gateway_id':form_data.get('gateway_id',''),'building_id':form_data.get('device_location_building_id',''),'floor_id':form_data.get('device_location_floor_id',''),'space_id':form_data.get('device_location_space_id','')}|tojson }};</script>
+<script src="/static/js/location-picker.js"></script>
 <script src="/static/js/device-workspace.js?v=device-workspace-20260802-3"></script>
 {% endblock %}

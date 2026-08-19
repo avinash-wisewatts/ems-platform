@@ -28,20 +28,74 @@ async def list_device_profiles() -> list[dict[str, Any]]:
             return await cursor.fetchall()
 
 
-async def list_asset_types() -> list[dict[str, Any]]:
-    """Return operational asset types available for onboarding."""
+async def list_asset_types(site_id: str | None = None) -> list[dict[str, Any]]:
+    """
+    Return operational asset types available for onboarding.
+
+    When site_id is given, the result is filtered to asset types mapped to
+    that site's sub-sector. Sites without a sub-sector assigned yet (or no
+    site_id at all) fall back to the full catalog.
+    """
+    async with database_connection() as connection:
+        async with connection.cursor() as cursor:
+            if site_id:
+                await cursor.execute(
+                    """
+                    SELECT id, name, description
+                    FROM admin.list_site_asset_types(%s::uuid)
+                    """,
+                    (site_id,),
+                )
+            else:
+                await cursor.execute(
+                    """
+                    SELECT
+                        id,
+                        name,
+                        description
+                    FROM admin.v_asset_types
+                    ORDER BY name, id
+                    """
+                )
+            return await cursor.fetchall()
+
+
+async def list_sectors() -> list[dict[str, Any]]:
+    """Return controlled sectors available for onboarding."""
     async with database_connection() as connection:
         async with connection.cursor() as cursor:
             await cursor.execute(
                 """
-                SELECT
-                    id,
-                    name,
-                    description
-                FROM admin.v_asset_types
-                ORDER BY name, id
+                SELECT id, name, description
+                FROM admin.v_sectors
+                ORDER BY name
                 """
             )
+            return await cursor.fetchall()
+
+
+async def list_sub_sectors(sector_id: str | None = None) -> list[dict[str, Any]]:
+    """Return controlled sub-sectors, optionally scoped to one sector."""
+    async with database_connection() as connection:
+        async with connection.cursor() as cursor:
+            if sector_id:
+                await cursor.execute(
+                    """
+                    SELECT id, sector_id, name, description
+                    FROM admin.v_sub_sectors
+                    WHERE sector_id = %s::uuid
+                    ORDER BY name
+                    """,
+                    (sector_id,),
+                )
+            else:
+                await cursor.execute(
+                    """
+                    SELECT id, sector_id, name, description
+                    FROM admin.v_sub_sectors
+                    ORDER BY name
+                    """
+                )
             return await cursor.fetchall()
 
 

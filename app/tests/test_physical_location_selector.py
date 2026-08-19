@@ -128,14 +128,14 @@ def test_locations_page_uses_controlled_context_selection() -> None:
 
 def test_selector_controller_uses_most_specific_value() -> None:
     script = Path(
-        "app/src/static/js/physical-location-selector.js"
+        "app/src/static/js/location-picker.js"
     ).read_text()
 
     normalized_script = " ".join(script.split())
 
     assert (
-        "space.value || floor.value "
-        "|| building.value || site.value"
+        "spaceSelect.value || floorSelect.value "
+        "|| buildingSelect.value || (siteSelect ? siteSelect.value : \"\")"
     ) in normalized_script
     assert 'data-location-level="site"' in script
     assert 'data-location-level="building"' in script

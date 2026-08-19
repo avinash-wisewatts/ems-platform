@@ -32,12 +32,11 @@ from src.auth.access_scope import (
     normalize_portal_access_scope_submission,
 )
 from src.auth.middleware import PortalAuthenticationMiddleware
+from src.context.dependencies import site_context
 from src.context.service import (
     AdministrationContextError,
     bootstrap_context_for_identity,
     get_administration_context,
-    require_location_context,
-    require_site_context,
     set_active_location,
     set_active_site,
 )
@@ -90,10 +89,7 @@ from src.user_management_service import (
     set_managed_user_access_scope,
     set_managed_user_active,
 )
-from src.onboarding.forms import (
-    OnboardingForm,
-    OnboardingValidationError,
-)
+from src.onboarding.forms import OnboardingValidationError
 from src.onboarding.repository import (
     list_asset_types,
     list_assets,
@@ -107,8 +103,10 @@ from src.onboarding.repository import (
     list_gateways,
     list_organizations,
     list_accessible_sites,
+    list_sectors,
     list_sites,
     list_spaces,
+    list_sub_sectors,
     validate_asset_relationship_availability,
     validate_onboarding_field,
 )
@@ -146,7 +144,6 @@ from src.onboarding.site import (
 )
 from src.onboarding.statuses import status_options
 from src.onboarding.database_errors import user_facing_database_error
-from src.onboarding.service import onboard_energy_asset
 from src.onboarding.grafana_reconciliation_service import reconcile_grafana_tenant
 from src.onboarding.organization_service import (
     create_organization,
@@ -157,7 +154,6 @@ from src.onboarding.grafana_provisioning_service import (
 )
 from src.location_management import (
     LIFECYCLE_STATUSES,
-    SITE_SECTORS,
     LocationManagementValidationError,
     validate_building_submission,
     validate_floor_submission,
@@ -393,52 +389,18 @@ app.mount(
 app.include_router(context_router)
 
 
-async def validate_existing_site_access(
-    *,
+@app.exception_handler(AdministrationContextError)
+async def handle_administration_context_error(
     request: Request,
-    payload: dict,
-) -> None:
-    """Reject existing-site selections outside the actor's access scope."""
+    exc: AdministrationContextError,
+) -> RedirectResponse:
+    """Convert a missing/invalid scope tier into the same authorization-
+    denied response every other rejection in this app produces, so routes
+    can depend on organization_context/site_context/location_context
+    (src.context.dependencies) directly instead of hand-checking
+    AdministrationContext fields."""
 
-    organization = payload.get("organization", {})
-    site = payload.get("site", {})
-
-    if (site.get("mode") or "").upper() != "USE_EXISTING":
-        return
-
-    selected_site_id = str(
-        site.get("existing_site_id") or ""
-    )
-    selected_organization_id = str(
-        organization.get("existing_organization_id") or ""
-    )
-
-    accessible_sites = await list_sites_for_request(request)
-
-    selected_site = next(
-        (
-            candidate
-            for candidate in accessible_sites
-            if str(candidate["id"]) == selected_site_id
-        ),
-        None,
-    )
-
-    if selected_site is None:
-        raise OnboardingValidationError(
-            "Existing site is not available to your account.",
-            field_name="existing_site_id",
-        )
-
-    if (
-        selected_organization_id
-        and str(selected_site["organization_id"])
-        != selected_organization_id
-    ):
-        raise OnboardingValidationError(
-            "Existing site does not belong to the selected organization.",
-            field_name="existing_site_id",
-        )
+    return RedirectResponse(url="/forbidden", status_code=303)
 
 
 async def list_sites_for_request(
@@ -450,47 +412,6 @@ async def list_sites_for_request(
 
     return await list_accessible_sites(
         portal_user_id=user.portal_user_id,
-    )
-
-
-async def render_onboarding_page(
-    request: Request,
-    error: str | None = None,
-    status_code: int = 200,
-    form_data: dict[str, str] | None = None,
-    field_error_name: str | None = None,
-    field_error_message: str | None = None,
-) -> HTMLResponse:
-    organizations = await list_organizations()
-    sites = await list_sites_for_request(request)
-    gateways = await list_gateways()
-    devices = await list_devices()
-    profiles = await list_device_profiles()
-    asset_types = await list_asset_types()
-    assets = await list_assets()
-    spaces = await list_spaces()
-    device_categories = await list_device_categories()
-
-    return templates.TemplateResponse(
-        request=request,
-        name="onboarding.html",
-        context={
-            "environment": settings.app_env,
-            "organizations": organizations,
-            "sites": sites,
-            "gateways": gateways,
-            "devices": devices,
-            "profiles": profiles,
-            "asset_types": asset_types,
-            "assets": assets,
-            "spaces": spaces,
-            "device_categories": device_categories,
-            "error": error,
-            "form_data": form_data or {},
-            "field_error_name": field_error_name,
-            "field_error_message": field_error_message,
-        },
-        status_code=status_code,
     )
 
 
@@ -1221,6 +1142,31 @@ def _site_address_from_form(
     }
 
 
+async def _site_sector_edit_context(sub_sector_id: str | None) -> dict:
+    """
+    Return the sectors/sub-sectors catalog plus the currently selected
+    sector/sub-sector, so the Site Edit cascading dropdowns can pre-select
+    the site's existing classification. The sector is derived by looking
+    up the sub-sector's parent, since the sector <select> itself is a UI
+    helper only and is never submitted.
+    """
+    sub_sectors = await list_sub_sectors()
+    selected_sector_id = ""
+    if sub_sector_id:
+        match = next(
+            (row for row in sub_sectors if str(row["id"]) == str(sub_sector_id)),
+            None,
+        )
+        if match:
+            selected_sector_id = str(match["sector_id"])
+    return {
+        "sectors": await list_sectors(),
+        "sub_sectors": sub_sectors,
+        "selected_sector_id": selected_sector_id,
+        "selected_sub_sector_id": str(sub_sector_id) if sub_sector_id else "",
+    }
+
+
 async def render_site_administration(
     request: Request,
     *,
@@ -1292,8 +1238,9 @@ async def create_site_page(request: Request) -> Response:
         context={
             "environment": settings.app_env, "organizations": organizations,
             "selected_organization_id": active_context.active_organization_id,
-            "form_data": {"site_timezone": "Asia/Kolkata", "site_sector": "OTHER", "lifecycle_status": "ACTIVE"},
-            "lifecycle_statuses": LIFECYCLE_STATUSES, "site_sectors": SITE_SECTORS, "telemetry_capture_intervals": TELEMETRY_CAPTURE_INTERVALS, "active_navigation_key": "sites",
+            "form_data": {"site_timezone": "Asia/Kolkata", "lifecycle_status": "ACTIVE"},
+            "lifecycle_statuses": LIFECYCLE_STATUSES, "telemetry_capture_intervals": TELEMETRY_CAPTURE_INTERVALS, "active_navigation_key": "sites",
+            "sectors": await list_sectors(), "sub_sectors": await list_sub_sectors(),
         },
     )
 
@@ -1302,7 +1249,8 @@ async def create_site_page(request: Request) -> Response:
 async def create_site_administration(
     request: Request, organization_id: Annotated[str, Form()],
     site_name: Annotated[str, Form()], site_timezone: Annotated[str, Form()],
-    site_sector: Annotated[str, Form()] = "OTHER", lifecycle_status: Annotated[str, Form()] = "ACTIVE", address_line1: Annotated[str, Form()] = "",
+    sub_sector_id: Annotated[str, Form()] = "",
+    lifecycle_status: Annotated[str, Form()] = "ACTIVE", address_line1: Annotated[str, Form()] = "",
     address_line2: Annotated[str, Form()] = "", city: Annotated[str, Form()] = "",
     region: Annotated[str, Form()] = "", postal_code: Annotated[str, Form()] = "",
     country: Annotated[str, Form()] = "",
@@ -1317,22 +1265,45 @@ async def create_site_administration(
     submitted = locals().copy()
     try:
         validated = validate_site_submission(organization_id=organization_id, site_name=site_name,
-            site_code=site_code, site_timezone=site_timezone, lifecycle_status=lifecycle_status, site_sector=site_sector, telemetry_capture_interval_seconds=telemetry_capture_interval_seconds)
+            site_code=site_code, site_timezone=site_timezone, lifecycle_status=lifecycle_status, telemetry_capture_interval_seconds=telemetry_capture_interval_seconds,
+            sub_sector_id=sub_sector_id)
         result = await create_site_workspace(
             portal_user_id=user.portal_user_id, organization_id=validated["organization_id"],
             name=validated["name"], code=validated["code"], timezone=validated["timezone"],
-            lifecycle_status=validated["lifecycle_status"], sector_code=validated["sector_code"],
+            lifecycle_status=validated["lifecycle_status"],
             address=_site_address_from_form(address_line1,address_line2,city,region,postal_code,country),
             telemetry_capture_interval_seconds=validated["telemetry_capture_interval_seconds"],
+            sub_sector_id=validated["sub_sector_id"],
         )
     except (LocationManagementValidationError, DatabaseError) as exc:
         return templates.TemplateResponse(request=request, name="site_create.html", context={
             "environment": settings.app_env, "organizations": organizations,
             "selected_organization_id": organization_id, "form_data": submitted,
             "error": str(exc) if isinstance(exc, LocationManagementValidationError) else user_facing_database_error(exc, fallback="The database rejected the site request."),
-            "lifecycle_statuses": LIFECYCLE_STATUSES, "site_sectors": SITE_SECTORS, "telemetry_capture_intervals": TELEMETRY_CAPTURE_INTERVALS, "active_navigation_key": "sites"},
+            "lifecycle_statuses": LIFECYCLE_STATUSES, "telemetry_capture_intervals": TELEMETRY_CAPTURE_INTERVALS, "active_navigation_key": "sites",
+            "sectors": await list_sectors(), "sub_sectors": await list_sub_sectors()},
             status_code=400 if isinstance(exc, LocationManagementValidationError) else 409)
     return RedirectResponse(url=f"/administration/sites/{result['site_id']}", status_code=303)
+
+
+@app.get("/administration/api/sub-sectors", include_in_schema=False)
+async def list_sub_sectors_api(request: Request, sector_id: str = "") -> JSONResponse:
+    """Return sub-sectors for a sector, for the site-creation cascading dropdown."""
+    require_authenticated_portal_user(request)
+    return JSONResponse([
+        {"id": str(row["id"]), "name": row["name"]}
+        for row in await list_sub_sectors(sector_id or None)
+    ])
+
+
+@app.get("/administration/api/asset-types", include_in_schema=False)
+async def list_site_asset_types_api(request: Request, site_id: str = "") -> JSONResponse:
+    """Return asset types filtered to a site's sub-sector, for the asset-creation form."""
+    require_authenticated_portal_user(request)
+    return JSONResponse([
+        {"id": str(row["id"]), "name": row["name"]}
+        for row in await list_asset_types(site_id or None)
+    ])
 
 
 async def _accessible_site_or_none(request: Request, site_id: UUID):
@@ -1362,14 +1333,16 @@ async def edit_site_page(request: Request, site_id: UUID) -> Response:
         return RedirectResponse(url="/administration/sites?context_error=1", status_code=303)
     return templates.TemplateResponse(request=request, name="site_edit.html", context={
         "environment": settings.app_env, "site": site, "form_data": {},
-        "lifecycle_statuses": LIFECYCLE_STATUSES, "telemetry_capture_intervals": TELEMETRY_CAPTURE_INTERVALS, "active_navigation_key": "sites"})
+        "lifecycle_statuses": LIFECYCLE_STATUSES, "telemetry_capture_intervals": TELEMETRY_CAPTURE_INTERVALS, "active_navigation_key": "sites",
+        **await _site_sector_edit_context(site.get("sub_sector_id"))})
 
 
 @app.post("/administration/sites/{site_id}/edit", response_class=HTMLResponse, include_in_schema=False)
 async def edit_site_submit(
     request: Request, site_id: UUID, site_name: Annotated[str, Form()],
     site_timezone: Annotated[str, Form()], lifecycle_status: Annotated[str, Form()],
-    change_reason: Annotated[str, Form()], address_line1: Annotated[str, Form()] = "",
+    change_reason: Annotated[str, Form()], sub_sector_id: Annotated[str, Form()] = "",
+    address_line1: Annotated[str, Form()] = "",
     address_line2: Annotated[str, Form()] = "", city: Annotated[str, Form()] = "",
     region: Annotated[str, Form()] = "", postal_code: Annotated[str, Form()] = "", country: Annotated[str, Form()] = "",
     telemetry_capture_interval_seconds: Annotated[str, Form()] = "60",
@@ -1385,7 +1358,8 @@ async def edit_site_submit(
     submitted = locals().copy()
     try:
         validated = validate_site_submission(organization_id=str(site["organization_id"]),
-            site_name=site_name, site_code=site["site_code"], site_timezone=site_timezone, lifecycle_status=lifecycle_status, telemetry_capture_interval_seconds=telemetry_capture_interval_seconds)
+            site_name=site_name, site_code=site["site_code"], site_timezone=site_timezone, lifecycle_status=lifecycle_status, telemetry_capture_interval_seconds=telemetry_capture_interval_seconds,
+            sub_sector_id=sub_sector_id)
         demand = validate_site_demand_submission(
             demand_monitoring_enabled=demand_monitoring_enabled,
             demand_interval_seconds=demand_interval_seconds,
@@ -1401,14 +1375,16 @@ async def edit_site_submit(
             demand_basis=demand["demand_basis"],
             site_demand_source_role=demand["site_demand_source_role"],
             demand_minimum_coverage_percent=demand["minimum_coverage_percent"],
-            demand_late_arrival_tolerance_seconds=demand["late_arrival_tolerance_seconds"])
+            demand_late_arrival_tolerance_seconds=demand["late_arrival_tolerance_seconds"],
+            sub_sector_id=validated["sub_sector_id"])
         if not result.get("success", False):
             raise LocationManagementValidationError(result.get("failure_reason", "The lifecycle transition was rejected."))
     except (LocationManagementValidationError, DatabaseError) as exc:
         return templates.TemplateResponse(request=request, name="site_edit.html", context={
             "environment": settings.app_env, "site": site, "form_data": submitted,
             "error": str(exc) if isinstance(exc, LocationManagementValidationError) else user_facing_database_error(exc, fallback="The database rejected the site update."),
-            "lifecycle_statuses": LIFECYCLE_STATUSES, "telemetry_capture_intervals": TELEMETRY_CAPTURE_INTERVALS, "active_navigation_key": "sites"},
+            "lifecycle_statuses": LIFECYCLE_STATUSES, "telemetry_capture_intervals": TELEMETRY_CAPTURE_INTERVALS, "active_navigation_key": "sites",
+            **await _site_sector_edit_context(sub_sector_id)},
             status_code=400 if isinstance(exc, LocationManagementValidationError) else 409)
     return RedirectResponse(url=f"/administration/sites/{site_id}", status_code=303)
 
@@ -1553,10 +1529,8 @@ async def create_location_page(request: Request) -> Response:
     user = require_authenticated_portal_user(request)
     if not has_permission(user, PortalPermission.LOCATION_MANAGE):
         return RedirectResponse(url="/forbidden", status_code=303)
+    context = site_context(request)
     catalog = await _location_page_catalog(request)
-    context = catalog["context"]
-    if not context.active_organization_id or not context.active_site_id:
-        return RedirectResponse(url="/administration/locations?context_required=1", status_code=303)
     return templates.TemplateResponse(
         request=request,
         name="location_create.html",
@@ -1609,9 +1583,7 @@ async def create_location_administration(
     user = require_authenticated_portal_user(request)
     if not has_permission(user, PortalPermission.LOCATION_MANAGE):
         return RedirectResponse(url="/forbidden", status_code=303)
-    context = get_administration_context(request)
-    if not context.active_organization_id or not context.active_site_id:
-        return RedirectResponse(url="/administration/locations?context_required=1", status_code=303)
+    context = site_context(request)
 
     normalized_type = location_type.strip().upper()
     generated_code = generate_entity_code(location_name)
@@ -1892,7 +1864,7 @@ async def _asset_form_context(request: Request, form_data: dict | None = None) -
             for row in hierarchy_rows
         ],
         "assets": assets,
-        "asset_types": await list_asset_types(),
+        "asset_types": await list_asset_types(defaults.get("site_id") or None),
         "asset_lifecycle_statuses": ASSET_LIFECYCLE_STATUSES,
         "metering_requirements": METERING_REQUIREMENTS,
         "form_data": defaults,
@@ -2199,7 +2171,7 @@ async def asset_edit_page(request: Request, asset_id: UUID) -> Response:
     asset = await _accessible_asset_or_none(request, asset_id)
     if asset is None:
         return RedirectResponse("/forbidden", status_code=303)
-    catalog = await _asset_form_context(request)
+    catalog = await _asset_form_context(request, {"site_id": str(asset["site_id"])})
     return templates.TemplateResponse(
         request=request, name="asset_edit.html",
         context={**catalog, "page_title": f"Edit {asset['asset_name']}",
@@ -4172,6 +4144,12 @@ async def render_organization_step(
             ),
             "form_data": form_data or {},
             "error": error,
+            "lifecycle_statuses": (
+                "DRAFT",
+                "ACTIVE",
+                "SUSPENDED",
+                "DECOMMISSIONED",
+            ),
         },
         status_code=status_code,
     )
@@ -4241,6 +4219,50 @@ async def organization_step(
                 organization.get("description")
                 or ""
             ),
+            "organization_timezone": (
+                organization.get("timezone")
+                or "Asia/Kolkata"
+            ),
+            "organization_lifecycle_status": (
+                organization.get("lifecycle_status")
+                or "ACTIVE"
+            ),
+            "legal_name": (
+                organization.get("legal_name") or ""
+            ),
+            "locale": (
+                organization.get("locale") or "en-US"
+            ),
+            "contact_name": (
+                (organization.get("primary_contact") or {}).get("name") or ""
+            ),
+            "contact_email": (
+                (organization.get("primary_contact") or {}).get("email") or ""
+            ),
+            "contact_phone": (
+                (organization.get("primary_contact") or {}).get("phone") or ""
+            ),
+            "address_line1": (
+                (organization.get("address") or {}).get("line1") or ""
+            ),
+            "address_line2": (
+                (organization.get("address") or {}).get("line2") or ""
+            ),
+            "city": (
+                (organization.get("address") or {}).get("city") or ""
+            ),
+            "region": (
+                (organization.get("address") or {}).get("region") or ""
+            ),
+            "postal_code": (
+                (organization.get("address") or {}).get("postal_code") or ""
+            ),
+            "country": (
+                (organization.get("address") or {}).get("country") or ""
+            ),
+            "notes": (
+                organization.get("notes") or ""
+            ),
         }
 
     return await render_organization_step(
@@ -4262,6 +4284,20 @@ async def save_organization_step(
     organization_name: Annotated[str, Form()] = "",
     organization_code: Annotated[str, Form()] = "",
     organization_description: Annotated[str, Form()] = "",
+    organization_timezone: Annotated[str, Form()] = "Asia/Kolkata",
+    organization_lifecycle_status: Annotated[str, Form()] = "ACTIVE",
+    legal_name: Annotated[str, Form()] = "",
+    locale: Annotated[str, Form()] = "en-US",
+    contact_name: Annotated[str, Form()] = "",
+    contact_email: Annotated[str, Form()] = "",
+    contact_phone: Annotated[str, Form()] = "",
+    address_line1: Annotated[str, Form()] = "",
+    address_line2: Annotated[str, Form()] = "",
+    city: Annotated[str, Form()] = "",
+    region: Annotated[str, Form()] = "",
+    postal_code: Annotated[str, Form()] = "",
+    country: Annotated[str, Form()] = "",
+    notes: Annotated[str, Form()] = "",
 ) -> HTMLResponse:
     """Validate and save the Organization wizard step."""
 
@@ -4271,6 +4307,20 @@ async def save_organization_step(
         "organization_name": organization_name,
         "organization_code": organization_code,
         "organization_description": organization_description,
+        "organization_timezone": organization_timezone,
+        "organization_lifecycle_status": organization_lifecycle_status,
+        "legal_name": legal_name,
+        "locale": locale,
+        "contact_name": contact_name,
+        "contact_email": contact_email,
+        "contact_phone": contact_phone,
+        "address_line1": address_line1,
+        "address_line2": address_line2,
+        "city": city,
+        "region": region,
+        "postal_code": postal_code,
+        "country": country,
+        "notes": notes,
     }
 
     parsed_draft_token: UUID | None = None
@@ -4309,6 +4359,22 @@ async def save_organization_step(
                 organization_description=(
                     organization_description
                 ),
+                organization_timezone=organization_timezone,
+                organization_lifecycle_status=(
+                    organization_lifecycle_status
+                ),
+                legal_name=legal_name,
+                locale=locale,
+                contact_name=contact_name,
+                contact_email=contact_email,
+                contact_phone=contact_phone,
+                address_line1=address_line1,
+                address_line2=address_line2,
+                city=city,
+                region=region,
+                postal_code=postal_code,
+                country=country,
+                notes=notes,
             )
         )
 
@@ -4686,9 +4752,11 @@ async def render_site_step(
             "organization_mode": organization_mode,
             "organization_label": organization_label,
             "sites": sites,
-            "site_sectors": SITE_SECTORS,
             "form_data": form_data or {},
             "error": error,
+            **await _site_sector_edit_context(
+                (form_data or {}).get("sub_sector_id")
+            ),
         },
         status_code=status_code,
     )
@@ -4756,11 +4824,11 @@ async def site_step(
         "site_timezone": (
             site.get("timezone") or "Asia/Kolkata"
         ),
-        "site_sector": (site.get("sector_code") or "OTHER"),
         "site_address": (
             address.get("full_address") or ""
         ),
         "telemetry_capture_interval_seconds": str(site.get("telemetry_capture_interval_seconds") or 60),
+        "sub_sector_id": site.get("sub_sector_id") or "",
     }
 
     return await render_site_step(
@@ -4783,9 +4851,9 @@ async def save_site_step(
     site_name: Annotated[str, Form()] = "",
     site_code: Annotated[str, Form()] = "",
     site_timezone: Annotated[str, Form()] = "Asia/Kolkata",
-    site_sector: Annotated[str, Form()] = "OTHER",
     site_address: Annotated[str, Form()] = "",
     telemetry_capture_interval_seconds: Annotated[str, Form()] = "60",
+    sub_sector_id: Annotated[str, Form()] = "",
 ) -> HTMLResponse:
     """Validate and save the Site wizard step."""
 
@@ -4825,9 +4893,9 @@ async def save_site_step(
         "site_name": site_name,
         "site_code": site_code,
         "site_timezone": site_timezone,
-        "site_sector": site_sector,
         "site_address": site_address,
         "telemetry_capture_interval_seconds": telemetry_capture_interval_seconds,
+        "sub_sector_id": sub_sector_id,
     }
 
     try:
@@ -4837,9 +4905,9 @@ async def save_site_step(
             site_name=site_name,
             site_code=site_code,
             site_timezone=site_timezone,
-            site_sector=site_sector,
             site_address=site_address,
             telemetry_capture_interval_seconds=telemetry_capture_interval_seconds,
+            sub_sector_id=sub_sector_id,
             organization_mode=(
                 organization.get("mode") or ""
             ),
@@ -5527,14 +5595,8 @@ async def gateway_step(
         "gateway_external_id": (
             gateway.get("external_id") or ""
         ),
-        "gateway_vendor": (
-            gateway.get("vendor") or ""
-        ),
-        "gateway_model": (
-            gateway.get("model") or ""
-        ),
-        "gateway_protocol": (
-            gateway.get("protocol") or "MQTT"
+        "gateway_model_id": (
+            gateway.get("gateway_model_id") or ""
         ),
     }
 
@@ -5557,9 +5619,7 @@ async def save_gateway_step(
     existing_gateway_id: Annotated[str, Form()] = "",
     gateway_name: Annotated[str, Form()] = "",
     gateway_external_id: Annotated[str, Form()] = "",
-    gateway_vendor: Annotated[str, Form()] = "",
-    gateway_model: Annotated[str, Form()] = "",
-    gateway_protocol: Annotated[str, Form()] = "MQTT",
+    gateway_model_id: Annotated[str, Form()] = "",
 ) -> HTMLResponse:
     """Validate and save the Gateway wizard step."""
 
@@ -5598,9 +5658,7 @@ async def save_gateway_step(
         "gateway_mode": gateway_mode,
         "existing_gateway_id": existing_gateway_id,
         "gateway_name": gateway_name,
-        "gateway_vendor": gateway_vendor,
-        "gateway_model": gateway_model,
-        "gateway_protocol": gateway_protocol,
+        "gateway_model_id": gateway_model_id,
     }
 
     try:
@@ -5609,9 +5667,7 @@ async def save_gateway_step(
             existing_gateway_id=existing_gateway_id,
             gateway_name=gateway_name,
             gateway_external_id=gateway_external_id,
-            gateway_vendor=gateway_vendor,
-            gateway_model=gateway_model,
-            gateway_protocol=gateway_protocol,
+            gateway_model_id=gateway_model_id,
             organization_mode=(
                 organization.get("mode") or ""
             ),
@@ -5619,6 +5675,17 @@ async def save_gateway_step(
                 site.get("mode") or ""
             ),
         )
+
+        if gateway_payload["mode"] == "CREATE_NEW":
+            all_gateway_models = await list_gateway_models()
+
+            if not any(
+                str(model["id"]) == gateway_payload["gateway_model_id"]
+                for model in all_gateway_models
+            ):
+                raise GatewayStepValidationError(
+                    "Select a gateway model from the catalog."
+                )
 
         if gateway_payload["mode"] == "USE_EXISTING":
             all_gateways = await list_gateways()
@@ -5896,10 +5963,9 @@ async def device_step(
         "device_category_id": (
             device.get("device_category_id") or ""
         ),
-        "device_vendor": (
-            device.get("model_vendor") or ""
+        "device_model_id": (
+            device.get("device_model_id") or ""
         ),
-        "device_model": device.get("model") or "",
         "device_protocol": (
             device.get("protocol") or "MQTT"
         ),
@@ -5908,6 +5974,12 @@ async def device_step(
         ),
         "firmware_version": (
             device.get("firmware_version") or ""
+        ),
+        "serial_number": (
+            device.get("serial_number") or ""
+        ),
+        "operational_policy": (
+            device.get("operational_policy") or "ASSET_ASSIGNED"
         ),
         "identifier_type": (
             identifier.get("type") or "MQTT_UID"
@@ -5937,13 +6009,14 @@ async def save_device_step(
     device_name: Annotated[str, Form()] = "",
     device_external_id: Annotated[str, Form()] = "",
     device_category_id: Annotated[str, Form()] = "",
-    device_vendor: Annotated[str, Form()] = "",
-    device_model: Annotated[str, Form()] = "",
+    device_model_id: Annotated[str, Form()] = "",
     device_protocol: Annotated[str, Form()] = "MQTT",
     profile_code: Annotated[str, Form()] = "",
     firmware_version: Annotated[str, Form()] = "",
     identifier_type: Annotated[str, Form()] = "",
     identifier_value: Annotated[str, Form()] = "",
+    serial_number: Annotated[str, Form()] = "",
+    operational_policy: Annotated[str, Form()] = "ASSET_ASSIGNED",
 ) -> HTMLResponse:
     """Validate and save the Device wizard step."""
 
@@ -5975,13 +6048,14 @@ async def save_device_step(
         "existing_device_id": existing_device_id,
         "device_name": device_name,
         "device_category_id": device_category_id,
-        "device_vendor": device_vendor,
-        "device_model": device_model,
+        "device_model_id": device_model_id,
         "device_protocol": device_protocol,
         "profile_code": profile_code,
         "firmware_version": firmware_version,
         "identifier_type": identifier_type,
         "identifier_value": identifier_value,
+        "serial_number": serial_number,
+        "operational_policy": operational_policy,
     }
 
     try:
@@ -5991,14 +6065,15 @@ async def save_device_step(
             device_name=device_name,
             device_external_id=device_external_id,
             device_category_id=device_category_id,
-            device_vendor=device_vendor,
-            device_model=device_model,
+            device_model_id=device_model_id,
             device_protocol=device_protocol,
             profile_code=profile_code,
             firmware_version=firmware_version,
             identifier_type=identifier_type,
             identifier_value=identifier_value,
             gateway_mode=gateway.get("mode") or "",
+            serial_number=serial_number,
+            operational_policy=operational_policy,
         )
 
         if device_payload["mode"] == "USE_EXISTING":
@@ -6075,6 +6150,31 @@ async def save_device_step(
             if selected_category is None:
                 raise DeviceStepValidationError(
                     "The selected device category does not exist."
+                )
+
+            device_models = await list_device_models()
+            selected_model = next(
+                (
+                    model
+                    for model in device_models
+                    if str(model["id"])
+                    == device_payload["device_model_id"]
+                ),
+                None,
+            )
+
+            if selected_model is None:
+                raise DeviceStepValidationError(
+                    "Select a device model from the catalog."
+                )
+
+            if (
+                str(selected_model["device_category_id"])
+                != device_payload["device_category_id"]
+            ):
+                raise DeviceStepValidationError(
+                    "The selected device model does not belong to the "
+                    "chosen device category."
                 )
 
             profiles = await list_device_profiles()
@@ -6315,9 +6415,16 @@ async def render_asset_step(
             "relationships": relationships,
             "allow_existing_asset": bool(assets),
             "assets": assets,
-            "asset_types": await list_asset_types(),
+            "asset_types": await list_asset_types(site_id),
             "metering_requirements": status_options(
                 "METERING_REQUIREMENT"
+            ),
+            "asset_lifecycle_statuses": (
+                "DRAFT",
+                "COMMISSIONING",
+                "ACTIVE",
+                "INACTIVE",
+                "DECOMMISSIONED",
             ),
             "form_data": form_data or {},
             "error": error,
@@ -6394,6 +6501,12 @@ async def asset_step(
         ),
         "operational_notes": (
             metadata.get("operational_notes") or ""
+        ),
+        "lifecycle_status": (
+            asset.get("lifecycle_status") or "ACTIVE"
+        ),
+        "parent_asset_id": (
+            asset.get("parent_asset_id") or ""
         ),
     }
 
@@ -6578,6 +6691,8 @@ async def save_asset_step(
     metering_requirement: Annotated[str, Form()] = "",
     relationship_type: Annotated[str, Form()] = "",
     operational_notes: Annotated[str, Form()] = "",
+    lifecycle_status: Annotated[str, Form()] = "ACTIVE",
+    parent_asset_id: Annotated[str, Form()] = "",
 ) -> HTMLResponse:
     """Validate and save the Asset wizard step."""
 
@@ -6618,6 +6733,8 @@ async def save_asset_step(
         "metering_requirement": metering_requirement,
         "relationship_type": relationship_type,
         "operational_notes": operational_notes,
+        "lifecycle_status": lifecycle_status,
+        "parent_asset_id": parent_asset_id,
     }
 
     try:
@@ -6643,6 +6760,8 @@ async def save_asset_step(
             site_mode=(
                 site.get("mode") or ""
             ),
+            lifecycle_status=lifecycle_status,
+            parent_asset_id=parent_asset_id,
         )
 
         if asset_payload["mode"] == "USE_EXISTING":
@@ -7261,195 +7380,6 @@ async def submit_review_step(
             f"?draft={parsed_draft_token}"
         ),
         status_code=303,
-    )
-
-
-@app.post("/onboarding", response_class=HTMLResponse)
-async def submit_onboarding(
-    request: Request,
-    organization_mode: Annotated[str, Form()] = "CREATE_NEW",
-    existing_organization_id: Annotated[str, Form()] = "",
-    organization_name: Annotated[str, Form()] = "",
-    organization_code: Annotated[str, Form()] = "",
-    organization_description: Annotated[str, Form()] = "",
-    site_mode: Annotated[str, Form()] = "CREATE_NEW",
-    existing_site_id: Annotated[str, Form()] = "",
-    site_name: Annotated[str, Form()] = "",
-    site_code: Annotated[str, Form()] = "",
-    site_timezone: Annotated[str, Form()] = "Asia/Kolkata",
-    site_address: Annotated[str, Form()] = "",
-    location_mode: Annotated[str, Form()] = "SITE_ONLY",
-    existing_space_id: Annotated[str, Form()] = "",
-    building_name: Annotated[str, Form()] = "",
-    building_code: Annotated[str, Form()] = "",
-    floor_name: Annotated[str, Form()] = "",
-    floor_code: Annotated[str, Form()] = "",
-    space_name: Annotated[str, Form()] = "",
-    space_code: Annotated[str, Form()] = "",
-    gateway_mode: Annotated[str, Form()] = "CREATE_NEW",
-    existing_gateway_id: Annotated[str, Form()] = "",
-    gateway_name: Annotated[str, Form()] = "",
-    gateway_external_id: Annotated[str, Form()] = "",
-    gateway_vendor: Annotated[str, Form()] = "",
-    gateway_model: Annotated[str, Form()] = "",
-    gateway_protocol: Annotated[str, Form()] = "MQTT",
-    device_mode: Annotated[str, Form()] = "CREATE_NEW",
-    existing_device_id: Annotated[str, Form()] = "",
-    device_name: Annotated[str, Form()] = "",
-    device_external_id: Annotated[str, Form()] = "",
-    device_model_vendor: Annotated[str, Form()] = "",
-    device_model: Annotated[str, Form()] = "",
-    device_category_id: Annotated[str, Form()] = "",
-    firmware_version: Annotated[str, Form()] = "",
-    device_protocol: Annotated[str, Form()] = "MQTT",
-    profile_code: Annotated[str, Form()] = "",
-    identifier_type: Annotated[str, Form()] = "MQTT_UID",
-    identifier_value: Annotated[str, Form()] = "",
-    asset_mode: Annotated[str, Form()] = "CREATE_NEW",
-    existing_asset_id: Annotated[str, Form()] = "",
-    asset_name: Annotated[str, Form()] = "",
-    asset_external_id: Annotated[str, Form()] = "",
-    asset_type_id: Annotated[str, Form()] = "",
-    relationship_type: Annotated[str, Form()] = "PRIMARY_METER",
-) -> HTMLResponse:
-    """Validate and execute one atomic EMS onboarding request."""
-
-    submitted_form_data = {
-        "organization_mode": organization_mode,
-        "existing_organization_id": existing_organization_id,
-        "organization_name": organization_name,
-        "organization_code": organization_code,
-        "organization_description": organization_description,
-        "site_mode": site_mode,
-        "existing_site_id": existing_site_id,
-        "site_name": site_name,
-        "site_code": site_code,
-        "site_timezone": site_timezone,
-        "site_address": site_address,
-        "location_mode": location_mode,
-        "existing_space_id": existing_space_id,
-        "building_name": building_name,
-        "building_code": building_code,
-        "floor_name": floor_name,
-        "floor_code": floor_code,
-        "space_name": space_name,
-        "space_code": space_code,
-        "gateway_mode": gateway_mode,
-        "existing_gateway_id": existing_gateway_id,
-        "gateway_name": gateway_name,
-        "gateway_external_id": gateway_external_id,
-        "gateway_vendor": gateway_vendor,
-        "gateway_model": gateway_model,
-        "gateway_protocol": gateway_protocol,
-        "device_mode": device_mode,
-        "existing_device_id": existing_device_id,
-        "device_name": device_name,
-        "device_external_id": device_external_id,
-        "device_model_vendor": device_model_vendor,
-        "device_model": device_model,
-        "device_category_id": device_category_id,
-        "firmware_version": firmware_version,
-        "device_protocol": device_protocol,
-        "profile_code": profile_code,
-        "identifier_type": identifier_type,
-        "identifier_value": identifier_value,
-        "asset_mode": asset_mode,
-        "existing_asset_id": existing_asset_id,
-        "asset_name": asset_name,
-        "asset_external_id": asset_external_id,
-        "asset_type_id": asset_type_id,
-        "relationship_type": relationship_type,
-    }
-
-    form = OnboardingForm(
-        organization_mode=organization_mode,
-        existing_organization_id=existing_organization_id,
-        organization_name=organization_name,
-        organization_code=organization_code,
-        organization_description=organization_description,
-        site_mode=site_mode,
-        existing_site_id=existing_site_id,
-        site_name=site_name,
-        site_code=site_code,
-        site_timezone=site_timezone,
-        site_address=site_address,
-        location_mode=location_mode,
-        existing_space_id=existing_space_id,
-        building_name=building_name,
-        building_code=building_code,
-        floor_name=floor_name,
-        floor_code=floor_code,
-        space_name=space_name,
-        space_code=space_code,
-        gateway_mode=gateway_mode,
-        existing_gateway_id=existing_gateway_id,
-        gateway_name=gateway_name,
-        gateway_external_id=gateway_external_id,
-        gateway_vendor=gateway_vendor,
-        gateway_model=gateway_model,
-        gateway_protocol=gateway_protocol,
-        device_mode=device_mode,
-        existing_device_id=existing_device_id,
-        device_name=device_name,
-        device_external_id=device_external_id,
-        device_model_vendor=device_model_vendor,
-        device_model=device_model,
-        device_category_id=device_category_id,
-        firmware_version=firmware_version,
-        device_protocol=device_protocol,
-        profile_code=profile_code,
-        identifier_type=identifier_type,
-        identifier_value=identifier_value,
-        asset_mode=asset_mode,
-        existing_asset_id=existing_asset_id,
-        asset_name=asset_name,
-        asset_type_id=asset_type_id,
-        relationship_type=relationship_type,
-    )
-
-    try:
-        payload = form.to_request_payload()
-
-        await validate_existing_site_access(
-            request=request,
-            payload=payload,
-        )
-
-        result = await onboard_energy_asset(
-            request_payload=payload,
-            requested_by="portal-v0.2",
-        )
-
-    except OnboardingValidationError as exc:
-        return await render_onboarding_page(
-            request,
-            status_code=422,
-            form_data=submitted_form_data,
-            field_error_name=exc.field_name,
-            field_error_message=exc.message,
-            error=None if exc.field_name else exc.message,
-        )
-
-    except DatabaseError as exc:
-        database_message = user_facing_database_error(
-            exc,
-            fallback="The database rejected the onboarding request.",
-        )
-
-        return await render_onboarding_page(
-            request,
-            error=database_message,
-            status_code=409,
-            form_data=submitted_form_data,
-        )
-
-    return templates.TemplateResponse(
-        request=request,
-        name="onboarding_result.html",
-        context={
-            "environment": settings.app_env,
-            "result": result,
-        },
     )
 
 

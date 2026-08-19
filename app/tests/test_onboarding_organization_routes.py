@@ -255,6 +255,20 @@ def test_organization_post_create_new_saves_and_redirects(
             "name": "WiseWatts Test",
             "code": "WISEWATTS_TEST",
             "description": "Route test tenant",
+            "timezone": "Asia/Kolkata",
+            "lifecycle_status": "ACTIVE",
+            "legal_name": "",
+            "locale": "en-US",
+            "primary_contact": {"name": "", "email": "", "phone": ""},
+            "address": {
+                "line1": "",
+                "line2": "",
+                "city": "",
+                "region": "",
+                "postal_code": "",
+                "country": "",
+            },
+            "notes": "",
         },
         "next_step": "site",
     }
@@ -312,6 +326,13 @@ def test_organization_post_use_existing_preserves_only_identity(
         "name": None,
         "code": None,
         "description": None,
+        "timezone": None,
+        "lifecycle_status": None,
+        "legal_name": None,
+        "locale": None,
+        "primary_contact": None,
+        "address": None,
+        "notes": None,
     }
 
 

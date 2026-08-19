@@ -244,6 +244,52 @@
                 </select>
             </label>
 
+            {% if assets %}
+            <label>
+                Parent asset
+
+                <span class="field-info">
+                    <span
+                        class="field-info-trigger"
+                        tabindex="0"
+                        aria-label="More information about this field"
+                        aria-describedby="parent_asset_id_help"
+                    >i</span>
+                    <span
+                        id="parent_asset_id_help"
+                        class="field-info-content"
+                        role="tooltip"
+                    >
+                        Optional. Creates this asset as a child / sub-meter
+                        under an existing root asset in the selected
+                        organization and site.
+                    </span>
+                </span>
+
+                <select
+                    id="parent_asset_id"
+                    name="parent_asset_id"
+                >
+                    <option value="">
+                        No parent asset
+                    </option>
+
+                    {% for candidate in assets %}
+                    <option
+                        value="{{ candidate.id }}"
+                        {% if form_data.get(
+                            'parent_asset_id'
+                        ) == candidate.id|string %}
+                        selected
+                        {% endif %}
+                    >
+                        {{ candidate.asset_name }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+            {% endif %}
+
             <label>
                 Metering requirement
 
@@ -282,6 +328,29 @@
                         title="{{ requirement.description }}"
                     >
                         {{ requirement.label }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+
+            <label>
+                Lifecycle status
+
+                <select
+                    id="asset_lifecycle_status"
+                    name="lifecycle_status"
+                >
+                    {% for status in asset_lifecycle_statuses %}
+                    <option
+                        value="{{ status }}"
+                        {% if form_data.get(
+                            'lifecycle_status',
+                            'ACTIVE'
+                        ) == status %}
+                        selected
+                        {% endif %}
+                    >
+                        {{ status|replace('_', ' ')|title }}
                     </option>
                     {% endfor %}
                 </select>

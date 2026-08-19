@@ -25,7 +25,7 @@ AS
 SELECT
     time_bucket(
         INTERVAL '1 day',
-        received_at,
+        bucket_start,
         'Asia/Kolkata'
     ) AS bucket_start,
 

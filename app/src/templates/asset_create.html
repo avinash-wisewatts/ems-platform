@@ -7,4 +7,39 @@
 <section class="form-section"><div class="form-section-heading"><h3>Installation</h3></div>{{ physical_location_selector('asset_location',hierarchy_rows,form_data.get('site_id',''),form_data.get('building_id',''),form_data.get('floor_id',''),form_data.get('space_id',''),true) }}</section>
 <section class="form-section"><div class="form-section-heading"><h3>Operational and lifecycle</h3></div><div class="form-grid"><label><span>Lifecycle status</span><select name="lifecycle_status" required>{% for status in asset_lifecycle_statuses %}<option value="{{ status }}"{% if form_data.get('lifecycle_status','DRAFT') == status %} selected{% endif %}>{{ status|replace('_',' ')|title }}</option>{% endfor %}</select></label><label><span>Metering requirement</span><select name="metering_requirement" required>{% for requirement in metering_requirements %}<option value="{{ requirement }}"{% if form_data.get('metering_requirement','NOT_REQUIRED') == requirement %} selected{% endif %}>{{ requirement|replace('_',' ')|title }}</option>{% endfor %}</select></label></div></section>
 <div class="form-actions sticky-actions"><a class="button button-secondary" href="/administration/assets">Cancel</a><button class="button button-primary" type="submit">Create asset</button></div></form></section>{% endblock %}
-{% block scripts %}<script src="{{ url_for('static',path='/js/physical-location-selector.js') }}" defer></script>{% endblock %}
+{% block scripts %}<script src="{{ url_for('static',path='/js/location-picker.js') }}" defer></script>
+<script>
+(function () {
+    document.addEventListener("DOMContentLoaded", function () {
+        var siteSelect = document.querySelector('[name="asset_location_site_id"]');
+        var assetTypeSelect = document.querySelector('[name="asset_type_id"]');
+        if (!siteSelect || !assetTypeSelect) {
+            return;
+        }
+
+        async function loadAssetTypes(siteId) {
+            var currentValue = assetTypeSelect.value;
+            var response = await fetch(
+                "/administration/api/asset-types" +
+                    (siteId ? "?site_id=" + encodeURIComponent(siteId) : "")
+            );
+            if (!response.ok) {
+                return;
+            }
+            var assetTypes = await response.json();
+            assetTypeSelect.innerHTML = "";
+            assetTypeSelect.appendChild(new Option("Select asset type", ""));
+            assetTypes.forEach(function (assetType) {
+                var option = new Option(assetType.name, assetType.id);
+                option.selected = assetType.id === currentValue;
+                assetTypeSelect.appendChild(option);
+            });
+        }
+
+        siteSelect.addEventListener("change", function () {
+            loadAssetTypes(siteSelect.value);
+        });
+    });
+})();
+</script>
+{% endblock %}

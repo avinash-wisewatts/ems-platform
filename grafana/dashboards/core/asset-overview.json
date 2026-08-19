@@ -1,20 +1,3904 @@
 {
-  "uid": "ems-asset-overview",
-  "title": "EMS | Asset Overview",
+  "annotations": {
+    "list": []
+  },
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "id": 31,
+      "title": "",
+      "type": "canvas",
+      "gridPos": {
+        "x": 0,
+        "y": 2,
+        "w": 24,
+        "h": 3
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ems-timescaledb"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ems-timescaledb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "refId": "A",
+          "rawSql": "WITH asset AS (\n    SELECT *\n    FROM analytics.v_grafana_asset_identity_context\n    WHERE grafana_org_id = ${__org.id}\n      AND asset_id = '$asset_id'::uuid\n),\nconnectivity AS (\n    SELECT *\n    FROM analytics.get_grafana_asset_connectivity_context(\n        ${__org.id}::bigint,\n        '$asset_id'::uuid,\n        statement_timestamp()\n    )\n)\nSELECT\n    a.asset_name AS \"Asset\",\n    COALESCE(a.asset_type, '—') AS \"Type\",\n    COALESCE(a.location_path, a.site_name, '—') AS \"Location\",\n    COALESCE(NULLIF(a.hierarchy_path, ''), a.asset_name, '—') AS \"Hierarchy\",\n\n    'Lifecycle: ' ||\n        COALESCE(a.lifecycle_status, '—')\n        AS \"Lifecycle Line\",\n\n    'Telemetry: ' ||\n        CASE\n            WHEN c.connectivity_state = 'RECEIVING'\n                THEN 'ACTIVE'\n            WHEN c.connectivity_state IS NULL\n                THEN 'NEVER SEEN'\n            ELSE replace(c.connectivity_state, '_', ' ')\n        END\n        AS \"Telemetry Line\",\n\n    'Last Seen: ' ||\n        CASE\n            WHEN c.latest_raw_received_timestamp IS NULL\n                THEN 'Never'\n            WHEN c.receipt_age_seconds < 60\n                THEN floor(c.receipt_age_seconds)::int::text || ' sec ago'\n            WHEN c.receipt_age_seconds < 3600\n                THEN floor(c.receipt_age_seconds / 60)::int::text || ' min ago'\n            WHEN c.receipt_age_seconds < 86400\n                THEN floor(c.receipt_age_seconds / 3600)::int::text || ' hr ago'\n            ELSE floor(c.receipt_age_seconds / 86400)::int::text || ' d ago'\n        END\n        AS \"Last Seen Line\",\n\n    'Instrumentation: ' ||\n        CASE\n            WHEN EXISTS (\n                SELECT 1\n                FROM analytics.v_grafana_asset_devices ad\n                WHERE ad.grafana_org_id = a.grafana_org_id\n                  AND ad.asset_id = a.asset_id\n                  AND ad.relationship_type = 'PRIMARY_METER'\n            )\n                THEN 'Primary Meter'\n\n            WHEN a.assigned_device_count > 0\n                THEN 'Assigned Devices'\n\n            WHEN a.metering_requirement = 'NOT_REQUIRED'\n                THEN 'Not Required'\n\n            ELSE 'Not Instrumented'\n        END\n        AS \"Instrumentation Line\"\n\nFROM asset a\nLEFT JOIN connectivity c\n  ON TRUE"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [],
+          "noValue": "—",
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {
+        "infinitePan": false,
+        "inlineEditing": false,
+        "panZoom": false,
+        "showAdvancedTypes": false,
+        "root": {
+          "name": "Root",
+          "type": "frame",
+          "elements": [
+            {
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "color": {
+                  "fixed": "#F4F5F5",
+                  "mode": "fixed"
+                },
+                "size": 18,
+                "text": {
+                  "field": "Asset",
+                  "fixed": "",
+                  "mode": "field"
+                },
+                "valign": "middle"
+              },
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "name": "asset-name",
+              "placement": {
+                "height": 26,
+                "left": 10,
+                "rotation": 0,
+                "top": 5,
+                "width": 650
+              },
+              "type": "metric-value"
+            },
+            {
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "color": {
+                  "fixed": "#A7A7A7",
+                  "mode": "fixed"
+                },
+                "size": 11,
+                "text": {
+                  "field": "",
+                  "fixed": "Type:",
+                  "mode": "fixed"
+                },
+                "valign": "middle"
+              },
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "name": "type-label",
+              "placement": {
+                "height": 18,
+                "left": 10,
+                "rotation": 0,
+                "top": 38,
+                "width": 68
+              },
+              "type": "text"
+            },
+            {
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "color": {
+                  "fixed": "#F4F5F5",
+                  "mode": "fixed"
+                },
+                "size": 11,
+                "text": {
+                  "field": "Type",
+                  "fixed": "",
+                  "mode": "field"
+                },
+                "valign": "middle"
+              },
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "name": "type-value",
+              "placement": {
+                "height": 18,
+                "left": 82,
+                "rotation": 0,
+                "top": 38,
+                "width": 300
+              },
+              "type": "metric-value"
+            },
+            {
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "color": {
+                  "fixed": "#A7A7A7",
+                  "mode": "fixed"
+                },
+                "size": 11,
+                "text": {
+                  "field": "",
+                  "fixed": "Location:",
+                  "mode": "fixed"
+                },
+                "valign": "middle"
+              },
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "name": "location-label",
+              "placement": {
+                "height": 18,
+                "left": 10,
+                "rotation": 0,
+                "top": 57,
+                "width": 68
+              },
+              "type": "text"
+            },
+            {
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "color": {
+                  "fixed": "#F4F5F5",
+                  "mode": "fixed"
+                },
+                "size": 11,
+                "text": {
+                  "field": "Location",
+                  "fixed": "",
+                  "mode": "field"
+                },
+                "valign": "middle"
+              },
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "name": "location-value",
+              "placement": {
+                "height": 18,
+                "left": 82,
+                "rotation": 0,
+                "top": 57,
+                "width": 560
+              },
+              "type": "metric-value"
+            },
+            {
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "color": {
+                  "fixed": "#A7A7A7",
+                  "mode": "fixed"
+                },
+                "size": 11,
+                "text": {
+                  "field": "",
+                  "fixed": "Hierarchy:",
+                  "mode": "fixed"
+                },
+                "valign": "middle"
+              },
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "name": "hierarchy-label",
+              "placement": {
+                "height": 18,
+                "left": 10,
+                "rotation": 0,
+                "top": 76,
+                "width": 68
+              },
+              "type": "text"
+            },
+            {
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "color": {
+                  "fixed": "#F4F5F5",
+                  "mode": "fixed"
+                },
+                "size": 11,
+                "text": {
+                  "field": "Hierarchy",
+                  "fixed": "",
+                  "mode": "field"
+                },
+                "valign": "middle"
+              },
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "name": "hierarchy-value",
+              "placement": {
+                "height": 18,
+                "left": 82,
+                "rotation": 0,
+                "top": 76,
+                "width": 560
+              },
+              "type": "metric-value"
+            },
+            {
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "right",
+                "color": {
+                  "fixed": "#F4F5F5",
+                  "mode": "fixed"
+                },
+                "size": 11,
+                "text": {
+                  "field": "Lifecycle Line",
+                  "fixed": "",
+                  "mode": "field"
+                },
+                "valign": "middle"
+              },
+              "constraint": {
+                "horizontal": "right",
+                "vertical": "top"
+              },
+              "name": "lifecycle-line",
+              "placement": {
+                "height": 19,
+                "left": 30,
+                "rotation": 0,
+                "top": 10,
+                "width": 491
+              },
+              "type": "metric-value"
+            },
+            {
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "right",
+                "color": {
+                  "fixed": "#73BF69",
+                  "mode": "fixed"
+                },
+                "size": 11,
+                "text": {
+                  "field": "Telemetry Line",
+                  "fixed": "",
+                  "mode": "field"
+                },
+                "valign": "middle"
+              },
+              "constraint": {
+                "horizontal": "right",
+                "vertical": "top"
+              },
+              "name": "telemetry-line",
+              "placement": {
+                "height": 19,
+                "left": 30,
+                "rotation": 0,
+                "top": 29,
+                "width": 491
+              },
+              "type": "metric-value"
+            },
+            {
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "right",
+                "color": {
+                  "fixed": "#F4F5F5",
+                  "mode": "fixed"
+                },
+                "size": 11,
+                "text": {
+                  "field": "Instrumentation Line",
+                  "fixed": "",
+                  "mode": "field"
+                },
+                "valign": "middle"
+              },
+              "constraint": {
+                "horizontal": "right",
+                "vertical": "top"
+              },
+              "name": "instrumentation-line",
+              "placement": {
+                "height": 19,
+                "left": 30,
+                "rotation": 0,
+                "top": 48,
+                "width": 491
+              },
+              "type": "metric-value"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": 32,
+      "type": "row",
+      "title": "Energy & Electrical Summary",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 33,
+      "type": "canvas",
+      "title": "",
+      "datasource": {
+        "type": "wisewatts-live-datasource",
+        "uid": "ffuz5sq2fe9s0a"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 6,
+        "w": 3,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "wisewatts-live-datasource",
+            "uid": "ffuz5sq2fe9s0a"
+          },
+          "assetId": "$asset_id",
+          "logicalPoints": "FREQUENCY"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "mappings": [],
+          "noValue": "—"
+        },
+        "overrides": []
+      },
+      "options": {
+        "infinitePan": false,
+        "inlineEditing": false,
+        "panZoom": false,
+        "showAdvancedTypes": false,
+        "root": {
+          "name": "Root",
+          "type": "frame",
+          "elements": [
+            {
+              "name": "title",
+              "type": "text",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 10,
+                "top": 8,
+                "width": 190,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 13,
+                "text": {
+                  "mode": "fixed",
+                  "fixed": "Frequency (Hz)",
+                  "field": ""
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#F4F5F5"
+                }
+              }
+            },
+            {
+              "name": "total",
+              "type": "metric-value",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 12,
+                "top": 28,
+                "width": 150,
+                "height": 28,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 30,
+                "text": {
+                  "mode": "field",
+                  "fixed": "",
+                  "field": "FREQUENCY"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#73BF69"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": 100,
+      "type": "canvas",
+      "title": "",
+      "datasource": {
+        "type": "wisewatts-live-datasource",
+        "uid": "ffuz5sq2fe9s0a"
+      },
+      "gridPos": {
+        "x": 3,
+        "y": 6,
+        "w": 4,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "wisewatts-live-datasource",
+            "uid": "ffuz5sq2fe9s0a"
+          },
+          "assetId": "$asset_id",
+          "logicalPoints": "VOLTAGE_LL_AVG,VOLTAGE_L12,VOLTAGE_L23,VOLTAGE_L31"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "mappings": [],
+          "noValue": "—"
+        },
+        "overrides": []
+      },
+      "options": {
+        "infinitePan": false,
+        "inlineEditing": false,
+        "panZoom": false,
+        "showAdvancedTypes": false,
+        "root": {
+          "name": "Root",
+          "type": "frame",
+          "elements": [
+            {
+              "name": "title",
+              "type": "text",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 10,
+                "top": 8,
+                "width": 190,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 13,
+                "text": {
+                  "mode": "fixed",
+                  "fixed": "Voltage (V)",
+                  "field": ""
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#F4F5F5"
+                }
+              }
+            },
+            {
+              "name": "total",
+              "type": "metric-value",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 12,
+                "top": 28,
+                "width": 150,
+                "height": 28,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 28,
+                "text": {
+                  "mode": "field",
+                  "fixed": "",
+                  "field": "VOLTAGE_LL_AVG"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#73BF69"
+                }
+              }
+            },
+            {
+              "name": "label-0",
+              "type": "text",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 12,
+                "top": 76,
+                "width": 38,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 14,
+                "text": {
+                  "mode": "fixed",
+                  "fixed": "V12"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#F4F5F5"
+                }
+              }
+            },
+            {
+              "name": "value-0",
+              "type": "metric-value",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 46,
+                "top": 76,
+                "width": 62,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 14,
+                "text": {
+                  "mode": "field",
+                  "fixed": "",
+                  "field": "VOLTAGE_L12"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#73BF69"
+                }
+              }
+            },
+            {
+              "name": "label-1",
+              "type": "text",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 12,
+                "top": 98,
+                "width": 38,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 14,
+                "text": {
+                  "mode": "fixed",
+                  "fixed": "V23"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#F4F5F5"
+                }
+              }
+            },
+            {
+              "name": "value-1",
+              "type": "metric-value",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 46,
+                "top": 98,
+                "width": 62,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 14,
+                "text": {
+                  "mode": "field",
+                  "fixed": "",
+                  "field": "VOLTAGE_L23"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#73BF69"
+                }
+              }
+            },
+            {
+              "name": "label-2",
+              "type": "text",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 12,
+                "top": 120,
+                "width": 38,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 14,
+                "text": {
+                  "mode": "fixed",
+                  "fixed": "V31"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#F4F5F5"
+                }
+              }
+            },
+            {
+              "name": "value-2",
+              "type": "metric-value",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 46,
+                "top": 120,
+                "width": 62,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 14,
+                "text": {
+                  "mode": "field",
+                  "fixed": "",
+                  "field": "VOLTAGE_L31"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#73BF69"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": 110,
+      "type": "canvas",
+      "title": "",
+      "datasource": {
+        "type": "wisewatts-live-datasource",
+        "uid": "ffuz5sq2fe9s0a"
+      },
+      "gridPos": {
+        "x": 7,
+        "y": 6,
+        "w": 4,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "wisewatts-live-datasource",
+            "uid": "ffuz5sq2fe9s0a"
+          },
+          "assetId": "$asset_id",
+          "logicalPoints": "CURRENT_TOTAL,CURRENT_L1,CURRENT_L2,CURRENT_L3"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "mappings": [],
+          "noValue": "—"
+        },
+        "overrides": []
+      },
+      "options": {
+        "infinitePan": false,
+        "inlineEditing": false,
+        "panZoom": false,
+        "showAdvancedTypes": false,
+        "root": {
+          "name": "Root",
+          "type": "frame",
+          "elements": [
+            {
+              "name": "title",
+              "type": "text",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 10,
+                "top": 8,
+                "width": 190,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 13,
+                "text": {
+                  "mode": "fixed",
+                  "fixed": "Current (A)",
+                  "field": ""
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#F4F5F5"
+                }
+              }
+            },
+            {
+              "name": "total",
+              "type": "metric-value",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 12,
+                "top": 28,
+                "width": 150,
+                "height": 28,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 28,
+                "text": {
+                  "mode": "field",
+                  "fixed": "",
+                  "field": "CURRENT_TOTAL"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#73BF69"
+                }
+              }
+            },
+            {
+              "name": "label-0",
+              "type": "text",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 12,
+                "top": 76,
+                "width": 38,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 14,
+                "text": {
+                  "mode": "fixed",
+                  "fixed": "I1"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#F4F5F5"
+                }
+              }
+            },
+            {
+              "name": "value-0",
+              "type": "metric-value",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 46,
+                "top": 76,
+                "width": 62,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 14,
+                "text": {
+                  "mode": "field",
+                  "fixed": "",
+                  "field": "CURRENT_L1"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#73BF69"
+                }
+              }
+            },
+            {
+              "name": "label-1",
+              "type": "text",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 12,
+                "top": 98,
+                "width": 38,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 14,
+                "text": {
+                  "mode": "fixed",
+                  "fixed": "I2"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#F4F5F5"
+                }
+              }
+            },
+            {
+              "name": "value-1",
+              "type": "metric-value",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 46,
+                "top": 98,
+                "width": 62,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 14,
+                "text": {
+                  "mode": "field",
+                  "fixed": "",
+                  "field": "CURRENT_L2"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#73BF69"
+                }
+              }
+            },
+            {
+              "name": "label-2",
+              "type": "text",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 12,
+                "top": 120,
+                "width": 38,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 14,
+                "text": {
+                  "mode": "fixed",
+                  "fixed": "I3"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#F4F5F5"
+                }
+              }
+            },
+            {
+              "name": "value-2",
+              "type": "metric-value",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 46,
+                "top": 120,
+                "width": 62,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 14,
+                "text": {
+                  "mode": "field",
+                  "fixed": "",
+                  "field": "CURRENT_L3"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#73BF69"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": 120,
+      "type": "canvas",
+      "title": "",
+      "datasource": {
+        "type": "wisewatts-live-datasource",
+        "uid": "ffuz5sq2fe9s0a"
+      },
+      "gridPos": {
+        "x": 11,
+        "y": 6,
+        "w": 3,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "wisewatts-live-datasource",
+            "uid": "ffuz5sq2fe9s0a"
+          },
+          "assetId": "$asset_id",
+          "logicalPoints": "POWER_FACTOR_TOTAL,POWER_FACTOR_L1,POWER_FACTOR_L2,POWER_FACTOR_L3"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "mappings": [],
+          "noValue": "—"
+        },
+        "overrides": []
+      },
+      "options": {
+        "infinitePan": false,
+        "inlineEditing": false,
+        "panZoom": false,
+        "showAdvancedTypes": false,
+        "root": {
+          "name": "Root",
+          "type": "frame",
+          "elements": [
+            {
+              "name": "title",
+              "type": "text",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 10,
+                "top": 8,
+                "width": 190,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 13,
+                "text": {
+                  "mode": "fixed",
+                  "fixed": "Power Factor",
+                  "field": ""
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#F4F5F5"
+                }
+              }
+            },
+            {
+              "name": "total",
+              "type": "metric-value",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 12,
+                "top": 28,
+                "width": 150,
+                "height": 28,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 28,
+                "text": {
+                  "mode": "field",
+                  "fixed": "",
+                  "field": "POWER_FACTOR_TOTAL"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#73BF69"
+                }
+              }
+            },
+            {
+              "name": "label-0",
+              "type": "text",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 12,
+                "top": 76,
+                "width": 38,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 14,
+                "text": {
+                  "mode": "fixed",
+                  "fixed": "PF1"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#F4F5F5"
+                }
+              }
+            },
+            {
+              "name": "value-0",
+              "type": "metric-value",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 46,
+                "top": 76,
+                "width": 62,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 14,
+                "text": {
+                  "mode": "field",
+                  "fixed": "",
+                  "field": "POWER_FACTOR_L1"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#73BF69"
+                }
+              }
+            },
+            {
+              "name": "label-1",
+              "type": "text",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 12,
+                "top": 98,
+                "width": 38,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 14,
+                "text": {
+                  "mode": "fixed",
+                  "fixed": "PF2"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#F4F5F5"
+                }
+              }
+            },
+            {
+              "name": "value-1",
+              "type": "metric-value",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 46,
+                "top": 98,
+                "width": 62,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 14,
+                "text": {
+                  "mode": "field",
+                  "fixed": "",
+                  "field": "POWER_FACTOR_L2"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#73BF69"
+                }
+              }
+            },
+            {
+              "name": "label-2",
+              "type": "text",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 12,
+                "top": 120,
+                "width": 38,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 14,
+                "text": {
+                  "mode": "fixed",
+                  "fixed": "PF3"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#F4F5F5"
+                }
+              }
+            },
+            {
+              "name": "value-2",
+              "type": "metric-value",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 46,
+                "top": 120,
+                "width": 62,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 14,
+                "text": {
+                  "mode": "field",
+                  "fixed": "",
+                  "field": "POWER_FACTOR_L3"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#73BF69"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": 130,
+      "type": "canvas",
+      "title": "",
+      "datasource": {
+        "type": "wisewatts-live-datasource",
+        "uid": "ffuz5sq2fe9s0a"
+      },
+      "gridPos": {
+        "x": 14,
+        "y": 6,
+        "w": 3,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "wisewatts-live-datasource",
+            "uid": "ffuz5sq2fe9s0a"
+          },
+          "assetId": "$asset_id",
+          "logicalPoints": "CURRENT_THD_TOTAL,CURRENT_THD_L1,CURRENT_THD_L2,CURRENT_THD_L3"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "mappings": [],
+          "noValue": "—"
+        },
+        "overrides": []
+      },
+      "options": {
+        "infinitePan": false,
+        "inlineEditing": false,
+        "panZoom": false,
+        "showAdvancedTypes": false,
+        "root": {
+          "name": "Root",
+          "type": "frame",
+          "elements": [
+            {
+              "name": "title",
+              "type": "text",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 10,
+                "top": 8,
+                "width": 190,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 13,
+                "text": {
+                  "mode": "fixed",
+                  "fixed": "Current THD (%)",
+                  "field": ""
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#F4F5F5"
+                }
+              }
+            },
+            {
+              "name": "total",
+              "type": "metric-value",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 12,
+                "top": 28,
+                "width": 150,
+                "height": 28,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 28,
+                "text": {
+                  "mode": "field",
+                  "fixed": "",
+                  "field": "CURRENT_THD_TOTAL"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#73BF69"
+                }
+              }
+            },
+            {
+              "name": "label-0",
+              "type": "text",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 12,
+                "top": 76,
+                "width": 38,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 14,
+                "text": {
+                  "mode": "fixed",
+                  "fixed": "THD1"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#F4F5F5"
+                }
+              }
+            },
+            {
+              "name": "value-0",
+              "type": "metric-value",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 58,
+                "top": 76,
+                "width": 72,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 14,
+                "text": {
+                  "mode": "field",
+                  "fixed": "",
+                  "field": "CURRENT_THD_L1"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#73BF69"
+                }
+              }
+            },
+            {
+              "name": "label-1",
+              "type": "text",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 12,
+                "top": 98,
+                "width": 38,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 14,
+                "text": {
+                  "mode": "fixed",
+                  "fixed": "THD2"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#F4F5F5"
+                }
+              }
+            },
+            {
+              "name": "value-1",
+              "type": "metric-value",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 58,
+                "top": 98,
+                "width": 72,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 14,
+                "text": {
+                  "mode": "field",
+                  "fixed": "",
+                  "field": "CURRENT_THD_L2"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#73BF69"
+                }
+              }
+            },
+            {
+              "name": "label-2",
+              "type": "text",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 12,
+                "top": 120,
+                "width": 38,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 14,
+                "text": {
+                  "mode": "fixed",
+                  "fixed": "THD3"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#F4F5F5"
+                }
+              }
+            },
+            {
+              "name": "value-2",
+              "type": "metric-value",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 58,
+                "top": 120,
+                "width": 72,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 14,
+                "text": {
+                  "mode": "field",
+                  "fixed": "",
+                  "field": "CURRENT_THD_L3"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#73BF69"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": 140,
+      "type": "canvas",
+      "title": "",
+      "datasource": {
+        "type": "wisewatts-live-datasource",
+        "uid": "ffuz5sq2fe9s0a"
+      },
+      "gridPos": {
+        "x": 17,
+        "y": 6,
+        "w": 4,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "wisewatts-live-datasource",
+            "uid": "ffuz5sq2fe9s0a"
+          },
+          "assetId": "$asset_id",
+          "logicalPoints": "ACTIVE_POWER_TOTAL,ACTIVE_POWER_L1,ACTIVE_POWER_L2,ACTIVE_POWER_L3"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "mappings": [],
+          "noValue": "—"
+        },
+        "overrides": []
+      },
+      "options": {
+        "infinitePan": false,
+        "inlineEditing": false,
+        "panZoom": false,
+        "showAdvancedTypes": false,
+        "root": {
+          "name": "Root",
+          "type": "frame",
+          "elements": [
+            {
+              "name": "title",
+              "type": "text",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 10,
+                "top": 8,
+                "width": 190,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 13,
+                "text": {
+                  "mode": "fixed",
+                  "fixed": "Active Power (kW)",
+                  "field": ""
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#F4F5F5"
+                }
+              }
+            },
+            {
+              "name": "total",
+              "type": "metric-value",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 12,
+                "top": 28,
+                "width": 150,
+                "height": 28,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 28,
+                "text": {
+                  "mode": "field",
+                  "field": "ACTIVE_POWER_TOTAL"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#73BF69"
+                }
+              }
+            },
+            {
+              "name": "label-0",
+              "type": "text",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 12,
+                "top": 76,
+                "width": 38,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 14,
+                "text": {
+                  "mode": "fixed",
+                  "fixed": "P1"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#F4F5F5"
+                }
+              }
+            },
+            {
+              "name": "value-0",
+              "type": "metric-value",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 46,
+                "top": 76,
+                "width": 62,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 14,
+                "text": {
+                  "mode": "field",
+                  "field": "ACTIVE_POWER_L1"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#73BF69"
+                }
+              }
+            },
+            {
+              "name": "label-1",
+              "type": "text",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 12,
+                "top": 98,
+                "width": 38,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 14,
+                "text": {
+                  "mode": "fixed",
+                  "fixed": "P2"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#F4F5F5"
+                }
+              }
+            },
+            {
+              "name": "value-1",
+              "type": "metric-value",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 46,
+                "top": 98,
+                "width": 62,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 14,
+                "text": {
+                  "mode": "field",
+                  "field": "ACTIVE_POWER_L2"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#73BF69"
+                }
+              }
+            },
+            {
+              "name": "label-2",
+              "type": "text",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 12,
+                "top": 120,
+                "width": 38,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 14,
+                "text": {
+                  "mode": "fixed",
+                  "fixed": "P3"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#F4F5F5"
+                }
+              }
+            },
+            {
+              "name": "value-2",
+              "type": "metric-value",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 46,
+                "top": 120,
+                "width": 62,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 14,
+                "text": {
+                  "mode": "field",
+                  "field": "ACTIVE_POWER_L3"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#73BF69"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": 39,
+      "type": "canvas",
+      "title": "",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ems-timescaledb"
+      },
+      "gridPos": {
+        "x": 21,
+        "y": 6,
+        "w": 3,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ems-timescaledb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH bounds AS (\n    SELECT\n        $__timeFrom()::timestamptz AS t0,\n        $__timeTo()::timestamptz AS t1\n),\nenergy AS (\n    SELECT x.*\n    FROM bounds b\n    CROSS JOIN LATERAL analytics.get_grafana_asset_energy_intervals(\n        ${__org.id}::bigint,\n        '$asset_id'::uuid,\n        b.t0 - (b.t1 - b.t0),\n        b.t1\n    ) AS x\n),\nsummary AS (\n    SELECT\n        sum(e.import_consumption_kwh)\n            FILTER (\n                WHERE e.interval_start >= b.t0\n                  AND e.interval_start <= b.t1\n                  AND e.import_quality_code = 'GOOD'\n            ) AS selected_kwh,\n\n        sum(e.import_consumption_kwh)\n            FILTER (\n                WHERE e.interval_start >= b.t0 - (b.t1 - b.t0)\n                  AND e.interval_start < b.t0\n                  AND e.import_quality_code = 'GOOD'\n            ) AS previous_kwh\n\n    FROM bounds b\n    LEFT JOIN energy e\n      ON TRUE\n),\ncalculated AS (\n    SELECT\n        round(selected_kwh::numeric, 2)\n            AS selected_kwh,\n\n        round(previous_kwh::numeric, 2)\n            AS previous_kwh,\n\n        round(\n            (\n                100.0\n                * (selected_kwh - previous_kwh)\n                / NULLIF(previous_kwh, 0)\n            )::numeric,\n            1\n        ) AS change_pct\n\n    FROM summary\n)\nSELECT\n    selected_kwh AS \"Total Energy\",\n    previous_kwh AS \"Previous Period\",\n\n    abs(change_pct) AS \"Change Magnitude\",\n\n    CASE\n        WHEN change_pct IS NULL THEN ''\n        WHEN change_pct > 0 THEN '▲'\n        WHEN change_pct < 0 THEN '▼'\n        ELSE ''\n    END AS \"Change Direction\",\n\n    change_pct AS \"Change Signed\"\n\nFROM calculated"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "noValue": "—",
+          "mappings": []
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Change Magnitude"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Change Signed"
+            },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "gray",
+                      "value": 0
+                    },
+                    {
+                      "color": "orange",
+                      "value": 0.1
+                    },
+                    {
+                      "color": "red",
+                      "value": 10
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "infinitePan": false,
+        "inlineEditing": false,
+        "panZoom": false,
+        "showAdvancedTypes": false,
+        "root": {
+          "name": "Root",
+          "type": "frame",
+          "elements": [
+            {
+              "name": "title",
+              "type": "text",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 10,
+                "top": 6,
+                "width": 180,
+                "height": 16,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 12,
+                "text": {
+                  "mode": "fixed",
+                  "fixed": "Total Energy (kWh)",
+                  "field": ""
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#F4F5F5"
+                }
+              }
+            },
+            {
+              "name": "energy",
+              "type": "metric-value",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 10,
+                "top": 23,
+                "width": 175,
+                "height": 28,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 27,
+                "text": {
+                  "mode": "field",
+                  "fixed": "",
+                  "field": "Total Energy"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#73BF69"
+                }
+              }
+            },
+            {
+              "name": "previous-label",
+              "type": "text",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 10,
+                "top": 57,
+                "width": 100,
+                "height": 14,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 10,
+                "text": {
+                  "mode": "fixed",
+                  "fixed": "Previous",
+                  "field": ""
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#A7A7A7"
+                }
+              }
+            },
+            {
+              "name": "previous-value",
+              "type": "metric-value",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 10,
+                "top": 70,
+                "width": 90,
+                "height": 20,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 16,
+                "text": {
+                  "mode": "field",
+                  "fixed": "",
+                  "field": "Previous Period"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#F4F5F5"
+                }
+              }
+            },
+            {
+              "name": "change-value",
+              "type": "metric-value",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "height": 20,
+                "left": 125,
+                "rotation": 0,
+                "top": 70,
+                "width": 63
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 16,
+                "text": {
+                  "field": "Change Magnitude",
+                  "fixed": "",
+                  "mode": "field"
+                },
+                "color": {
+                  "field": "Change Signed",
+                  "fixed": "#F4F5F5",
+                  "mode": "field"
+                }
+              }
+            },
+            {
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "color": {
+                  "field": "Change Signed",
+                  "fixed": "#F4F5F5",
+                  "mode": "field"
+                },
+                "size": 16,
+                "text": {
+                  "field": "Change Direction",
+                  "fixed": "",
+                  "mode": "field"
+                },
+                "valign": "middle"
+              },
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "name": "change-direction",
+              "placement": {
+                "height": 20,
+                "left": 108,
+                "rotation": 0,
+                "top": 70,
+                "width": 16
+              },
+              "type": "text"
+            }
+          ]
+        }
+      },
+      "description": "Selected-period total energy, immediately preceding equal-duration energy, and percentage change. All values are calculated from one canonical energy-interval query."
+    },
+    {
+      "id": 200,
+      "type": "row",
+      "title": "Power & Demand",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 11,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 201,
+      "title": "",
+      "type": "canvas",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ems-timescaledb"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 3,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ems-timescaledb"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n    latest_valid_demand_kw AS \"Latest Demand\"\nFROM analytics.get_grafana_asset_demand_summary(\n    ${__org.id}::bigint,\n    '$asset_id'::uuid,\n    statement_timestamp()\n)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No valid demand",
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "infinitePan": false,
+        "inlineEditing": false,
+        "panZoom": false,
+        "showAdvancedTypes": false,
+        "root": {
+          "name": "Root",
+          "type": "frame",
+          "elements": [
+            {
+              "name": "title",
+              "type": "text",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 10,
+                "top": 8,
+                "width": 220,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 13,
+                "text": {
+                  "mode": "fixed",
+                  "fixed": "Latest Demand (kW)",
+                  "field": ""
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#F4F5F5"
+                }
+              }
+            },
+            {
+              "name": "value",
+              "type": "metric-value",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 12,
+                "top": 30,
+                "width": 220,
+                "height": 38,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 28,
+                "text": {
+                  "mode": "field",
+                  "fixed": "",
+                  "field": "Latest Demand"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#73BF69"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "description": "Most recent finalized VALID 15-minute asset demand. The open/provisional interval is intentionally not substituted."
+    },
+    {
+      "id": 11,
+      "title": "Active Power Trend",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 3,
+        "y": 12,
+        "w": 21,
+        "h": 6
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ems-timescaledb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ems-timescaledb"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH samples AS (\n    SELECT\n        e.sample_time,\n        e.active_power_kw,\n        p.capture_interval_seconds\n\n    FROM analytics.v_grafana_asset_electrical_samples e\n\n    LEFT JOIN LATERAL (\n        SELECT\n            cp.capture_interval_seconds\n        FROM analytics.v_grafana_telemetry_capture_policies cp\n        WHERE cp.grafana_org_id = e.grafana_org_id\n          AND cp.organization_id = e.organization_id\n          AND cp.site_id = e.site_id\n          AND cp.effective_from <= e.sample_time\n          AND (\n                cp.effective_to IS NULL\n                OR e.sample_time < cp.effective_to\n              )\n        ORDER BY cp.effective_from DESC\n        LIMIT 1\n    ) p ON TRUE\n\n    WHERE e.grafana_org_id = ${__org.id}\n      AND e.asset_id = '$asset_id'::uuid\n      AND $__timeFilter(e.sample_time)\n),\n\nsequenced AS (\n    SELECT\n        sample_time,\n        active_power_kw,\n        capture_interval_seconds,\n\n        lag(sample_time) OVER (\n            ORDER BY sample_time\n        ) AS previous_sample_time,\n\n        lag(capture_interval_seconds) OVER (\n            ORDER BY sample_time\n        ) AS previous_capture_interval_seconds\n\n    FROM samples\n),\n\nseries AS (\n    -- Real telemetry observations.\n    SELECT\n        sample_time AS \"time\",\n        (active_power_kw * 1000) AS \"Active power\"\n\n    FROM sequenced\n\n    UNION ALL\n\n    -- Insert one NULL point immediately after the last real observation\n    -- whenever the next observation arrives more than 1.5 capture\n    -- intervals later. Grafana spanNulls=false then creates a visible gap.\n    SELECT\n        previous_sample_time\n            + make_interval(\n                secs => previous_capture_interval_seconds\n              ) AS \"time\",\n\n        NULL::double precision AS \"Active power\"\n\n    FROM sequenced\n\n    WHERE previous_sample_time IS NOT NULL\n      AND previous_capture_interval_seconds IS NOT NULL\n      AND previous_capture_interval_seconds > 0\n      AND extract(\n            epoch FROM (\n                sample_time - previous_sample_time\n            )\n          ) >\n          previous_capture_interval_seconds * 1.5\n)\n\nSELECT\n    \"time\",\n    \"Active power\"\nFROM series\nORDER BY \"time\" "
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "auto",
+            "spanNulls": false
+          },
+          "unit": "watt"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "description": "Active power trend. Lines are deliberately broken across telemetry gaps exceeding 1.5 times the site's effective capture interval. Missing telemetry is not interpolated and is never represented as zero."
+    },
+    {
+      "id": 202,
+      "title": "",
+      "type": "canvas",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ems-timescaledb"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 3,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ems-timescaledb"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n    max(demand_value)\n        FILTER (WHERE quality_status = 'VALID')\n        AS \"Peak Demand\"\nFROM analytics.v_grafana_asset_demand_intervals\nWHERE grafana_org_id = ${__org.id}\n  AND asset_id = '$asset_id'::uuid\n  AND $__timeFilter(interval_start)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No valid demand",
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "infinitePan": false,
+        "inlineEditing": false,
+        "panZoom": false,
+        "showAdvancedTypes": false,
+        "root": {
+          "name": "Root",
+          "type": "frame",
+          "elements": [
+            {
+              "name": "title",
+              "type": "text",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 10,
+                "top": 8,
+                "width": 220,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 13,
+                "text": {
+                  "mode": "fixed",
+                  "fixed": "Peak Demand (kW)",
+                  "field": ""
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#F4F5F5"
+                }
+              }
+            },
+            {
+              "name": "value",
+              "type": "metric-value",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 12,
+                "top": 30,
+                "width": 220,
+                "height": 38,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 28,
+                "text": {
+                  "mode": "field",
+                  "fixed": "",
+                  "field": "Peak Demand"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#73BF69"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": 12,
+      "title": "Demand Profile",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 3,
+        "y": 18,
+        "w": 21,
+        "h": 6
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ems-timescaledb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ems-timescaledb"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n    interval_end AS \"time\",\n\n    CASE\n        WHEN quality_status = 'VALID'\n        THEN demand_value\n        ELSE NULL\n    END AS \"Demand\"\n\nFROM analytics.v_grafana_asset_demand_intervals\n\nWHERE grafana_org_id = ${__org.id}\n  AND asset_id = '$asset_id'::uuid\n  AND $__timeFilter(interval_start)\n\nORDER BY interval_end"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "auto",
+            "spanNulls": false
+          },
+          "unit": "kwatt"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "description": "Finalized demand profile shown by interval end. Only intervals with canonical quality status VALID are plotted. Provisional, no-data, or other non-valid intervals are rendered as gaps and are not interpolated."
+    },
+    {
+      "id": 203,
+      "title": "",
+      "type": "canvas",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ems-timescaledb"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 3,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ems-timescaledb"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n    CASE\n        WHEN NOT demand_monitoring_enabled\n            THEN 'Not enabled'\n\n        WHEN NOT capability_ready\n            THEN 'Unavailable'\n\n        WHEN latest_valid_demand_kw IS NULL\n            THEN 'Waiting for data'\n\n        ELSE 'Available'\n    END AS \"Demand Status\",\n\n    CASE\n        WHEN quality_status = 'NO_DATA'\n            THEN 'Waiting for data'\n\n        WHEN quality_status = 'PROVISIONAL'\n            THEN 'In progress'\n\n        WHEN quality_status = 'VALID'\n            THEN 'Final'\n\n        WHEN quality_status IS NULL\n            THEN 'Waiting for data'\n\n        ELSE 'Data issue'\n    END AS \"Current Interval\"\n\nFROM analytics.get_grafana_asset_demand_summary(\n    ${__org.id}::bigint,\n    '$asset_id'::uuid,\n    statement_timestamp()\n)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "Unavailable"
+        },
+        "overrides": []
+      },
+      "options": {
+        "infinitePan": false,
+        "inlineEditing": false,
+        "panZoom": false,
+        "showAdvancedTypes": false,
+        "root": {
+          "name": "Root",
+          "type": "frame",
+          "elements": [
+            {
+              "name": "title",
+              "type": "text",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 10,
+                "top": 8,
+                "width": 220,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 13,
+                "text": {
+                  "mode": "fixed",
+                  "fixed": "Demand Status",
+                  "field": ""
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#F4F5F5"
+                }
+              }
+            },
+            {
+              "name": "status",
+              "type": "metric-value",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 12,
+                "top": 29,
+                "width": 220,
+                "height": 26,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 24,
+                "text": {
+                  "mode": "field",
+                  "fixed": "",
+                  "field": "Demand Status"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#73BF69"
+                }
+              }
+            },
+            {
+              "name": "interval-label",
+              "type": "text",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 12,
+                "top": 65,
+                "width": 110,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 12,
+                "text": {
+                  "mode": "fixed",
+                  "fixed": "Current interval",
+                  "field": ""
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#F4F5F5"
+                }
+              }
+            },
+            {
+              "name": "interval-status",
+              "type": "metric-value",
+              "constraint": {
+                "horizontal": "left",
+                "vertical": "top"
+              },
+              "placement": {
+                "left": 122,
+                "top": 65,
+                "width": 115,
+                "height": 18,
+                "rotation": 0
+              },
+              "background": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "border": {
+                "color": {
+                  "fixed": "transparent"
+                }
+              },
+              "config": {
+                "align": "left",
+                "valign": "middle",
+                "size": 13,
+                "text": {
+                  "mode": "field",
+                  "fixed": "",
+                  "field": "Current Interval"
+                },
+                "color": {
+                  "mode": "fixed",
+                  "fixed": "#F4F5F5"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": 210,
+      "type": "row",
+      "title": "Energy Consumption & Performance",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 13,
+      "title": "Energy Consumption Trend",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 25,
+        "w": 24,
+        "h": 12
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ems-timescaledb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ems-timescaledb"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n    interval_start AS \"time\",\n\n    CASE\n        WHEN import_quality_status = 'GOOD'\n        THEN import_consumption_kwh * 1000\n        ELSE NULL\n    END AS \"Energy\"\n\nFROM analytics.get_canonical_energy_read(\n    ${__org.id}::bigint,\n    '$asset_id'::uuid,\n    $__timeFrom()::timestamptz,\n    $__timeTo()::timestamptz,\n    'native',\n    'strict'\n)\n\nORDER BY interval_start"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "auto",
+            "spanNulls": false
+          },
+          "unit": "watth"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "description": "Validated import energy consumption by interval. Intervals whose canonical import quality is not GOOD are rendered as gaps rather than interpolated or represented as zero."
+    },
+    {
+      "id": 17,
+      "title": "Voltage Trend",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 37,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ems-timescaledb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ems-timescaledb"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH samples AS (\n    SELECT\n        e.sample_time,\n        e.voltage_l1_v,\n        e.voltage_l2_v,\n        e.voltage_l3_v,\n        p.capture_interval_seconds\n\n    FROM analytics.v_grafana_asset_electrical_samples e\n\n    LEFT JOIN LATERAL (\n        SELECT\n            cp.capture_interval_seconds\n\n        FROM analytics.v_grafana_telemetry_capture_policies cp\n\n        WHERE cp.grafana_org_id = e.grafana_org_id\n          AND cp.organization_id = e.organization_id\n          AND cp.site_id = e.site_id\n          AND cp.effective_from <= e.sample_time\n          AND (\n                cp.effective_to IS NULL\n                OR e.sample_time < cp.effective_to\n              )\n\n        ORDER BY cp.effective_from DESC\n        LIMIT 1\n    ) p ON TRUE\n\n    WHERE e.grafana_org_id = ${__org.id}\n      AND e.asset_id = '$asset_id'::uuid\n      AND $__timeFilter(e.sample_time)\n),\n\nsequenced AS (\n    SELECT\n        *,\n\n        lag(sample_time) OVER (\n            ORDER BY sample_time\n        ) AS previous_sample_time,\n\n        lag(capture_interval_seconds) OVER (\n            ORDER BY sample_time\n        ) AS previous_capture_interval_seconds\n\n    FROM samples\n),\n\nseries AS (\n    -- Real observations.\n    SELECT\n        sample_time AS \"time\",\n        voltage_l1_v AS \"L1\",\n        voltage_l2_v AS \"L2\",\n        voltage_l3_v AS \"L3\" \n\n    FROM sequenced\n\n    UNION ALL\n\n    -- One NULL row after the last valid observation before a gap.\n    SELECT\n        previous_sample_time\n            + make_interval(\n                secs => previous_capture_interval_seconds\n              ) AS \"time\",\n\n        NULL::double precision AS \"L1\",\n        NULL::double precision AS \"L2\",\n        NULL::double precision AS \"L3\" \n\n    FROM sequenced\n\n    WHERE previous_sample_time IS NOT NULL\n      AND previous_capture_interval_seconds IS NOT NULL\n      AND previous_capture_interval_seconds > 0\n      AND extract(\n            epoch FROM (\n                sample_time - previous_sample_time\n            )\n          ) >\n          previous_capture_interval_seconds * 1.5\n)\n\nSELECT *\nFROM series\nORDER BY \"time\" "
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "auto",
+            "spanNulls": false
+          },
+          "unit": "volt"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "description": "Phase voltage trend. Lines break across telemetry gaps exceeding 1.5 times the site's effective capture interval."
+    },
+    {
+      "id": 18,
+      "title": "Current Trend",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 37,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ems-timescaledb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ems-timescaledb"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH samples AS (\n    SELECT\n        e.sample_time,\n        e.current_l1_a,\n        e.current_l2_a,\n        e.current_l3_a,\n        p.capture_interval_seconds\n\n    FROM analytics.v_grafana_asset_electrical_samples e\n\n    LEFT JOIN LATERAL (\n        SELECT\n            cp.capture_interval_seconds\n\n        FROM analytics.v_grafana_telemetry_capture_policies cp\n\n        WHERE cp.grafana_org_id = e.grafana_org_id\n          AND cp.organization_id = e.organization_id\n          AND cp.site_id = e.site_id\n          AND cp.effective_from <= e.sample_time\n          AND (\n                cp.effective_to IS NULL\n                OR e.sample_time < cp.effective_to\n              )\n\n        ORDER BY cp.effective_from DESC\n        LIMIT 1\n    ) p ON TRUE\n\n    WHERE e.grafana_org_id = ${__org.id}\n      AND e.asset_id = '$asset_id'::uuid\n      AND $__timeFilter(e.sample_time)\n),\n\nsequenced AS (\n    SELECT\n        *,\n\n        lag(sample_time) OVER (\n            ORDER BY sample_time\n        ) AS previous_sample_time,\n\n        lag(capture_interval_seconds) OVER (\n            ORDER BY sample_time\n        ) AS previous_capture_interval_seconds\n\n    FROM samples\n),\n\nseries AS (\n    -- Real observations.\n    SELECT\n        sample_time AS \"time\",\n        current_l1_a AS \"L1\",\n        current_l2_a AS \"L2\",\n        current_l3_a AS \"L3\" \n\n    FROM sequenced\n\n    UNION ALL\n\n    -- One NULL row after the last valid observation before a gap.\n    SELECT\n        previous_sample_time\n            + make_interval(\n                secs => previous_capture_interval_seconds\n              ) AS \"time\",\n\n        NULL::double precision AS \"L1\",\n        NULL::double precision AS \"L2\",\n        NULL::double precision AS \"L3\" \n\n    FROM sequenced\n\n    WHERE previous_sample_time IS NOT NULL\n      AND previous_capture_interval_seconds IS NOT NULL\n      AND previous_capture_interval_seconds > 0\n      AND extract(\n            epoch FROM (\n                sample_time - previous_sample_time\n            )\n          ) >\n          previous_capture_interval_seconds * 1.5\n)\n\nSELECT *\nFROM series\nORDER BY \"time\" "
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "auto",
+            "spanNulls": false
+          },
+          "unit": "amp"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "description": "Phase current trend. Lines break across telemetry gaps exceeding 1.5 times the site's effective capture interval."
+    },
+    {
+      "id": 19,
+      "title": "Power Factor & Frequency",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 45,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ems-timescaledb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ems-timescaledb"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH samples AS (\n    SELECT\n        e.sample_time,\n        e.power_factor_total,\n        e.frequency_hz,\n        p.capture_interval_seconds\n\n    FROM analytics.v_grafana_asset_electrical_samples e\n\n    LEFT JOIN LATERAL (\n        SELECT\n            cp.capture_interval_seconds\n\n        FROM analytics.v_grafana_telemetry_capture_policies cp\n\n        WHERE cp.grafana_org_id = e.grafana_org_id\n          AND cp.organization_id = e.organization_id\n          AND cp.site_id = e.site_id\n          AND cp.effective_from <= e.sample_time\n          AND (\n                cp.effective_to IS NULL\n                OR e.sample_time < cp.effective_to\n              )\n\n        ORDER BY cp.effective_from DESC\n        LIMIT 1\n    ) p ON TRUE\n\n    WHERE e.grafana_org_id = ${__org.id}\n      AND e.asset_id = '$asset_id'::uuid\n      AND $__timeFilter(e.sample_time)\n),\n\nsequenced AS (\n    SELECT\n        *,\n\n        lag(sample_time) OVER (\n            ORDER BY sample_time\n        ) AS previous_sample_time,\n\n        lag(capture_interval_seconds) OVER (\n            ORDER BY sample_time\n        ) AS previous_capture_interval_seconds\n\n    FROM samples\n),\n\nseries AS (\n    -- Real observations.\n    SELECT\n        sample_time AS \"time\",\n        power_factor_total AS \"Power factor\",\n        frequency_hz AS \"Frequency Hz\" \n\n    FROM sequenced\n\n    UNION ALL\n\n    -- One NULL row after the last valid observation before a gap.\n    SELECT\n        previous_sample_time\n            + make_interval(\n                secs => previous_capture_interval_seconds\n              ) AS \"time\",\n\n        NULL::double precision AS \"Power factor\",\n        NULL::double precision AS \"Frequency Hz\" \n\n    FROM sequenced\n\n    WHERE previous_sample_time IS NOT NULL\n      AND previous_capture_interval_seconds IS NOT NULL\n      AND previous_capture_interval_seconds > 0\n      AND extract(\n            epoch FROM (\n                sample_time - previous_sample_time\n            )\n          ) >\n          previous_capture_interval_seconds * 1.5\n)\n\nSELECT *\nFROM series\nORDER BY \"time\" "
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "auto",
+            "spanNulls": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Power factor"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 3
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "left"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "Power factor"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Frequency Hz"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "hertz"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "Frequency"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "description": "Power factor and frequency trend. Lines break across telemetry gaps exceeding 1.5 times the site's effective capture interval."
+    },
+    {
+      "id": 20,
+      "title": "Current THD",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 45,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ems-timescaledb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ems-timescaledb"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH samples AS (\n    SELECT\n        e.sample_time,\n        e.current_thd_l1_percent,\n        e.current_thd_l2_percent,\n        e.current_thd_l3_percent,\n        p.capture_interval_seconds\n\n    FROM analytics.v_grafana_asset_electrical_samples e\n\n    LEFT JOIN LATERAL (\n        SELECT\n            cp.capture_interval_seconds\n\n        FROM analytics.v_grafana_telemetry_capture_policies cp\n\n        WHERE cp.grafana_org_id = e.grafana_org_id\n          AND cp.organization_id = e.organization_id\n          AND cp.site_id = e.site_id\n          AND cp.effective_from <= e.sample_time\n          AND (\n                cp.effective_to IS NULL\n                OR e.sample_time < cp.effective_to\n              )\n\n        ORDER BY cp.effective_from DESC\n        LIMIT 1\n    ) p ON TRUE\n\n    WHERE e.grafana_org_id = ${__org.id}\n      AND e.asset_id = '$asset_id'::uuid\n      AND $__timeFilter(e.sample_time)\n),\n\nsequenced AS (\n    SELECT\n        *,\n\n        lag(sample_time) OVER (\n            ORDER BY sample_time\n        ) AS previous_sample_time,\n\n        lag(capture_interval_seconds) OVER (\n            ORDER BY sample_time\n        ) AS previous_capture_interval_seconds\n\n    FROM samples\n),\n\nseries AS (\n    -- Real observations.\n    SELECT\n        sample_time AS \"time\",\n        current_thd_l1_percent AS \"L1 THD\",\n        current_thd_l2_percent AS \"L2 THD\",\n        current_thd_l3_percent AS \"L3 THD\" \n\n    FROM sequenced\n\n    UNION ALL\n\n    -- One NULL row after the last valid observation before a gap.\n    SELECT\n        previous_sample_time\n            + make_interval(\n                secs => previous_capture_interval_seconds\n              ) AS \"time\",\n\n        NULL::double precision AS \"L1 THD\",\n        NULL::double precision AS \"L2 THD\",\n        NULL::double precision AS \"L3 THD\" \n\n    FROM sequenced\n\n    WHERE previous_sample_time IS NOT NULL\n      AND previous_capture_interval_seconds IS NOT NULL\n      AND previous_capture_interval_seconds > 0\n      AND extract(\n            epoch FROM (\n                sample_time - previous_sample_time\n            )\n          ) >\n          previous_capture_interval_seconds * 1.5\n)\n\nSELECT *\nFROM series\nORDER BY \"time\" "
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "auto",
+            "spanNulls": false
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "description": "Phase current THD trend. Lines break across telemetry gaps exceeding 1.5 times the site's effective capture interval."
+    },
+    {
+      "id": 211,
+      "type": "row",
+      "title": "Equipment / Condition Metrics",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 53,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 212,
+      "type": "table",
+      "title": "Current Condition Metrics",
+      "description": "Latest available normalized points from devices explicitly assigned to this asset in a condition-monitoring relationship role.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ems-timescaledb"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 54,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ems-timescaledb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH latest AS (\n    SELECT DISTINCT ON (\n        np.device_id,\n        np.logical_point_id\n    )\n        ad.relationship_type,\n        ad.device_name,\n        np.device_id,\n        np.logical_point_id,\n        np.logical_point,\n        np.unit_symbol,\n        np.data_type,\n        np.numeric_value,\n        np.raw_value,\n        np.quality_code,\n        np.event_time\n    FROM analytics.v_grafana_asset_devices ad\n    JOIN analytics.v_grafana_normalized_points np\n      ON np.grafana_org_id = ad.grafana_org_id\n     AND np.asset_id = ad.asset_id\n     AND np.device_id = ad.device_id\n    WHERE ad.grafana_org_id = ${__org.id}\n      AND ad.asset_id = '$asset_id'::uuid\n      AND ad.relationship_type IN (\n          'TEMPERATURE_SENSOR',\n          'PRESSURE_SENSOR',\n          'FLOW_SENSOR',\n          'VIBRATION_SENSOR',\n          'RUN_STATUS',\n          'FAULT_STATUS',\n          'STATUS_INPUT'\n      )\n    ORDER BY\n        np.device_id,\n        np.logical_point_id,\n        np.event_time DESC\n)\nSELECT\n    relationship_type AS \"Role\",\n    device_name AS \"Device\",\n    logical_point AS \"Metric\",\n    CASE\n        WHEN numeric_value IS NOT NULL\n            THEN numeric_value::text\n        ELSE raw_value\n    END AS \"Value\",\n    unit_symbol AS \"Unit\",\n    quality_code AS \"Quality\",\n    event_time AS \"Last sample\"\nFROM latest\nORDER BY\n    relationship_type,\n    device_name,\n    logical_point"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducers": []
+        }
+      }
+    },
+    {
+      "id": 213,
+      "type": "row",
+      "title": "Alarms & Events",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 62,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 24,
+      "title": "Active Alarms",
+      "type": "table",
+      "gridPos": {
+        "x": 0,
+        "y": 63,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ems-timescaledb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ems-timescaledb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT severity AS \"Severity\", alarm_code AS \"Alarm\", alarm_message AS \"Message\", entity_type AS \"Entity\", entity_name AS \"Source\", detected_at AS \"Detected\", last_observed_at AS \"Last observed\" FROM analytics.v_grafana_active_alarms aa WHERE aa.grafana_org_id=${__org.id} AND (aa.asset_id='$asset_id'::uuid OR aa.device_id IN (SELECT device_id FROM analytics.v_grafana_asset_devices WHERE grafana_org_id=${__org.id} AND asset_id='$asset_id'::uuid)) ORDER BY detected_at DESC"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "description": "Active alarms and events associated with the selected asset or its assigned devices."
+    },
+    {
+      "id": 214,
+      "type": "row",
+      "title": "Devices & Diagnostics",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 71,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 21,
+      "title": "Assigned Devices",
+      "type": "table",
+      "gridPos": {
+        "x": 0,
+        "y": 72,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ems-timescaledb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ems-timescaledb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT relationship_type AS \"Role\", device_name AS \"Device\", device_external_id AS \"External ID\", device_lifecycle_status AS \"Lifecycle\", telemetry_state AS \"Telemetry\", latest_received_timestamp AS \"Last received\" FROM analytics.v_grafana_asset_devices WHERE grafana_org_id=${__org.id} AND asset_id='$asset_id'::uuid ORDER BY CASE relationship_type WHEN 'PRIMARY_METER' THEN 0 ELSE 1 END, device_name"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      }
+    },
+    {
+      "id": 22,
+      "title": "Demand Context",
+      "type": "table",
+      "gridPos": {
+        "x": 12,
+        "y": 72,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ems-timescaledb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ems-timescaledb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT demand_monitoring_enabled AS \"Automatic asset demand\", demand_interval_seconds/60 AS \"Interval min\", demand_basis AS \"Basis\", demand_unit AS \"Unit\", source_device_name AS \"Source meter\", source_profile_code AS \"Profile\", selected_method AS \"Method\", display_status AS \"Status\", coverage_percent AS \"Coverage %\", latest_valid_demand_kw AS \"Last valid kW\", latest_valid_interval_end AS \"Last valid interval\" FROM analytics.get_grafana_asset_demand_summary(${__org.id}::bigint, '$asset_id'::uuid, statement_timestamp())"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "description": "Capability/readiness and the actual calculation method selected by the canonical demand subsystem."
+    },
+    {
+      "id": 23,
+      "title": "Demand Quality History",
+      "type": "table",
+      "gridPos": {
+        "x": 0,
+        "y": 80,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ems-timescaledb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ems-timescaledb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n    interval_end AS \"Interval End\",\n    demand_value AS \"Demand\",\n    demand_unit AS \"Unit\",\n    source_method AS \"Method\",\n    coverage_percent AS \"Coverage %\",\n    quality_status AS \"Quality\",\n    source_device_name AS \"Source meter\"\nFROM analytics.v_grafana_asset_demand_intervals\nWHERE grafana_org_id=${__org.id}\n  AND asset_id='$asset_id'::uuid\n  AND $__timeFilter(interval_start)\nORDER BY interval_end DESC\nLIMIT 100"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "description": "Historical demand intervals shown by interval end time, consistent with Demand Profile and Demand Context."
+    },
+    {
+      "id": 215,
+      "title": "",
+      "type": "stat",
+      "gridPos": {
+        "x": 21,
+        "y": 0,
+        "w": 3,
+        "h": 1
+      },
+      "datasource": {
+        "type": "wisewatts-live-datasource",
+        "uid": "ffuz5sq2fe9s0a"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "wisewatts-live-datasource",
+            "uid": "ffuz5sq2fe9s0a"
+          },
+          "assetId": "$asset_id",
+          "logicalPoints": "__STATUS_LAST_SEEN"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^Last Seen Line$/",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value",
+        "wideLayout": true,
+        "text": {
+          "valueSize": 11
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "description": "Historical demand intervals shown by interval end time, consistent with Demand Profile and Demand Context.",
+      "transparent": true,
+      "pluginVersion": "11.6.0"
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 39,
   "tags": [
     "ems",
-    "mvp",
-    "asset"
+    "asset",
+    "v1",
+    "canonical-demand",
+    "asset-centric"
   ],
-  "timezone": "browser",
-  "schemaVersion": 39,
-  "version": 1,
-  "editable": false,
-  "time": {
-    "from": "now-24h",
-    "to": "now"
-  },
-  "refresh": "1m",
   "templating": {
     "list": [
       {
@@ -35,6 +3919,54 @@
         "current": {}
       },
       {
+        "name": "location_key",
+        "label": "Location",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "ems-timescaledb"
+        },
+        "query": "SELECT DISTINCT location_path AS __text, location_key AS __value FROM analytics.v_grafana_asset_selector WHERE grafana_org_id = ${__org.id} AND site_id = '$site_id'::uuid ORDER BY location_path",
+        "definition": "SELECT DISTINCT location_path AS __text, location_key AS __value FROM analytics.v_grafana_asset_selector WHERE grafana_org_id = ${__org.id} AND site_id = '$site_id'::uuid ORDER BY location_path",
+        "refresh": 1,
+        "multi": false,
+        "includeAll": true,
+        "hide": 0,
+        "sort": 1,
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "allValue": "__all",
+        "options": [],
+        "skipUrlSync": false
+      },
+      {
+        "name": "asset_type_id",
+        "label": "Asset Type",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "ems-timescaledb"
+        },
+        "query": "SELECT DISTINCT asset_type AS __text, asset_type_id::text AS __value FROM analytics.v_grafana_asset_selector WHERE grafana_org_id = ${__org.id} AND site_id = '$site_id'::uuid AND ('${location_key:raw}' = '__all' OR location_key = '${location_key:raw}') AND asset_type_id IS NOT NULL ORDER BY asset_type",
+        "definition": "SELECT DISTINCT asset_type AS __text, asset_type_id::text AS __value FROM analytics.v_grafana_asset_selector WHERE grafana_org_id = ${__org.id} AND site_id = '$site_id'::uuid AND ('${location_key:raw}' = '__all' OR location_key = '${location_key:raw}') AND asset_type_id IS NOT NULL ORDER BY asset_type",
+        "refresh": 1,
+        "multi": false,
+        "includeAll": true,
+        "hide": 0,
+        "sort": 1,
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "allValue": "__all",
+        "options": [],
+        "skipUrlSync": false
+      },
+      {
         "name": "asset_id",
         "label": "Asset",
         "type": "query",
@@ -42,341 +3974,26 @@
           "type": "grafana-postgresql-datasource",
           "uid": "ems-timescaledb"
         },
-        "query": "SELECT hierarchy_path AS __text, asset_id AS __value FROM analytics.v_grafana_assets WHERE grafana_org_id = ${__org.id} AND site_id = '$site_id'::uuid ORDER BY hierarchy_path",
-        "definition": "SELECT hierarchy_path AS __text, asset_id AS __value FROM analytics.v_grafana_assets WHERE grafana_org_id = ${__org.id} AND site_id = '$site_id'::uuid ORDER BY hierarchy_path",
+        "query": "SELECT hierarchy_path AS __text, asset_id::text AS __value FROM analytics.v_grafana_asset_selector WHERE grafana_org_id = ${__org.id} AND site_id = '$site_id'::uuid AND ('${location_key:raw}' = '__all' OR location_key = '${location_key:raw}') AND ('${asset_type_id:raw}' = '__all' OR asset_type_id::text = '${asset_type_id:raw}') ORDER BY hierarchy_path",
+        "definition": "SELECT hierarchy_path AS __text, asset_id::text AS __value FROM analytics.v_grafana_asset_selector WHERE grafana_org_id = ${__org.id} AND site_id = '$site_id'::uuid AND ('${location_key:raw}' = '__all' OR location_key = '${location_key:raw}') AND ('${asset_type_id:raw}' = '__all' OR asset_type_id::text = '${asset_type_id:raw}') ORDER BY hierarchy_path",
         "refresh": 1,
         "multi": false,
         "includeAll": false,
         "hide": 0,
         "sort": 1,
-        "current": {}
+        "current": {},
+        "options": []
       }
     ]
   },
-  "links": [
-    {
-      "title": "EMS navigation",
-      "type": "link",
-      "url": "/d/ems-org-overview",
-      "includeVars": true,
-      "keepTime": true
-    }
-  ],
-  "panels": [
-    {
-      "id": 1,
-      "type": "text",
-      "title": "EMS Navigation",
-      "gridPos": {
-        "x": 0,
-        "y": 0,
-        "w": 24,
-        "h": 2
-      },
-      "options": {
-        "mode": "markdown",
-        "content": "[Organization](/d/ems-org-overview) | [Site](/d/ems-site-overview) | [Area](/d/ems-area-overview) | [Asset](/d/ems-asset-overview) | [Devices](/d/ems-device-diagnostics) | [Analytics](/d/ems-analytics-explorer) | [Alarms](/d/ems-alarms)"
-      }
-    },
-    {
-      "id": 2,
-      "title": "Current demand kW",
-      "type": "stat",
-      "gridPos": {
-        "x": 0,
-        "y": 2,
-        "w": 6,
-        "h": 4
-      },
-      "datasource": {
-        "type": "grafana-postgresql-datasource",
-        "uid": "ems-timescaledb"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "grafana-postgresql-datasource",
-            "uid": "ems-timescaledb"
-          },
-          "editorMode": "code",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "SELECT active_power_kw FROM analytics.v_grafana_energy_samples WHERE grafana_org_id = ${__org.id} AND asset_id='$asset_id'::uuid ORDER BY sample_time DESC LIMIT 1",
-          "refId": "A"
-        }
-      ],
-      "description": "",
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "auto",
-        "textMode": "auto"
-      }
-    },
-    {
-      "id": 3,
-      "title": "Power factor",
-      "type": "stat",
-      "gridPos": {
-        "x": 6,
-        "y": 2,
-        "w": 6,
-        "h": 4
-      },
-      "datasource": {
-        "type": "grafana-postgresql-datasource",
-        "uid": "ems-timescaledb"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "grafana-postgresql-datasource",
-            "uid": "ems-timescaledb"
-          },
-          "editorMode": "code",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "SELECT power_factor_total FROM analytics.v_grafana_energy_samples WHERE grafana_org_id = ${__org.id} AND asset_id='$asset_id'::uuid ORDER BY sample_time DESC LIMIT 1",
-          "refId": "A"
-        }
-      ],
-      "description": "",
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "auto",
-        "textMode": "auto"
-      }
-    },
-    {
-      "id": 4,
-      "title": "Assigned devices",
-      "type": "stat",
-      "gridPos": {
-        "x": 12,
-        "y": 2,
-        "w": 6,
-        "h": 4
-      },
-      "datasource": {
-        "type": "grafana-postgresql-datasource",
-        "uid": "ems-timescaledb"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "grafana-postgresql-datasource",
-            "uid": "ems-timescaledb"
-          },
-          "editorMode": "code",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "SELECT count(*) FROM analytics.v_grafana_asset_devices WHERE grafana_org_id = ${__org.id} AND asset_id='$asset_id'::uuid",
-          "refId": "A"
-        }
-      ],
-      "description": "",
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "auto",
-        "textMode": "auto"
-      }
-    },
-    {
-      "id": 5,
-      "title": "Active alarms",
-      "type": "stat",
-      "gridPos": {
-        "x": 18,
-        "y": 2,
-        "w": 6,
-        "h": 4
-      },
-      "datasource": {
-        "type": "grafana-postgresql-datasource",
-        "uid": "ems-timescaledb"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "grafana-postgresql-datasource",
-            "uid": "ems-timescaledb"
-          },
-          "editorMode": "code",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "SELECT count(*) FROM analytics.v_grafana_active_alarms WHERE grafana_org_id = ${__org.id} AND asset_id='$asset_id'::uuid",
-          "refId": "A"
-        }
-      ],
-      "description": "",
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "orientation": "auto",
-        "textMode": "auto"
-      }
-    },
-    {
-      "id": 6,
-      "title": "Demand profile",
-      "type": "timeseries",
-      "gridPos": {
-        "x": 0,
-        "y": 6,
-        "w": 16,
-        "h": 8
-      },
-      "datasource": {
-        "type": "grafana-postgresql-datasource",
-        "uid": "ems-timescaledb"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "grafana-postgresql-datasource",
-            "uid": "ems-timescaledb"
-          },
-          "editorMode": "code",
-          "format": "time_series",
-          "rawQuery": true,
-          "rawSql": "SELECT sample_time AS time,active_power_kw FROM analytics.v_grafana_energy_samples WHERE grafana_org_id = ${__org.id} AND asset_id='$asset_id'::uuid AND $__timeFilter(sample_time) ORDER BY sample_time",
-          "refId": "A"
-        }
-      ],
-      "description": "",
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "fillOpacity": 8,
-            "showPoints": "auto"
-          }
-        },
-        "overrides": []
-      }
-    },
-    {
-      "id": 7,
-      "title": "Asset identity",
-      "type": "table",
-      "gridPos": {
-        "x": 16,
-        "y": 6,
-        "w": 8,
-        "h": 8
-      },
-      "datasource": {
-        "type": "grafana-postgresql-datasource",
-        "uid": "ems-timescaledb"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "grafana-postgresql-datasource",
-            "uid": "ems-timescaledb"
-          },
-          "editorMode": "code",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "SELECT hierarchy_path,asset_type,external_id,manufacturer,model,lifecycle_status,metering_requirement FROM analytics.v_grafana_assets WHERE grafana_org_id = ${__org.id} AND asset_id='$asset_id'::uuid",
-          "refId": "A"
-        }
-      ],
-      "description": "",
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm"
-      }
-    },
-    {
-      "id": 8,
-      "title": "Assigned devices",
-      "type": "table",
-      "gridPos": {
-        "x": 0,
-        "y": 14,
-        "w": 12,
-        "h": 8
-      },
-      "datasource": {
-        "type": "grafana-postgresql-datasource",
-        "uid": "ems-timescaledb"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "grafana-postgresql-datasource",
-            "uid": "ems-timescaledb"
-          },
-          "editorMode": "code",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "SELECT device_name,device_external_id,relationship_type,device_lifecycle_status,telemetry_state,latest_received_timestamp FROM analytics.v_grafana_asset_devices WHERE grafana_org_id = ${__org.id} AND asset_id='$asset_id'::uuid ORDER BY relationship_type,device_name",
-          "refId": "A"
-        }
-      ],
-      "description": "",
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm"
-      }
-    },
-    {
-      "id": 9,
-      "title": "Asset alarms",
-      "type": "table",
-      "gridPos": {
-        "x": 12,
-        "y": 14,
-        "w": 12,
-        "h": 8
-      },
-      "datasource": {
-        "type": "grafana-postgresql-datasource",
-        "uid": "ems-timescaledb"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "grafana-postgresql-datasource",
-            "uid": "ems-timescaledb"
-          },
-          "editorMode": "code",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "SELECT severity,alarm_code,alarm_message,detected_at,last_observed_at FROM analytics.v_grafana_active_alarms WHERE grafana_org_id = ${__org.id} AND asset_id='$asset_id'::uuid ORDER BY last_observed_at DESC",
-          "refId": "A"
-        }
-      ],
-      "description": "",
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm"
-      }
-    }
-  ]
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "EMS | Asset Overview",
+  "uid": "ems-asset-overview",
+  "version": 3,
+  "weekStart": ""
 }

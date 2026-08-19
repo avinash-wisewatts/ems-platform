@@ -14,13 +14,10 @@ def valid_gateway_values() -> dict[str, str]:
         "existing_gateway_id": "",
         "gateway_name": "Eniscope Gateway 1",
         "gateway_external_id": "gateway_001",
-        "gateway_vendor": "Best Energy",
-        "gateway_model": "Eniscope Hybrid",
-        "gateway_protocol": "mqtt",
+        "gateway_model_id": str(uuid4()),
         "organization_mode": "CREATE_NEW",
         "site_mode": "CREATE_NEW",
     }
-
 
 
 def test_create_gateway_normalizes_values() -> None:
@@ -34,46 +31,28 @@ def test_create_gateway_normalizes_values() -> None:
         "existing_gateway_id": None,
         "name": "Eniscope Gateway 1",
         "external_id": "ENISCOPE_GATEWAY_1",
-        "vendor": "Best Energy",
-        "model": "Eniscope Hybrid",
-        "protocol": "MQTT",
+        "gateway_model_id": values["gateway_model_id"],
     }
 
-@pytest.mark.parametrize(
-    "protocol",
-    [
-        "MQTT",
-        "HTTP API",
-        "OPC-UA",
-    ],
-)
-def test_supported_gateway_protocols_are_accepted(
-    protocol: str,
-) -> None:
+
+def test_gateway_model_id_is_required() -> None:
     values = valid_gateway_values()
-    values["gateway_protocol"] = protocol
-
-    assert validate_gateway_step(**values)["protocol"] == protocol
-
-
-@pytest.mark.parametrize(
-    "protocol",
-    [
-        "",
-        "MODBUS TCP",
-        "BACNET",
-        "COAP",
-    ],
-)
-def test_unsupported_gateway_protocol_is_rejected(
-    protocol: str,
-) -> None:
-    values = valid_gateway_values()
-    values["gateway_protocol"] = protocol
+    values["gateway_model_id"] = ""
 
     with pytest.raises(
         GatewayStepValidationError,
-        match="supported cloud uplink protocol",
+        match="Select a gateway model from the catalog",
+    ):
+        validate_gateway_step(**values)
+
+
+def test_gateway_model_id_must_be_a_valid_uuid() -> None:
+    values = valid_gateway_values()
+    values["gateway_model_id"] = "not-a-uuid"
+
+    with pytest.raises(
+        GatewayStepValidationError,
+        match="Select a gateway model from the catalog",
     ):
         validate_gateway_step(**values)
 
@@ -115,11 +94,8 @@ def test_existing_gateway_is_accepted_for_existing_parents() -> None:
         "existing_gateway_id": gateway_id,
         "name": None,
         "external_id": None,
-        "vendor": None,
-        "model": None,
-        "protocol": None,
+        "gateway_model_id": None,
     }
-
 
 
 def test_client_gateway_external_id_is_ignored() -> None:
@@ -129,4 +105,3 @@ def test_client_gateway_external_id_is_ignored() -> None:
     payload = validate_gateway_step(**values)
 
     assert payload["external_id"] == "ENISCOPE_GATEWAY_1"
-

@@ -40,8 +40,14 @@ def page_reads(monkeypatch):
     async def sites(*, portal_user_id: int):
         assert portal_user_id == 500
         return []
+    async def sectors():
+        return []
+    async def sub_sectors(sector_id=None):
+        return []
     monkeypatch.setattr("src.main._site_page_organizations", lambda user: organizations())
     monkeypatch.setattr("src.main.list_manageable_sites", sites)
+    monkeypatch.setattr("src.main.list_sectors", sectors)
+    monkeypatch.setattr("src.main.list_sub_sectors", sub_sectors)
 
 
 def test_site_page_lists_all_accessible_sites_without_active_organization(portal_client, monkeypatch):
@@ -95,10 +101,12 @@ def test_create_site_uses_selected_accessible_organization(portal_client, monkey
         "organization_id": str(ORGANIZATION_ID), "site_name": "Main Site",
         "site_timezone": "Europe/London", "lifecycle_status": "ACTIVE",
         "address_line1": "1 Main Road", "city": "London", "country": "UK",
+        "sub_sector_id": "55555555-5555-4555-8555-555555555555",
     }, follow_redirects=False)
     assert response.status_code == 303
     assert response.headers["location"] == f"/administration/sites/{SITE_ID}"
     assert captured["organization_id"] == str(ORGANIZATION_ID)
+    assert captured["sub_sector_id"] == "55555555-5555-4555-8555-555555555555"
     assert captured["code"] == "MAIN_SITE"
     assert captured["address"]["line1"] == "1 Main Road"
 

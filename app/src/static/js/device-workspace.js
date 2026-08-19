@@ -19,14 +19,10 @@
   const externalId = form.querySelector('[data-device-external-id]');
   const externalPreview = form.querySelector('[data-device-external-id-preview]');
 
-  const rows = Array.isArray(window.deviceHierarchy) ? window.deviceHierarchy : [];
-  const selected = window.deviceSelected || {};
   const text = (value) => value == null ? '' : String(value);
 
   const modelCatalog = model ? [...model.options].filter((o) => o.value).map((o) => o.cloneNode(true)) : [];
   const profileCatalog = profile ? [...profile.options].filter((o) => o.value).map((o) => o.cloneNode(true)) : [];
-  const editFloorCatalog = !gateway && floor ? [...floor.options].filter((o) => o.value).map((o) => o.cloneNode(true)) : [];
-  const editSpaceCatalog = !gateway && space ? [...space.options].filter((o) => o.value).map((o) => o.cloneNode(true)) : [];
 
   function generatedExternalId(value) {
     const normalized = text(value).trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 100);
@@ -87,78 +83,23 @@
     if (manufacturer) manufacturer.value = model?.selectedOptions[0]?.dataset.vendor || '';
   }
 
-  const uniqueBy = (items, key) => {
-    const seen = new Set();
-    return items.filter((item) => {
-      const value = text(item[key]);
-      if (!value || seen.has(value)) return false;
-      seen.add(value);
-      return true;
-    });
-  };
-
-  function optionLabel(row, level) {
-    const site = [row.site_name, row.site_code && `(${row.site_code})`].filter(Boolean).join(' ');
-    const buildingPart = [row.building_name, row.building_code && `(${row.building_code})`].filter(Boolean).join(' ');
-    const floorPart = [row.floor_name, row.floor_code && `(${row.floor_code})`].filter(Boolean).join(' ');
-    const spacePart = [row.space_name, row.space_code && `(${row.space_code})`].filter(Boolean).join(' ');
-    if (level === 'building') return [site, buildingPart].filter(Boolean).join(' / ');
-    if (level === 'floor') return [site, buildingPart, floorPart].filter(Boolean).join(' / ');
-    return [site, buildingPart, floorPart, spacePart].filter(Boolean).join(' / ');
-  }
-
-  function fillSelect(select, placeholder, items, valueKey, labelLevel, selectedValue) {
-    if (!select) return;
-    select.replaceChildren();
-    const blank = document.createElement('option');
-    blank.value = '';
-    blank.textContent = placeholder;
-    select.append(blank);
-    for (const row of items) {
-      const option = document.createElement('option');
-      option.value = text(row[valueKey]);
-      option.textContent = optionLabel(row, labelLevel);
-      select.append(option);
-    }
-    if ([...select.options].some((option) => option.value === text(selectedValue))) select.value = text(selectedValue);
-  }
-
-  function rowsForGatewaySite() {
-    const siteId = text(gateway?.selectedOptions[0]?.dataset.site);
-    return rows.filter((row) => text(row.site_id) === siteId);
-  }
-
-  function rebuildBuildings({ preserve = true } = {}) {
-    const siteRows = rowsForGatewaySite();
-    const desired = preserve ? (building?.value || building?.dataset.selectedValue || selected.building_id || '') : '';
-    fillSelect(building, 'Site level', uniqueBy(siteRows, 'building_id'), 'building_id', 'building', desired);
-    rebuildFloors({ preserve });
-  }
-
-  function rebuildFloors({ preserve = true } = {}) {
-    const buildingId = text(building?.value);
-    const items = uniqueBy(rowsForGatewaySite().filter((row) => text(row.building_id) === buildingId), 'floor_id');
-    const desired = preserve ? (floor?.value || floor?.dataset.selectedValue || selected.floor_id || '') : '';
-    fillSelect(floor, 'No floor', items, 'floor_id', 'floor', desired);
-    rebuildSpaces({ preserve });
-  }
-
-  function rebuildSpaces({ preserve = true } = {}) {
-    const floorId = text(floor?.value);
-    const items = uniqueBy(rowsForGatewaySite().filter((row) => text(row.floor_id) === floorId), 'space_id');
-    const desired = preserve ? (space?.value || space?.dataset.selectedValue || selected.space_id || '') : '';
-    fillSelect(space, 'No space', items, 'space_id', 'space', desired);
-    updateLocationSummary();
-  }
+  // Building/Floor/Space population and cascading is owned by
+  // location-picker.js (see [data-physical-location-selector] on the
+  // Installation section of this form). This script only reflects the
+  // current selection into the human-readable summary line and enforces
+  // the "inherit from gateway" disabled state -- it must run *after*
+  // location-picker.js so the selects are already populated. Keep the
+  // <script src=".../location-picker.js"> tag before this one in the
+  // template.
 
   function updateLocationSummary() {
     if (!locationSummary) return;
     const gatewayOption = gateway?.selectedOptions[0];
-    if (!gatewayOption?.value) {
+    if (gateway && !gatewayOption?.value) {
       locationSummary.textContent = 'Select a gateway to view location context.';
       return;
     }
-    const gatewayPath = gatewayOption.dataset.locationPath || 'Site level';
+    const gatewayPath = gatewayOption?.dataset.locationPath || 'Site level';
     if (inherit?.checked) {
       locationSummary.textContent = `Effective location: ${gatewayPath} (inherited from gateway).`;
       return;
@@ -166,32 +107,8 @@
     const explicit = space?.selectedOptions[0]?.value ? space.selectedOptions[0].textContent
       : floor?.selectedOptions[0]?.value ? floor.selectedOptions[0].textContent
       : building?.selectedOptions[0]?.value ? building.selectedOptions[0].textContent
-      : `Site level · ${gatewayOption.textContent}`;
+      : gatewayOption ? `Site level · ${gatewayOption.textContent}` : 'Site level';
     locationSummary.textContent = `Effective location: ${explicit}.`;
-  }
-
-
-  function rebuildEditFloors({ preserve = true } = {}) {
-    const desired = preserve ? (floor?.value || floor?.dataset.selectedValue || '') : '';
-    rebuildCatalog(
-      floor,
-      editFloorCatalog,
-      (option) => text(option.dataset.building) === text(building?.value),
-      'No floor',
-      desired,
-    );
-    rebuildEditSpaces({ preserve });
-  }
-
-  function rebuildEditSpaces({ preserve = true } = {}) {
-    const desired = preserve ? (space?.value || space?.dataset.selectedValue || '') : '';
-    rebuildCatalog(
-      space,
-      editSpaceCatalog,
-      (option) => text(option.dataset.floor) === text(floor?.value),
-      'No space',
-      desired,
-    );
   }
 
   function updateLocationMode() {
@@ -215,22 +132,16 @@
     if (manufacturer) manufacturer.value = model.selectedOptions[0]?.dataset.vendor || '';
   });
   gateway?.addEventListener('change', () => {
-    if (building) building.dataset.selectedValue = '';
-    if (floor) floor.dataset.selectedValue = '';
-    if (space) space.dataset.selectedValue = '';
-    rebuildBuildings({ preserve: false });
     updateGatewayContext();
     updateLocationMode();
   });
-  building?.addEventListener('change', () => gateway ? rebuildFloors({ preserve: false }) : rebuildEditFloors({ preserve: false }));
-  floor?.addEventListener('change', () => gateway ? rebuildSpaces({ preserve: false }) : rebuildEditSpaces({ preserve: false }));
+  building?.addEventListener('change', updateLocationSummary);
+  floor?.addEventListener('change', updateLocationSummary);
   space?.addEventListener('change', updateLocationSummary);
   inherit?.addEventListener('change', updateLocationMode);
 
   syncExternalId();
   filterCatalogs({ preserve: true });
-  if (gateway) rebuildBuildings({ preserve: true });
-  else rebuildEditFloors({ preserve: true });
   updateGatewayContext();
   updateLocationMode();
 })();

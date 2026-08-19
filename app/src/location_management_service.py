@@ -118,6 +118,49 @@ async def _set_site_capture_interval(
     )
 
 
+async def _set_site_demand_policy(
+    *,
+    cursor,
+    portal_user_id: int,
+    site_id: str,
+    is_enabled: bool,
+    demand_interval_seconds: int,
+    demand_basis: str,
+    site_demand_source_role: str,
+    minimum_coverage_percent: float,
+    late_arrival_tolerance_seconds: int,
+    change_reason: str,
+) -> None:
+    """Persist the effective site demand-monitoring policy."""
+
+    await cursor.execute(
+        """
+        SELECT admin.set_site_demand_policy(
+            %s::bigint,
+            %s::uuid,
+            %s::boolean,
+            %s::integer,
+            %s::text,
+            %s::text,
+            %s::numeric,
+            %s::integer,
+            %s::text
+        )
+        """,
+        (
+            portal_user_id,
+            site_id,
+            is_enabled,
+            demand_interval_seconds,
+            demand_basis,
+            site_demand_source_role,
+            minimum_coverage_percent,
+            late_arrival_tolerance_seconds,
+            change_reason,
+        ),
+    )
+
+
 async def get_site_workspace(
     *,
     portal_user_id: int,
@@ -144,12 +187,54 @@ async def get_site_workspace(
                 (portal_user_id, site_id),
             )
             interval_row = await cursor.fetchone()
+
+            await cursor.execute(
+                """
+                SELECT *
+                FROM admin.get_site_demand_policy(%s, %s::uuid)
+                """,
+                (portal_user_id, site_id),
+            )
+            demand_policy_row = await cursor.fetchone()
+
+            await cursor.execute(
+                """
+                SELECT *
+                FROM admin.get_site_demand_readiness(%s, %s::uuid)
+                """,
+                (portal_user_id, site_id),
+            )
+            demand_readiness_row = await cursor.fetchone()
+
         await connection.rollback()
 
     result["telemetry_capture_interval_seconds"] = (
         interval_row["interval_seconds"] if interval_row else 60
     )
+    result["demand_policy"] = (
+        dict(demand_policy_row) if demand_policy_row else None
+    )
+    result["demand_readiness"] = (
+        dict(demand_readiness_row) if demand_readiness_row else None
+    )
     return result
+
+
+async def set_site_sub_sector(
+    *,
+    cursor,
+    portal_user_id: int,
+    site_id: str,
+    sub_sector_id: str,
+) -> None:
+    await cursor.execute(
+        """
+        SELECT admin.set_site_sub_sector(
+            %s, %s::uuid, %s::uuid
+        )
+        """,
+        (portal_user_id, site_id, sub_sector_id),
+    )
 
 
 async def create_site_workspace(
@@ -160,9 +245,9 @@ async def create_site_workspace(
     code: str,
     timezone: str,
     lifecycle_status: str,
-    sector_code: str,
     address: dict[str, str],
     telemetry_capture_interval_seconds: int,
+    sub_sector_id: str | None = None,
 ) -> dict[str, Any]:
     """Create one site through the scope-aware site workspace contract."""
 
@@ -179,18 +264,13 @@ async def create_site_workspace(
                      lifecycle_status, __import__('json').dumps(address)),
                 )
                 row = await cursor.fetchone()
-                await cursor.execute(
-                    """
-                    SELECT admin.set_site_sector(
-                        %s, %s::uuid, %s
+                if sub_sector_id:
+                    await set_site_sub_sector(
+                        cursor=cursor,
+                        portal_user_id=portal_user_id,
+                        site_id=str(row["result"]["site_id"]),
+                        sub_sector_id=sub_sector_id,
                     )
-                    """,
-                    (
-                        portal_user_id,
-                        str(row["result"]["site_id"]),
-                        sector_code,
-                    ),
-                )
                 await _set_site_capture_interval(
                     cursor=cursor,
                     portal_user_id=portal_user_id,
@@ -215,6 +295,13 @@ async def update_site_workspace(
     address: dict[str, str],
     change_reason: str,
     telemetry_capture_interval_seconds: int,
+    demand_monitoring_enabled: bool,
+    demand_interval_seconds: int,
+    demand_basis: str,
+    site_demand_source_role: str,
+    demand_minimum_coverage_percent: float,
+    demand_late_arrival_tolerance_seconds: int,
+    sub_sector_id: str | None = None,
 ) -> dict[str, Any]:
     """Update one site without allowing organization or code reassignment."""
 
@@ -231,11 +318,32 @@ async def update_site_workspace(
                      __import__('json').dumps(address), change_reason),
                 )
                 row = await cursor.fetchone()
+                if sub_sector_id:
+                    await set_site_sub_sector(
+                        cursor=cursor,
+                        portal_user_id=portal_user_id,
+                        site_id=site_id,
+                        sub_sector_id=sub_sector_id,
+                    )
                 await _set_site_capture_interval(
                     cursor=cursor,
                     portal_user_id=portal_user_id,
                     site_id=site_id,
                     capture_interval_seconds=telemetry_capture_interval_seconds,
+                    change_reason=change_reason,
+                )
+                await _set_site_demand_policy(
+                    cursor=cursor,
+                    portal_user_id=portal_user_id,
+                    site_id=site_id,
+                    is_enabled=demand_monitoring_enabled,
+                    demand_interval_seconds=demand_interval_seconds,
+                    demand_basis=demand_basis,
+                    site_demand_source_role=site_demand_source_role,
+                    minimum_coverage_percent=demand_minimum_coverage_percent,
+                    late_arrival_tolerance_seconds=(
+                        demand_late_arrival_tolerance_seconds
+                    ),
                     change_reason=change_reason,
                 )
             await connection.commit()

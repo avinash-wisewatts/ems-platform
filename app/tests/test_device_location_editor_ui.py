@@ -13,9 +13,23 @@ def test_device_location_editor_uses_large_aligned_checkbox() -> None:
 
 
 def test_device_location_catalog_is_built_before_inheritance_is_applied() -> None:
-    rebuild_position = SCRIPT.index("else rebuildEditFloors({ preserve: true });")
-    mode_position = SCRIPT.index("updateLocationMode();", rebuild_position)
-    assert rebuild_position < mode_position
+    """The Building/Floor/Space catalog must be populated before the
+    "inherit from gateway" disabled state is applied, so the fields never
+    flash empty-then-disabled. Catalog population now happens in
+    location-picker.js, which the template loads before device-workspace.js
+    (see test_device_location_site_catalog.py); device-workspace.js's own
+    init runs updateLocationMode() as its last step, after that catalog is
+    already in place.
+    """
+
+    init_block = SCRIPT.split("syncExternalId();", 1)[1]
+    init_calls = [
+        line.strip()
+        for line in init_block.splitlines()
+        if line.strip().endswith("();")
+        and not line.strip().startswith("}")
+    ]
+    assert init_calls[-1] == "updateLocationMode();"
     assert "if (disabled) select.value = '';" not in SCRIPT
 
 

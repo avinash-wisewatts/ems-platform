@@ -59,6 +59,81 @@
             </div>
         </section>
 
+        {% set demand_policy = site.demand_policy or {} %}
+        {% set demand_readiness = site.demand_readiness or {} %}
+        <section class="surface-panel administration-detail-section">
+            <h3>Demand monitoring</h3>
+            <div class="table-scroll">
+                <table class="data-table administration-detail-table">
+                    <tbody>
+                        <tr>
+                            <th scope="row">Status</th>
+                            <td>
+                                {% set readiness = demand_readiness.get('readiness_status', 'NOT_CONFIGURED') %}
+                                <span class="status-pill{% if readiness == 'READY' %} is-positive{% elif readiness == 'SOURCE_NOT_CONFIGURED' %} is-warning{% endif %}">
+                                    {% if readiness == 'READY' %}
+                                        Ready
+                                    {% elif readiness == 'SOURCE_NOT_CONFIGURED' %}
+                                        Source meter not configured
+                                    {% elif readiness == 'DISABLED' %}
+                                        Disabled
+                                    {% else %}
+                                        Not configured
+                                    {% endif %}
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row">Monitoring</th>
+                            <td>{{ 'Enabled' if demand_policy.get('is_enabled') else 'Disabled' }}</td>
+                        </tr>
+                        <tr>
+                            <th scope="row">Demand interval</th>
+                            <td>
+                                {% if demand_policy.get('demand_interval_seconds') == 900 %}
+                                    15 minutes
+                                {% elif demand_policy.get('demand_interval_seconds') == 1800 %}
+                                    30 minutes
+                                {% else %}
+                                    —
+                                {% endif %}
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row">Demand basis</th>
+                            <td>
+                                {% if demand_policy.get('demand_basis') == 'ACTIVE_POWER_KW' %}
+                                    Active power (kW)
+                                {% elif demand_policy.get('demand_basis') == 'APPARENT_POWER_KVA' %}
+                                    Apparent power (kVA)
+                                {% else %}
+                                    —
+                                {% endif %}
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row">Demand source</th>
+                            <td>
+                                {% if demand_policy.get('site_demand_source_role') == 'GRID_IMPORT' %}
+                                    Utility / grid meter
+                                {% elif demand_policy.get('site_demand_source_role') == 'SITE_CONSUMPTION' %}
+                                    Total site consumption meter
+                                {% else %}
+                                    —
+                                {% endif %}
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            {% if demand_readiness.get('readiness_status') == 'SOURCE_NOT_CONFIGURED' %}
+            <p class="form-help">
+                Assign an authoritative demand-source meter to make demand monitoring ready.
+            </p>
+            {% endif %}
+        </section>
+
         <section class="surface-panel administration-detail-section">
             <h3>Address</h3>
             <div class="table-scroll">

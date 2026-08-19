@@ -1,6 +1,7 @@
+from tests.sql_contract_sources import canonical_sql
 from pathlib import Path
 
-SQL = Path("postgres/archive/prebaseline_20260807/migrations/126_audit_lifecycle_safety.sql").read_text()
+SQL = canonical_sql("99_audit_lifecycle_safety.sql")
 
 
 def test_shared_transition_contract_exists():

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[2]
-SQL=(ROOT/"postgres/archive/prebaseline_20260807/migrations/123_gateway_commissioning_action.sql").read_text()
+SQL=(ROOT/"postgres/ddl/96_gateway_commissioning_action.sql").read_text()
 
 def test_gateway_commissioning_requires_identity_model_and_online_connectivity():
     assert "GATEWAY_IDENTITY_MISSING" in SQL

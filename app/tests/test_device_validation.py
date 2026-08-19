@@ -15,8 +15,7 @@ def valid_create_device_input() -> dict[str, str]:
         "device_name": "Chiller Meter 1",
         "device_external_id": "eni demo 001",
         "device_category_id": str(uuid4()),
-        "device_vendor": "Best Energy",
-        "device_model": "Eniscope 8",
+        "device_model_id": str(uuid4()),
         "device_protocol": "mqtt",
         "profile_code": "eniscope_v4",
         "firmware_version": "4.2.1",
@@ -116,6 +115,28 @@ def test_invalid_mqtt_uid_is_rejected(
         validate_device_step(**values)
 
 
+def test_device_model_id_is_required() -> None:
+    values = valid_create_device_input()
+    values["device_model_id"] = ""
+
+    with pytest.raises(
+        DeviceStepValidationError,
+        match="Select a device model from the catalog",
+    ):
+        validate_device_step(**values)
+
+
+def test_device_model_id_must_be_a_valid_uuid() -> None:
+    values = valid_create_device_input()
+    values["device_model_id"] = "not-a-uuid"
+
+    with pytest.raises(
+        DeviceStepValidationError,
+        match="Select a device model from the catalog",
+    ):
+        validate_device_step(**values)
+
+
 def test_existing_device_requires_existing_gateway() -> None:
     values = valid_create_device_input()
     values.update(
@@ -155,11 +176,12 @@ def test_existing_device_ignores_client_identifier_fields() -> None:
         "name": None,
         "external_id": None,
         "device_category_id": None,
-        "model_vendor": None,
-        "model": None,
+        "device_model_id": None,
         "protocol": None,
         "profile_code": None,
         "firmware_version": None,
+        "serial_number": None,
+        "operational_policy": None,
         "identifier": {
             "type": None,
             "value": None,

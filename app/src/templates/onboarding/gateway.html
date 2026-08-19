@@ -218,44 +218,6 @@
             </label>
 
             <label>
-                Gateway manufacturer
-
-                <span class="field-info">
-                    <span
-                        class="field-info-trigger"
-                        tabindex="0"
-                        aria-label="More information about this field"
-                        aria-describedby="gateway_vendor_help"
-                    >i</span>
-                    <span
-                        id="gateway_vendor_help"
-                        class="field-info-content"
-                        role="tooltip"
-                    >
-                        Select a known manufacturer or enter a new one.
-                    </span>
-                </span>
-
-                <input
-                    id="gateway_vendor"
-                    name="gateway_vendor"
-                    type="text"
-                    maxlength="200"
-                    list="gateway_vendor_catalog"
-                    placeholder="ENISCOPE"
-                    value="{{ form_data.get('gateway_vendor', '') }}"
-                >
-
-                <datalist id="gateway_vendor_catalog">
-                    {% for model in gateway_models %}
-                    {% if model.vendor %}
-                    <option value="{{ model.vendor }}"></option>
-                    {% endif %}
-                    {% endfor %}
-                </datalist>
-            </label>
-
-            <label>
                 Gateway model
 
                 <span class="field-info">
@@ -263,92 +225,42 @@
                         class="field-info-trigger"
                         tabindex="0"
                         aria-label="More information about this field"
-                        aria-describedby="gateway_model_help"
+                        aria-describedby="gateway_model_id_help"
                     >i</span>
                     <span
-                        id="gateway_model_help"
+                        id="gateway_model_id_help"
                         class="field-info-content"
                         role="tooltip"
                     >
-                        Existing model suggestions are shown from the catalog.
-                    </span>
-                </span>
-
-                <input
-                    id="gateway_model"
-                    name="gateway_model"
-                    type="text"
-                    maxlength="200"
-                    list="gateway_model_catalog"
-                    placeholder="Eniscope Gateway"
-                    value="{{ form_data.get('gateway_model', '') }}"
-                >
-
-                <datalist id="gateway_model_catalog">
-                    {% for model in gateway_models %}
-                    <option
-                        value="{{ model.model }}"
-                        data-vendor="{{ model.vendor or '' }}"
-                        data-protocol="{{ model.protocol or '' }}"
-                    ></option>
-                    {% endfor %}
-                </datalist>
-            </label>
-
-            <label class="full-width">
-                Cloud uplink protocol
-
-                <span class="field-info">
-                    <span
-                        class="field-info-trigger"
-                        tabindex="0"
-                        aria-label="More information about this field"
-                        aria-describedby="gateway_protocol_help"
-                    >i</span>
-                    <span
-                        id="gateway_protocol_help"
-                        class="field-info-content"
-                        role="tooltip"
-                    >
-                        Protocol used by the gateway to deliver telemetry to the cloud EMS platform.
+                        Manufacturer, model, and cloud uplink protocol are
+                        all determined by the selected catalog model.
                     </span>
                 </span>
 
                 <select
-                    id="gateway_protocol"
-                    name="gateway_protocol"
+                    id="gateway_model_id"
+                    name="gateway_model_id"
                 >
-                    {% set selected_protocol = form_data.get(
-                        'gateway_protocol',
-                        'MQTT'
-                    ) %}
+                    <option value="">
+                        Select a gateway model
+                    </option>
 
+                    {% for model in gateway_models %}
                     <option
-                        value="MQTT"
-                        {% if selected_protocol == 'MQTT' %}
+                        value="{{ model.id }}"
+                        {% if form_data.get(
+                            'gateway_model_id'
+                        ) == model.id|string %}
                         selected
                         {% endif %}
                     >
-                        MQTT over TLS
-                    </option>
-
-                    <option
-                        value="HTTP API"
-                        {% if selected_protocol == 'HTTP API' %}
-                        selected
+                        {{ model.vendor or 'Generic' }}
+                        — {{ model.model }}
+                        {% if model.protocol %}
+                        ({{ model.protocol }})
                         {% endif %}
-                    >
-                        HTTPS API
                     </option>
-
-                    <option
-                        value="OPC-UA"
-                        {% if selected_protocol == 'OPC-UA' %}
-                        selected
-                        {% endif %}
-                    >
-                        OPC-UA
-                    </option>
+                    {% endfor %}
                 </select>
             </label>
         </div>

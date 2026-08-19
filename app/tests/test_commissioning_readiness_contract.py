@@ -1,6 +1,7 @@
+from tests.sql_contract_sources import canonical_sql
 from pathlib import Path
 
-SQL = Path('postgres/archive/prebaseline_20260807/migrations/122_commissioning_readiness_asset_action.sql').read_text()
+SQL = canonical_sql("95_commissioning_readiness_asset_action.sql")
 
 
 def test_unified_readiness_view_and_scope_function_exist():

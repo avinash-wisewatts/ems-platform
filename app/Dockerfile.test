@@ -18,5 +18,8 @@ COPY app/src /workspace/app/src
 COPY app/tests /workspace/app/tests
 COPY postgres/ddl /workspace/postgres/ddl
 COPY postgres/migrations /workspace/postgres/migrations
+COPY postgres/restructure_manifest.csv /workspace/postgres/restructure_manifest.csv
+COPY scripts/test /workspace/scripts/test
+COPY grafana/dashboards/core /workspace/grafana/dashboards/core
 
 CMD ["pytest", "-q", "-p", "no:cacheprovider", "app/tests"]

@@ -54,8 +54,13 @@ document.addEventListener("DOMContentLoaded", () => {
         "device_category_id"
     );
 
-    const vendor = document.getElementById("device_vendor");
-    const model = document.getElementById("device_model");
+    const model = document.getElementById("device_model_id");
+    const manufacturer = document.querySelector(
+        "[data-device-manufacturer]"
+    );
+    const modelEmptyHelp = document.querySelector(
+        "[data-model-empty]"
+    );
     const protocol = document.getElementById(
         "device_protocol"
     );
@@ -77,6 +82,57 @@ document.addEventListener("DOMContentLoaded", () => {
             .forEach((field) => {
                 field.disabled = !enabled;
             });
+    };
+
+    const updateManufacturer = () => {
+        if (!manufacturer) {
+            return;
+        }
+
+        const selectedOption =
+            model.options[model.selectedIndex];
+
+        manufacturer.value =
+            (selectedOption && selectedOption.dataset.vendor) || "";
+    };
+
+    const filterModels = () => {
+        const selectedCategory = category.value;
+        const options = Array.from(model.options);
+
+        options.forEach((option, index) => {
+            if (index === 0) {
+                option.hidden = false;
+                option.disabled = false;
+                return;
+            }
+
+            const compatible = (
+                selectedCategory
+                && option.dataset.category === selectedCategory
+            );
+
+            option.hidden = !compatible;
+            option.disabled = !compatible;
+        });
+
+        const selectedOption =
+            model.options[model.selectedIndex];
+
+        if (selectedOption && selectedOption.disabled) {
+            model.value = "";
+        }
+
+        if (modelEmptyHelp) {
+            const hasCompatibleModel = options.some(
+                (option, index) => index > 0 && !option.disabled
+            );
+
+            modelEmptyHelp.hidden =
+                !selectedCategory || hasCompatibleModel;
+        }
+
+        updateManufacturer();
     };
 
     const filterProfiles = () => {
@@ -138,7 +194,6 @@ document.addEventListener("DOMContentLoaded", () => {
         [
             deviceName,
             category,
-            vendor,
             model,
             protocol,
             profile,
@@ -148,38 +203,12 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     };
 
-    category.addEventListener("change", filterProfiles);
-
-    model.addEventListener("change", () => {
-        const options = Array.from(
-            document.querySelectorAll(
-                "#device_model_catalog option"
-            )
-        );
-
-        const selected = options.find(
-            (option) =>
-                option.value.toLowerCase()
-                === model.value.trim().toLowerCase()
-        );
-
-        if (!selected) {
-            return;
-        }
-
-        if (
-            !vendor.value.trim()
-            && selected.dataset.vendor
-        ) {
-            vendor.value = selected.dataset.vendor;
-        }
-
-        if (selected.dataset.categoryId) {
-            category.value =
-                selected.dataset.categoryId;
-            filterProfiles();
-        }
+    category.addEventListener("change", () => {
+        filterProfiles();
+        filterModels();
     });
+
+    model.addEventListener("change", updateManufacturer);
 
     modeInputs.forEach((input) => {
         input.addEventListener("change", updateMode);
@@ -202,6 +231,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     filterProfiles();
+    filterModels();
     updateExistingIdentity();
     updateMode();
 });

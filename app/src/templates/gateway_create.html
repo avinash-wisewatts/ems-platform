@@ -13,10 +13,11 @@
 <label><span>Gateway model</span><select name="gateway_model_id" required><option value="">Select model</option>{% for model in gateway_models %}<option value="{{ model.id }}"{% if form_data.get('gateway_model_id')|string == model.id|string %} selected{% endif %}>{{ model.vendor or 'Generic' }} — {{ model.model }}{% if model.protocol %} ({{ model.protocol }}){% endif %}</option>{% endfor %}</select></label>
 <label><span>Lifecycle status</span><select name="lifecycle_status">{% for status in gateway_lifecycle_statuses %}<option value="{{ status }}"{% if form_data.get('lifecycle_status','REGISTERED') == status %} selected{% endif %}>{{ status|title }}</option>{% endfor %}</select></label>
 </div></section>
-<section class="form-section"><div class="form-section-heading"><h3>Physical location</h3><p>Optional. Choose the most specific known installation location.</p></div><div class="form-grid">
-<label><span>Building</span><select name="gateway_location_building_id" data-building><option value="">Site level</option></select></label>
-<label><span>Floor</span><select name="gateway_location_floor_id" data-floor><option value="">No floor</option></select></label>
-<label><span>Space</span><select name="gateway_location_space_id" data-space><option value="">No space</option></select></label>
+<section class="form-section" data-physical-location-selector data-label-style="breadcrumb"><div class="form-section-heading"><h3>Physical location</h3><p>Optional. Choose the most specific known installation location.</p></div><div class="form-grid">
+<label><span>Building</span><select name="gateway_location_building_id" data-location-level="building" data-selected-value="{{ form_data.get('building_id','') }}"><option value="">Site level</option></select></label>
+<label><span>Floor</span><select name="gateway_location_floor_id" data-location-level="floor" data-selected-value="{{ form_data.get('floor_id','') }}"><option value="">No floor</option></select></label>
+<label><span>Space</span><select name="gateway_location_space_id" data-location-level="space" data-selected-value="{{ form_data.get('space_id','') }}"><option value="">No space</option></select></label>
+<script type="application/json" data-location-options>{{ hierarchy_rows|tojson }}</script>
 </div></section>
 <div class="form-actions sticky-actions"><a class="button button-secondary" href="/administration/gateways">Cancel</a><button class="button button-primary" type="submit">Create gateway</button></div></form></section>{% endblock %}
-{% block scripts %}<script>window.gatewayHierarchy={{ hierarchy_rows|tojson }};window.gatewaySelected={{ {'building_id':form_data.get('building_id',''),'floor_id':form_data.get('floor_id',''),'space_id':form_data.get('space_id','')}|tojson }};</script><script src="/static/js/gateway-hierarchy.js"></script>{% endblock %}
+{% block scripts %}<script src="/static/js/location-picker.js" defer></script>{% endblock %}

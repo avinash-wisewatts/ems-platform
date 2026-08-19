@@ -27,6 +27,20 @@ def test_create_organization_normalizes_values() -> None:
         "name": "WiseWatts Demo",
         "code": "WISE_WATTS_01",
         "description": "Demo organization",
+        "timezone": "Asia/Kolkata",
+        "lifecycle_status": "ACTIVE",
+        "legal_name": "",
+        "locale": "en-US",
+        "primary_contact": {"name": "", "email": "", "phone": ""},
+        "address": {
+            "line1": "",
+            "line2": "",
+            "city": "",
+            "region": "",
+            "postal_code": "",
+            "country": "",
+        },
+        "notes": "",
     }
 
 
@@ -84,6 +98,13 @@ def test_existing_organization_returns_only_identity() -> None:
         "name": None,
         "code": None,
         "description": None,
+        "timezone": None,
+        "lifecycle_status": None,
+        "legal_name": None,
+        "locale": None,
+        "primary_contact": None,
+        "address": None,
+        "notes": None,
     }
 
 
@@ -102,6 +123,8 @@ def test_invalid_existing_organization_id_is_rejected() -> None:
 
 
 def test_create_site_normalizes_values() -> None:
+    sub_sector_id = str(uuid4())
+
     payload = validate_site_step(
         site_mode="create_new",
         existing_site_id="",
@@ -110,6 +133,7 @@ def test_create_site_normalizes_values() -> None:
         site_timezone=" Asia/Kolkata ",
         site_address="  Hyderabad, Telangana  ",
         organization_mode="CREATE_NEW",
+        sub_sector_id=f" {sub_sector_id} ",
     )
 
     assert payload == {
@@ -118,11 +142,11 @@ def test_create_site_normalizes_values() -> None:
         "name": "Hyderabad Hotel",
         "code": "HYD_HOTEL",
         "timezone": "Asia/Kolkata",
-        "sector_code": "OTHER",
         "telemetry_capture_interval_seconds": 60,
         "address": {
             "full_address": "Hyderabad, Telangana",
         },
+        "sub_sector_id": sub_sector_id,
     }
 
 
@@ -135,9 +159,27 @@ def test_blank_site_address_becomes_empty_object() -> None:
         site_timezone="Asia/Kolkata",
         site_address="   ",
         organization_mode="CREATE_NEW",
+        sub_sector_id=str(uuid4()),
     )
 
     assert payload["address"] == {}
+
+
+def test_create_new_site_requires_sub_sector() -> None:
+    with pytest.raises(
+        SiteStepValidationError,
+        match="Select a sub-sector.",
+    ):
+        validate_site_step(
+            site_mode="CREATE_NEW",
+            existing_site_id="",
+            site_name="Hyderabad Hotel",
+            site_code="HYD_HOTEL",
+            site_timezone="Asia/Kolkata",
+            site_address="",
+            organization_mode="CREATE_NEW",
+            sub_sector_id="",
+        )
 
 
 def test_new_organization_cannot_use_existing_site() -> None:
@@ -175,9 +217,9 @@ def test_existing_organization_can_use_existing_site() -> None:
         "name": None,
         "code": None,
         "timezone": None,
-        "sector_code": None,
         "address": None,
         "telemetry_capture_interval_seconds": 60,
+        "sub_sector_id": None,
     }
 
 

@@ -327,7 +327,7 @@ def install_asset_catalogs(
     device_rows: list[dict] | None = None,
     asset_rows: list[dict] | None = None,
 ) -> None:
-    async def fake_list_asset_types() -> list[dict]:
+    async def fake_list_asset_types(site_id: str | None = None) -> list[dict]:
         return (
             asset_types()
             if asset_type_rows is None
@@ -660,6 +660,8 @@ def test_asset_post_create_new_saves_and_redirects(
                     "270 TR water-cooled chiller"
                 )
             },
+            "lifecycle_status": "ACTIVE",
+            "parent_asset_id": None,
         },
         "next_step": "review",
     }
@@ -732,6 +734,8 @@ def test_asset_post_use_existing_saves_identity_and_relationship(
         "metering_requirement": None,
         "relationship_type": "SECONDARY_METER",
         "metadata": {},
+        "lifecycle_status": None,
+        "parent_asset_id": None,
     }
 
 

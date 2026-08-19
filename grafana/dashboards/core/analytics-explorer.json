@@ -8,112 +8,144 @@
   ],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 18,
   "editable": false,
   "time": {
     "from": "now-24h",
     "to": "now"
   },
-  "refresh": "1m",
+  "refresh": "",
   "templating": {
     "list": [
       {
-        "name": "site_id",
+        "name": "Site",
         "label": "Site",
         "type": "query",
         "datasource": {
           "type": "grafana-postgresql-datasource",
           "uid": "ems-timescaledb"
         },
-        "query": "SELECT site_name AS __text, site_id AS __value FROM analytics.v_grafana_sites WHERE grafana_org_id = ${__org.id} ORDER BY site_name",
-        "definition": "SELECT site_name AS __text, site_id AS __value FROM analytics.v_grafana_sites WHERE grafana_org_id = ${__org.id} ORDER BY site_name",
+        "query": "SELECT __text, __value FROM (\n    SELECT 0 AS sort_order, '\u2014 All sites \u2014' AS __text, '' AS __value\n    UNION ALL\n    SELECT 1, site_name, site_id::text\n    FROM analytics.v_grafana_sites\n    WHERE grafana_org_id = ${__org.id}\n) ranked\nORDER BY sort_order, __text",
+        "definition": "SELECT __text, __value FROM (\n    SELECT 0 AS sort_order, '\u2014 All sites \u2014' AS __text, '' AS __value\n    UNION ALL\n    SELECT 1, site_name, site_id::text\n    FROM analytics.v_grafana_sites\n    WHERE grafana_org_id = ${__org.id}\n) ranked\nORDER BY sort_order, __text",
+        "description": "Optional drill-down narrowing filter for the Asset dropdown below. Not passed to analytics.get_grafana_explorer_intervals, which takes only asset_id/logical_point.",
         "refresh": 1,
         "multi": false,
         "includeAll": false,
         "hide": 0,
         "sort": 1,
-        "current": {}
+        "current": {
+          "selected": true,
+          "text": "\u2014 All sites \u2014",
+          "value": ""
+        },
+        "options": []
       },
       {
-        "name": "asset_ids",
-        "label": "Assets",
+        "name": "Location",
+        "label": "Location",
         "type": "query",
         "datasource": {
           "type": "grafana-postgresql-datasource",
           "uid": "ems-timescaledb"
         },
-        "query": "SELECT hierarchy_path AS __text, asset_id AS __value FROM analytics.v_grafana_assets WHERE grafana_org_id = ${__org.id} AND site_id::text = '$site_id' ORDER BY hierarchy_path",
-        "definition": "SELECT hierarchy_path AS __text, asset_id AS __value FROM analytics.v_grafana_assets WHERE grafana_org_id = ${__org.id} AND site_id::text = '$site_id' ORDER BY hierarchy_path",
-        "refresh": 2,
-        "multi": true,
-        "includeAll": true,
+        "query": "SELECT __text, __value FROM (\n    SELECT 0 AS sort_order, '\u2014 All locations \u2014' AS __text, '' AS __value\n    UNION ALL\n    SELECT DISTINCT 1, location_path, location_key\n    FROM analytics.v_grafana_asset_selector\n    WHERE grafana_org_id = ${__org.id}\n      AND ('${Site:raw}' = '' OR site_id::text = '${Site:raw}')\n) ranked\nORDER BY sort_order, __text",
+        "definition": "SELECT __text, __value FROM (\n    SELECT 0 AS sort_order, '\u2014 All locations \u2014' AS __text, '' AS __value\n    UNION ALL\n    SELECT DISTINCT 1, location_path, location_key\n    FROM analytics.v_grafana_asset_selector\n    WHERE grafana_org_id = ${__org.id}\n      AND ('${Site:raw}' = '' OR site_id::text = '${Site:raw}')\n) ranked\nORDER BY sort_order, __text",
+        "description": "Optional drill-down narrowing filter for the Asset dropdown below, cascaded from Site.",
+        "refresh": 1,
+        "multi": false,
+        "includeAll": false,
         "hide": 0,
         "sort": 1,
         "current": {
           "selected": true,
-          "text": "All",
-          "value": "$__all"
+          "text": "\u2014 All locations \u2014",
+          "value": ""
         },
-        "allValue": "__all"
+        "options": []
       },
       {
-        "name": "logical_point_id",
-        "label": "Data point",
+        "name": "AssetType",
+        "label": "Asset Type",
         "type": "query",
         "datasource": {
           "type": "grafana-postgresql-datasource",
           "uid": "ems-timescaledb"
         },
-        "query": "SELECT logical_point||COALESCE(' ['||unit_symbol||']','') AS __text, logical_point_id AS __value FROM analytics.v_grafana_point_catalog WHERE grafana_org_id = ${__org.id} AND site_id::text = '$site_id' GROUP BY logical_point,unit_symbol,logical_point_id ORDER BY logical_point",
-        "definition": "SELECT logical_point||COALESCE(' ['||unit_symbol||']','') AS __text, logical_point_id AS __value FROM analytics.v_grafana_point_catalog WHERE grafana_org_id = ${__org.id} AND site_id::text = '$site_id' GROUP BY logical_point,unit_symbol,logical_point_id ORDER BY logical_point",
-        "refresh": 2,
-        "multi": true,
-        "includeAll": true,
+        "query": "SELECT __text, __value FROM (\n    SELECT 0 AS sort_order, '\u2014 All asset types \u2014' AS __text, '' AS __value\n    UNION ALL\n    SELECT DISTINCT 1, asset_type, asset_type_id::text\n    FROM analytics.v_grafana_asset_selector\n    WHERE grafana_org_id = ${__org.id}\n      AND ('${Site:raw}' = '' OR site_id::text = '${Site:raw}')\n      AND ('${Location:raw}' = '' OR location_key = '${Location:raw}')\n      AND asset_type_id IS NOT NULL\n) ranked\nORDER BY sort_order, __text",
+        "definition": "SELECT __text, __value FROM (\n    SELECT 0 AS sort_order, '\u2014 All asset types \u2014' AS __text, '' AS __value\n    UNION ALL\n    SELECT DISTINCT 1, asset_type, asset_type_id::text\n    FROM analytics.v_grafana_asset_selector\n    WHERE grafana_org_id = ${__org.id}\n      AND ('${Site:raw}' = '' OR site_id::text = '${Site:raw}')\n      AND ('${Location:raw}' = '' OR location_key = '${Location:raw}')\n      AND asset_type_id IS NOT NULL\n) ranked\nORDER BY sort_order, __text",
+        "description": "Optional drill-down narrowing filter for the Asset dropdown below, cascaded from Site and Location.",
+        "refresh": 1,
+        "multi": false,
+        "includeAll": false,
         "hide": 0,
         "sort": 1,
         "current": {
           "selected": true,
-          "text": "All",
-          "value": "$__all"
+          "text": "\u2014 All asset types \u2014",
+          "value": ""
         },
-        "allValue": "__all"
+        "options": []
+      },
+      {
+        "name": "Asset",
+        "label": "Asset",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "ems-timescaledb"
+        },
+        "query": "SELECT __text, __value FROM (\n    SELECT 0 AS sort_order, '\u2014 Select assets \u2014' AS __text, '' AS __value\n    UNION ALL\n    SELECT 1, hierarchy_path, asset_id::text\n    FROM analytics.v_grafana_asset_selector\n    WHERE grafana_org_id = ${__org.id}\n      AND ('${Site:raw}' = '' OR site_id::text = '${Site:raw}')\n      AND ('${Location:raw}' = '' OR location_key = '${Location:raw}')\n      AND ('${AssetType:raw}' = '' OR asset_type_id::text = '${AssetType:raw}')\n) ranked\nORDER BY sort_order, __text",
+        "definition": "SELECT __text, __value FROM (\n    SELECT 0 AS sort_order, '\u2014 Select assets \u2014' AS __text, '' AS __value\n    UNION ALL\n    SELECT 1, hierarchy_path, asset_id::text\n    FROM analytics.v_grafana_asset_selector\n    WHERE grafana_org_id = ${__org.id}\n      AND ('${Site:raw}' = '' OR site_id::text = '${Site:raw}')\n      AND ('${Location:raw}' = '' OR location_key = '${Location:raw}')\n      AND ('${AssetType:raw}' = '' OR asset_type_id::text = '${AssetType:raw}')\n) ranked\nORDER BY sort_order, __text",
+        "description": "Feeds analytics.get_grafana_explorer_intervals directly (max 5 -- the function raises if exceeded). Filtered by the optional Site/Location/Asset Type selectors above.",
+        "refresh": 1,
+        "multi": true,
+        "includeAll": false,
+        "hide": 0,
+        "sort": 1,
+        "current": {
+          "selected": false,
+          "text": [],
+          "value": []
+        },
+        "options": []
+      },
+      {
+        "name": "Metric",
+        "label": "Metric",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "ems-timescaledb"
+        },
+        "query": "SELECT __text, __value FROM (\n    SELECT DISTINCT logical_point AS __text, logical_point AS __value\n    FROM analytics.v_grafana_asset_point_selector\n    WHERE grafana_org_id = ${__org.id}\n) ranked\nORDER BY __text",
+        "definition": "SELECT __text, __value FROM (\n    SELECT DISTINCT logical_point AS __text, logical_point AS __value\n    FROM analytics.v_grafana_asset_point_selector\n    WHERE grafana_org_id = ${__org.id}\n) ranked\nORDER BY __text",
+        "description": "Logical point names (max 5 -- the function raises if exceeded), passed as text[] to analytics.get_grafana_explorer_intervals.",
+        "refresh": 1,
+        "multi": true,
+        "includeAll": false,
+        "hide": 0,
+        "sort": 1,
+        "current": {
+          "selected": false,
+          "text": [],
+          "value": []
+        },
+        "options": []
       }
     ]
   },
-  "links": [
-    {
-      "title": "EMS navigation",
-      "type": "link",
-      "url": "/d/ems-org-overview",
-      "includeVars": true,
-      "keepTime": true
-    }
-  ],
+  "links": [],
   "panels": [
     {
-      "id": 1,
-      "type": "text",
-      "title": "EMS Navigation",
+      "id": 5,
+      "title": "Analytics Explorer (max 5 assets X 5 metrics)",
+      "description": "Routed through analytics.get_grafana_explorer_intervals: native samples for <=24h ranges, 15-minute rollups for <=14d, hourly rollups beyond that. Hard-capped at 5 assets and 5 metrics -- the Asset/Metric arrays are CASE-guarded below so a >5 selection returns zero rows instead of reaching the database's own hard exception. There is no separate status banner: exceeding the limit currently renders as a silently empty chart with no on-screen explanation.",
+      "type": "timeseries",
       "gridPos": {
         "x": 0,
         "y": 0,
         "w": 24,
-        "h": 2
-      },
-      "options": {
-        "mode": "markdown",
-        "content": "[Organization](/d/ems-org-overview) | [Site](/d/ems-site-overview) | [Area](/d/ems-area-overview) | [Asset](/d/ems-asset-overview) | [Devices](/d/ems-device-diagnostics) | [Analytics](/d/ems-analytics-explorer) | [Alarms](/d/ems-alarms)"
-      }
-    },
-    {
-      "id": 2,
-      "title": "Selected-point trends",
-      "type": "timeseries",
-      "gridPos": {
-        "x": 0,
-        "y": 2,
-        "w": 24,
-        "h": 11
+        "h": 20
       },
       "datasource": {
         "type": "grafana-postgresql-datasource",
@@ -128,11 +160,24 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT event_time AS time,COALESCE(asset_name,device_name)||' · '||logical_point AS metric,numeric_value FROM analytics.v_grafana_normalized_points np LEFT JOIN analytics.v_grafana_assets a ON a.grafana_org_id=np.grafana_org_id AND a.asset_id=np.asset_id LEFT JOIN analytics.v_grafana_devices d ON d.grafana_org_id=np.grafana_org_id AND d.device_id=np.device_id WHERE np.grafana_org_id = ${__org.id} AND np.site_id::text = '$site_id' AND ('${asset_ids:raw}' = '__all' OR np.asset_id::text IN (${asset_ids:sqlstring})) AND ('${logical_point_id:raw}' = '__all' OR np.logical_point_id::text IN (${logical_point_id:sqlstring})) AND $__timeFilter(event_time) ORDER BY event_time",
+          "rawSql": "WITH selection AS (\n    SELECT\n        CASE\n            WHEN array_length(NULLIF(ARRAY[${Asset:singlequote}]::uuid[], ARRAY[NULL::uuid]), 1) <= 5\n            THEN ARRAY[${Asset:singlequote}]::uuid[]\n            ELSE ARRAY[]::uuid[]\n        END AS asset_ids,\n        CASE\n            WHEN array_length(NULLIF(ARRAY[${Metric:singlequote}]::text[], ARRAY[NULL::text]), 1) <= 5\n            THEN ARRAY[${Metric:singlequote}]::text[]\n            ELSE ARRAY[]::text[]\n        END AS logical_points\n),\n\nraw_data AS (\n    SELECT\n        x.interval_start,\n        COALESCE(sel_a.asset_name, x.asset_id::text) AS asset_name,\n        COALESCE(sel_p.logical_point, x.logical_point_id::text) AS logical_point_name,\n        x.avg_value,\n        x.max_value\n\n    FROM selection\n\n    CROSS JOIN LATERAL analytics.get_grafana_explorer_intervals(\n        ${__org.id}::bigint,\n        selection.asset_ids,\n        selection.logical_points,\n        $__timeFrom()::timestamptz,\n        $__timeTo()::timestamptz\n    ) AS x\n\n    LEFT JOIN LATERAL (\n        SELECT asset_name\n        FROM analytics.v_grafana_asset_selector\n        WHERE asset_id = x.asset_id\n          AND grafana_org_id = ${__org.id}\n        LIMIT 1\n    ) AS sel_a ON TRUE\n\n    LEFT JOIN LATERAL (\n        SELECT logical_point\n        FROM analytics.v_grafana_asset_point_selector\n        WHERE logical_point_id = x.logical_point_id\n          AND grafana_org_id = ${__org.id}\n        LIMIT 1\n    ) AS sel_p ON TRUE\n)\n\nSELECT\n    interval_start AS time,\n\n    CASE\n        WHEN logical_point_name ILIKE '%ENERGY%' THEN\n            GREATEST(\n                0,\n                max_value - LAG(max_value) OVER (\n                    PARTITION BY asset_name, logical_point_name\n                    ORDER BY interval_start\n                )\n            )\n        ELSE avg_value\n    END AS value,\n\n    asset_name || ' - ' || logical_point_name AS metric\n\nFROM raw_data\n\nORDER BY interval_start",
           "refId": "A"
         }
       ],
-      "description": "",
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "max",
+            "mean"
+          ]
+        }
+      },
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -143,73 +188,230 @@
             "showPoints": "auto"
           }
         },
-        "overrides": []
-      }
-    },
-    {
-      "id": 3,
-      "title": "Selection summary",
-      "type": "table",
-      "gridPos": {
-        "x": 0,
-        "y": 13,
-        "w": 12,
-        "h": 9
-      },
-      "datasource": {
-        "type": "grafana-postgresql-datasource",
-        "uid": "ems-timescaledb"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "grafana-postgresql-datasource",
-            "uid": "ems-timescaledb"
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*(ENERGY_IMPORT|ENERGY_EXPORT|APPARENT_ENERGY|REACTIVE_ENERGY|ENERGY_REACTIVE_EXPORT)_.*"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "watth"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "Energy"
+              },
+              {
+                "id": "custom.drawStyle",
+                "value": "bars"
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 80
+              },
+              {
+                "id": "custom.stacking",
+                "value": {
+                  "mode": "none",
+                  "group": "A"
+                }
+              }
+            ]
           },
-          "editorMode": "code",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "SELECT logical_point,unit_symbol,count(*) AS samples,min(numeric_value) AS minimum,avg(numeric_value) AS average,max(numeric_value) AS maximum,min(event_time) AS first_sample,max(event_time) AS last_sample FROM analytics.v_grafana_normalized_points WHERE grafana_org_id = ${__org.id} AND site_id::text = '$site_id' AND ('${asset_ids:raw}' = '__all' OR asset_id::text IN (${asset_ids:sqlstring})) AND ('${logical_point_id:raw}' = '__all' OR logical_point_id::text IN (${logical_point_id:sqlstring})) AND $__timeFilter(event_time) GROUP BY logical_point,unit_symbol ORDER BY logical_point",
-          "refId": "A"
-        }
-      ],
-      "description": "",
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm"
-      }
-    },
-    {
-      "id": 4,
-      "title": "Point catalogue",
-      "type": "table",
-      "gridPos": {
-        "x": 12,
-        "y": 13,
-        "w": 12,
-        "h": 9
-      },
-      "datasource": {
-        "type": "grafana-postgresql-datasource",
-        "uid": "ems-timescaledb"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "grafana-postgresql-datasource",
-            "uid": "ems-timescaledb"
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*POWER.*"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "watt"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "Power"
+              }
+            ]
           },
-          "editorMode": "code",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "SELECT logical_point,unit_symbol,data_type,recommended_aggregation,count(DISTINCT asset_id) AS assets,count(DISTINCT device_id) AS devices FROM analytics.v_grafana_point_catalog WHERE grafana_org_id = ${__org.id} AND site_id::text = '$site_id' GROUP BY logical_point,unit_symbol,data_type,recommended_aggregation ORDER BY logical_point",
-          "refId": "A"
-        }
-      ],
-      "description": "",
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm"
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*(ACTIVE_POWER|APPARENT_POWER|REACTIVE_POWER)_.*"
+            },
+            "properties": [
+              {
+                "id": "custom.drawStyle",
+                "value": "bars"
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 80
+              },
+              {
+                "id": "custom.stacking",
+                "value": {
+                  "mode": "none",
+                  "group": "A"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*VOLTAGE.*"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "volt"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "Voltage"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*CURRENT.*"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "amp"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "Current"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*FREQUENCY.*"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "hertz"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "Frequency"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*POWER_FACTOR.*"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "Power factor"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*TEMPERATURE.*"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "celsius"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "Temperature"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*HUMIDITY.*"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "Humidity"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*ILLUMINANCE.*"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "Illuminance"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*THD.*"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "THD"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*PHASE_ANGLE.*"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "degree"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "Phase angle"
+              }
+            ]
+          }
+        ]
       }
     }
   ]

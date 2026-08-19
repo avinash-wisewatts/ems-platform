@@ -1,5 +1,6 @@
+from tests.sql_contract_sources import canonical_sql
 from pathlib import Path
-SQL=(Path(__file__).parents[2]/"postgres/archive/prebaseline_20260807/migrations/119_asset_device_relationship_management.sql").read_text()
+SQL=canonical_sql("92_asset_device_relationship_management.sql")
 
 def test_database_controls_relationship_types_and_compatibility():
     assert "asset_device_relationship_types" in SQL

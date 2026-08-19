@@ -6,7 +6,6 @@ from psycopg.errors import UniqueViolation
 from src.auth.models import AuthenticatedPortalUser
 from src.auth.security import AuthenticationStatus
 from src.auth.service import AuthenticationResult
-from src.context.models import AdministrationContext
 
 
 ORGANIZATION_ID = UUID(
@@ -156,7 +155,7 @@ def mock_asset_page_reads(
         assert portal_user_id == 500
         return asset_rows()
 
-    async def fake_list_asset_types() -> list[dict]:
+    async def fake_list_asset_types(site_id: str | None = None) -> list[dict]:
         return [
             {
                 "id": ASSET_TYPE_ID,
@@ -174,22 +173,6 @@ def mock_asset_page_reads(
         assert portal_user_id == 500
         assert entity_type == "ASSET"
         return []
-
-    def fake_require_location_context(request) -> AdministrationContext:
-        return AdministrationContext(
-            active_organization_id=str(ORGANIZATION_ID),
-            active_organization_name="Organization One",
-            active_organization_code="ORG_1",
-            active_site_id=str(SITE_ID),
-            active_site_name="Main Site",
-            active_site_code="SITE_1",
-            active_location_id=str(SPACE_ID),
-        )
-
-    monkeypatch.setattr(
-        "src.main.require_location_context",
-        fake_require_location_context,
-    )
 
     monkeypatch.setattr(
         "src.main.list_organizations",

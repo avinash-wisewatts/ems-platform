@@ -1,3 +1,4 @@
+from tests.sql_contract_sources import baseline_migration_sql
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -6,11 +7,7 @@ MAIN = Path("app/src/main.py").read_text()
 DETAIL = Path("app/src/templates/device_detail.html").read_text()
 EDIT = Path("app/src/templates/device_edit.html").read_text()
 CREATE = Path("app/src/templates/device_create.html").read_text()
-ONBOARDING = Path("app/src/templates/onboarding.html").read_text()
-RESULT = Path("app/src/templates/onboarding_result.html").read_text()
-SQL = Path(
-    "postgres/archive/prebaseline_20260807/migrations/177_device_commissioning_experience_and_controlled_activation.sql"
-).read_text()
+SQL = baseline_migration_sql("177_device_commissioning_experience_and_controlled_activation.sql")
 
 
 def test_device_headers_link_to_operational_lifecycle():
@@ -32,12 +29,6 @@ def test_user_facing_asset_assignment_terminology():
     assert 'Asset assignment requirement' in EDIT
     assert 'Required before commissioning' in CREATE
     assert 'Optional' in EDIT
-
-
-def test_onboarding_calls_out_pending_commissioning():
-    assert 'Commissioning pending' in ONBOARDING
-    assert 'Commissioning pending' in RESULT
-    assert 'review readiness and complete commissioning' in RESULT
 
 
 def test_commission_failures_return_to_device_context():

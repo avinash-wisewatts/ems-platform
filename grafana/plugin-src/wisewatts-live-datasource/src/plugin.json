@@ -1,0 +1,33 @@
+{
+  "$schema": "https://raw.githubusercontent.com/grafana/grafana/master/docs/sources/developers/plugins/plugin.schema.json",
+  "type": "datasource",
+  "name": "WiseWatts Live",
+  "id": "wisewatts-live-datasource",
+  "metrics": true,
+  "backend": true,
+  "executable": "wisewatts_live_datasource",
+  "info": {
+    "description": "Thin Grafana adapter for the WiseWatts canonical live telemetry WebSocket API.",
+    "author": {
+      "name": "WiseWatts Solutions"
+    },
+    "keywords": [
+      "wisewatts",
+      "ems",
+      "live",
+      "streaming"
+    ],
+    "logos": {
+      "small": "img/logo.svg",
+      "large": "img/logo.svg"
+    },
+    "links": [],
+    "screenshots": [],
+    "version": "0.1.5",
+    "updated": "2026-08-12"
+  },
+  "dependencies": {
+    "grafanaDependency": ">=11.6.0 <12.0.0",
+    "plugins": []
+  }
+}

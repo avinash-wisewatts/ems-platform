@@ -7,11 +7,11 @@
 -- Vendor mappings:
 --
 -- Eniscope:
---      Q   -> ENERGY_REACTIVE_POWER_TOTAL
---      RE  -> ENERGY_REACTIVE_ENERGY_TOTAL
+--      Q   -> REACTIVE_POWER_TOTAL
+--      RE  -> REACTIVE_ENERGY_TOTAL
 --      REx -> ENERGY_REACTIVE_EXPORT_TOTAL
---      S   -> ENERGY_APPARENT_POWER_TOTAL
---      AE  -> ENERGY_APPARENT_ENERGY_TOTAL
+--      S   -> APPARENT_POWER_TOTAL
+--      AE  -> APPARENT_ENERGY_TOTAL
 --
 -- ============================================================================
 
@@ -35,14 +35,14 @@ FROM
 VALUES
 
 (
-'ENERGY_REACTIVE_POWER_TOTAL',
+'REACTIVE_POWER_TOTAL',
 'Total reactive power',
 'kvar',
 'numeric'
 ),
 
 (
-'ENERGY_REACTIVE_ENERGY_TOTAL',
+'REACTIVE_ENERGY_TOTAL',
 'Total reactive energy import',
 'kvarh',
 'numeric'
@@ -56,14 +56,14 @@ VALUES
 ),
 
 (
-'ENERGY_APPARENT_POWER_TOTAL',
+'APPARENT_POWER_TOTAL',
 'Total apparent power',
 'kVA',
 'numeric'
 ),
 
 (
-'ENERGY_APPARENT_ENERGY_TOTAL',
+'APPARENT_ENERGY_TOTAL',
 'Total apparent energy',
 'kVAh',
 'numeric'

@@ -363,3 +363,135 @@ def test_location_administration_handles_database_error(
 
     assert response.status_code == 409
     assert "database rejected the location request" in response.text.lower()
+
+
+def login_platform_admin_without_site_context(
+    portal_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Authenticate the same identity as login_platform_admin, but stop
+    before selecting an organization/site -- the session carries a valid
+    authenticated identity with no active scope tier established, which
+    is exactly the state src.context.dependencies.site_context must
+    reject."""
+
+    async def fake_authenticate(
+        username: str,
+        password: str,
+    ) -> AuthenticationResult:
+        return successful_platform_admin_result()
+
+    monkeypatch.setattr(
+        "src.main.authenticate_portal_user",
+        fake_authenticate,
+    )
+
+    response = portal_client.post(
+        "/login",
+        data={
+            "username": "admin@example.com",
+            "password": "valid-password",
+            "next_path": "/administration/locations",
+        },
+    )
+
+    assert response.status_code == 303
+
+
+def test_create_location_page_without_site_context_is_forbidden(
+    portal_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login_platform_admin_without_site_context(portal_client, monkeypatch)
+
+    response = portal_client.get("/administration/locations/new")
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/forbidden"
+
+
+def test_create_location_submit_without_site_context_is_forbidden(
+    portal_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login_platform_admin_without_site_context(portal_client, monkeypatch)
+
+    response = portal_client.post(
+        "/administration/locations/new",
+        data={
+            "location_type": "BUILDING",
+            "parent_id": str(SITE_ID),
+            "location_name": "Building A",
+            "location_code": "BUILDING_A",
+        },
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/forbidden"
+
+
+def test_create_location_page_with_organization_but_no_site_is_forbidden(
+    portal_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Organization context alone must not satisfy site_context -- the
+    hierarchy requires each tier's own parent, not just any ancestor."""
+
+    async def fake_authenticate(
+        username: str,
+        password: str,
+    ) -> AuthenticationResult:
+        return successful_platform_admin_result()
+
+    async def fake_organizations(**kwargs) -> list[dict]:
+        return [
+            {
+                "id": ORGANIZATION_ID,
+                "organization_id": ORGANIZATION_ID,
+                "organization_name": "Organization One",
+                "organization_code": "ORG_1",
+            }
+        ]
+
+    monkeypatch.setattr(
+        "src.main.authenticate_portal_user",
+        fake_authenticate,
+    )
+    monkeypatch.setattr(
+        "src.context.service._accessible_organizations",
+        fake_organizations,
+    )
+
+    portal_client.post(
+        "/login",
+        data={
+            "username": "admin@example.com",
+            "password": "valid-password",
+            "next_path": "/administration/locations",
+        },
+    )
+
+    organization_response = portal_client.post(
+        "/context/organization",
+        data={
+            "organization_id": str(ORGANIZATION_ID),
+            "return_to": "/administration/sites",
+        },
+    )
+    assert organization_response.status_code == 303
+
+    response = portal_client.get("/administration/locations/new")
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/forbidden"
+
+
+def test_forbidden_page_renders_403(
+    portal_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login_platform_admin_without_site_context(portal_client, monkeypatch)
+
+    response = portal_client.get("/forbidden")
+
+    assert response.status_code == 403

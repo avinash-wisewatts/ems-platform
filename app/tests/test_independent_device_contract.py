@@ -1,6 +1,7 @@
+from tests.sql_contract_sources import canonical_sql
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
-SQL=(ROOT/'postgres/archive/prebaseline_20260807/migrations/117_independent_device_inventory.sql').read_text()
+SQL=canonical_sql("79_independent_device_inventory.sql")
 def test_device_creation_requires_no_asset():
     assert 'admin.create_device' in SQL
     assert 'p_asset_id' not in SQL
