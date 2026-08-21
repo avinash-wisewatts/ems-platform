@@ -14,6 +14,8 @@ RUN pip install \
     --requirement /workspace/app/requirements-dev.txt
 
 COPY pytest.ini /workspace/pytest.ini
+COPY compose.yaml /workspace/compose.yaml
+COPY grafana/plugin-src/wisewatts-live-datasource/src/datasource.ts /workspace/grafana/plugin-src/wisewatts-live-datasource/src/datasource.ts
 COPY app/src /workspace/app/src
 COPY app/tests /workspace/app/tests
 COPY postgres/ddl /workspace/postgres/ddl
