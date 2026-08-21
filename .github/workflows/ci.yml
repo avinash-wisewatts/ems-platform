@@ -31,6 +31,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Create CI-only placeholder env files
+        # compose.yaml's env_file: entries must exist as real files or
+        # `docker compose config` fails outright ("env file ... not found")
+        # -- this is a hard error, independent of and prior to any variable
+        # interpolation. The real .env files are intentionally untracked
+        # (see .gitignore) and never exist on a fresh runner.
+        #
+        # These placeholders are written only into the ephemeral runner
+        # workspace, are never committed, and contain no real credentials --
+        # just non-secret values for the two variables compose.yaml actually
+        # interpolates (POSTGRES_USER, POSTGRES_DB, used only in the
+        # timescaledb healthcheck string). The other five files are left
+        # empty: compose.yaml itself never interpolates values from them --
+        # they are only consumed by application containers at runtime,
+        # which this validation step does not start.
+        run: |
+          cat > .env <<'EOF'
+          POSTGRES_USER=ci_placeholder_user
+          POSTGRES_DB=ci_placeholder_db
+          EOF
+          touch app/.env
+          touch app/live-telemetry.env
+          touch telegraf/.env
+          touch grafana/.env
+          touch grafana/live-stream.env
+
       - name: Validate compose configuration (staging/production shape)
         run: docker compose -f compose.yaml config -q
 
