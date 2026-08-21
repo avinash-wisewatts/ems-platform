@@ -25,7 +25,8 @@ CONNINFO = (
     f"user={DB_USER} password={DB_PASSWORD}"
 )
 
-# Seeded tenant fixture already present in ems_test (same asset used by
+# Deterministic tenant identity fixture created by
+# conftest.seed_grafana_tenant_fixture (same asset used by
 # test_analytics_grafana_routing.py / test_analytics_grafana_electrical_routing.py).
 GRAFANA_ORG_ID = 9001
 ASSET_ID = "00000000-0000-0000-0000-0000000003a1"
@@ -43,12 +44,16 @@ def conn():
 
 
 @pytest.fixture(scope="session", autouse=True)
-def seed_normalized_points():
+def seed_normalized_points(seed_grafana_tenant_fixture):
     """Insert raw normalized_points samples for the fixture device/point and
     refresh analytics.generic_telemetry_15m/_1h, so native/15m/1h all have
     real rows to route to. Runs once per test session; leaves the rows in
     place afterward (ems_test is a disposable test database, and other
-    contract tests already assume additive fixture state)."""
+    contract tests already assume additive fixture state).
+
+    Depends on seed_grafana_tenant_fixture so the organization/site/device/
+    asset these samples reference, and the grafana_organization_map entry
+    the routing functions resolve tenant context through, exist first."""
 
     with psycopg.connect(CONNINFO, autocommit=True) as connection:
         with connection.cursor() as cur:
