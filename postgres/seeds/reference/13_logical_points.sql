@@ -35,27 +35,6 @@ FROM
 (
 VALUES
 
-('ACTIVE_POWER_TOTAL',
- 'Total active power consumption',
- 'kW',
- 'numeric'),
-
-('ACTIVE_POWER_L1',
- 'Phase 1 active power',
- 'kW',
- 'numeric'),
-
-('ACTIVE_POWER_L2',
- 'Phase 2 active power',
- 'kW',
- 'numeric'),
-
-('ACTIVE_POWER_L3',
- 'Phase 3 active power',
- 'kW',
- 'numeric'),
-
-
 ('ENERGY_IMPORT_TOTAL',
  'Total imported active energy',
  'kWh',

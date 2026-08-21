@@ -41,7 +41,7 @@ BEGIN
 
     SELECT id INTO v_lp_active_power
     FROM metadata.logical_points
-    WHERE name = 'ENERGY_ACTIVE_POWER_TOTAL'
+    WHERE name = 'ACTIVE_POWER_TOTAL'
     LIMIT 1;
 
     SELECT id INTO v_energy_meter_category

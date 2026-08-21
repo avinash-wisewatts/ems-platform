@@ -24,6 +24,7 @@ source_file,target_category,target_path,notes
 13_logical_points.sql,reference,postgres/seeds/reference/13_logical_points.sql,Logical point catalog
 13_01_logical_points_energy_extension.sql,reference,postgres/seeds/reference/13_01_logical_points_energy_extension.sql,Energy logical point extension
 13_02_logical_points_power_factor.sql,reference,postgres/seeds/reference/13_02_logical_points_power_factor.sql,Power factor logical points
+13_03_logical_points_electrical_baseline.sql,reference,postgres/seeds/reference/13_03_logical_points_electrical_baseline.sql,Deterministic UUID baseline for the 20 pre-rename ENERGY_* electrical logical points consumed by migration 174's canonical rename
 20_indexes.sql,canonical,postgres/ddl/20_indexes.sql,Canonical indexes
 21_constraints.sql,canonical,postgres/ddl/21_constraints.sql,Canonical constraints
 22_functions.sql,canonical,postgres/ddl/22_functions.sql,Canonical functions
@@ -315,10 +316,10 @@ source_file,target_category,target_path,notes
 042_canonical_energy_read.sql,migration,postgres/migrations/042_canonical_energy_read.sql,Introduce the production canonical energy read contract resolving tenant/PRIMARY_METER/site/resolution and reading already-classified semantic energy by actual_resolution.
 043_canonical_energy_read_grafana_grant.sql,migration,postgres/migrations/043_canonical_energy_read_grafana_grant.sql,Grant grafana_reader EXECUTE on the canonical energy reader for the Panel 13 pilot cutover.
 044_dynamic_grafana_resolution_routing.sql,migration,postgres/migrations/044_dynamic_grafana_resolution_routing.sql,Route Grafana asset energy queries to a resolution tier chosen from the requested range (<=24h 15m, <=14d 1h, >14d 1d) and add a 10-asset-max multi-asset fan-out.
-139_live_telemetry_state.sql,canonical,postgres/ddl/139_live_telemetry_state.sql,Create telemetry.device_live_point_state for last-known per-point live telemetry state.
-150_grafana_telemetry_capture_policy.sql,canonical,postgres/ddl/150_grafana_telemetry_capture_policy.sql,Tenant-safe view exposing configured telemetry capture-interval policy per site to Grafana.
-151_resolution_aware_native_energy_gap_threshold.sql,canonical,postgres/ddl/151_resolution_aware_native_energy_gap_threshold.sql,Resolution-aware native energy gap classification so multi-interval observations are not misclassified as GOOD.
-152_grafana_asset_identity_context.sql,canonical,postgres/ddl/152_grafana_asset_identity_context.sql,Tenant-safe Grafana asset identity/location context view without granting direct metadata table access.
+139_live_telemetry_state.sql,canonical_mirror,postgres/ddl/139_live_telemetry_state.sql,Create telemetry.device_live_point_state for last-known per-point live telemetry state.
+150_grafana_telemetry_capture_policy.sql,canonical_mirror,postgres/ddl/150_grafana_telemetry_capture_policy.sql,Tenant-safe view exposing configured telemetry capture-interval policy per site to Grafana.
+151_resolution_aware_native_energy_gap_threshold.sql,canonical_mirror,postgres/ddl/151_resolution_aware_native_energy_gap_threshold.sql,Resolution-aware native energy gap classification so multi-interval observations are not misclassified as GOOD.
+152_grafana_asset_identity_context.sql,canonical_mirror,postgres/ddl/152_grafana_asset_identity_context.sql,Tenant-safe Grafana asset identity/location context view without granting direct metadata table access.
 153_grafana_asset_connectivity_runtime_grant.sql,migration,postgres/migrations/153_grafana_asset_connectivity_runtime_grant.sql,Grant ems_app EXECUTE on analytics.get_grafana_asset_connectivity_context.
 170_grafana_asset_selector.sql,migration,postgres/migrations/170_grafana_asset_selector.sql,Add tenant-aware Grafana asset-selection projection (Site -> Location -> Asset Type -> Asset) without changing analytics.v_grafana_assets.
 171_analytics_explorer_metadata_surface.sql,migration,postgres/migrations/171_analytics_explorer_metadata_surface.sql,Add lightweight Analytics Explorer point metadata surface sourced from asset/device assignments rather than historical telemetry.

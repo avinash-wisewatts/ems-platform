@@ -48,7 +48,7 @@ BEGIN
 
     SELECT id INTO v_lp_active_power
     FROM metadata.logical_points
-    WHERE name = 'ENERGY_ACTIVE_POWER_TOTAL'
+    WHERE name = 'ACTIVE_POWER_TOTAL'
     LIMIT 1;
 
     IF v_lp_import IS NULL OR v_lp_active_power IS NULL THEN

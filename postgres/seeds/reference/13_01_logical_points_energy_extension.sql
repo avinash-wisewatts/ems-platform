@@ -35,37 +35,9 @@ FROM
 VALUES
 
 (
-'REACTIVE_POWER_TOTAL',
-'Total reactive power',
-'kvar',
-'numeric'
-),
-
-(
-'REACTIVE_ENERGY_TOTAL',
-'Total reactive energy import',
-'kvarh',
-'numeric'
-),
-
-(
 'ENERGY_REACTIVE_EXPORT_TOTAL',
 'Total reactive energy export',
 'kvarh',
-'numeric'
-),
-
-(
-'APPARENT_POWER_TOTAL',
-'Total apparent power',
-'kVA',
-'numeric'
-),
-
-(
-'APPARENT_ENERGY_TOTAL',
-'Total apparent energy',
-'kVAh',
 'numeric'
 )
 
