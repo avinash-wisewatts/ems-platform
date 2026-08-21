@@ -44,6 +44,21 @@ require_compose_file() {
 wait_for_database() {
     echo "Waiting for the test database to become healthy..."
 
+    # TimescaleDB's entrypoint briefly runs a temporary bootstrap Postgres
+    # instance (to create the timescaledb extension) before restarting into
+    # the final process once shared_preload_libraries takes effect. Docker's
+    # cached Health.Status can latch "healthy" from a single probe against
+    # that temporary instance and will not clear during the brief restart
+    # (compose.test.yaml's healthcheck allows 20 consecutive failed probes,
+    # 5s apart, before flipping back) -- so re-reading that cached field
+    # alone, however many times, cannot detect the race. A freshly-executed
+    # pg_isready call, re-run every iteration instead of read from a cached
+    # field, closes it: that call reflects the live socket state at the
+    # moment it runs, and is required to succeed on two consecutive polls
+    # before readiness is trusted, which the temporary instance's brief
+    # accepting window cannot satisfy on its own.
+    local consecutive_ready=0
+
     for attempt in $(seq 1 30); do
         health_status="$(
             docker inspect \
@@ -51,9 +66,19 @@ wait_for_database() {
                 "${CONTAINER_NAME}" 2>/dev/null || true
         )"
 
-        if [[ "${health_status}" == "healthy" ]]; then
-            echo "Test database is healthy."
-            return 0
+        if [[ "${health_status}" == "healthy" ]] \
+            && docker exec "${CONTAINER_NAME}" \
+                pg_isready -U "${DATABASE_USER}" -d "${DATABASE_NAME}" \
+                >/dev/null 2>&1
+        then
+            consecutive_ready=$((consecutive_ready + 1))
+
+            if [[ "${consecutive_ready}" -ge 2 ]]; then
+                echo "Test database is healthy."
+                return 0
+            fi
+        else
+            consecutive_ready=0
         fi
 
         sleep 2
