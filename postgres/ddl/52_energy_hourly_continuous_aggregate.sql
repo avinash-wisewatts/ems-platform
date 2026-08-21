@@ -25,7 +25,7 @@ AS
 SELECT
     time_bucket(
         INTERVAL '1 hour',
-        bucket_start
+        received_at
     ) AS bucket_start,
 
     organization_id,
