@@ -3,7 +3,13 @@ name: ems-platform-prod
 services:
 
   timescaledb:
-    image: timescale/timescaledb:latest-pg16
+    # Pinned by digest to the exact image verified healthy on staging
+    # (PostgreSQL 16.15 / TimescaleDB extension 2.29.2, confirmed via
+    # `docker inspect` and scripts/verify/verify_database.sh at pin time).
+    # This replaces the previously floating `latest-pg16` tag. Upgrading
+    # requires a deliberate repository change and re-verification, not an
+    # incidental re-pull.
+    image: timescale/timescaledb@sha256:289d55704b1b3ee8263cd3805c6930f9cd54506835a8f19f9b85dad17d5c5a8a
 
     container_name: ems-timescaledb
 
@@ -16,7 +22,7 @@ services:
       - "127.0.0.1:5432:5432"
 
     volumes:
-      - ./postgres/data:/var/lib/postgresql/data
+      - ./postgres/data/pgdata:/var/lib/postgresql/data
 
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
@@ -99,6 +105,13 @@ services:
   live-telemetry:
     # Dedicated server-side real-time path. Grafana/browser never receives
     # MQTT credentials or vendor topic knowledge.
+    #
+    # Built once in CI and tagged with the immutable Git commit SHA; deploy
+    # workflows set APP_IMAGE to that exact tag so staging/production run
+    # the identical artifact. `build:` is retained only so local
+    # `docker compose build` still works for development; deployment scripts
+    # never pass --build.
+    image: ${APP_IMAGE:-ems-platform-prod-app:local}
     build:
       context: ./app
       dockerfile: Dockerfile
@@ -135,6 +148,12 @@ services:
 
   admin-portal:
     # WiseWatts EMS metadata and tenant onboarding interface.
+    #
+    # Shares the exact same built artifact as live-telemetry (same
+    # Dockerfile/context, different `command:` below) -- one image, tagged
+    # with the immutable Git commit SHA in CI, is used for both services and
+    # promoted unchanged from staging to production.
+    image: ${APP_IMAGE:-ems-platform-prod-app:local}
     build:
       context: ./app
       dockerfile: Dockerfile

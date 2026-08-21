@@ -1,0 +1,74 @@
+name: Rollback Deployment
+
+# Application rollback: redeploy a previously-built, previously-verified
+# immutable image tag to the chosen environment. Reuses the exact same
+# deploy_release.sh / post_deploy_verify.sh path as a normal deployment --
+# a rollback IS a deployment, just of an older tag.
+#
+# This does NOT and CANNOT reverse database migrations. The repository's
+# migration system (scripts/apply_migrations.sh) is forward-only and
+# checksum-verified; there is no reverse-migration mechanism, and inventing
+# one here would be unsafe. See docs/operations/CICD_PIPELINE.md, section
+# "Rollback strategy", for what this does and does not cover.
+#
+# Never automatically triggered. Rolling back production requires the same
+# `production` Environment approval gate as a forward deployment.
+#
+# Finding the previous good tag:
+#   - GHCR retains every git-SHA-tagged image indefinitely (tags are never
+#     overwritten), so any past commit SHA on the deployed branch is a valid
+#     rollback target as long as CI built and pushed it.
+#   - Each deployment appends one line to
+#     <PROJECT_PATH>/.deploy-history/<environment>.log on the target host
+#     (timestamp|environment|git_sha|image) for local operator reference.
+#   - The GitHub Actions run history for deploy-staging.yml / this workflow
+#     also records exactly which image_tag was deployed on every run.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_environment:
+        description: "Environment to roll back"
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      image_tag:
+        description: "Exact previously-deployed image reference to roll back to"
+        required: true
+      release_git_sha:
+        description: "Git commit SHA matching image_tag"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  rollback:
+    name: Roll back to previous artifact
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.target_environment }}
+    steps:
+      - name: Roll back over SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ inputs.target_environment == 'production' && secrets.PRODUCTION_HOST || secrets.STAGING_HOST }}
+          username: ${{ inputs.target_environment == 'production' && secrets.PRODUCTION_USER || secrets.STAGING_USER }}
+          key: ${{ inputs.target_environment == 'production' && secrets.PRODUCTION_SSH_KEY || secrets.STAGING_SSH_KEY }}
+          envs: RELEASE_SHA,APP_IMAGE,REGISTRY_USERNAME,REGISTRY_PASSWORD,PROJECT_PATH_VALUE,ENV_NAME_VALUE
+          script: |
+            set -euo pipefail
+            export PROJECT_PATH="${PROJECT_PATH_VALUE}"
+            export APP_IMAGE="${APP_IMAGE}"
+            export RELEASE_GIT_SHA="${RELEASE_SHA}"
+            export ENVIRONMENT_NAME="${ENV_NAME_VALUE}"
+            "${PROJECT_PATH}/scripts/release/deploy_release.sh"
+            "${PROJECT_PATH}/scripts/release/post_deploy_verify.sh"
+        env:
+          RELEASE_SHA: ${{ inputs.release_git_sha }}
+          APP_IMAGE: ${{ inputs.image_tag }}
+          ENV_NAME_VALUE: ${{ inputs.target_environment }}
+          PROJECT_PATH_VALUE: ${{ inputs.target_environment == 'production' && secrets.PRODUCTION_PROJECT_PATH || secrets.STAGING_PROJECT_PATH }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}

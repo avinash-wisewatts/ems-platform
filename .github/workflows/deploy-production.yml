@@ -1,0 +1,73 @@
+name: Deploy to Production
+
+# Production deployment ARCHITECTURE.
+#
+# This workflow is created as part of the CI/CD implementation task but is
+# NEVER automatically triggered and has NOT been executed. It only runs when
+# a human explicitly invokes it (workflow_dispatch) and only after the
+# `production` GitHub Environment's required-reviewer approval gate passes.
+#
+# It pulls the EXACT image tag already built once and verified in staging --
+# it never rebuilds from source, and it never accepts an arbitrary branch or
+# ref as its artifact source, only a pre-built image tag.
+#
+# Secrets referenced here (PRODUCTION_HOST, PRODUCTION_USER,
+# PRODUCTION_SSH_KEY, PRODUCTION_PROJECT_PATH) do not need to exist yet for
+# this file to be valid; they must be configured before this workflow can
+# ever be run. See docs/operations/CICD_PIPELINE.md for the exact list.
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Exact immutable image reference already proven in staging (e.g. ghcr.io/OWNER/REPO-app:<git-sha>)"
+        required: true
+      release_git_sha:
+        description: "Git commit SHA matching image_tag (the commit that produced it in staging)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-production:
+    name: Deploy exact staging-proven artifact to production
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.PRODUCTION_HOST }}
+          username: ${{ secrets.PRODUCTION_USER }}
+          key: ${{ secrets.PRODUCTION_SSH_KEY }}
+          envs: RELEASE_SHA,APP_IMAGE,REGISTRY_USERNAME,REGISTRY_PASSWORD
+          script: |
+            set -euo pipefail
+            export PROJECT_PATH="${{ secrets.PRODUCTION_PROJECT_PATH }}"
+            export APP_IMAGE="${APP_IMAGE}"
+            export RELEASE_GIT_SHA="${RELEASE_SHA}"
+            export ENVIRONMENT_NAME="production"
+            "${PROJECT_PATH}/scripts/release/deploy_release.sh"
+        env:
+          RELEASE_SHA: ${{ inputs.release_git_sha }}
+          APP_IMAGE: ${{ inputs.image_tag }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+
+  verify-production:
+    name: Post-deployment verification
+    needs: deploy-production
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Run post-deployment verification gate on production
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.PRODUCTION_HOST }}
+          username: ${{ secrets.PRODUCTION_USER }}
+          key: ${{ secrets.PRODUCTION_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            cd "${{ secrets.PRODUCTION_PROJECT_PATH }}"
+            ./scripts/release/post_deploy_verify.sh

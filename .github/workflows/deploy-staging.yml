@@ -1,13 +1,65 @@
 name: Deploy to Staging
 
+# BUILD ONCE -> TEST -> PROMOTE THE SAME ARTIFACT.
+#
+# Replaces the previous model of:
+#   git pull && docker compose up -d --build
+#
+# with:
+#   CI gates -> build immutable image -> push to registry -> pull exact
+#   tag on staging -> apply migrations -> deploy -> health check ->
+#   post-deployment verification.
+#
+# Nothing here ever touches production. Nothing here ever rebuilds source on
+# the staging host -- the image built in `build-and-push` is the only
+# artifact `deploy-staging` is permitted to run.
+
 on:
   push:
     branches:
       - staging
 
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}-app
+
 jobs:
-  deploy:
-    name: Deploy to staging server
+  ci:
+    name: CI gates
+    uses: ./.github/workflows/ci.yml
+
+  build-and-push:
+    name: Build and push immutable artifact
+    needs: ci
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+      sha: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push application image
+        id: image
+        run: |
+          IMAGE="${REGISTRY}/${IMAGE_NAME}:${{ github.sha }}"
+          docker build --file app/Dockerfile --tag "${IMAGE}" ./app
+          docker push "${IMAGE}"
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+
+  deploy-staging:
+    name: Deploy exact artifact to staging
+    needs: build-and-push
     runs-on: ubuntu-latest
     environment: staging
     steps:
@@ -17,8 +69,47 @@ jobs:
           host: ${{ secrets.STAGING_HOST }}
           username: ${{ secrets.STAGING_USER }}
           key: ${{ secrets.STAGING_SSH_KEY }}
+          envs: RELEASE_SHA,APP_IMAGE,REGISTRY_USERNAME,REGISTRY_PASSWORD
+          script: |
+            set -euo pipefail
+            export PROJECT_PATH="${{ secrets.STAGING_PROJECT_PATH }}"
+            export APP_IMAGE="${APP_IMAGE}"
+            export RELEASE_GIT_SHA="${RELEASE_SHA}"
+            export ENVIRONMENT_NAME="staging"
+            "${PROJECT_PATH}/scripts/release/deploy_release.sh"
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+          APP_IMAGE: ${{ needs.build-and-push.outputs.image }}
+          # Default: GHCR pull using the workflow's own token, scoped to
+          # this run only. Set repository secrets REGISTRY_USERNAME /
+          # REGISTRY_PASSWORD (e.g. a long-lived PAT with read:packages) to
+          # override this if the staging host should authenticate
+          # independently of the triggering workflow run.
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME || github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD || secrets.GITHUB_TOKEN }}
+
+  verify-staging:
+    name: Post-deployment verification
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Run post-deployment verification gate on staging
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
           script: |
             set -euo pipefail
             cd "${{ secrets.STAGING_PROJECT_PATH }}"
-            git pull origin staging
-            docker compose up -d --build
+            # Live MQTT smoke tests remain opt-in and are intentionally NOT
+            # enabled here: they publish real telemetry and require a
+            # deliberately authorized broker/credential context.
+            #
+            # See scripts/release/post_deploy_verify.sh for why database/
+            # metadata structure checks are required gates here while
+            # pipeline/job checks are reported in full but non-blocking
+            # (known, separately-tracked commissioning gap and job-schedule
+            # drift -- not deployment regressions).
+            ./scripts/release/post_deploy_verify.sh

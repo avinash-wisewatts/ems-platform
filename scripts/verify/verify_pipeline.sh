@@ -25,7 +25,8 @@ if [[ ! -r "${PIPELINE_CONFIG}" ]]; then
     summary
 fi
 
-MQTT_TABLE="$(get_config_value MQTT_STAGING_TABLE)"
+MQTT_TABLE="$(get_config_value MQTT_ADAPTER_VIEW)"
+RAW_MESSAGES_TABLE="$(get_config_value RAW_MESSAGES_TABLE)"
 RTDATA_VIEW="$(get_config_value RTDATA_VIEW)"
 NORMALIZED_VIEW="$(get_config_value NORMALIZED_VIEW)"
 NORMALIZED_TABLE="$(get_config_value NORMALIZED_TABLE)"
@@ -34,6 +35,7 @@ ENVIRONMENT_TABLE="$(get_config_value ENVIRONMENT_TABLE)"
 PIPELINE_STATE_TABLE="$(get_config_value PIPELINE_STATE_TABLE)"
 
 if [[ -z "${MQTT_TABLE}" ||
+      -z "${RAW_MESSAGES_TABLE}" ||
       -z "${RTDATA_VIEW}" ||
       -z "${NORMALIZED_VIEW}" ||
       -z "${NORMALIZED_TABLE}" ||
@@ -60,20 +62,25 @@ else
 fi
 
 #
-# MQTT staging count
+# MQTT landing count
+#
+# NOTE: public.mqtt_staging (MQTT_ADAPTER_VIEW) is an INSTEAD OF INSERT
+# write-only adapter view (`SELECT ... WHERE false`) -- it intentionally
+# never returns rows on SELECT (see docs/operations/TELEMETRY_PIPELINE.md).
+# Receipt must be verified against the real landing table, RAW_MESSAGES_TABLE.
 #
 
 STAGING_COUNT="$(
 psql_query "
 SELECT COUNT(*)
-FROM ${MQTT_TABLE};
+FROM ${RAW_MESSAGES_TABLE};
 " 2>/dev/null || echo 0
 )"
 
 if [[ "$STAGING_COUNT" =~ ^[0-9]+$ ]] && (( STAGING_COUNT > 0 )); then
-    pass "mqtt_staging contains ${STAGING_COUNT} messages"
+    pass "raw_messages contains ${STAGING_COUNT} messages"
 else
-    fail "mqtt_staging is empty"
+    fail "raw_messages is empty"
 fi
 
 #
@@ -83,7 +90,7 @@ fi
 LATEST_STAGING="$(
 psql_query "
 SELECT MAX(received_at)
-FROM ${MQTT_TABLE};
+FROM ${RAW_MESSAGES_TABLE};
 " 2>/dev/null
 )"
 
@@ -152,7 +159,7 @@ LATEST_INGESTION_AGE_SECONDS="$(
                     )::BIGINT
                 )
             END
-        FROM ${MQTT_TABLE};
+        FROM ${RAW_MESSAGES_TABLE};
     " 2>/dev/null || true
 )"
 
@@ -169,7 +176,7 @@ fi
 FUTURE_STAGING_ROWS="$(
     psql_query "
         SELECT COUNT(*)
-        FROM ${MQTT_TABLE}
+        FROM ${RAW_MESSAGES_TABLE}
         WHERE received_at > clock_timestamp() + interval '5 minutes';
     " 2>/dev/null || echo 0
 )"
@@ -330,7 +337,7 @@ NORMALIZATION_CHECKPOINT_AHEAD="$(
         FROM ${PIPELINE_STATE_TABLE} ps
         CROSS JOIN (
             SELECT MAX(received_at) AS newest_landing
-            FROM ${MQTT_TABLE}
+            FROM ${RAW_MESSAGES_TABLE}
         ) source
         WHERE ps.pipeline_name = 'normalized_points'
           AND ps.last_received_at IS NOT NULL
@@ -367,7 +374,7 @@ NORMALIZATION_CHECKPOINT_LAG_SECONDS="$(
         FROM ${PIPELINE_STATE_TABLE} ps
         CROSS JOIN (
             SELECT MAX(received_at) AS newest_landing
-            FROM ${MQTT_TABLE}
+            FROM ${RAW_MESSAGES_TABLE}
         ) source
         WHERE ps.pipeline_name = 'normalized_points';
     " 2>/dev/null || true

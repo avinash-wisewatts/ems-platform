@@ -1,0 +1,95 @@
+name: CI
+
+# Reusable verification pipeline.
+#
+# Called directly on every pull request and every push (fast feedback), and
+# also invoked via `workflow_call` from deploy-staging.yml so the exact same
+# gates must pass before anything is built/pushed/deployed. No job here ever
+# touches a remote host, HiveMQ, or production.
+#
+# Live MQTT smoke tests are intentionally NOT run here: they publish real
+# messages and are opt-in only (RUN_LIVE_MQTT_SMOKE=true), reserved for a
+# manually authorized run against a real broker/credential set.
+
+on:
+  pull_request:
+  push:
+    branches: ["**"]
+  workflow_call:
+    outputs:
+      passed:
+        description: "Whether all CI gates passed"
+        value: ${{ jobs.summary.outputs.passed }}
+
+permissions:
+  contents: read
+
+jobs:
+  config-validation:
+    name: Configuration validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate compose configuration (staging/production shape)
+        run: docker compose -f compose.yaml config -q
+
+      - name: Validate compose configuration (disposable test database)
+        run: docker compose -f compose.test.yaml config -q
+
+  docker-build-validate:
+    name: Docker build validation (application image)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build application image (validation only -- not pushed)
+        run: |
+          docker build \
+            --file app/Dockerfile \
+            --tag ems-app:ci-build-validate \
+            ./app
+
+  app-tests:
+    name: Application test suite (pytest)
+    runs-on: ubuntu-latest
+    needs: [docker-build-validate]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build application test image
+        run: |
+          docker build \
+            --file app/Dockerfile.test \
+            --tag ems-admin-portal-test \
+            .
+
+      - name: Run application test suite
+        run: docker run --rm --network host ems-admin-portal-test
+
+  database-integration-tests:
+    name: Database / migration / repository integration tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run disposable-database canonical + migration integration suite
+        run: ./scripts/test/run_integration_environment.sh
+
+      - name: Tear down disposable test database
+        if: always()
+        run: ./scripts/test/test_database.sh destroy
+
+  summary:
+    name: CI summary
+    runs-on: ubuntu-latest
+    needs:
+      - config-validation
+      - docker-build-validate
+      - app-tests
+      - database-integration-tests
+    outputs:
+      passed: ${{ steps.result.outputs.passed }}
+    steps:
+      - id: result
+        run: echo "passed=true" >> "$GITHUB_OUTPUT"
