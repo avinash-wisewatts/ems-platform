@@ -90,8 +90,21 @@ jobs:
             --tag ems-admin-portal-test \
             .
 
+      - name: Start disposable test database
+        run: ./scripts/test/test_database.sh start
+
+      - name: Deploy canonical database
+        run: ./scripts/test/deploy_test_database.sh
+
+      - name: Apply test migrations
+        run: ./scripts/test/apply_test_migrations.sh
+
       - name: Run application test suite
         run: docker run --rm --network host ems-admin-portal-test
+
+      - name: Tear down disposable test database
+        if: always()
+        run: ./scripts/test/test_database.sh destroy
 
   database-integration-tests:
     name: Database / migration / repository integration tests
