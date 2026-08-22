@@ -254,8 +254,17 @@ for what this means honestly.
 
 ## Compose design changes
 
-- `timescaledb` image pinned by digest (see above). Storage path
-  (`./postgres/data/pgdata:/var/lib/postgresql/data`) is **untouched**.
+- `timescaledb` image pinned by digest (see above). Storage path is
+  environment-specific, controlled by `TIMESCALEDB_DATA_PATH`:
+  `volumes: - ${TIMESCALEDB_DATA_PATH:-./postgres/data/pgdata}:/var/lib/postgresql/data`.
+  Staging uses the default (`./postgres/data/pgdata`); production overrides it
+  via its host-local, untracked `.env` (`TIMESCALEDB_DATA_PATH=./postgres/data`)
+  to match its existing on-disk data layout exactly, since production's
+  TimescaleDB predates this pipeline and already had live data at that path.
+  Application deployment (`deploy_release.sh`) never names `timescaledb` as a
+  target service and therefore never recreates it -- this parameterization
+  only matters if the service is ever explicitly (re)created, where it
+  prevents accidentally pointing at the wrong data directory.
 - `admin-portal` and `live-telemetry` now declare
   `image: ${APP_IMAGE:-ems-platform-prod-app:local}` alongside their
   existing `build:` block, so the same file supports both "build locally
