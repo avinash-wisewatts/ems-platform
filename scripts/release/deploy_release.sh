@@ -142,7 +142,7 @@ echo
 # ----------------------------------------------------------------------------
 
 echo "[5/6] Deploying application services..."
-APP_IMAGE="${APP_IMAGE}" compose up -d --no-build "${APP_SERVICES_ARRAY[@]}"
+APP_IMAGE="${APP_IMAGE}" compose up -d --no-build --no-deps "${APP_SERVICES_ARRAY[@]}"
 echo
 
 # ----------------------------------------------------------------------------
