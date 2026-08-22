@@ -56,8 +56,18 @@ development/feature branch
    staging verified
         |
         v
-  manual production approval          (GitHub Environment "production"
-        |                              required-reviewer gate)
+  deliberate operator dispatch        (production Environment exists as a
+        |                              configuration namespace only -- NOT
+        |                              a reviewer gate. GitHub Free does
+        |                              not support required reviewers for
+        |                              a private repository. Authorization
+        |                              is procedural: only the repository
+        |                              owner can dispatch, and image_tag /
+        |                              release_git_sha must be copied from
+        |                              a known-good entry in
+        |                              .deploy-history/staging.log -- see
+        |                              docs/operations/FIRST_PRODUCTION_
+        |                              DEPLOYMENT_ROLLBACK_RUNBOOK.md)
         v
 .github/workflows/deploy-production.yml   (workflow_dispatch only; takes
         |                                  the exact image_tag proven in
@@ -77,7 +87,7 @@ older artifact.
 |---|---|---|
 | `.github/workflows/ci.yml` | `pull_request`, `push` (any branch), and `workflow_call` | Runs all automated gates. Never deploys anything. |
 | `.github/workflows/deploy-staging.yml` | `push` to `staging` | Calls `ci.yml`, then builds+pushes the immutable image, then deploys it to staging, then runs post-deploy verification. |
-| `.github/workflows/deploy-production.yml` | `workflow_dispatch` only | Takes a proven `image_tag` + `release_git_sha` as input. Requires the `production` Environment's approval gate. **Never executed as part of this task.** |
+| `.github/workflows/deploy-production.yml` | `workflow_dispatch` only | Takes a proven `image_tag` + `release_git_sha` as input. Authorization is procedural, not GitHub-enforced: only the repository owner can dispatch this workflow, and `image_tag`/`release_git_sha` must correspond to a known staging release recorded in `.deploy-history/staging.log`. **Never executed as part of this task.** |
 | `.github/workflows/rollback.yml` | `workflow_dispatch` only | Redeploys a chosen previous `image_tag` to `staging` or `production`. **Never executed as part of this task.** |
 
 ## CI gates (what actually runs, and why each one uses existing tooling)
@@ -306,17 +316,33 @@ This cannot be completed from repository files; it requires GitHub
 repository/organization admin access.
 
 1. **Create two GitHub Environments**: `staging` and `production`
-   (Settings -> Environments).
-2. On the **`production`** environment: enable **Required reviewers** (at
-   least one) so `deploy-production.yml` and `rollback.yml` targeting
-   production cannot run without a human approval click, and consider
-   restricting it to the `staging` branch / specific tags if your policy
-   requires that production can only ever be deployed from a
-   staging-proven commit.
+   (Settings -> Environments). **Done** -- both exist.
+2. On the **`production`** environment: **Required reviewers are not
+   available.** This repository is private, on a personal GitHub Free
+   account. GitHub's own documentation states required reviewers (and wait
+   timers) are only available for public repositories on Free, Pro, and
+   Team plans -- required reviewers on a private repository require GitHub
+   Enterprise, which is disproportionate for this project's current
+   single-owner scale. The `production` environment therefore exists as a
+   configuration namespace (secrets, variables) only, not an approval gate.
+   Authorization is instead procedural: (a) only the repository owner has
+   write/dispatch access to trigger `deploy-production.yml` or
+   `rollback.yml` at all, and (b) the operator must only ever dispatch an
+   `image_tag`/`release_git_sha` pair matching a known-good entry in
+   `.deploy-history/staging.log`. See
+   `docs/operations/FIRST_PRODUCTION_DEPLOYMENT_ROLLBACK_RUNBOOK.md` for
+   the full procedure, the release-pairing convention, and the manual
+   rollback plan for the first deployment. Revisit this decision if the
+   team or budget grows to where GitHub Enterprise becomes proportionate.
 3. On the **`staging`** environment: no required reviewers are strictly
    necessary (staging deploys automatically on push, matching the existing
-   trigger), but you may still want **Deployment branch rules** restricting
-   it to the `staging` branch only.
+   trigger) -- and, per the same plan limitation, none are available here
+   either. **Deployment branch rules** restricting it to the `staging`
+   branch are visible as an option in the environment UI even on GitHub
+   Free, though GitHub's documentation describes this as a Pro/Team feature
+   for private repositories -- this was not empirically confirmed to
+   actually enforce on the current plan, so verify its real effect before
+   relying on it.
 4. Confirm (or enable) **branch protection** on `staging` requiring the
    `CI gates` check (from `ci.yml`, called via `deploy-staging.yml`'s `ci`
    job) to pass before merge, if pushes to `staging` normally arrive via PR
