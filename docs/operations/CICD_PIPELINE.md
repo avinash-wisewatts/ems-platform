@@ -284,6 +284,21 @@ for what this means honestly.
   `docker compose -f compose.yaml config -q` and
   `docker compose -f compose.test.yaml config -q` both validate cleanly
   after these edits.
+- `admin-portal` and `grafana` host bind addresses are environment-specific,
+  following the same pattern as `TIMESCALEDB_DATA_PATH` above:
+  `ports: - "${ADMIN_PORTAL_BIND_HOST:-127.0.0.1}:8080:8080"` and
+  `ports: - "${GRAFANA_BIND_HOST:-127.0.0.1}:3000:3000"`. Since `compose.yaml`
+  is the single shared file promoted unchanged from staging to production,
+  both default safely to `127.0.0.1` -- a host that never sets these
+  variables stays localhost-only. Staging may explicitly set
+  `ADMIN_PORTAL_BIND_HOST=0.0.0.0` and `GRAFANA_BIND_HOST=0.0.0.0` in its
+  own host-local, untracked root `.env` when direct host access is
+  intentionally required; production should retain the safe localhost
+  defaults unless a deliberate production exposure architecture (e.g. a
+  reverse proxy with TLS and authentication) is introduced. As with
+  `TIMESCALEDB_DATA_PATH`, this does not affect the immutable-artifact
+  promotion model: the bind-address values are host-local configuration,
+  never embedded in the application image or in the Git-promoted artifact.
 
 ## Rollback strategy
 
