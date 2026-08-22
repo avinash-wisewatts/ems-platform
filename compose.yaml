@@ -76,7 +76,7 @@ services:
     # exposure will be configured only after authentication and tenant isolation
     # have been validated.
     ports:
-      - "127.0.0.1:3000:3000"
+      - "3000:3000"
 
     volumes:
       # Persistent Grafana application database and state.
@@ -175,7 +175,7 @@ services:
     # Keep the administration portal private during development.
     # Access it from the EC2 host or through an SSH tunnel.
     ports:
-      - "127.0.0.1:8080:8080"
+      - "8080:8080"
 
     volumes:
       - ./grafana/dashboards:/app/grafana-dashboards:ro
