@@ -69,6 +69,10 @@ echo
 echo "[connectivity-semantics] Running Phase 1A connectivity semantic contract assertions..."
 "${SCRIPT_DIR}/assert_connectivity_semantic_contract.sh"
 
+echo
+echo "[energy-consumption-semantics] Running Phase 1B energy consumption semantic contract assertions..."
+"${SCRIPT_DIR}/assert_energy_consumption_semantic_contract.sh"
+
 echo "[14/14] Verifying migration ledger..."
 ledger="$(
     docker compose \
