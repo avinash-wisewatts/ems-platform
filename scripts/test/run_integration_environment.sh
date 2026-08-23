@@ -77,6 +77,10 @@ echo
 echo "[job-schedule-canonical] Running Phase 1C job-schedule canonical contract assertions..."
 "${SCRIPT_DIR}/assert_job_schedule_canonical.sh"
 
+echo
+echo "[grafana-energy-routing] Running Phase 1D Grafana energy resolution-routing contract assertions..."
+"${SCRIPT_DIR}/assert_grafana_energy_routing_daily_tier.sh"
+
 echo "[14/14] Verifying migration ledger..."
 ledger="$(
     docker compose \
