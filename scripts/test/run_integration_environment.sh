@@ -73,6 +73,10 @@ echo
 echo "[energy-consumption-semantics] Running Phase 1B energy consumption semantic contract assertions..."
 "${SCRIPT_DIR}/assert_energy_consumption_semantic_contract.sh"
 
+echo
+echo "[job-schedule-canonical] Running Phase 1C job-schedule canonical contract assertions..."
+"${SCRIPT_DIR}/assert_job_schedule_canonical.sh"
+
 echo "[14/14] Verifying migration ledger..."
 ledger="$(
     docker compose \
