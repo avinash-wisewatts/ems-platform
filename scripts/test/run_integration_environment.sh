@@ -65,6 +65,10 @@ echo
 echo "[asset-demand regression] Verifying automatic ASSET demand with SITE demand disabled..."
 "${SCRIPT_DIR}/assert_asset_demand_automatic_decoupling.sh"
 
+echo
+echo "[connectivity-semantics] Running Phase 1A connectivity semantic contract assertions..."
+"${SCRIPT_DIR}/assert_connectivity_semantic_contract.sh"
+
 echo "[14/14] Verifying migration ledger..."
 ledger="$(
     docker compose \
