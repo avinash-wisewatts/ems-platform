@@ -66,7 +66,7 @@ def _rows(conn, sql, params):
         ("14 days", "15m"),  # inclusive boundary
         ("14 days 1 second", "1h"),  # just over 14d
         ("30 days", "1h"),
-        ("400 days", "1h"),
+        ("400 days", "1d"),
     ],
 )
 def test_routing_thresholds(conn, range_interval, expected_resolution):
