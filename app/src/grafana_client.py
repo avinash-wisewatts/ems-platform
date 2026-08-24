@@ -106,6 +106,36 @@ class GrafanaClient:
 
         return response.json()
 
+    def _datasource_payload(self) -> dict[str, Any]:
+        """
+        Build the canonical TimescaleDB datasource configuration.
+
+        Shared by create_datasource() and update_datasource() so the two
+        operations cannot drift apart from each other.
+        """
+
+        return {
+            "name": DATASOURCE_NAME,
+            "uid": DATASOURCE_UID,
+            "type": "grafana-postgresql-datasource",
+            "access": "proxy",
+            "url": "timescaledb:5432",
+            "database": "ems",
+            "user": "grafana_reader",
+            "isDefault": True,
+            "jsonData": {
+                "sslmode": "disable",
+                "postgresVersion": 1600,
+                "timescaledb": True,
+                "maxOpenConns": 10,
+                "maxIdleConns": 5,
+                "connMaxLifetime": 14400,
+            },
+            "secureJsonData": {
+                "password": self.datasource_password,
+            },
+        }
+
     async def create_datasource(
         self,
         org_id: int,
@@ -114,27 +144,29 @@ class GrafanaClient:
             "POST",
             "/api/datasources",
             org_id=org_id,
-            json_payload={
-                "name": DATASOURCE_NAME,
-                "uid": DATASOURCE_UID,
-                "type": "grafana-postgresql-datasource",
-                "access": "proxy",
-                "url": "timescaledb:5432",
-                "database": "ems",
-                "user": "grafana_reader",
-                "isDefault": True,
-                "jsonData": {
-                    "sslmode": "disable",
-                    "postgresVersion": 1600,
-                    "timescaledb": True,
-                    "maxOpenConns": 10,
-                    "maxIdleConns": 5,
-                    "connMaxLifetime": 14400,
-                },
-                "secureJsonData": {
-                    "password": self.datasource_password,
-                },
-            },
+            json_payload=self._datasource_payload(),
+        )
+
+    async def update_datasource(
+        self,
+        org_id: int,
+    ) -> None:
+        """
+        Reconcile an existing datasource to the current canonical
+        configuration, including the current EMS_GRAFANA_DB_PASSWORD.
+
+        Grafana does not merge secureJsonData on PUT: fields omitted from
+        secureJsonData are left as previously stored, but a password
+        included here is always applied, which is exactly the update this
+        method exists to make. The UID-based endpoint is used so the
+        existing stable "ems-timescaledb" identity is never replaced.
+        """
+
+        await self._request(
+            "PUT",
+            f"/api/datasources/uid/{DATASOURCE_UID}",
+            org_id=org_id,
+            json_payload=self._datasource_payload(),
         )
 
     async def ensure_folder(self, org_id: int) -> None:
@@ -226,6 +258,8 @@ class GrafanaClient:
 
         if datasource is None:
             await self.create_datasource(grafana_org_id)
+        else:
+            await self.update_datasource(grafana_org_id)
 
         await self.ensure_folder(grafana_org_id)
         await self.import_dashboards(grafana_org_id)

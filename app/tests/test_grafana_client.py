@@ -141,6 +141,74 @@ async def test_create_datasource_uses_stable_uid(
 
 
 @pytest.mark.asyncio
+async def test_update_datasource_uses_stable_uid_and_current_password(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = GrafanaClient()
+    captured: dict = {}
+
+    async def fake_request(
+        method: str,
+        path: str,
+        *,
+        org_id=None,
+        json_payload=None,
+    ):
+        captured.update(
+            {
+                "method": method,
+                "path": path,
+                "org_id": org_id,
+                "json_payload": json_payload,
+            }
+        )
+
+        return FakeResponse(payload={"message": "Datasource updated"})
+
+    monkeypatch.setattr(client, "_request", fake_request)
+
+    client.datasource_password = "rotated-password"
+
+    await client.update_datasource(7)
+
+    assert captured["method"] == "PUT"
+    assert captured["path"] == f"/api/datasources/uid/{DATASOURCE_UID}"
+    assert captured["org_id"] == 7
+    assert captured["json_payload"]["uid"] == DATASOURCE_UID
+    assert captured["json_payload"]["secureJsonData"] == {
+        "password": "rotated-password"
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_and_update_datasource_payloads_do_not_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both operations must build their payload from the same helper."""
+    client = GrafanaClient()
+    client.datasource_password = "shared-password"
+
+    captured_payloads: list[dict] = []
+
+    async def fake_request(
+        method: str,
+        path: str,
+        *,
+        org_id=None,
+        json_payload=None,
+    ):
+        captured_payloads.append(json_payload)
+        return FakeResponse(payload={"message": "ok"})
+
+    monkeypatch.setattr(client, "_request", fake_request)
+
+    await client.create_datasource(7)
+    await client.update_datasource(7)
+
+    assert captured_payloads[0] == captured_payloads[1]
+
+
+@pytest.mark.asyncio
 async def test_ensure_folder_creates_missing_folder(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -285,9 +353,13 @@ async def test_request_wraps_http_failure(
         await client.list_organizations()
 
 @pytest.mark.asyncio
-async def test_provision_organization_reuses_existing_org_id(
+async def test_provision_organization_reconciles_existing_datasource(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """
+    Regression test for the stale-datasource-credential bug: an existing
+    datasource must be reconciled (updated), never silently left as-is.
+    """
     client = GrafanaClient()
     calls: list[tuple[str, int]] = []
 
@@ -301,9 +373,17 @@ async def test_provision_organization_reuses_existing_org_id(
             "Existing mappings must not create a Grafana organization."
         )
 
+    async def unexpected_create_datasource(org_id: int):
+        raise AssertionError(
+            "An existing datasource must be updated, not created."
+        )
+
     async def fake_get_datasource(org_id: int):
         calls.append(("get_datasource", org_id))
         return {"uid": DATASOURCE_UID}
+
+    async def fake_update_datasource(org_id: int):
+        calls.append(("update_datasource", org_id))
 
     async def fake_ensure_folder(org_id: int):
         calls.append(("ensure_folder", org_id))
@@ -328,6 +408,16 @@ async def test_provision_organization_reuses_existing_org_id(
     )
     monkeypatch.setattr(
         client,
+        "create_datasource",
+        unexpected_create_datasource,
+    )
+    monkeypatch.setattr(
+        client,
+        "update_datasource",
+        fake_update_datasource,
+    )
+    monkeypatch.setattr(
+        client,
         "ensure_folder",
         fake_ensure_folder,
     )
@@ -345,6 +435,7 @@ async def test_provision_organization_reuses_existing_org_id(
     assert result == 7
     assert calls == [
         ("get_datasource", 7),
+        ("update_datasource", 7),
         ("ensure_folder", 7),
         ("import_dashboards", 7),
     ]
@@ -372,6 +463,11 @@ async def test_provision_organization_creates_missing_resources(
     async def fake_create_datasource(org_id: int):
         calls.append(("create_datasource", org_id))
 
+    async def unexpected_update_datasource(org_id: int):
+        raise AssertionError(
+            "A missing datasource must be created, not updated."
+        )
+
     async def fake_ensure_folder(org_id: int):
         calls.append(("ensure_folder", org_id))
 
@@ -397,6 +493,11 @@ async def test_provision_organization_creates_missing_resources(
         client,
         "create_datasource",
         fake_create_datasource,
+    )
+    monkeypatch.setattr(
+        client,
+        "update_datasource",
+        unexpected_update_datasource,
     )
     monkeypatch.setattr(
         client,

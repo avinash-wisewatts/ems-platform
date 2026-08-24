@@ -1,0 +1,177 @@
+# Change History
+
+Status: HISTORICAL
+Last verified: 2026-08-24
+Verification basis: Audit evidence, Repository, Staging (this session)
+
+This is a narrative timeline synthesized from the `Audit/` folder's ~35
+investigation documents plus this session's own verified work. It is a
+**history of investigation and implementation phases**, not a live status
+document — for current state, see the numbered architecture documents
+(especially [23-known-issues-and-drift.md](23-known-issues-and-drift.md)).
+Audit document titles are quoted for traceability; read the source
+document for full detail on any phase.
+
+## Phase 0 — Current-state baseline (multiple audit documents)
+
+A multi-part investigation (`Phase 0 Current-State Inventory`,
+`Phase 0 Complete Grafana Analytics Consumption Audit`,
+`Phase 0 Metric Lineage Catalogue`, `Phase 0 Semantic Layer Audit`,
+`Phase 0 Static Analytical Query-Performance Audit`,
+`Phase 0 Tenant-Isolation & Authorization Audit`,
+`Phase 0 Application-API Endpoint Audit`,
+`Phase 0 Runtime Verification Against STAGING`) culminating in
+`Phase 0 Final Deliverable: Current-State Analytics Architecture Baseline`.
+This established the layered model (raw → normalized → domain measurements
+→ two parallel aggregation families → analytics/semantic layer) that
+[05-database.md](05-database.md) and [11-aggregation.md](11-aggregation.md)
+describe. **At this baseline, staging had zero commissioned
+sites/gateways/devices** — every telemetry table below the metadata layer
+was empty by construction, not by failure. The baseline also recorded live
+job-schedule drift (`run_normalization_job` running 5min/20min-overlap
+against a canonical 1min/15min-overlap definition) and a retention-policy
+discrepancy (a "do NOT add a retention policy yet" comment in source vs. an
+already-configured 180-day/2-year retention observed live).
+
+## Phase 1 — Canonical semantic model
+
+`Phase 1 Canonical Semantic Model` and its `Final Reconciliation` document
+define the target semantic model the subsequent 1A-1E phases implemented
+toward.
+
+## Phases 1A–1E — Incremental implementation
+
+A sequence of implementation plans and reports (1A connectivity/semantic
+consolidation, 1B, 1C, 1D, 1E-A, 1E-B), each pushed to `origin/staging` as
+scoped, reviewed commits. Notable: `Phase 1C Scope Ambiguity (Blocking)`
+and `Phase 1D Investigation (STOP — Discrepancy Found)` record cases where
+implementation paused pending clarification rather than proceeding on an
+assumption — consistent with this manual's own "do not infer architecture"
+posture. `Phase 1D CI Failure and Corrective Commit` records a CI break and
+its fix. `Phase 1E-B Implementation Report` (historical backfill of
+per-flow energy-consumption quality columns) is the most recent
+implementation-phase document found in `Audit/` as of this verification;
+its commit (`b114c10`) matches this repository's own recent git history.
+
+Each phase's CI/CD verification is separately recorded
+(`Phase 1B CI-CD Release Verification`, `Phase 1C CI-CD Release
+Verification`), distinct from the later, more complete CI/CD pipeline
+implementation described in `docs/operations/CICD_PIPELINE.md` and
+[17-cicd-and-deployment.md](17-cicd-and-deployment.md).
+
+## Production access and bootstrap
+
+`Production Read-Only Access Design` and its `Final Hardened Design`
+revision, plus `Production Bootstrap Runbook`, establish the read-only
+production database access model this manual's own live-verification work
+(and the sessions before it) used.
+
+## Staging commissioning investigation → Meenaxy Pharma migration (this session)
+
+`Staging Commissioning Investigation` and its `(Corrected Topology)`
+revision, plus `Staging Reference-Data Decision Report`, investigated why
+staging's onboarding UI showed empty Device Model / Device Profile
+dropdowns, tracing the root cause to `metadata.device_models` and
+`config.device_profile_categories` both being empty on staging — a
+reference-data gap, not an application bug.
+
+**This session's own work directly followed on from that investigation**:
+using production as the read-only authoritative source, it resolved the
+device-model naming blocker with real production evidence
+(`vendor='Best Energy'`, `model='Eniscope Energy Meter'` — correcting an
+earlier test-fixture-based guess of `vendor='Eniscope'`), then built and
+executed a transactional, idempotent, business-key-resolved migration
+creating Meenaxy Pharma's 22 devices/22 assets/22 identifiers/22
+relationships on staging. Two real staging-side surprises were found and
+fixed mid-migration, not assumed away:
+1. A duplicate `DISTRIBUTIONPANEL` space existed under both `GROUND` and
+   `MEZZANINE` floors on staging (production only ever had it under
+   `MEZZANINE`) — resolved by qualifying the space lookup by floor, not by
+   modifying staging's location data.
+2. A live trigger (`metadata.validate_asset_physical_location`, not
+   present in any repository migration) required `building_id`/`floor_id`
+   to be set explicitly whenever `space_id` was set on an asset row — the
+   migration's asset `INSERT` was corrected to populate all three.
+
+Following the migration, all 22 devices were **manually commissioned
+through the application's controlled commissioning action** (traced via
+`admin.onboarding_audit` to a human portal user, not any automated process
+in this session), and real MQTT telemetry began flowing within minutes —
+verified end-to-end from raw ingestion through 1-minute/15-minute/hourly
+aggregation to the Grafana-facing semantic views, for all 22 devices,
+individually traced for 3 representative devices (one per gateway).
+
+This is the first point in the audit trail where staging is confirmed to
+be carrying **real, live, commissioned telemetry** rather than empty
+metadata scaffolding — every prior Phase 0/1A-1E document's "0 rows" /
+"staging has zero devices" observations should be read as historical,
+pre-commissioning state, not current fact.
+
+## What this timeline does not cover
+
+Whether Phases 1A-1E's implementation work has been independently
+re-verified as still-correct against the current staging schema (only the
+specific objects this session directly touched — device/asset metadata,
+the aggregation and analytics layers exercised by the pipeline
+verification — were re-checked). Treat older phases' specific claims as
+historical unless a current document in this manual explicitly re-confirms
+them.
+
+## Manual maintenance log
+
+Ongoing entries from this point forward, one per meaningful documentation
+change (not every trivial edit). Each entry: date, area, what changed, why,
+evidence/source, whether verified live, related code/doc.
+
+### 2026-08-24 — Documentation-maintenance workflow adopted
+
+- **Area**: Manual process itself ([README.md](README.md), [23-known-issues-and-drift.md](23-known-issues-and-drift.md))
+- **What changed**: Added a formal source-of-truth priority order and
+  contradiction-handling format to the README; added a consolidated
+  "Tracked open items" index table to `23-known-issues-and-drift.md`
+  covering all 13 currently-known open items (the original 6 documented in
+  that file plus 7 more that existed only in topic-specific files —
+  `device_profile_categories` DB-trigger gap, possible near-duplicate
+  `analytics.v_energy_*` views, uncanonicalized 15min/hourly/daily
+  aggregation DDL, two differing "demand" panel semantics, unestablished
+  backup/recovery, unestablished admin-portal route inventory, unconfirmed
+  onboarding code path).
+- **Why**: User directive establishing the manual as a continuously
+  maintained artifact, with an explicit requirement to track known open
+  items rather than let them go untracked or get silently marked resolved.
+- **Evidence/source**: Direct user instruction; cross-checked which items
+  were already documented where via targeted grep across
+  `docs/platform-manual/` before adding the index (not assumed).
+- **Verified live**: No — this was a documentation-structure change only,
+  no new system investigation.
+- **Related**: None (process change, not a code/schema change).
+
+### 2026-08-24 — Staging Grafana failure investigation (diagnosis only, no fix applied)
+
+- **Area**: Grafana ([12-grafana.md](12-grafana.md)), known issues ([23-known-issues-and-drift.md](23-known-issues-and-drift.md))
+- **What changed**: Documented the full, tested list of 18 `grafana_reader`-executable functions (previously described only as "a handful"); added two new tracked issues (`max_connections=25` ceiling, `run_failed_message_recovery_job` actively failing since 21:45).
+- **Why**: User reported staging Grafana showing errors across dashboard tiles, live/status tiles, and charts. Investigated read-only, no changes made per explicit instruction.
+- **Evidence/source**: Live staging queries via `SET ROLE grafana_reader`, calling 8 of the 18 `analytics.get_grafana_*` functions directly with real Meenaxy data (asset `HVAC_UNIT_PELLET_SECTION_P1_HUV_02`) — all 8 returned correct, current results (fresh as of `22:05` IST). All 13 TimescaleDB background jobs checked via `timescaledb_information.jobs`/`job_stats` — 12 healthy, 1 (`run_failed_message_recovery_job`) failing. `metadata.grafana_organization_map` re-confirmed to have exactly one active row (Meenaxy). `admin.schema_migrations` confirmed migrations 194-197 applied hours before the reported failure.
+- **Verified live**: Yes, staging, `ems_admin` + `grafana_reader` impersonation.
+- **Related**: `postgres/migrations/194-197_*.sql` (reviewed, ruled out as directly implicated); no code/schema changes made.
+- **Outcome**: Could not reproduce the reported failure at the database layer — every query-level, permission-level, and data-freshness check passed. Root cause not established; most likely location is Grafana's own process/container/connection layer, which this session cannot inspect (no SSH/`docker exec`/Grafana API access). See the full diagnostic report in that session's conversation for the complete VERIFIED FACTS / INFERENCE / ROOT CAUSE breakdown.
+
+### 2026-08-24 — Grafana datasource stale-credential bug: root cause found and fixed (code only, not yet deployed)
+
+- **Area**: Grafana provisioning/reconciliation ([12-grafana.md](12-grafana.md))
+- **What changed**: `app/src/grafana_client.py` — `provision_organization()` now calls a new `update_datasource()` method (PUT `/api/datasources/uid/ems-timescaledb`) when a tenant's datasource already exists, instead of silently leaving it untouched. `create_datasource()` and `update_datasource()` now share one `_datasource_payload()` builder so their configurations cannot drift apart. `app/tests/test_grafana_client.py` updated accordingly: rewrote the test that asserted the old skip-when-exists behavior, added dedicated update/no-drift regression tests, and added a create-path guard proving `update_datasource` is never called when the datasource is missing.
+- **Why**: The staging Grafana failure investigated the same day (previous entry) turned out, once a browser-side Grafana admin check was possible, to be `password authentication failed for user "grafana_reader"` at the Grafana-stored-datasource level, despite the actual Postgres role and `EMS_GRAFANA_DB_PASSWORD` both being independently verified correct. Root cause: existing datasources were never reconciled to the current canonical configuration on any subsequent provisioning run — only ever created once and left alone.
+- **Evidence/source**: Direct code inspection of `provision_organization()`'s `if datasource is None: create... ` branch with no `else`; confirmed the only other call site with datasource-touching logic (`grafana_reconciliation_service.py::reconcile_grafana_tenant`) also routes through the same unpatched `provision_organization()`.
+- **Verified live**: No — this is a code fix, not yet deployed to staging. Tests run against a locally built `Dockerfile.test` image: `app/tests/test_grafana_client.py` (11/11 passed), full suite (`app/tests`: 980 passed; 57 pre-existing errors, all `psycopg.OperationalError: connection refused` against a local test Postgres this environment doesn't have running — confirmed unrelated to this change, same errors occur in unrelated `test_analytics_grafana_routing.py`/`test_analytics_grafana_electrical_routing.py` files that don't import `grafana_client` at all).
+- **Related**: `app/src/grafana_client.py`, `app/tests/test_grafana_client.py`; repair path for the currently-affected Meenaxy tenant is the existing `POST /administration/organizations/{organization_id}/grafana/reconcile` route (`app/src/main.py`) — not yet invoked, pending deployment of this fix.
+- **Outcome**: Code fixed and tested locally. Not committed, not pushed, not deployed, and the live Meenaxy datasource has not yet been repaired — all per explicit instruction to report before taking further action.
+
+### 2026-08-24 — Architecture review of the datasource reconciliation fix
+
+- **Area**: Grafana ([12-grafana.md](12-grafana.md))
+- **What changed**: Added an explicit verification-status breakdown (repo/code vs. automated-test vs. Grafana-docs vs. live-instance evidence) and a minimal recommended staging smoke test (using Grafana's own `/api/datasources/uid/:uid/health` endpoint) to the datasource lifecycle section. No functional code changes — the review confirmed the prior fix's architecture is sound.
+- **Why**: User requested a focused architecture/deployment review of the same-day datasource fix, explicitly asking for evidence-level honesty and confirmation that no competing datasource-mutation path exists elsewhere in the repo.
+- **Evidence/source**: Repo-wide grep confirmed `provision_organization()` is the only caller of `create_datasource`/`update_datasource`, and the only code path that calls Grafana's `/api/datasources` API at all (`live_main.py`'s Grafana-adjacent routes are WebSocket endpoints for the separate `wisewatts-live-datasource` plugin, unrelated). Grafana's official HTTP API documentation for `PUT /api/datasources/uid/:uid` fetched and checked against our payload shape (confirms convention match; does not explicitly document overwrite-on-PUT semantics).
+- **Verified live**: No — documentation-and-code review only, consistent with the explicit "do not deploy/call the reconciliation route/rotate passwords" instruction.
+- **Related**: `app/src/grafana_client.py` (unchanged), `docs/platform-manual/12-grafana.md`.
+- **Outcome**: No code changes needed. Architecture confirmed sound. One concrete follow-up recommended (the staging smoke test), not yet performed.
