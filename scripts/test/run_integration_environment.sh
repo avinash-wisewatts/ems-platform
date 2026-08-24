@@ -81,6 +81,10 @@ echo
 echo "[grafana-energy-routing] Running Phase 1D Grafana energy resolution-routing contract assertions..."
 "${SCRIPT_DIR}/assert_grafana_energy_routing_daily_tier.sh"
 
+echo
+echo "[energy-consumption-per-flow-quality] Running Phase 1E-A per-flow quality persistence contract assertions..."
+"${SCRIPT_DIR}/assert_energy_consumption_per_flow_quality_contract.sh"
+
 echo "[14/14] Verifying migration ledger..."
 ledger="$(
     docker compose \
