@@ -85,6 +85,10 @@ echo
 echo "[energy-consumption-per-flow-quality] Running Phase 1E-A per-flow quality persistence contract assertions..."
 "${SCRIPT_DIR}/assert_energy_consumption_per_flow_quality_contract.sh"
 
+echo
+echo "[energy-consumption-backfill] Running Phase 1E-B historical backfill contract assertions..."
+"${SCRIPT_DIR}/assert_energy_consumption_backfill_contract.sh"
+
 echo "[14/14] Verifying migration ledger..."
 ledger="$(
     docker compose \
