@@ -27,6 +27,22 @@ class LiveSettings(BaseSettings):
 
     grafana_stream_token: str = Field(min_length=32, alias="EMS_GRAFANA_STREAM_TOKEN")
 
+    # Bounds concurrent telemetry.ingest_live_rtdata() calls so an MQTT burst
+    # (e.g. the retained-message flood on reconnect) cannot occupy every
+    # connection in the live-telemetry DB pool. Kept below the pool's
+    # max_size=10 (see live_main.py's lifespan()) so the live-tile read path
+    # (fetch_grafana_asset_state) always has pool capacity available, even
+    # under maximum ingest concurrency.
+    live_ingest_max_concurrency: int = Field(default=6, alias="EMS_LIVE_INGEST_MAX_CONCURRENCY")
+
+    # Bounded retry for a transient pool-acquisition timeout on the live-tile
+    # WebSocket connect path. Finite by construction: at most this many
+    # attempts, each separated by the fixed backoff below.
+    live_pool_acquire_max_attempts: int = Field(default=3, alias="EMS_LIVE_POOL_ACQUIRE_MAX_ATTEMPTS")
+    live_pool_acquire_retry_backoff_seconds: float = Field(
+        default=0.5, alias="EMS_LIVE_POOL_ACQUIRE_RETRY_BACKOFF_SECONDS"
+    )
+
     model_config = SettingsConfigDict(extra="ignore", case_sensitive=True)
 
     @property
