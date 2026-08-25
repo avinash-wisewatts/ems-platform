@@ -31,8 +31,24 @@ name: Deploy to Production
 #      verification, not merely that CI ran once.
 #   5. The image ghcr.io/<repo>-app:<release_git_sha> -- derived from the
 #      SHA, never accepted as independent input -- must actually exist in
-#      GHCR, and its digest is resolved and pinned before deployment so the
-#      exact same immutable artifact reaches the deploy job.
+#      GHCR. validate-promotion verifies this early (fail-fast, and shown in
+#      the promotion summary); deploy-production independently re-resolves
+#      and pins the immutable digest itself, immediately before the SSH
+#      step, rather than consuming validate-promotion's resolved value
+#      through a job output. That split exists because a job-level output
+#      (jobs.<id>.outputs, the mechanism behind needs.*.outputs.*) is
+#      scanned against every secret used in that job when it completes, and
+#      GitHub Actions silently drops any output value that happens to
+#      match -- exactly what happened to the digest-pinned image string on
+#      this workflow's first real dispatch (2026-08-25, run 32858328343 ->
+#      32861162765): validate-promotion reported success, but
+#      deploy-production's APP_IMAGE was silently empty, and
+#      deploy_release.sh correctly refused to run with no image. Resolving
+#      the digest again inside deploy-production as a same-job step output
+#      avoids that cross-job channel entirely without weakening any
+#      guarantee: the image is still derived only from release_git_sha,
+#      still authenticated against GHCR, and still pinned to its immutable
+#      digest before deploy_release.sh ever runs.
 #
 # It never rebuilds from source, and it never accepts an arbitrary branch,
 # ref, or independently-supplied image tag as its artifact source.
@@ -69,8 +85,6 @@ jobs:
     name: Validate promotion candidate
     runs-on: ubuntu-latest
     environment: production
-    outputs:
-      image_with_digest: ${{ steps.resolve-image.outputs.image_with_digest }}
     steps:
       - name: Require an approved production operator
         env:
@@ -156,7 +170,23 @@ jobs:
           echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
           echo "Verified by staging deployment run: ${run_url}"
 
-      - name: Resolve and verify the SHA-derived image exists in GHCR
+      - name: Verify the SHA-derived image exists in GHCR
+        # Early, fail-fast existence check for operator feedback and the
+        # promotion summary below. This step's resolved digest is
+        # deliberately NOT exposed as a job-level output for
+        # deploy-production to consume -- see that job's own "Resolve and
+        # pin the deployment image" step for why: a job-level output
+        # (jobs.<id>.outputs, the mechanism behind needs.*.outputs.*) is
+        # scanned against every secret used in this job when the job
+        # completes, and GitHub Actions silently drops (not fails, just
+        # drops with a warning) any output value that happens to match.
+        # That is exactly what happened on the first real dispatch of this
+        # workflow (2026-08-25, run 32858328343 -> 32861162765): the
+        # digest-pinned image string was computed correctly, printed
+        # correctly in this job's own summary, and then silently discarded
+        # at job-completion ("Skip output 'image_with_digest' since it may
+        # contain secret"), leaving deploy-production's APP_IMAGE empty
+        # even though validate-promotion itself reported success.
         id: resolve-image
         env:
           RELEASE_SHA: ${{ inputs.release_git_sha }}
@@ -232,6 +262,44 @@ jobs:
           fi
           echo "staging HEAD still matches validated release_git_sha: ${head}"
 
+      - name: Resolve and pin the deployment image
+        # Authoritative for this deployment. Deliberately re-resolved here,
+        # in this job, as a same-job step output (steps.*.outputs.*, never
+        # a jobs.*.outputs.* cross-job output) -- not consumed from
+        # validate-promotion's equivalent step, because a job-level output
+        # is exactly what GitHub Actions silently discarded on the first
+        # real dispatch (see validate-promotion's "Verify the SHA-derived
+        # image exists in GHCR" step for the full explanation). A same-job
+        # step output never leaves this job's boundary, so it is not
+        # subject to that job-outputs secret-masking check. The image is
+        # still derived only from release_git_sha (never an
+        # independently-supplied tag), still authenticated against GHCR
+        # with the same registry credentials, and still pinned to its
+        # immutable digest before deploy_release.sh ever runs.
+        id: resolve-image
+        env:
+          RELEASE_SHA: ${{ inputs.release_git_sha }}
+        run: |
+          image="${REGISTRY}/${IMAGE_NAME}:${RELEASE_SHA}"
+          echo "${{ secrets.REGISTRY_PASSWORD }}" | docker login "${REGISTRY}" \
+            --username "${{ secrets.REGISTRY_USERNAME }}" \
+            --password-stdin
+
+          inspect_output="$(docker buildx imagetools inspect "${image}" 2>&1)" || {
+            echo "::error::Image not found in registry: ${image}"
+            echo "${inspect_output}"
+            exit 1
+          }
+          digest="$(echo "${inspect_output}" | awk '/^Digest:/{print $2; exit}')"
+          if [[ -z "${digest}" ]]; then
+            echo "::error::Could not resolve a digest for ${image}"
+            exit 1
+          fi
+
+          image_with_digest="${REGISTRY}/${IMAGE_NAME}:${RELEASE_SHA}@${digest}"
+          echo "image_with_digest=${image_with_digest}" >> "$GITHUB_OUTPUT"
+          echo "Resolved image: ${image_with_digest}"
+
       - name: Deploy over SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -248,7 +316,7 @@ jobs:
             "${PROJECT_PATH}/scripts/release/deploy_release.sh"
         env:
           RELEASE_SHA: ${{ inputs.release_git_sha }}
-          APP_IMAGE: ${{ needs.validate-promotion.outputs.image_with_digest }}
+          APP_IMAGE: ${{ steps.resolve-image.outputs.image_with_digest }}
           REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
           REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
 
