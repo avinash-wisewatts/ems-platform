@@ -93,6 +93,10 @@ echo
 echo "[reference-data-completeness-guard] Running reference-data completeness guard assertions..."
 "${SCRIPT_DIR}/assert_reference_data_completeness_guard.sh"
 
+echo
+echo "[commissioning-semantic-gate] Running commissioning profile-completeness gate assertions..."
+"${SCRIPT_DIR}/assert_commissioning_semantic_gate.sh"
+
 echo "[14/14] Verifying migration ledger..."
 ledger="$(
     docker compose \
