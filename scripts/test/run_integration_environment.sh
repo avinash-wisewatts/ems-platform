@@ -101,6 +101,10 @@ echo
 echo "[normalized-points-uniqueness-verification] Running normalized_points uniqueness verification assertions..."
 "${SCRIPT_DIR}/assert_normalized_points_uniqueness_verification.sh"
 
+echo
+echo "[canonical-energy-read-pre-policy-range] Running canonical energy read pre-policy-range assertions..."
+"${SCRIPT_DIR}/assert_canonical_energy_read_pre_policy_range.sh"
+
 echo "[14/14] Verifying migration ledger..."
 ledger="$(
     docker compose \
