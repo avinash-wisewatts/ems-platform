@@ -89,6 +89,10 @@ echo
 echo "[energy-consumption-backfill] Running Phase 1E-B historical backfill contract assertions..."
 "${SCRIPT_DIR}/assert_energy_consumption_backfill_contract.sh"
 
+echo
+echo "[reference-data-completeness-guard] Running reference-data completeness guard assertions..."
+"${SCRIPT_DIR}/assert_reference_data_completeness_guard.sh"
+
 echo "[14/14] Verifying migration ledger..."
 ledger="$(
     docker compose \
