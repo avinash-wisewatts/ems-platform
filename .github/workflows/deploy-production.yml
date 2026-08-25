@@ -3,38 +3,214 @@ name: Deploy to Production
 # Production deployment ARCHITECTURE.
 #
 # This workflow is created as part of the CI/CD implementation task but is
-# NEVER automatically triggered and has NOT been executed. It only runs when
-# a human explicitly invokes it (workflow_dispatch) and only after the
-# `production` GitHub Environment's required-reviewer approval gate passes.
+# NEVER automatically triggered. It only runs when a human explicitly
+# invokes it (workflow_dispatch).
 #
-# It pulls the EXACT image tag already built once and verified in staging --
-# it never rebuilds from source, and it never accepts an arbitrary branch or
-# ref as its artifact source, only a pre-built image tag.
+# GitHub Free does not offer the "Required reviewers" Environment protection
+# rule, so the `environment: production` block below provides secret scoping
+# ONLY -- it does not pause the run for approval. All promotion controls are
+# therefore enforced in-workflow, entirely inside the `validate-promotion`
+# job, which must fully succeed before the `deploy-production` job (the only
+# job with SSH access to production) is even allowed to start:
+#
+#   1. release_git_sha must be a full 40-character commit SHA, and
+#      confirm_release_git_sha must match it byte-for-byte (deliberate
+#      double-entry -- the operator must consciously look up and retype the
+#      exact commit, not just click a button).
+#   2. The requesting GitHub actor must appear in the
+#      PRODUCTION_APPROVED_OPERATORS environment variable (a repo-native
+#      allowlist -- see docs/operations/CICD_PIPELINE.md). Repository write
+#      access alone is NOT sufficient.
+#   3. release_git_sha must be staging's CURRENT HEAD, re-verified again
+#      immediately before deployment to close the push-after-validation
+#      race window. This workflow only ever promotes "staging, right now" --
+#      never an arbitrary older or newer SHA (that is rollback.yml's job).
+#   4. release_git_sha must correspond to a deploy-staging.yml run whose
+#      headSha matches and whose conclusion is "success" -- proof staging
+#      was actually deployed AND passed its own post-deployment
+#      verification, not merely that CI ran once.
+#   5. The image ghcr.io/<repo>-app:<release_git_sha> -- derived from the
+#      SHA, never accepted as independent input -- must actually exist in
+#      GHCR, and its digest is resolved and pinned before deployment so the
+#      exact same immutable artifact reaches the deploy job.
+#
+# It never rebuilds from source, and it never accepts an arbitrary branch,
+# ref, or independently-supplied image tag as its artifact source.
 #
 # Secrets referenced here (PRODUCTION_HOST, PRODUCTION_USER,
-# PRODUCTION_SSH_KEY, PRODUCTION_PROJECT_PATH) do not need to exist yet for
-# this file to be valid; they must be configured before this workflow can
-# ever be run. See docs/operations/CICD_PIPELINE.md for the exact list.
+# PRODUCTION_SSH_KEY, PRODUCTION_PROJECT_PATH, REGISTRY_USERNAME,
+# REGISTRY_PASSWORD) must be configured before this workflow can ever run.
+# See docs/operations/CICD_PIPELINE.md for the exact list, plus the
+# PRODUCTION_APPROVED_OPERATORS environment variable (Settings ->
+# Environments -> production -> Variables), which must be populated with a
+# comma-separated list of authorized GitHub usernames before any promotion
+# can succeed -- this gate fails closed if that variable is unset or empty.
 
 on:
   workflow_dispatch:
     inputs:
-      image_tag:
-        description: "Exact immutable image reference already proven in staging (e.g. ghcr.io/OWNER/REPO-app:<git-sha>)"
-        required: true
       release_git_sha:
-        description: "Git commit SHA matching image_tag (the commit that produced it in staging)"
+        description: "Exact 40-character commit SHA to promote (must be staging's current HEAD)"
+        required: true
+      confirm_release_git_sha:
+        description: "Retype the same commit SHA to confirm -- must match release_git_sha exactly"
         required: true
 
 permissions:
   contents: read
+  actions: read
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}-app
 
 jobs:
+  validate-promotion:
+    name: Validate promotion candidate
+    runs-on: ubuntu-latest
+    environment: production
+    outputs:
+      image_with_digest: ${{ steps.resolve-image.outputs.image_with_digest }}
+    steps:
+      - name: Require an approved production operator
+        env:
+          ACTOR: ${{ github.actor }}
+          APPROVED_OPERATORS: ${{ vars.PRODUCTION_APPROVED_OPERATORS }}
+        run: |
+          if [[ -z "${APPROVED_OPERATORS}" ]]; then
+            echo "::error::PRODUCTION_APPROVED_OPERATORS environment variable is unset or empty. Configure it under Settings -> Environments -> production -> Variables before any production promotion can run."
+            exit 1
+          fi
+          IFS=',' read -ra allowed <<< "${APPROVED_OPERATORS}"
+          authorized="false"
+          for name in "${allowed[@]}"; do
+            trimmed="$(echo "${name}" | xargs)"
+            if [[ "${trimmed}" == "${ACTOR}" ]]; then
+              authorized="true"
+              break
+            fi
+          done
+          if [[ "${authorized}" != "true" ]]; then
+            echo "::error::GitHub actor '${ACTOR}' is not in PRODUCTION_APPROVED_OPERATORS. Repository write access alone does not authorize a production deployment."
+            exit 1
+          fi
+          echo "Authorized production operator: ${ACTOR}"
+
+      - name: Require exact double-entry commit-SHA confirmation
+        env:
+          RELEASE_SHA: ${{ inputs.release_git_sha }}
+          CONFIRM_SHA: ${{ inputs.confirm_release_git_sha }}
+        run: |
+          if [[ ! "${RELEASE_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::release_git_sha must be exactly 40 lowercase hexadecimal characters, got: ${RELEASE_SHA}"
+            exit 1
+          fi
+          if [[ "${RELEASE_SHA}" != "${CONFIRM_SHA}" ]]; then
+            echo "::error::confirm_release_git_sha does not match release_git_sha byte-for-byte"
+            exit 1
+          fi
+          echo "Confirmation matches: ${RELEASE_SHA}"
+
+      - name: Require release_git_sha to be staging's current HEAD
+        id: staging-head
+        env:
+          RELEASE_SHA: ${{ inputs.release_git_sha }}
+        run: |
+          head="$(git ls-remote https://github.com/${{ github.repository }}.git refs/heads/staging | cut -f1)"
+          if [[ -z "${head}" ]]; then
+            echo "::error::Could not resolve origin/staging HEAD"
+            exit 1
+          fi
+          if [[ "${RELEASE_SHA}" != "${head}" ]]; then
+            echo "::error::release_git_sha (${RELEASE_SHA}) is not staging's current HEAD (${head}). This workflow only promotes the current staging tip -- use rollback.yml for an older, previously-deployed commit."
+            exit 1
+          fi
+          echo "staging_head=${head}" >> "$GITHUB_OUTPUT"
+          echo "release_git_sha matches staging HEAD: ${head}"
+
+      - name: Require a successful deploy-staging.yml run for this exact SHA
+        id: staging-run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ inputs.release_git_sha }}
+        run: |
+          run_json="$(gh run list --repo "${{ github.repository }}" --workflow=deploy-staging.yml \
+            --json headSha,conclusion,url,databaseId --limit 100 \
+            --jq "[.[] | select(.headSha==\"${RELEASE_SHA}\" and .conclusion==\"success\")] | first")"
+          if [[ -z "${run_json}" || "${run_json}" == "null" ]]; then
+            echo "::error::No successful deploy-staging.yml run found with headSha=${RELEASE_SHA}. The commit must be built, deployed, and post-deployment-verified on staging before it can be promoted."
+            exit 1
+          fi
+          run_url="$(echo "${run_json}" | jq -r '.url')"
+          run_id="$(echo "${run_json}" | jq -r '.databaseId')"
+          echo "run_url=${run_url}" >> "$GITHUB_OUTPUT"
+          echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
+          echo "Verified by staging deployment run: ${run_url}"
+
+      - name: Resolve and verify the SHA-derived image exists in GHCR
+        id: resolve-image
+        env:
+          RELEASE_SHA: ${{ inputs.release_git_sha }}
+        run: |
+          image="${REGISTRY}/${IMAGE_NAME}:${RELEASE_SHA}"
+          echo "${{ secrets.REGISTRY_PASSWORD }}" | docker login "${REGISTRY}" \
+            --username "${{ secrets.REGISTRY_USERNAME }}" \
+            --password-stdin
+
+          inspect_output="$(docker buildx imagetools inspect "${image}" 2>&1)" || {
+            echo "::error::Image not found in registry: ${image}"
+            echo "${inspect_output}"
+            exit 1
+          }
+          digest="$(echo "${inspect_output}" | awk '/^Digest:/{print $2; exit}')"
+          if [[ -z "${digest}" ]]; then
+            echo "::error::Could not resolve a digest for ${image}"
+            exit 1
+          fi
+
+          image_with_digest="${REGISTRY}/${IMAGE_NAME}:${RELEASE_SHA}@${digest}"
+          echo "image_with_digest=${image_with_digest}" >> "$GITHUB_OUTPUT"
+          echo "Resolved image: ${image_with_digest}"
+
+      - name: Promotion summary
+        env:
+          RELEASE_SHA: ${{ inputs.release_git_sha }}
+          STAGING_HEAD: ${{ steps.staging-head.outputs.staging_head }}
+          STAGING_RUN_URL: ${{ steps.staging-run.outputs.run_url }}
+          STAGING_RUN_ID: ${{ steps.staging-run.outputs.run_id }}
+          IMAGE_WITH_DIGEST: ${{ steps.resolve-image.outputs.image_with_digest }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          {
+            echo "### Production promotion candidate"
+            echo
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| release_git_sha | \`${RELEASE_SHA}\` |"
+            echo "| confirmation match | yes |"
+            echo "| current staging HEAD | \`${STAGING_HEAD}\` |"
+            echo "| staging deployment run | [${STAGING_RUN_ID}](${STAGING_RUN_URL}) |"
+            echo "| derived image (digest-pinned) | \`${IMAGE_WITH_DIGEST}\` |"
+            echo "| authorized actor | \`${ACTOR}\` |"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
   deploy-production:
     name: Deploy exact staging-proven artifact to production
+    needs: validate-promotion
     runs-on: ubuntu-latest
     environment: production
     steps:
+      - name: Re-verify staging HEAD has not moved since validation
+        env:
+          RELEASE_SHA: ${{ inputs.release_git_sha }}
+        run: |
+          head="$(git ls-remote https://github.com/${{ github.repository }}.git refs/heads/staging | cut -f1)"
+          if [[ "${RELEASE_SHA}" != "${head}" ]]; then
+            echo "::error::staging HEAD moved to ${head} after this promotion was validated for ${RELEASE_SHA}. Aborting -- re-run this workflow against the new staging HEAD."
+            exit 1
+          fi
+          echo "staging HEAD still matches validated release_git_sha: ${head}"
+
       - name: Deploy over SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -51,7 +227,7 @@ jobs:
             "${PROJECT_PATH}/scripts/release/deploy_release.sh"
         env:
           RELEASE_SHA: ${{ inputs.release_git_sha }}
-          APP_IMAGE: ${{ inputs.image_tag }}
+          APP_IMAGE: ${{ needs.validate-promotion.outputs.image_with_digest }}
           REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
           REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
 
