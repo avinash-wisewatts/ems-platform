@@ -23,9 +23,26 @@ set -Eeuo pipefail
 # staging or production.
 # ============================================================================
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+WORKFLOW_FILE="${PROJECT_ROOT}/.github/workflows/deploy-production.yml"
+
 REPO="avinash-wisewatts/ems-platform"
 PASS=0
 FAIL=0
+
+# Extracts the raw YAML lines for top-level job $1 (e.g. "validate-promotion")
+# from deploy-production.yml, up to (but not including) the next 2-space-
+# indented job key or end of file. Used for job-scoped structural
+# assertions (Tests 10-12) without needing a YAML parser as a dependency.
+extract_job() {
+    local job="$1"
+    awk -v job="  ${job}:" '
+        $0 == job { found=1; print; next }
+        found && /^  [a-zA-Z_-]+:/ { exit }
+        found { print }
+    ' "${WORKFLOW_FILE}"
+}
 
 SKIP=0
 pass() { echo "PASS: $1"; PASS=$((PASS+1)); }
@@ -58,11 +75,22 @@ if [[ "$a" == "$a" ]]; then pass "2b: identical SHAs correctly matched"; else fa
 
 # ----------------------------------------------------------------------------
 # Mirrors: "Require release_git_sha to be staging's current HEAD"
-# Live check against the real remote.
+# Live check against the real remote, via the SAME authenticated GitHub API
+# call the workflow itself uses (gh api .../git/ref/heads/staging), not a
+# raw `git ls-remote`. An earlier version of this test used
+# `git ls-remote https://github.com/...` directly and passed locally --
+# but only because this developer machine's git has a credential helper
+# transparently supplying a token for github.com. That is exactly the class
+# of gap that made the real GitHub Actions runner fail closed in production
+# (2026-08-25, run 32858328343): the runner has no such credential helper
+# and no actions/checkout in that job, so the identical-looking command
+# fails there with "could not read Username". Mirroring the actual fixed
+# mechanism here, instead of a differently-authenticated command that only
+# happens to produce the same answer, is the point of this test.
 # ----------------------------------------------------------------------------
 echo
 echo "=== Test 3: SHA different from staging HEAD (live) ==="
-staging_head="$(git ls-remote "https://github.com/${REPO}.git" refs/heads/staging | cut -f1)"
+staging_head="$(gh api "repos/${REPO}/git/ref/heads/staging" --jq '.object.sha')"
 if [[ -z "${staging_head}" ]]; then
     fail "3: could not resolve live staging HEAD -- skipping dependent assertions"
 else
@@ -201,6 +229,90 @@ if [[ -n "${staging_head:-}" ]] \
     pass "7: current staging HEAD (${staging_head}) satisfies every live, credential-free validate-promotion precondition (SHA format, staging-HEAD match, successful staging run); GHCR image existence is covered by Test 5 under the workflow's own authenticated credentials"
 else
     fail "7: current staging HEAD does NOT satisfy the credential-free validate-promotion preconditions right now"
+fi
+
+# ----------------------------------------------------------------------------
+# Tests 8-14: structural assertions against the actual workflow source.
+# These do not require any live credentials -- they prove the fixed
+# implementation is present in the file that will actually run, not just
+# that some equivalent logic passes in this script.
+# ----------------------------------------------------------------------------
+
+echo
+echo "=== Test 8: staging HEAD lookup uses an authenticated GitHub mechanism ==="
+auth_lookup_count="$(grep -cE 'gh api "repos/\$\{\{ github\.repository \}\}/git/ref/heads/staging"' "${WORKFLOW_FILE}" || true)"
+if [[ "${auth_lookup_count}" -eq 2 ]]; then
+    pass "8: authenticated gh api ref lookup present in both staging-HEAD checks (validate-promotion and the pre-deploy race recheck)"
+else
+    fail "8: expected 2 occurrences of the authenticated staging-HEAD lookup (validate-promotion + race recheck), found ${auth_lookup_count}"
+fi
+
+echo
+echo "=== Test 9: no raw unauthenticated git ls-remote against github.com remains ==="
+executable_ls_remote="$(grep -nE 'git ls-remote.*github\.com' "${WORKFLOW_FILE}" | grep -v '^[0-9]*:[[:space:]]*#' || true)"
+if [[ -z "${executable_ls_remote}" ]]; then
+    pass "9: no executable (non-comment) git ls-remote against github.com remains -- this is exactly the pattern that failed closed in run 32858328343"
+else
+    fail "9: found what looks like an executable git ls-remote against github.com: ${executable_ls_remote}"
+fi
+
+echo
+echo "=== Test 10: production SSH secrets unavailable to validate-promotion ==="
+validate_block="$(extract_job "validate-promotion")"
+if echo "${validate_block}" | grep -qE 'PRODUCTION_HOST|PRODUCTION_USER|PRODUCTION_SSH_KEY'; then
+    fail "10: validate-promotion job references a production SSH secret -- it must never have SSH access"
+else
+    pass "10: validate-promotion job does not reference any production SSH secret (only REGISTRY_* and the built-in github.token)"
+fi
+
+echo
+echo "=== Test 11: deploy-production depends on validate-promotion ==="
+deploy_block="$(extract_job "deploy-production")"
+if echo "${deploy_block}" | grep -qE '^[[:space:]]*needs:[[:space:]]*validate-promotion[[:space:]]*$'; then
+    pass "11: deploy-production job declares needs: validate-promotion"
+else
+    fail "11: deploy-production job does not declare needs: validate-promotion"
+fi
+
+echo
+echo "=== Test 12: final staging HEAD recheck immediately precedes the SSH deploy step ==="
+recheck_line="$(echo "${deploy_block}" | grep -n 'name: Re-verify staging HEAD' | head -1 | cut -d: -f1)"
+ssh_line="$(echo "${deploy_block}" | grep -n 'name: Deploy over SSH' | head -1 | cut -d: -f1)"
+if [[ -n "${recheck_line}" && -n "${ssh_line}" && "${recheck_line}" -lt "${ssh_line}" ]]; then
+    between="$(echo "${deploy_block}" | sed -n "$((recheck_line+1)),$((ssh_line-1))p" | grep -cE '^[[:space:]]*- name:' || true)"
+    if [[ "${between}" -eq 0 ]]; then
+        pass "12: staging HEAD recheck is the step immediately preceding Deploy over SSH in deploy-production"
+    else
+        fail "12: another step appears between the staging HEAD recheck and Deploy over SSH"
+    fi
+else
+    fail "12: could not confirm staging HEAD recheck precedes the SSH deploy step"
+fi
+
+echo
+echo "=== Test 13: image is derived from release_git_sha, not an independent input ==="
+if grep -qE '^[[:space:]]*image_tag:' "${WORKFLOW_FILE}"; then
+    fail "13a: an independent image_tag input still exists"
+else
+    pass "13a: no independent image_tag input exists"
+fi
+if grep -qF 'image="${REGISTRY}/${IMAGE_NAME}:${RELEASE_SHA}"' "${WORKFLOW_FILE}"; then
+    pass "13b: image reference is constructed from REGISTRY/IMAGE_NAME/RELEASE_SHA (derived from release_git_sha)"
+else
+    fail "13b: could not find the expected SHA-derived image construction"
+fi
+
+echo
+echo "=== Test 14: production deployment uses the resolved, digest-pinned image ==="
+if grep -qF 'image_with_digest="${REGISTRY}/${IMAGE_NAME}:${RELEASE_SHA}@${digest}"' "${WORKFLOW_FILE}"; then
+    pass "14a: digest-pinned image reference is constructed (tag@digest)"
+else
+    fail "14a: digest-pinned image construction not found"
+fi
+if grep -qF 'APP_IMAGE: ${{ needs.validate-promotion.outputs.image_with_digest }}' "${WORKFLOW_FILE}"; then
+    pass "14b: deploy-production's APP_IMAGE is sourced from validate-promotion's resolved digest-pinned output"
+else
+    fail "14b: deploy-production does not consume the resolved digest-pinned image output"
 fi
 
 echo
