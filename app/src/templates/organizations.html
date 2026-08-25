@@ -52,6 +52,11 @@
         ({{ reconciliation.datasource_name }}):
         {{ reconciliation.datasource_action or "no change recorded" }}.
         {% endif %}
+        {% if reconciliation.live_datasource_uid %}
+        <br>Live datasource <code>{{ reconciliation.live_datasource_uid }}</code>
+        ({{ reconciliation.live_datasource_name }}):
+        {{ reconciliation.live_datasource_action or "no change recorded" }}.
+        {% endif %}
         {% if reconciliation.reconciliation_status %}
         <br>Status: {{ reconciliation.reconciliation_status }}
         {% endif %}

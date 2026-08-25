@@ -48,7 +48,8 @@ async def reconcile_grafana_tenant(
         )
         reason = (
             f"{reason} Datasource {provision_result['datasource_action']} "
-            f"(verified version {provision_result['datasource_version']})."
+            f"(verified version {provision_result['datasource_version']}). "
+            f"Live datasource {provision_result['live_datasource_action']}."
         )
         mapping_result = await apply_grafana_reconciliation_mapping(
             portal_user_id=portal_user_id,
@@ -61,6 +62,9 @@ async def reconcile_grafana_tenant(
             "datasource_action": provision_result["datasource_action"],
             "datasource_uid": provision_result["datasource_uid"],
             "datasource_name": provision_result["datasource_name"],
+            "live_datasource_action": provision_result["live_datasource_action"],
+            "live_datasource_uid": provision_result["live_datasource_uid"],
+            "live_datasource_name": provision_result["live_datasource_name"],
         }
 
     if len(name_matches) > 1:
@@ -84,7 +88,8 @@ async def reconcile_grafana_tenant(
             repair_reason=(
                 "Adopted the unique same-name unowned Grafana "
                 f"organization. Datasource {provision_result['datasource_action']} "
-                f"(verified version {provision_result['datasource_version']})."
+                f"(verified version {provision_result['datasource_version']}). "
+                f"Live datasource {provision_result['live_datasource_action']}."
             ),
         )
         return {
@@ -92,6 +97,9 @@ async def reconcile_grafana_tenant(
             "datasource_action": provision_result["datasource_action"],
             "datasource_uid": provision_result["datasource_uid"],
             "datasource_name": provision_result["datasource_name"],
+            "live_datasource_action": provision_result["live_datasource_action"],
+            "live_datasource_uid": provision_result["live_datasource_uid"],
+            "live_datasource_name": provision_result["live_datasource_name"],
         }
 
     provision_result = await client.provision_organization(
@@ -105,7 +113,8 @@ async def reconcile_grafana_tenant(
         repair_reason=(
             "Created the missing Grafana organization and tenant resources. "
             f"Datasource {provision_result['datasource_action']} "
-            f"(verified version {provision_result['datasource_version']})."
+            f"(verified version {provision_result['datasource_version']}). "
+            f"Live datasource {provision_result['live_datasource_action']}."
         ),
     )
     return {
@@ -113,4 +122,7 @@ async def reconcile_grafana_tenant(
         "datasource_action": provision_result["datasource_action"],
         "datasource_uid": provision_result["datasource_uid"],
         "datasource_name": provision_result["datasource_name"],
+        "live_datasource_action": provision_result["live_datasource_action"],
+        "live_datasource_uid": provision_result["live_datasource_uid"],
+        "live_datasource_name": provision_result["live_datasource_name"],
     }

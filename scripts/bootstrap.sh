@@ -16,6 +16,7 @@ for step in \
     04_wait_database.sh \
     05_deploy_database.sh \
     06_start_telegraf.sh \
+    06a_build_grafana_live_plugin.sh \
     07_start_grafana.sh \
     08_post_checks.sh \
     09_summary.sh

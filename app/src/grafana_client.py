@@ -10,6 +10,19 @@ from src.config import get_settings
 DASHBOARD_DIRECTORY = Path("/app/grafana-dashboards")
 DATASOURCE_UID = "ems-timescaledb"
 DATASOURCE_NAME = "EMS TimescaleDB"
+
+# The live-telemetry Grafana datasource UID is not a design choice made
+# here -- it is a fixed value already hardcoded into every live/canvas
+# panel's `datasource.uid` in grafana/dashboards/core/asset-overview.json
+# (the same dashboard JSON is provisioned into every tenant organization
+# via import_dashboards(), so every org's live-datasource instance must
+# share this exact UID for that dashboard to resolve it). Changing this
+# constant without also changing the dashboard JSON would break every
+# live panel; the dashboard is the contract, not this constant.
+LIVE_DATASOURCE_UID = "ffuz5sq2fe9s0a"
+LIVE_DATASOURCE_NAME = "WiseWatts Live"
+LIVE_DATASOURCE_TYPE = "wisewatts-live-datasource"
+
 FOLDER_UID = "ems"
 FOLDER_TITLE = "EMS"
 
@@ -112,11 +125,12 @@ class GrafanaClient:
     async def get_datasource_by_uid(
         self,
         org_id: int,
+        uid: str = DATASOURCE_UID,
     ) -> dict[str, Any] | None:
         try:
             response = await self._request(
                 "GET",
-                f"/api/datasources/uid/{DATASOURCE_UID}",
+                f"/api/datasources/uid/{uid}",
                 org_id=org_id,
             )
         except GrafanaApiError as exc:
@@ -156,22 +170,46 @@ class GrafanaClient:
             },
         }
 
-    async def create_datasource(
+    def _live_datasource_payload(self) -> dict[str, Any]:
+        """
+        Build the canonical WiseWatts live-telemetry datasource
+        configuration.
+
+        Unlike the TimescaleDB datasource, this plugin (see
+        grafana/plugin-src/wisewatts-live-datasource) reads its live-stream
+        connection details (EMS_LIVE_TELEMETRY_WS_BASE_URL,
+        EMS_GRAFANA_STREAM_TOKEN) from the Grafana *process's own*
+        environment, not from per-instance datasource settings -- so no
+        url/database/user/secureJsonData belongs here. The instance only
+        needs to exist, with the right type and this fixed UID, for
+        dashboard panels to resolve it.
+        """
+
+        return {
+            "name": LIVE_DATASOURCE_NAME,
+            "uid": LIVE_DATASOURCE_UID,
+            "type": LIVE_DATASOURCE_TYPE,
+            "access": "proxy",
+        }
+
+    async def _create_datasource(
         self,
         org_id: int,
+        uid: str,
+        payload: dict[str, Any],
     ) -> dict[str, Any]:
         write_response = await self._request(
             "POST",
             "/api/datasources",
             org_id=org_id,
-            json_payload=self._datasource_payload(),
+            json_payload=payload,
         )
 
-        verified = await self.get_datasource_by_uid(org_id)
+        verified = await self.get_datasource_by_uid(org_id, uid)
 
         if verified is None:
             raise GrafanaApiError(
-                f"Datasource {DATASOURCE_UID} was not found in Grafana "
+                f"Datasource {uid} was not found in Grafana "
                 f"organization {org_id} immediately after creation; the "
                 "write did not take effect. "
                 f"{_describe_write_response(write_response)}"
@@ -179,20 +217,16 @@ class GrafanaClient:
 
         return verified
 
-    async def update_datasource(
+    async def _update_datasource(
         self,
         org_id: int,
+        uid: str,
         existing_datasource_id: int | None,
+        payload: dict[str, Any],
     ) -> dict[str, Any]:
         """
         Reconcile an existing datasource to the current canonical
-        configuration, including the current EMS_GRAFANA_DB_PASSWORD.
-
-        Grafana does not merge secureJsonData on PUT: fields omitted from
-        secureJsonData are left as previously stored, but a password
-        included here is always applied, which is exactly the update this
-        method exists to make. The UID-based endpoint is used so the
-        existing stable "ems-timescaledb" identity is never replaced.
+        configuration.
 
         Grafana 11.6's documented UID-update request body includes the
         datasource's numeric `id` and `orgId` alongside the common fields;
@@ -215,47 +249,87 @@ class GrafanaClient:
         update. `version` is therefore not a reliable signal for this
         endpoint and is no longer used as one; the functional proof used
         here instead is the datasource's own `/health` check, which
-        exercises the exact credential Grafana just stored.
+        exercises the exact credential/configuration Grafana just stored.
         """
 
         update_payload = {
-            **self._datasource_payload(),
+            **payload,
             "id": existing_datasource_id,
             "orgId": org_id,
         }
 
         write_response = await self._request(
             "PUT",
-            f"/api/datasources/uid/{DATASOURCE_UID}",
+            f"/api/datasources/uid/{uid}",
             org_id=org_id,
             json_payload=update_payload,
         )
 
-        verified = await self.get_datasource_by_uid(org_id)
+        verified = await self.get_datasource_by_uid(org_id, uid)
 
         if verified is None:
             raise GrafanaApiError(
-                f"Datasource {DATASOURCE_UID} was not found in Grafana "
+                f"Datasource {uid} was not found in Grafana "
                 f"organization {org_id} immediately after update. "
                 f"{_describe_write_response(write_response)}"
             )
 
         health = await self._request(
             "GET",
-            f"/api/datasources/uid/{DATASOURCE_UID}/health",
+            f"/api/datasources/uid/{uid}/health",
             org_id=org_id,
         )
         health_status = health.json().get("status")
 
         if health_status != "OK":
             raise GrafanaApiError(
-                f"Datasource {DATASOURCE_UID} update did not take effect: "
+                f"Datasource {uid} update did not take effect: "
                 f"post-update health check reported status "
                 f"{health_status!r} in Grafana organization {org_id}. "
                 f"{_describe_write_response(write_response)}"
             )
 
         return verified
+
+    async def create_datasource(
+        self,
+        org_id: int,
+    ) -> dict[str, Any]:
+        return await self._create_datasource(
+            org_id, DATASOURCE_UID, self._datasource_payload()
+        )
+
+    async def update_datasource(
+        self,
+        org_id: int,
+        existing_datasource_id: int | None,
+    ) -> dict[str, Any]:
+        return await self._update_datasource(
+            org_id,
+            DATASOURCE_UID,
+            existing_datasource_id,
+            self._datasource_payload(),
+        )
+
+    async def create_live_datasource(
+        self,
+        org_id: int,
+    ) -> dict[str, Any]:
+        return await self._create_datasource(
+            org_id, LIVE_DATASOURCE_UID, self._live_datasource_payload()
+        )
+
+    async def update_live_datasource(
+        self,
+        org_id: int,
+        existing_datasource_id: int | None,
+    ) -> dict[str, Any]:
+        return await self._update_datasource(
+            org_id,
+            LIVE_DATASOURCE_UID,
+            existing_datasource_id,
+            self._live_datasource_payload(),
+        )
 
     async def ensure_folder(self, org_id: int) -> None:
         try:
@@ -321,6 +395,13 @@ class GrafanaClient:
         UI) can distinguish "created", "updated", and can surface the
         verified post-write datasource version rather than merely reporting
         that no HTTP error occurred.
+
+        Provisions two datasources per organization: the TimescaleDB
+        analytics datasource and the WiseWatts live-telemetry datasource
+        (grafana/dashboards/core/asset-overview.json's live/canvas panels
+        depend on the latter existing with UID LIVE_DATASOURCE_UID in every
+        organization). Both follow the same create-if-missing /
+        reconcile-if-present pattern.
         """
 
         grafana_org_id = existing_org_id
@@ -362,6 +443,22 @@ class GrafanaClient:
             )
             datasource_action = "updated"
 
+        live_datasource = await self.get_datasource_by_uid(
+            grafana_org_id, LIVE_DATASOURCE_UID
+        )
+
+        if live_datasource is None:
+            verified_live_datasource = await self.create_live_datasource(
+                grafana_org_id
+            )
+            live_datasource_action = "created"
+        else:
+            verified_live_datasource = await self.update_live_datasource(
+                grafana_org_id,
+                live_datasource.get("id"),
+            )
+            live_datasource_action = "updated"
+
         await self.ensure_folder(grafana_org_id)
         await self.import_dashboards(grafana_org_id)
 
@@ -371,4 +468,7 @@ class GrafanaClient:
             "datasource_uid": DATASOURCE_UID,
             "datasource_name": DATASOURCE_NAME,
             "datasource_version": verified_datasource.get("version"),
+            "live_datasource_action": live_datasource_action,
+            "live_datasource_uid": LIVE_DATASOURCE_UID,
+            "live_datasource_name": LIVE_DATASOURCE_NAME,
         }

@@ -14,6 +14,9 @@ async def test_existing_mapping_is_reused_and_repaired(monkeypatch):
                 "datasource_uid": "ems-timescaledb",
                 "datasource_name": "EMS TimescaleDB",
                 "datasource_version": 2,
+                "live_datasource_action": "updated",
+                "live_datasource_uid": "ffuz5sq2fe9s0a",
+                "live_datasource_name": "WiseWatts Live",
             }
     async def apply(**kwargs): return {"success":True,"reconciliation_status":"REPAIRED","grafana_org_id":kwargs["grafana_org_id"]}
     monkeypatch.setattr("src.onboarding.grafana_reconciliation_service.get_grafana_reconciliation_context",context)
@@ -23,6 +26,8 @@ async def test_existing_mapping_is_reused_and_repaired(monkeypatch):
     assert result["grafana_org_id"]==7
     assert result["datasource_action"]=="updated"
     assert result["datasource_uid"]=="ems-timescaledb"
+    assert result["live_datasource_action"]=="updated"
+    assert result["live_datasource_uid"]=="ffuz5sq2fe9s0a"
 
 @pytest.mark.asyncio
 async def test_missing_authoritative_mapping_is_not_reassigned(monkeypatch):
