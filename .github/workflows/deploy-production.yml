@@ -114,11 +114,20 @@ jobs:
       - name: Require release_git_sha to be staging's current HEAD
         id: staging-head
         env:
+          GH_TOKEN: ${{ github.token }}
           RELEASE_SHA: ${{ inputs.release_git_sha }}
         run: |
-          head="$(git ls-remote https://github.com/${{ github.repository }}.git refs/heads/staging | cut -f1)"
+          # This repository is private, and this job never runs
+          # actions/checkout, so there is no git credential helper
+          # configured for an unauthenticated `git ls-remote` over HTTPS to
+          # succeed. The authoritative source for refs/heads/staging is
+          # queried instead through the authenticated GitHub API (contents:
+          # read, already granted above), which returns the exact same ref
+          # object git itself would resolve -- not a derived or cached
+          # value.
+          head="$(gh api "repos/${{ github.repository }}/git/ref/heads/staging" --jq '.object.sha')"
           if [[ -z "${head}" ]]; then
-            echo "::error::Could not resolve origin/staging HEAD"
+            echo "::error::Could not resolve origin/staging HEAD via the GitHub API"
             exit 1
           fi
           if [[ "${RELEASE_SHA}" != "${head}" ]]; then
@@ -202,9 +211,21 @@ jobs:
     steps:
       - name: Re-verify staging HEAD has not moved since validation
         env:
+          GH_TOKEN: ${{ github.token }}
           RELEASE_SHA: ${{ inputs.release_git_sha }}
         run: |
-          head="$(git ls-remote https://github.com/${{ github.repository }}.git refs/heads/staging | cut -f1)"
+          # See the equivalent step in validate-promotion for why this uses
+          # the authenticated GitHub API rather than an unauthenticated
+          # `git ls-remote` (this repository is private and this job never
+          # runs actions/checkout). This job never receives the production
+          # SSH secrets (PRODUCTION_HOST/USER/SSH_KEY) until the next step,
+          # so this re-check still runs entirely before any production
+          # access is possible.
+          head="$(gh api "repos/${{ github.repository }}/git/ref/heads/staging" --jq '.object.sha')"
+          if [[ -z "${head}" ]]; then
+            echo "::error::Could not resolve origin/staging HEAD via the GitHub API"
+            exit 1
+          fi
           if [[ "${RELEASE_SHA}" != "${head}" ]]; then
             echo "::error::staging HEAD moved to ${head} after this promotion was validated for ${RELEASE_SHA}. Aborting -- re-run this workflow against the new staging HEAD."
             exit 1
