@@ -105,6 +105,10 @@ echo
 echo "[canonical-energy-read-pre-policy-range] Running canonical energy read pre-policy-range assertions..."
 "${SCRIPT_DIR}/assert_canonical_energy_read_pre_policy_range.sh"
 
+echo
+echo "[recovery-supersession-late-arrival-bound] Running recovery supersession late-arrival bound assertions..."
+"${SCRIPT_DIR}/assert_recovery_supersession_late_arrival_bound.sh"
+
 echo "[14/14] Verifying migration ledger..."
 ledger="$(
     docker compose \
