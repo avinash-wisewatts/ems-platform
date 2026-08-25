@@ -97,6 +97,10 @@ echo
 echo "[commissioning-semantic-gate] Running commissioning profile-completeness gate assertions..."
 "${SCRIPT_DIR}/assert_commissioning_semantic_gate.sh"
 
+echo
+echo "[normalized-points-uniqueness-verification] Running normalized_points uniqueness verification assertions..."
+"${SCRIPT_DIR}/assert_normalized_points_uniqueness_verification.sh"
+
 echo "[14/14] Verifying migration ledger..."
 ledger="$(
     docker compose \

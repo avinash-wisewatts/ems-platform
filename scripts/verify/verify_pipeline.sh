@@ -229,7 +229,49 @@ else
     fail "Unable to determine latest normalization insert"
 fi
 
-DUPLICATE_NORMALIZED_KEYS="$(
+#
+# Normalized-point uniqueness
+#
+# NOTE: This used to be an unbounded GROUP BY over the entire
+# normalized_points hypertable. At production scale (34M+ rows, compressed
+# after 1 day, retained 90 days) that query cannot use any index -- EXPLAIN
+# showed a parallel sequential scan decompressing multiple chunks, feeding
+# a multi-million-row HashAggregate -- and it still had not completed after
+# 12+ minutes on a real deployment (2026-08-25).
+#
+# telemetry.uq_normalized_points_identity (postgres/ddl/40_normalized_points_
+# uniqueness.sql) is a UNIQUE INDEX on exactly (event_time, device_id,
+# logical_point_id) -- the same triplet -- and has existed since shortly
+# after this table was created. A duplicate on this triplet cannot be
+# inserted while that index is valid: PostgreSQL rejects it at write time.
+# Re-scanning all history can never catch anything the live constraint
+# didn't already prevent; the only failure mode a scan could catch that the
+# constraint itself can't self-report is the index having been dropped or
+# bypassed out-of-band, which a catalog check answers directly and in
+# constant time regardless of table size.
+#
+# Replaced with two checks: (1) the enforcing index is present, unique,
+# ready, and valid; (2) a small recent-window content check as
+# defense-in-depth against exactly that out-of-band-bypass scenario. The
+# recent window stays on the current, uncompressed chunk(s), so it remains
+# cheap as the table grows.
+#
+
+NORMALIZED_UNIQUENESS_INDEX_OK="$(
+    psql_query "
+        SELECT indisvalid AND indisready AND indisunique
+        FROM pg_index
+        WHERE indexrelid = to_regclass('telemetry.uq_normalized_points_identity');
+    " 2>/dev/null
+)"
+
+if [[ "${NORMALIZED_UNIQUENESS_INDEX_OK}" == "t" ]]; then
+    pass "normalized_points uniqueness enforcement is present and valid"
+else
+    fail "normalized_points uniqueness enforcement (telemetry.uq_normalized_points_identity) is missing, not unique, not ready, or not valid"
+fi
+
+RECENT_DUPLICATE_NORMALIZED_KEYS="$(
     psql_query "
         SELECT COUNT(*)
         FROM (
@@ -238,19 +280,20 @@ DUPLICATE_NORMALIZED_KEYS="$(
                 device_id,
                 logical_point_id
             FROM ${NORMALIZED_TABLE}
+            WHERE event_time > now() - interval '1 hour'
             GROUP BY
                 event_time,
                 device_id,
                 logical_point_id
             HAVING COUNT(*) > 1
-        ) duplicates;
+        ) recent_duplicates;
     " 2>/dev/null || echo 0
 )"
 
-if [[ "${DUPLICATE_NORMALIZED_KEYS}" == "0" ]]; then
-    pass "No duplicate normalized business keys detected"
+if [[ "${RECENT_DUPLICATE_NORMALIZED_KEYS}" == "0" ]]; then
+    pass "No duplicate normalized telemetry keys found in the recent verification window"
 else
-    fail "Duplicate normalized business keys detected: ${DUPLICATE_NORMALIZED_KEYS}"
+    fail "Duplicate normalized business keys detected in the recent verification window: ${RECENT_DUPLICATE_NORMALIZED_KEYS}"
 fi
 
 print_section "Pipeline Checkpoints"
