@@ -18,6 +18,26 @@ class GrafanaApiError(RuntimeError):
     """Raised when Grafana rejects or cannot complete provisioning."""
 
 
+def _describe_write_response(response: httpx.Response) -> str:
+    """
+    Summarize a write response for a verification-failure error message.
+
+    Only describes the *response* Grafana sent back (status code, any
+    redirect target, a truncated response body) -- never the request that
+    produced it, so this can never echo the datasource password back into
+    an error message, log, or rendered page.
+    """
+
+    location = response.headers.get("location")
+    redirect_note = f" Redirected to: {location}." if location else ""
+    body_preview = response.text[:200].replace("\n", " ")
+
+    return (
+        f"Write response was HTTP {response.status_code}.{redirect_note} "
+        f"Body preview: {body_preview!r}"
+    )
+
+
 class GrafanaClient:
     """Small async client for Grafana organization provisioning."""
 
@@ -140,7 +160,7 @@ class GrafanaClient:
         self,
         org_id: int,
     ) -> dict[str, Any]:
-        await self._request(
+        write_response = await self._request(
             "POST",
             "/api/datasources",
             org_id=org_id,
@@ -153,7 +173,8 @@ class GrafanaClient:
             raise GrafanaApiError(
                 f"Datasource {DATASOURCE_UID} was not found in Grafana "
                 f"organization {org_id} immediately after creation; the "
-                "write did not take effect."
+                "write did not take effect. "
+                f"{_describe_write_response(write_response)}"
             )
 
         return verified
@@ -184,7 +205,7 @@ class GrafanaClient:
         is exactly the failure mode this method exists to rule out.
         """
 
-        await self._request(
+        write_response = await self._request(
             "PUT",
             f"/api/datasources/uid/{DATASOURCE_UID}",
             org_id=org_id,
@@ -196,7 +217,8 @@ class GrafanaClient:
         if verified is None:
             raise GrafanaApiError(
                 f"Datasource {DATASOURCE_UID} was not found in Grafana "
-                f"organization {org_id} immediately after update."
+                f"organization {org_id} immediately after update. "
+                f"{_describe_write_response(write_response)}"
             )
 
         new_version = verified.get("version")
@@ -209,7 +231,8 @@ class GrafanaClient:
             raise GrafanaApiError(
                 f"Datasource {DATASOURCE_UID} update did not take effect: "
                 f"version remained {new_version} in Grafana organization "
-                f"{org_id} (expected greater than {previous_version})."
+                f"{org_id} (expected greater than {previous_version}). "
+                f"{_describe_write_response(write_response)}"
             )
 
         return verified

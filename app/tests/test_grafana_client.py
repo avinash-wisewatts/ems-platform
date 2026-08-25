@@ -19,10 +19,12 @@ class FakeResponse:
         status_code: int = 200,
         payload=None,
         text: str = "",
+        headers: dict | None = None,
     ) -> None:
         self.status_code = status_code
         self._payload = payload
         self.text = text
+        self.headers = headers or {}
 
     def json(self):
         return self._payload
@@ -294,6 +296,50 @@ async def test_update_datasource_raises_when_version_does_not_increase(
 
     with pytest.raises(GrafanaApiError, match="did not take effect"):
         await client.update_datasource(7, previous_version=1)
+
+
+@pytest.mark.asyncio
+async def test_update_datasource_error_describes_write_response_without_leaking_password(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Diagnostic enrichment added after the live incident where a PUT
+    Grafana accepted (no GrafanaApiError raised) still left `version`
+    unchanged: the failure message must describe the actual write
+    response (status code, any redirect target) so a future occurrence
+    doesn't require external manual probing to diagnose -- while still
+    never including the request payload (and therefore never the
+    password) anywhere in that description.
+    """
+    client = GrafanaClient()
+    client.datasource_password = "must-never-appear-in-errors"
+
+    async def fake_request(
+        method: str,
+        path: str,
+        *,
+        org_id=None,
+        json_payload=None,
+    ):
+        if method == "PUT":
+            return FakeResponse(
+                status_code=302,
+                text="<html>redirecting to login</html>",
+                headers={"location": "/login"},
+            )
+        return FakeResponse(
+            payload={"uid": DATASOURCE_UID, "orgId": org_id, "version": 1}
+        )
+
+    monkeypatch.setattr(client, "_request", fake_request)
+
+    with pytest.raises(GrafanaApiError) as excinfo:
+        await client.update_datasource(7, previous_version=1)
+
+    message = str(excinfo.value)
+    assert "HTTP 302" in message
+    assert "/login" in message
+    assert "must-never-appear-in-errors" not in message
 
 
 @pytest.mark.asyncio
