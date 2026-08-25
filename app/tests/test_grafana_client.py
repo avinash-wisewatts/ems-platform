@@ -101,7 +101,43 @@ async def test_get_datasource_by_uid_returns_none_for_404(
 
 
 @pytest.mark.asyncio
-async def test_create_datasource_uses_stable_uid(
+async def test_get_datasource_by_uid_scopes_by_org_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Regression test: verify the org-scoping mechanism this application
+    actually relies on (the X-Grafana-Org-Id header threaded through
+    _request(), not organization switching or any other mechanism) is what
+    get_datasource_by_uid() uses -- live staging evidence (org 1 empty,
+    org 2 holding the real datasource, both GET-by-uid and GET-list
+    consistently agreeing) ruled out org-scoping as the live defect, and
+    this test pins that behavior so it can't silently regress.
+    """
+    client = GrafanaClient()
+    captured: dict = {}
+
+    async def fake_request(
+        method: str,
+        path: str,
+        *,
+        org_id=None,
+        json_payload=None,
+    ):
+        captured["org_id"] = org_id
+        return FakeResponse(
+            payload={"uid": DATASOURCE_UID, "orgId": org_id, "version": 3}
+        )
+
+    monkeypatch.setattr(client, "_request", fake_request)
+
+    result = await client.get_datasource_by_uid(2)
+
+    assert captured["org_id"] == 2
+    assert result["orgId"] == 2
+
+
+@pytest.mark.asyncio
+async def test_create_datasource_uses_stable_uid_and_verifies_write(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client = GrafanaClient()
@@ -114,22 +150,28 @@ async def test_create_datasource_uses_stable_uid(
         org_id=None,
         json_payload=None,
     ):
-        captured.update(
-            {
-                "method": method,
-                "path": path,
-                "org_id": org_id,
-                "json_payload": json_payload,
-            }
-        )
+        if method == "POST":
+            captured.update(
+                {
+                    "method": method,
+                    "path": path,
+                    "org_id": org_id,
+                    "json_payload": json_payload,
+                }
+            )
+            return FakeResponse(payload={"message": "Datasource added"})
 
-        return FakeResponse(payload={"message": "Datasource added"})
+        assert method == "GET"
+        assert path == f"/api/datasources/uid/{DATASOURCE_UID}"
+        return FakeResponse(
+            payload={"uid": DATASOURCE_UID, "orgId": org_id, "version": 1}
+        )
 
     monkeypatch.setattr(client, "_request", fake_request)
 
     client.datasource_password = "reader-password"
 
-    await client.create_datasource(7)
+    verified = await client.create_datasource(7)
 
     assert captured["method"] == "POST"
     assert captured["path"] == "/api/datasources"
@@ -138,6 +180,36 @@ async def test_create_datasource_uses_stable_uid(
     assert captured["json_payload"]["secureJsonData"] == {
         "password": "reader-password"
     }
+    assert verified["version"] == 1
+
+
+@pytest.mark.asyncio
+async def test_create_datasource_raises_when_not_found_after_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Regression test: a POST that Grafana accepts (HTTP < 400) is not proof
+    the datasource actually exists afterward. create_datasource() must
+    verify by re-reading, and fail loudly if the datasource is missing.
+    """
+    client = GrafanaClient()
+
+    async def fake_request(
+        method: str,
+        path: str,
+        *,
+        org_id=None,
+        json_payload=None,
+    ):
+        if method == "POST":
+            return FakeResponse(payload={"message": "Datasource added"})
+
+        raise GrafanaApiError("Grafana returned HTTP 404: not found")
+
+    monkeypatch.setattr(client, "_request", fake_request)
+
+    with pytest.raises(GrafanaApiError, match="was not found"):
+        await client.create_datasource(7)
 
 
 @pytest.mark.asyncio
@@ -154,22 +226,27 @@ async def test_update_datasource_uses_stable_uid_and_current_password(
         org_id=None,
         json_payload=None,
     ):
-        captured.update(
-            {
-                "method": method,
-                "path": path,
-                "org_id": org_id,
-                "json_payload": json_payload,
-            }
-        )
+        if method == "PUT":
+            captured.update(
+                {
+                    "method": method,
+                    "path": path,
+                    "org_id": org_id,
+                    "json_payload": json_payload,
+                }
+            )
+            return FakeResponse(payload={"message": "Datasource updated"})
 
-        return FakeResponse(payload={"message": "Datasource updated"})
+        assert method == "GET"
+        return FakeResponse(
+            payload={"uid": DATASOURCE_UID, "orgId": org_id, "version": 2}
+        )
 
     monkeypatch.setattr(client, "_request", fake_request)
 
     client.datasource_password = "rotated-password"
 
-    await client.update_datasource(7)
+    verified = await client.update_datasource(7, previous_version=1)
 
     assert captured["method"] == "PUT"
     assert captured["path"] == f"/api/datasources/uid/{DATASOURCE_UID}"
@@ -178,17 +255,24 @@ async def test_update_datasource_uses_stable_uid_and_current_password(
     assert captured["json_payload"]["secureJsonData"] == {
         "password": "rotated-password"
     }
+    assert verified["version"] == 2
 
 
 @pytest.mark.asyncio
-async def test_create_and_update_datasource_payloads_do_not_drift(
+async def test_update_datasource_raises_when_version_does_not_increase(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Both operations must build their payload from the same helper."""
+    """
+    Regression test for the exact failure mode discovered live: the
+    reconciliation route returned HTTP 200 (proving GrafanaClient's PUT
+    itself didn't raise), yet Grafana org 2's ems-timescaledb datasource
+    stayed at version 1 and its health check kept reporting
+    "password authentication failed for user \"grafana_reader\"". A PUT
+    Grafana accepts is not proof it took effect. update_datasource() must
+    detect this by re-reading and comparing `version`, and raise loudly
+    instead of letting a no-op masquerade as success.
+    """
     client = GrafanaClient()
-    client.datasource_password = "shared-password"
-
-    captured_payloads: list[dict] = []
 
     async def fake_request(
         method: str,
@@ -197,13 +281,80 @@ async def test_create_and_update_datasource_payloads_do_not_drift(
         org_id=None,
         json_payload=None,
     ):
-        captured_payloads.append(json_payload)
-        return FakeResponse(payload={"message": "ok"})
+        if method == "PUT":
+            return FakeResponse(payload={"message": "Datasource updated"})
+
+        # Simulates the observed live behavior: Grafana returns 200 for the
+        # PUT, but a re-read shows the version never actually advanced.
+        return FakeResponse(
+            payload={"uid": DATASOURCE_UID, "orgId": org_id, "version": 1}
+        )
+
+    monkeypatch.setattr(client, "_request", fake_request)
+
+    with pytest.raises(GrafanaApiError, match="did not take effect"):
+        await client.update_datasource(7, previous_version=1)
+
+
+@pytest.mark.asyncio
+async def test_update_datasource_raises_when_disappears_after_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = GrafanaClient()
+
+    async def fake_request(
+        method: str,
+        path: str,
+        *,
+        org_id=None,
+        json_payload=None,
+    ):
+        if method == "PUT":
+            return FakeResponse(payload={"message": "Datasource updated"})
+
+        raise GrafanaApiError("Grafana returned HTTP 404: not found")
+
+    monkeypatch.setattr(client, "_request", fake_request)
+
+    with pytest.raises(GrafanaApiError, match="was not found"):
+        await client.update_datasource(7, previous_version=1)
+
+
+@pytest.mark.asyncio
+async def test_create_and_update_datasource_payloads_do_not_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both operations must build their write payload from the same helper."""
+    client = GrafanaClient()
+    client.datasource_password = "shared-password"
+
+    captured_payloads: list[dict] = []
+    version = {"value": 0}
+
+    async def fake_request(
+        method: str,
+        path: str,
+        *,
+        org_id=None,
+        json_payload=None,
+    ):
+        if method in ("POST", "PUT"):
+            captured_payloads.append(json_payload)
+            version["value"] += 1
+            return FakeResponse(payload={"message": "ok"})
+
+        return FakeResponse(
+            payload={
+                "uid": DATASOURCE_UID,
+                "orgId": org_id,
+                "version": version["value"],
+            }
+        )
 
     monkeypatch.setattr(client, "_request", fake_request)
 
     await client.create_datasource(7)
-    await client.update_datasource(7)
+    await client.update_datasource(7, previous_version=1)
 
     assert captured_payloads[0] == captured_payloads[1]
 
@@ -352,16 +503,53 @@ async def test_request_wraps_http_failure(
     ):
         await client.list_organizations()
 
+
+@pytest.mark.asyncio
+async def test_grafana_api_error_never_contains_password(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    GrafanaApiError messages are shown to administrators (via the
+    reconciliation route's `error` rendering) and may end up in logs.
+    Confirm a failing write never leaks the datasource password into the
+    exception text, even though the payload that triggered the failure
+    contained it.
+    """
+    client = GrafanaClient()
+    client.datasource_password = "super-secret-value"
+
+    async def fake_request(
+        method: str,
+        path: str,
+        *,
+        org_id=None,
+        json_payload=None,
+    ):
+        if method == "PUT":
+            raise GrafanaApiError(
+                "Grafana returned HTTP 400: Bad Request"
+            )
+        return FakeResponse(payload={"uid": DATASOURCE_UID, "version": 1})
+
+    monkeypatch.setattr(client, "_request", fake_request)
+
+    with pytest.raises(GrafanaApiError) as excinfo:
+        await client.update_datasource(7, previous_version=1)
+
+    assert "super-secret-value" not in str(excinfo.value)
+
+
 @pytest.mark.asyncio
 async def test_provision_organization_reconciles_existing_datasource(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
     Regression test for the stale-datasource-credential bug: an existing
-    datasource must be reconciled (updated), never silently left as-is.
+    datasource must be reconciled (updated), never silently left as-is, and
+    the verified post-write state must be reported back to the caller.
     """
     client = GrafanaClient()
-    calls: list[tuple[str, int]] = []
+    calls: list[tuple[str, object]] = []
 
     async def unexpected_list():
         raise AssertionError(
@@ -380,10 +568,11 @@ async def test_provision_organization_reconciles_existing_datasource(
 
     async def fake_get_datasource(org_id: int):
         calls.append(("get_datasource", org_id))
-        return {"uid": DATASOURCE_UID}
+        return {"uid": DATASOURCE_UID, "version": 1}
 
-    async def fake_update_datasource(org_id: int):
-        calls.append(("update_datasource", org_id))
+    async def fake_update_datasource(org_id: int, previous_version):
+        calls.append(("update_datasource", (org_id, previous_version)))
+        return {"uid": DATASOURCE_UID, "version": 2}
 
     async def fake_ensure_folder(org_id: int):
         calls.append(("ensure_folder", org_id))
@@ -391,40 +580,16 @@ async def test_provision_organization_reconciles_existing_datasource(
     async def fake_import_dashboards(org_id: int):
         calls.append(("import_dashboards", org_id))
 
+    monkeypatch.setattr(client, "list_organizations", unexpected_list)
+    monkeypatch.setattr(client, "create_organization", unexpected_create)
+    monkeypatch.setattr(client, "get_datasource_by_uid", fake_get_datasource)
     monkeypatch.setattr(
-        client,
-        "list_organizations",
-        unexpected_list,
+        client, "create_datasource", unexpected_create_datasource
     )
+    monkeypatch.setattr(client, "update_datasource", fake_update_datasource)
+    monkeypatch.setattr(client, "ensure_folder", fake_ensure_folder)
     monkeypatch.setattr(
-        client,
-        "create_organization",
-        unexpected_create,
-    )
-    monkeypatch.setattr(
-        client,
-        "get_datasource_by_uid",
-        fake_get_datasource,
-    )
-    monkeypatch.setattr(
-        client,
-        "create_datasource",
-        unexpected_create_datasource,
-    )
-    monkeypatch.setattr(
-        client,
-        "update_datasource",
-        fake_update_datasource,
-    )
-    monkeypatch.setattr(
-        client,
-        "ensure_folder",
-        fake_ensure_folder,
-    )
-    monkeypatch.setattr(
-        client,
-        "import_dashboards",
-        fake_import_dashboards,
+        client, "import_dashboards", fake_import_dashboards
     )
 
     result = await client.provision_organization(
@@ -432,10 +597,16 @@ async def test_provision_organization_reconciles_existing_datasource(
         existing_org_id=7,
     )
 
-    assert result == 7
+    assert result == {
+        "grafana_org_id": 7,
+        "datasource_action": "updated",
+        "datasource_uid": DATASOURCE_UID,
+        "datasource_name": "EMS TimescaleDB",
+        "datasource_version": 2,
+    }
     assert calls == [
         ("get_datasource", 7),
-        ("update_datasource", 7),
+        ("update_datasource", (7, 1)),
         ("ensure_folder", 7),
         ("import_dashboards", 7),
     ]
@@ -462,8 +633,9 @@ async def test_provision_organization_creates_missing_resources(
 
     async def fake_create_datasource(org_id: int):
         calls.append(("create_datasource", org_id))
+        return {"uid": DATASOURCE_UID, "version": 1}
 
-    async def unexpected_update_datasource(org_id: int):
+    async def unexpected_update_datasource(org_id: int, previous_version):
         raise AssertionError(
             "A missing datasource must be created, not updated."
         )
@@ -514,7 +686,13 @@ async def test_provision_organization_creates_missing_resources(
         organization_name="Organization Nine",
     )
 
-    assert result == 9
+    assert result == {
+        "grafana_org_id": 9,
+        "datasource_action": "created",
+        "datasource_uid": DATASOURCE_UID,
+        "datasource_name": "EMS TimescaleDB",
+        "datasource_version": 1,
+    }
     assert calls == [
         ("list_organizations", None),
         ("create_organization", "Organization Nine"),

@@ -39,7 +39,7 @@ async def provision_grafana_for_organization(
     client = GrafanaClient()
 
     try:
-        grafana_org_id = await client.provision_organization(
+        provision_result = await client.provision_organization(
             organization_name=organization_name,
             existing_org_id=existing_grafana_org_id,
         )
@@ -52,5 +52,5 @@ async def provision_grafana_for_organization(
 
     return await mark_grafana_provisioning_complete(
         organization_id,
-        grafana_org_id,
+        provision_result["grafana_org_id"],
     )

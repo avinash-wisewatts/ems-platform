@@ -38,7 +38,13 @@ async def test_provision_grafana_completes_successfully(
                     ),
                 )
             )
-            return 7
+            return {
+                "grafana_org_id": 7,
+                "datasource_action": "created",
+                "datasource_uid": "ems-timescaledb",
+                "datasource_name": "EMS TimescaleDB",
+                "datasource_version": 1,
+            }
 
     async def fake_mark_complete(
         organization_id: str,
@@ -153,7 +159,13 @@ async def test_provision_grafana_reuses_existing_mapping(
                     "existing_org_id": existing_org_id,
                 }
             )
-            return 9
+            return {
+                "grafana_org_id": 9,
+                "datasource_action": "updated",
+                "datasource_uid": "ems-timescaledb",
+                "datasource_name": "EMS TimescaleDB",
+                "datasource_version": 2,
+            }
 
     async def fake_mark_complete(
         organization_id: str,

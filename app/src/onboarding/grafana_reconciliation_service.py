@@ -37,7 +37,7 @@ async def reconcile_grafana_tenant(
                     "Automatic reassignment is prohibited."
                 ),
             }
-        await client.provision_organization(
+        provision_result = await client.provision_organization(
             organization_name=context["organization_name"],
             existing_org_id=mapped_id,
         )
@@ -46,12 +46,22 @@ async def reconcile_grafana_tenant(
             if provisioning_id != mapped_id
             else "Verified and repaired tenant resources idempotently."
         )
-        return await apply_grafana_reconciliation_mapping(
+        reason = (
+            f"{reason} Datasource {provision_result['datasource_action']} "
+            f"(verified version {provision_result['datasource_version']})."
+        )
+        mapping_result = await apply_grafana_reconciliation_mapping(
             portal_user_id=portal_user_id,
             organization_id=organization_id,
             grafana_org_id=mapped_id,
             repair_reason=reason,
         )
+        return {
+            **mapping_result,
+            "datasource_action": provision_result["datasource_action"],
+            "datasource_uid": provision_result["datasource_uid"],
+            "datasource_name": provision_result["datasource_name"],
+        }
 
     if len(name_matches) > 1:
         return {
@@ -63,24 +73,44 @@ async def reconcile_grafana_tenant(
 
     if len(name_matches) == 1:
         grafana_org_id = int(name_matches[0]["id"])
-        await client.provision_organization(
+        provision_result = await client.provision_organization(
             organization_name=context["organization_name"],
             existing_org_id=grafana_org_id,
         )
-        return await apply_grafana_reconciliation_mapping(
+        mapping_result = await apply_grafana_reconciliation_mapping(
             portal_user_id=portal_user_id,
             organization_id=organization_id,
             grafana_org_id=grafana_org_id,
-            repair_reason="Adopted the unique same-name unowned Grafana organization.",
+            repair_reason=(
+                "Adopted the unique same-name unowned Grafana "
+                f"organization. Datasource {provision_result['datasource_action']} "
+                f"(verified version {provision_result['datasource_version']})."
+            ),
         )
+        return {
+            **mapping_result,
+            "datasource_action": provision_result["datasource_action"],
+            "datasource_uid": provision_result["datasource_uid"],
+            "datasource_name": provision_result["datasource_name"],
+        }
 
-    grafana_org_id = await client.provision_organization(
+    provision_result = await client.provision_organization(
         organization_name=context["organization_name"],
         existing_org_id=None,
     )
-    return await apply_grafana_reconciliation_mapping(
+    mapping_result = await apply_grafana_reconciliation_mapping(
         portal_user_id=portal_user_id,
         organization_id=organization_id,
-        grafana_org_id=grafana_org_id,
-        repair_reason="Created the missing Grafana organization and tenant resources.",
+        grafana_org_id=provision_result["grafana_org_id"],
+        repair_reason=(
+            "Created the missing Grafana organization and tenant resources. "
+            f"Datasource {provision_result['datasource_action']} "
+            f"(verified version {provision_result['datasource_version']})."
+        ),
     )
+    return {
+        **mapping_result,
+        "datasource_action": provision_result["datasource_action"],
+        "datasource_uid": provision_result["datasource_uid"],
+        "datasource_name": provision_result["datasource_name"],
+    }

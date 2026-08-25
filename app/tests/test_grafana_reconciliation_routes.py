@@ -21,3 +21,33 @@ def test_reconciliation_route_and_action_exist():
 
     assert "/grafana/reconcile" in TEMPLATES
     assert "Reconcile" in TEMPLATES
+
+
+def test_reconciliation_result_is_actually_rendered():
+    """
+    Regression test: the reconciliation route has always computed
+    result["grafana_reconciliation"], but organizations.html previously had
+    no markup referencing it at all -- an HTTP 200 communicated nothing
+    about what actually happened. This pins the observability fix.
+    """
+    organizations_html = (
+        SOURCE_ROOT / "templates" / "organizations.html"
+    ).read_text()
+
+    assert "grafana_reconciliation" in organizations_html
+    assert "datasource_action" in organizations_html
+    assert "reconciliation.success" in organizations_html
+
+
+def test_reconciliation_rendering_never_references_secret_fields():
+    """No password/secureJsonData field name is ever written into the
+    reconciliation result markup -- the result dict itself never contains
+    one (see GrafanaClient.provision_organization()), and this guards
+    against a future change accidentally adding one to the template."""
+    organizations_html = (
+        SOURCE_ROOT / "templates" / "organizations.html"
+    ).read_text()
+
+    assert "secureJsonData" not in organizations_html
+    assert "datasource_password" not in organizations_html
+    assert "reconciliation.password" not in organizations_html

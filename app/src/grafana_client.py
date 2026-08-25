@@ -139,7 +139,7 @@ class GrafanaClient:
     async def create_datasource(
         self,
         org_id: int,
-    ) -> None:
+    ) -> dict[str, Any]:
         await self._request(
             "POST",
             "/api/datasources",
@@ -147,10 +147,22 @@ class GrafanaClient:
             json_payload=self._datasource_payload(),
         )
 
+        verified = await self.get_datasource_by_uid(org_id)
+
+        if verified is None:
+            raise GrafanaApiError(
+                f"Datasource {DATASOURCE_UID} was not found in Grafana "
+                f"organization {org_id} immediately after creation; the "
+                "write did not take effect."
+            )
+
+        return verified
+
     async def update_datasource(
         self,
         org_id: int,
-    ) -> None:
+        previous_version: int | None,
+    ) -> dict[str, Any]:
         """
         Reconcile an existing datasource to the current canonical
         configuration, including the current EMS_GRAFANA_DB_PASSWORD.
@@ -160,6 +172,16 @@ class GrafanaClient:
         included here is always applied, which is exactly the update this
         method exists to make. The UID-based endpoint is used so the
         existing stable "ems-timescaledb" identity is never replaced.
+
+        A PUT that Grafana accepts (HTTP < 400) is not, on its own, proof
+        the datasource was actually changed -- it only proves the request
+        was well-formed. Grafana increments the datasource's `version`
+        field on every write it actually persists, so this method re-reads
+        the datasource after the PUT and requires `version` to have
+        increased. Without this check, a request that Grafana silently
+        accepted without applying (or applied to a different record than
+        expected) would be indistinguishable from a genuine repair -- which
+        is exactly the failure mode this method exists to rule out.
         """
 
         await self._request(
@@ -168,6 +190,29 @@ class GrafanaClient:
             org_id=org_id,
             json_payload=self._datasource_payload(),
         )
+
+        verified = await self.get_datasource_by_uid(org_id)
+
+        if verified is None:
+            raise GrafanaApiError(
+                f"Datasource {DATASOURCE_UID} was not found in Grafana "
+                f"organization {org_id} immediately after update."
+            )
+
+        new_version = verified.get("version")
+
+        if (
+            previous_version is not None
+            and new_version is not None
+            and new_version <= previous_version
+        ):
+            raise GrafanaApiError(
+                f"Datasource {DATASOURCE_UID} update did not take effect: "
+                f"version remained {new_version} in Grafana organization "
+                f"{org_id} (expected greater than {previous_version})."
+            )
+
+        return verified
 
     async def ensure_folder(self, org_id: int) -> None:
         try:
@@ -222,11 +267,17 @@ class GrafanaClient:
         *,
         organization_name: str,
         existing_org_id: int | None = None,
-    ) -> int:
+    ) -> dict[str, Any]:
         """
         Ensure the Grafana organization and its EMS resources exist.
 
         Existing mappings take precedence over name matching.
+
+        Returns a result describing what actually happened -- not just the
+        resolved organization id -- so callers (and, ultimately, the admin
+        UI) can distinguish "created", "updated", and can surface the
+        verified post-write datasource version rather than merely reporting
+        that no HTTP error occurred.
         """
 
         grafana_org_id = existing_org_id
@@ -257,11 +308,24 @@ class GrafanaClient:
         )
 
         if datasource is None:
-            await self.create_datasource(grafana_org_id)
+            verified_datasource = await self.create_datasource(
+                grafana_org_id
+            )
+            datasource_action = "created"
         else:
-            await self.update_datasource(grafana_org_id)
+            verified_datasource = await self.update_datasource(
+                grafana_org_id,
+                datasource.get("version"),
+            )
+            datasource_action = "updated"
 
         await self.ensure_folder(grafana_org_id)
         await self.import_dashboards(grafana_org_id)
 
-        return grafana_org_id
+        return {
+            "grafana_org_id": grafana_org_id,
+            "datasource_action": datasource_action,
+            "datasource_uid": DATASOURCE_UID,
+            "datasource_name": DATASOURCE_NAME,
+            "datasource_version": verified_datasource.get("version"),
+        }

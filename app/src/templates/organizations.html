@@ -39,6 +39,28 @@
     <div class="alert alert-error" role="alert">{{ error }}</div>
     {% endif %}
 
+    {% if result and result.grafana_reconciliation %}
+    {% set reconciliation = result.grafana_reconciliation %}
+    <div class="alert {% if reconciliation.success %}alert-success{% else %}alert-error{% endif %}" role="{% if reconciliation.success %}status{% else %}alert{% endif %}">
+        <strong>
+            Grafana reconciliation
+            {% if reconciliation.success %}succeeded{% else %}failed{% endif %}
+            for organization {{ result.organization_id }}.
+        </strong>
+        {% if reconciliation.datasource_uid %}
+        <br>Datasource <code>{{ reconciliation.datasource_uid }}</code>
+        ({{ reconciliation.datasource_name }}):
+        {{ reconciliation.datasource_action or "no change recorded" }}.
+        {% endif %}
+        {% if reconciliation.reconciliation_status %}
+        <br>Status: {{ reconciliation.reconciliation_status }}
+        {% endif %}
+        {% if reconciliation.failure_reason %}
+        <br>{{ reconciliation.failure_reason }}
+        {% endif %}
+    </div>
+    {% endif %}
+
     <section class="surface-panel organization-list-panel">
         <div class="list-toolbar">
             <label class="search-field">
