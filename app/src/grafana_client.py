@@ -182,6 +182,7 @@ class GrafanaClient:
     async def update_datasource(
         self,
         org_id: int,
+        existing_datasource_id: int | None,
         previous_version: int | None,
     ) -> dict[str, Any]:
         """
@@ -194,6 +195,11 @@ class GrafanaClient:
         method exists to make. The UID-based endpoint is used so the
         existing stable "ems-timescaledb" identity is never replaced.
 
+        Grafana 11.6's documented UID-update request body includes the
+        datasource's numeric `id` and `orgId` alongside the common fields;
+        `existing_datasource_id` is the `id` from the existing datasource
+        record the caller already fetched via get_datasource_by_uid().
+
         A PUT that Grafana accepts (HTTP < 400) is not, on its own, proof
         the datasource was actually changed -- it only proves the request
         was well-formed. Grafana increments the datasource's `version`
@@ -205,11 +211,17 @@ class GrafanaClient:
         is exactly the failure mode this method exists to rule out.
         """
 
+        update_payload = {
+            **self._datasource_payload(),
+            "id": existing_datasource_id,
+            "orgId": org_id,
+        }
+
         write_response = await self._request(
             "PUT",
             f"/api/datasources/uid/{DATASOURCE_UID}",
             org_id=org_id,
-            json_payload=self._datasource_payload(),
+            json_payload=update_payload,
         )
 
         verified = await self.get_datasource_by_uid(org_id)
@@ -338,6 +350,7 @@ class GrafanaClient:
         else:
             verified_datasource = await self.update_datasource(
                 grafana_org_id,
+                datasource.get("id"),
                 datasource.get("version"),
             )
             datasource_action = "updated"

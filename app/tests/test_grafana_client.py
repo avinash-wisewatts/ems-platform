@@ -248,7 +248,9 @@ async def test_update_datasource_uses_stable_uid_and_current_password(
 
     client.datasource_password = "rotated-password"
 
-    verified = await client.update_datasource(7, previous_version=1)
+    verified = await client.update_datasource(
+        7, existing_datasource_id=42, previous_version=1
+    )
 
     assert captured["method"] == "PUT"
     assert captured["path"] == f"/api/datasources/uid/{DATASOURCE_UID}"
@@ -258,6 +260,43 @@ async def test_update_datasource_uses_stable_uid_and_current_password(
         "password": "rotated-password"
     }
     assert verified["version"] == 2
+
+
+@pytest.mark.asyncio
+async def test_update_datasource_payload_includes_existing_id_and_org_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Regression test: Grafana 11.6's documented UID-update request body
+    includes the datasource's numeric `id` and `orgId`. The previous
+    implementation omitted both, which is the change this test pins.
+    """
+    client = GrafanaClient()
+    captured: dict = {}
+
+    async def fake_request(
+        method: str,
+        path: str,
+        *,
+        org_id=None,
+        json_payload=None,
+    ):
+        if method == "PUT":
+            captured["json_payload"] = json_payload
+            return FakeResponse(payload={"message": "Datasource updated"})
+
+        return FakeResponse(
+            payload={"uid": DATASOURCE_UID, "orgId": org_id, "version": 2}
+        )
+
+    monkeypatch.setattr(client, "_request", fake_request)
+
+    await client.update_datasource(
+        7, existing_datasource_id=42, previous_version=1
+    )
+
+    assert captured["json_payload"]["id"] == 42
+    assert captured["json_payload"]["orgId"] == 7
 
 
 @pytest.mark.asyncio
@@ -295,7 +334,9 @@ async def test_update_datasource_raises_when_version_does_not_increase(
     monkeypatch.setattr(client, "_request", fake_request)
 
     with pytest.raises(GrafanaApiError, match="did not take effect"):
-        await client.update_datasource(7, previous_version=1)
+        await client.update_datasource(
+            7, existing_datasource_id=42, previous_version=1
+        )
 
 
 @pytest.mark.asyncio
@@ -334,7 +375,9 @@ async def test_update_datasource_error_describes_write_response_without_leaking_
     monkeypatch.setattr(client, "_request", fake_request)
 
     with pytest.raises(GrafanaApiError) as excinfo:
-        await client.update_datasource(7, previous_version=1)
+        await client.update_datasource(
+            7, existing_datasource_id=42, previous_version=1
+        )
 
     message = str(excinfo.value)
     assert "HTTP 302" in message
@@ -363,7 +406,9 @@ async def test_update_datasource_raises_when_disappears_after_write(
     monkeypatch.setattr(client, "_request", fake_request)
 
     with pytest.raises(GrafanaApiError, match="was not found"):
-        await client.update_datasource(7, previous_version=1)
+        await client.update_datasource(
+            7, existing_datasource_id=42, previous_version=1
+        )
 
 
 @pytest.mark.asyncio
@@ -400,9 +445,22 @@ async def test_create_and_update_datasource_payloads_do_not_drift(
     monkeypatch.setattr(client, "_request", fake_request)
 
     await client.create_datasource(7)
-    await client.update_datasource(7, previous_version=1)
+    await client.update_datasource(
+        7, existing_datasource_id=42, previous_version=1
+    )
 
-    assert captured_payloads[0] == captured_payloads[1]
+    create_payload, update_payload = captured_payloads
+
+    # The update payload additionally carries `id`/`orgId`, which only make
+    # sense for an existing record, so compare the common fields (i.e. the
+    # fields built by _datasource_payload()) rather than the full payloads.
+    common_fields = set(create_payload)
+    assert common_fields <= set(update_payload)
+    assert create_payload == {
+        field: update_payload[field] for field in common_fields
+    }
+    assert update_payload["id"] == 42
+    assert update_payload["orgId"] == 7
 
 
 @pytest.mark.asyncio
@@ -580,7 +638,9 @@ async def test_grafana_api_error_never_contains_password(
     monkeypatch.setattr(client, "_request", fake_request)
 
     with pytest.raises(GrafanaApiError) as excinfo:
-        await client.update_datasource(7, previous_version=1)
+        await client.update_datasource(
+            7, existing_datasource_id=42, previous_version=1
+        )
 
     assert "super-secret-value" not in str(excinfo.value)
 
@@ -614,10 +674,17 @@ async def test_provision_organization_reconciles_existing_datasource(
 
     async def fake_get_datasource(org_id: int):
         calls.append(("get_datasource", org_id))
-        return {"uid": DATASOURCE_UID, "version": 1}
+        return {"id": 42, "uid": DATASOURCE_UID, "version": 1}
 
-    async def fake_update_datasource(org_id: int, previous_version):
-        calls.append(("update_datasource", (org_id, previous_version)))
+    async def fake_update_datasource(
+        org_id: int, existing_datasource_id, previous_version
+    ):
+        calls.append(
+            (
+                "update_datasource",
+                (org_id, existing_datasource_id, previous_version),
+            )
+        )
         return {"uid": DATASOURCE_UID, "version": 2}
 
     async def fake_ensure_folder(org_id: int):
@@ -652,7 +719,7 @@ async def test_provision_organization_reconciles_existing_datasource(
     }
     assert calls == [
         ("get_datasource", 7),
-        ("update_datasource", (7, 1)),
+        ("update_datasource", (7, 42, 1)),
         ("ensure_folder", 7),
         ("import_dashboards", 7),
     ]
@@ -681,7 +748,9 @@ async def test_provision_organization_creates_missing_resources(
         calls.append(("create_datasource", org_id))
         return {"uid": DATASOURCE_UID, "version": 1}
 
-    async def unexpected_update_datasource(org_id: int, previous_version):
+    async def unexpected_update_datasource(
+        org_id: int, existing_datasource_id, previous_version
+    ):
         raise AssertionError(
             "A missing datasource must be created, not updated."
         )
