@@ -275,18 +275,26 @@ else
 fi
 
 echo
-echo "=== Test 12: final staging HEAD recheck immediately precedes the SSH deploy step ==="
+echo "=== Test 12: staging HEAD recheck, then image resolution, then SSH -- in that exact order ==="
+# 2026-08-25 update: deploy-production now resolves its own digest-pinned
+# image (step "Resolve and pin the deployment image") between the staging-
+# HEAD recheck and the SSH step, instead of consuming validate-promotion's
+# resolved value via a cross-job output -- see Test 15 for why. So exactly
+# one step (the image resolution) is expected between the recheck and SSH,
+# not zero.
 recheck_line="$(echo "${deploy_block}" | grep -n 'name: Re-verify staging HEAD' | head -1 | cut -d: -f1)"
+resolve_line="$(echo "${deploy_block}" | grep -n 'name: Resolve and pin the deployment image' | head -1 | cut -d: -f1)"
 ssh_line="$(echo "${deploy_block}" | grep -n 'name: Deploy over SSH' | head -1 | cut -d: -f1)"
-if [[ -n "${recheck_line}" && -n "${ssh_line}" && "${recheck_line}" -lt "${ssh_line}" ]]; then
-    between="$(echo "${deploy_block}" | sed -n "$((recheck_line+1)),$((ssh_line-1))p" | grep -cE '^[[:space:]]*- name:' || true)"
+if [[ -n "${recheck_line}" && -n "${resolve_line}" && -n "${ssh_line}" \
+    && "${recheck_line}" -lt "${resolve_line}" && "${resolve_line}" -lt "${ssh_line}" ]]; then
+    between="$(echo "${deploy_block}" | sed -n "$((resolve_line+1)),$((ssh_line-1))p" | grep -cE '^[[:space:]]*- name:' || true)"
     if [[ "${between}" -eq 0 ]]; then
-        pass "12: staging HEAD recheck is the step immediately preceding Deploy over SSH in deploy-production"
+        pass "12: deploy-production steps run in order: staging-HEAD recheck, image resolution, Deploy over SSH -- with nothing else between resolution and SSH"
     else
-        fail "12: another step appears between the staging HEAD recheck and Deploy over SSH"
+        fail "12: another step appears between image resolution and Deploy over SSH"
     fi
 else
-    fail "12: could not confirm staging HEAD recheck precedes the SSH deploy step"
+    fail "12: could not confirm the expected step order (staging-HEAD recheck -> image resolution -> Deploy over SSH) in deploy-production"
 fi
 
 echo
@@ -304,15 +312,70 @@ fi
 
 echo
 echo "=== Test 14: production deployment uses the resolved, digest-pinned image ==="
-if grep -qF 'image_with_digest="${REGISTRY}/${IMAGE_NAME}:${RELEASE_SHA}@${digest}"' "${WORKFLOW_FILE}"; then
-    pass "14a: digest-pinned image reference is constructed (tag@digest)"
+digest_construction_count="$(grep -cF 'image_with_digest="${REGISTRY}/${IMAGE_NAME}:${RELEASE_SHA}@${digest}"' "${WORKFLOW_FILE}" || true)"
+if [[ "${digest_construction_count}" -eq 2 ]]; then
+    pass "14a: digest-pinned image reference (tag@digest) is constructed in both validate-promotion's early check and deploy-production's authoritative resolution"
 else
-    fail "14a: digest-pinned image construction not found"
+    fail "14a: expected the digest-pinned image construction exactly twice (early check + authoritative resolution), found ${digest_construction_count}"
 fi
-if grep -qF 'APP_IMAGE: ${{ needs.validate-promotion.outputs.image_with_digest }}' "${WORKFLOW_FILE}"; then
-    pass "14b: deploy-production's APP_IMAGE is sourced from validate-promotion's resolved digest-pinned output"
+if grep -qF 'APP_IMAGE: ${{ steps.resolve-image.outputs.image_with_digest }}' "${WORKFLOW_FILE}"; then
+    pass "14b: deploy-production's APP_IMAGE is sourced from a same-job step output"
 else
-    fail "14b: deploy-production does not consume the resolved digest-pinned image output"
+    fail "14b: deploy-production does not consume a same-job resolved digest-pinned image output"
+fi
+
+# ----------------------------------------------------------------------------
+# Tests 15-18: the 2026-08-25 image-handoff fix. The first real dispatch
+# (run 32858328343 -> 32861162765) proved that a job-level output
+# (jobs.validate-promotion.outputs.image_with_digest, the mechanism behind
+# needs.validate-promotion.outputs.*) gets silently discarded by GitHub
+# Actions' own secret-masking check at job completion when the value
+# happens to match a secret used in that job ("Skip output
+# 'image_with_digest' since it may contain secret") -- validate-promotion
+# reported success, but deploy-production's APP_IMAGE was empty, and
+# deploy_release.sh correctly refused to run rather than deploy with no
+# image. The fix moves authoritative image resolution into deploy-production
+# itself, as a same-job step output, which is never subject to that
+# specific job-outputs masking check. These tests prove the fixed
+# architecture is actually present, not just that some digest string
+# appears somewhere in the file.
+# ----------------------------------------------------------------------------
+
+echo
+echo "=== Test 15: validate-promotion no longer exposes a job-level image output ==="
+if echo "${validate_block}" | grep -qE '^[[:space:]]*outputs:'; then
+    fail "15: validate-promotion still declares a job-level outputs: block -- this is exactly the cross-job channel GitHub Actions silently discarded"
+else
+    pass "15: validate-promotion declares no job-level outputs: block (the image is no longer handed off through a cross-job output)"
+fi
+
+echo
+echo "=== Test 16: deploy-production does not consume validate-promotion's job output for the image ==="
+if echo "${deploy_block}" | grep -qE 'needs\.validate-promotion\.outputs\.image'; then
+    fail "16: deploy-production still references needs.validate-promotion.outputs.image* -- this is the exact reference that resolved empty on the failed run"
+else
+    pass "16: deploy-production does not reference needs.validate-promotion.outputs.image* anywhere"
+fi
+
+echo
+echo "=== Test 17: deploy-production resolves its own image via a same-job step output ==="
+if echo "${deploy_block}" | grep -qE '^[[:space:]]*id:[[:space:]]*resolve-image[[:space:]]*$'; then
+    pass "17a: deploy-production declares its own resolve-image step"
+else
+    fail "17a: deploy-production does not declare its own resolve-image step"
+fi
+if echo "${deploy_block}" | grep -qF 'docker buildx imagetools inspect "${image}"'; then
+    pass "17b: deploy-production's resolve-image step independently authenticates to GHCR and inspects the SHA-derived image"
+else
+    fail "17b: deploy-production's resolve-image step does not perform its own GHCR inspection"
+fi
+
+echo
+echo "=== Test 18: deploy_release.sh remains unchanged by this fix (live, vs origin/staging) ==="
+if git diff --quiet origin/staging -- scripts/release/deploy_release.sh 2>/dev/null; then
+    pass "18: scripts/release/deploy_release.sh is byte-identical to origin/staging -- this fix touched only the workflow"
+else
+    fail "18: scripts/release/deploy_release.sh differs from origin/staging -- this fix must not modify the deployment script"
 fi
 
 echo
