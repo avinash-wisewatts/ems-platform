@@ -183,7 +183,6 @@ class GrafanaClient:
         self,
         org_id: int,
         existing_datasource_id: int | None,
-        previous_version: int | None,
     ) -> dict[str, Any]:
         """
         Reconcile an existing datasource to the current canonical
@@ -202,13 +201,21 @@ class GrafanaClient:
 
         A PUT that Grafana accepts (HTTP < 400) is not, on its own, proof
         the datasource was actually changed -- it only proves the request
-        was well-formed. Grafana increments the datasource's `version`
-        field on every write it actually persists, so this method re-reads
-        the datasource after the PUT and requires `version` to have
-        increased. Without this check, a request that Grafana silently
-        accepted without applying (or applied to a different record than
-        expected) would be indistinguishable from a genuine repair -- which
-        is exactly the failure mode this method exists to rule out.
+        was well-formed. This was originally verified by requiring the
+        datasource's `version` field to strictly increase after the write.
+        Live staging evidence (2026-08-25) showed that check to be a false
+        negative: `version` stayed unchanged across a PUT whose own
+        response body already echoed `"message": "Datasource updated"`,
+        while a fresh, independently-observed PostgreSQL session opened by
+        Grafana immediately afterward authenticated successfully as
+        `grafana_reader` -- proof the new password was in fact applied,
+        since PostgreSQL accepts only the single currently-set password for
+        a role. Grafana's own HTTP API documentation example for this
+        endpoint likewise shows `"version": 1` in the *response* to an
+        update. `version` is therefore not a reliable signal for this
+        endpoint and is no longer used as one; the functional proof used
+        here instead is the datasource's own `/health` check, which
+        exercises the exact credential Grafana just stored.
         """
 
         update_payload = {
@@ -233,17 +240,18 @@ class GrafanaClient:
                 f"{_describe_write_response(write_response)}"
             )
 
-        new_version = verified.get("version")
+        health = await self._request(
+            "GET",
+            f"/api/datasources/uid/{DATASOURCE_UID}/health",
+            org_id=org_id,
+        )
+        health_status = health.json().get("status")
 
-        if (
-            previous_version is not None
-            and new_version is not None
-            and new_version <= previous_version
-        ):
+        if health_status != "OK":
             raise GrafanaApiError(
                 f"Datasource {DATASOURCE_UID} update did not take effect: "
-                f"version remained {new_version} in Grafana organization "
-                f"{org_id} (expected greater than {previous_version}). "
+                f"post-update health check reported status "
+                f"{health_status!r} in Grafana organization {org_id}. "
                 f"{_describe_write_response(write_response)}"
             )
 
@@ -351,7 +359,6 @@ class GrafanaClient:
             verified_datasource = await self.update_datasource(
                 grafana_org_id,
                 datasource.get("id"),
-                datasource.get("version"),
             )
             datasource_action = "updated"
 
