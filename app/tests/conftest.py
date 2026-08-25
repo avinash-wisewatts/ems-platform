@@ -26,6 +26,18 @@ os.environ.setdefault(
     "grafana-test-reader-password",
 )
 
+# Test-only configuration must exist before src.live_main is imported.
+# LiveSettings reuses the EMS_APP_DB_*/EMS_APP_SESSION_SECRET aliases set
+# above; only the live-telemetry-specific fields need their own defaults.
+# No live MQTT broker connection is opened by the unit tests.
+os.environ.setdefault("MQTT_HOST", "127.0.0.1")
+os.environ.setdefault("MQTT_USERNAME", "live-test-subscriber")
+os.environ.setdefault("MQTT_PASSWORD", "live-test-only-password")
+os.environ.setdefault(
+    "EMS_GRAFANA_STREAM_TOKEN",
+    "live-route-test-stream-token-at-least-32-chars",
+)
+
 from datetime import datetime, timezone
 
 import pytest

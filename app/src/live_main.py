@@ -1,4 +1,6 @@
+import asyncio
 from contextlib import asynccontextmanager
+import logging
 import secrets
 from typing import AsyncIterator
 from uuid import UUID
@@ -7,13 +9,15 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from psycopg.rows import dict_row
-from psycopg_pool import AsyncConnectionPool
+from psycopg_pool import AsyncConnectionPool, PoolTimeout
 from starlette.middleware.sessions import SessionMiddleware
 
 from src.auth.session import SESSION_IDENTITY_KEY, deserialize_authenticated_user
 from src.live_config import get_live_settings
 from src.live_telemetry.broker import LiveTelemetryBroker
 from src.live_telemetry.hub import AssetLiveHub, GrafanaAssetLiveHub
+
+logger = logging.getLogger(__name__)
 
 settings = get_live_settings()
 pool: AsyncConnectionPool | None = None
@@ -60,6 +64,44 @@ async def fetch_grafana_asset_state(grafana_org_id: int, asset_id: UUID) -> list
                 (grafana_org_id, asset_id),
             )
             return [dict(row) for row in await cursor.fetchall()]
+
+
+async def fetch_grafana_asset_state_with_retry(
+    grafana_org_id: int, asset_id: UUID
+) -> list[dict]:
+    """Bounded-retry wrapper for the live-tile WebSocket connect path.
+
+    A pool-acquisition timeout (psycopg_pool.PoolTimeout) here is transient
+    by nature -- it means every pooled connection was busy for the whole
+    acquisition window, not that the query itself is broken. Retrying a
+    small, finite number of times gives a slot that is about to free up (the
+    common case once live_ingest_max_concurrency bounds ingest) a chance to
+    become available without failing a live-tile connection outright.
+
+    This never holds a connection while sleeping: PoolTimeout means no
+    connection was ever acquired, so there is nothing to release between
+    attempts. If every attempt is exhausted, the last PoolTimeout propagates
+    to the caller, which is expected to close the WebSocket cleanly rather
+    than let it crash with an uncaught exception.
+    """
+    attempts = settings.live_pool_acquire_max_attempts
+    delay = settings.live_pool_acquire_retry_backoff_seconds
+    for attempt in range(1, attempts + 1):
+        try:
+            return await fetch_grafana_asset_state(grafana_org_id, asset_id)
+        except PoolTimeout:
+            if attempt >= attempts:
+                raise
+            logger.warning(
+                "Live-tile pool acquisition attempt %s/%s timed out "
+                "asset_id=%s grafana_org_id=%s; retrying",
+                attempt,
+                attempts,
+                asset_id,
+                grafana_org_id,
+            )
+            await asyncio.sleep(delay)
+    raise AssertionError("unreachable: loop above always returns or raises")
 
 
 async def fetch_grafana_asset_connectivity(
@@ -210,6 +252,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         client_id=settings.mqtt_client_id,
         use_tls=settings.mqtt_tls,
         on_device_update=publish_device_update,
+        ingest_max_concurrency=settings.live_ingest_max_concurrency,
     )
     await broker.start()
     try:
@@ -327,7 +370,23 @@ async def grafana_live_asset_websocket(
         await websocket.close(code=4401)
         return
 
-    rows = await fetch_grafana_asset_state(grafana_org_id, asset_id)
+    try:
+        rows = await fetch_grafana_asset_state_with_retry(grafana_org_id, asset_id)
+    except PoolTimeout:
+        logger.error(
+            "Live-tile connection acquisition exhausted retries "
+            "asset_id=%s grafana_org_id=%s",
+            asset_id,
+            grafana_org_id,
+        )
+        # 1013 = "Try Again Later" (RFC 6455 IANA registry): the same
+        # close-before-accept pattern already used above for auth/asset
+        # failures, so the Grafana Live client sees a clean stream close
+        # and retries per its normal reconnect behavior instead of an
+        # uncaught server exception.
+        await websocket.close(code=1013)
+        return
+
     await websocket.accept()
     await grafana_hub.add(asset_id, websocket, grafana_org_id)
     try:

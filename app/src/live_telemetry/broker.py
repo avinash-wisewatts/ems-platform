@@ -26,12 +26,24 @@ class LiveTelemetryBroker:
         client_id: str,
         use_tls: bool,
         on_device_update: Callable[[str], Awaitable[None]],
+        ingest_max_concurrency: int,
     ) -> None:
         self.pool = pool
         self.host = host
         self.port = port
         self.on_device_update = on_device_update
         self.loop: asyncio.AbstractEventLoop | None = None
+        # Bounds how many _ingest() calls may hold a pooled DB connection at
+        # once. A burst of MQTT messages still schedules one task per message
+        # (fire-and-forget, unchanged), but only ingest_max_concurrency of
+        # them may be inside `async with self.pool.connection()` at a time --
+        # the rest wait here instead of occupying a pool slot while blocked
+        # on PostgreSQL row/transaction locks. Deliberately kept below the
+        # live-telemetry DB pool's max_size so ingest can never consume the
+        # entire pool and starve the live-tile read path that shares it.
+        # Created in start(), once the owning event loop is known.
+        self._ingest_max_concurrency = ingest_max_concurrency
+        self._ingest_semaphore: asyncio.Semaphore | None = None
         self._state_lock = threading.Lock()
         self._mqtt_connected = False
         self._subscription_mids: set[int] = set()
@@ -61,6 +73,7 @@ class LiveTelemetryBroker:
 
     async def start(self) -> None:
         self.loop = asyncio.get_running_loop()
+        self._ingest_semaphore = asyncio.Semaphore(self._ingest_max_concurrency)
         self.client.connect_async(self.host, self.port, keepalive=60)
         self.client.loop_start()
 
@@ -183,18 +196,25 @@ class LiveTelemetryBroker:
             logger.exception("Live MQTT ingest task failed")
 
     async def _ingest(self, topic: str, payload: dict, received_at: datetime) -> None:
+        assert self._ingest_semaphore is not None
         try:
-            async with self.pool.connection() as connection:
-                async with connection.cursor() as cursor:
-                    await cursor.execute(
-                        """
-                        SELECT device_id
-                        FROM telemetry.ingest_live_rtdata(%s, %s::jsonb, %s)
-                        """,
-                        (topic, json.dumps(payload), received_at),
-                    )
-                    rows = await cursor.fetchall()
-                await connection.commit()
+            # Only ingest_max_concurrency tasks may hold a pooled connection
+            # at once. Excess tasks from a burst wait on the semaphore here
+            # -- a suspended coroutine, not an occupied DB connection -- so a
+            # burst cannot exhaust the pool the way an unbounded fan-out of
+            # concurrent `pool.connection()` calls did.
+            async with self._ingest_semaphore:
+                async with self.pool.connection() as connection:
+                    async with connection.cursor() as cursor:
+                        await cursor.execute(
+                            """
+                            SELECT device_id
+                            FROM telemetry.ingest_live_rtdata(%s, %s::jsonb, %s)
+                            """,
+                            (topic, json.dumps(payload), received_at),
+                        )
+                        rows = await cursor.fetchall()
+                    await connection.commit()
 
             now = datetime.now(timezone.utc)
             with self._state_lock:
