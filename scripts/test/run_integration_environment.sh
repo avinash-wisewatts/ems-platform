@@ -113,6 +113,10 @@ echo
 echo "[recovery-normalized-points-targeted-lookup] Running recovery normalized-points targeted-lookup assertions..."
 "${SCRIPT_DIR}/assert_recovery_normalized_points_targeted_lookup.sh"
 
+echo
+echo "[recovery-per-candidate-commit] Running recovery per-candidate commit assertions..."
+"${SCRIPT_DIR}/assert_recovery_per_candidate_commit.sh"
+
 echo "[14/14] Verifying migration ledger..."
 ledger="$(
     docker compose \

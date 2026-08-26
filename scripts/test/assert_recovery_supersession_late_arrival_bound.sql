@@ -17,7 +17,7 @@
 --   already-resolved values (no new parameter, no hardcoded duration, no
 --   dependence on now() or the candidate's own age).
 --
---   This test proves, against a fully synthetic, rollback-only fixture:
+--   This test proves, against a fully synthetic fixture:
 --     A. a failed message with no replacement still recovers normally;
 --     B. a later sample WITHIN the tolerance window is recognized as a
 --        legitimate superseder (the failed message's own row is correctly
@@ -31,11 +31,16 @@
 --        procedure (a live catalog check, not a text/file check), so the
 --        historical unbounded scan cannot silently return.
 --
---   Everything here runs inside one transaction that is rolled back at the
---   very end -- no fixture data ever persists.
+--   Migration 203 note: telemetry.recover_failed_raw_messages() now commits
+--   after each candidate (see migration 203) and therefore MUST be invoked
+--   as a bare top-level CALL -- wrapping it in an explicit transaction fails
+--   with "invalid transaction termination". This test can no longer run
+--   inside a BEGIN; ... ROLLBACK; wrapper the way it used to: the CALL below
+--   really commits. Fixture rows are identified by distinctive business
+--   keys (org/site/gateway/device/profile codes, the fixed source_topic,
+--   and the fixed synthetic MQTT UID) and explicitly deleted at the end
+--   instead, so the test remains idempotent and leaves no residue.
 -- ============================================================================
-
-BEGIN;
 
 DO $test$
 DECLARE
@@ -322,7 +327,42 @@ BEGIN
 END;
 $test$;
 
-ROLLBACK;
+-- ==================================================================
+-- Cleanup -- the CALLs above really committed (migration 203), so
+-- explicitly remove every row this fixture created, identified by its
+-- distinctive business keys, in FK-safe (child-before-parent) order.
+-- ==================================================================
+
+DELETE FROM telemetry.normalized_points
+WHERE device_id IN (SELECT id FROM metadata.devices WHERE external_id = 'RECOVERY-SUPERSESSION-DEV');
+
+DELETE FROM telemetry.capture_bucket_samples
+WHERE device_id IN (SELECT id FROM metadata.devices WHERE external_id = 'RECOVERY-SUPERSESSION-DEV');
+
+DELETE FROM telemetry.raw_message_failures
+WHERE payload->'rtdata'->0->>'uid' = 'TEST:RECOVERY:SUPERSESSION:001';
+
+DELETE FROM telemetry.raw_messages
+WHERE source_topic = 'test/recovery/supersession';
+
+DELETE FROM config.device_point_configuration
+WHERE device_id IN (SELECT id FROM metadata.devices WHERE external_id = 'RECOVERY-SUPERSESSION-DEV');
+
+DELETE FROM metadata.device_identifiers
+WHERE device_id IN (SELECT id FROM metadata.devices WHERE external_id = 'RECOVERY-SUPERSESSION-DEV');
+
+DELETE FROM config.profile_field_mapping
+WHERE profile_id IN (SELECT id FROM config.device_profiles WHERE profile_code = 'TEST_RECOVERY_SUPERSESSION_PROFILE');
+
+DELETE FROM metadata.devices WHERE external_id = 'RECOVERY-SUPERSESSION-DEV';
+DELETE FROM metadata.gateways WHERE external_id = 'RECOVERY-SUPERSESSION-GW';
+
+DELETE FROM config.telemetry_capture_policies
+WHERE site_id IN (SELECT id FROM metadata.sites WHERE code = 'RECOVERY_SUPERSESSION_TEST_SITE');
+
+DELETE FROM metadata.sites WHERE code = 'RECOVERY_SUPERSESSION_TEST_SITE';
+DELETE FROM metadata.organizations WHERE code = 'RECOVERY_SUPERSESSION_TEST_ORG';
+DELETE FROM config.device_profiles WHERE profile_code = 'TEST_RECOVERY_SUPERSESSION_PROFILE';
 
 SELECT
     'Recovery supersession late-arrival bound assertions passed.'
