@@ -312,17 +312,28 @@ BEGIN
     RAISE NOTICE 'TEST D passed: an old (60-day) failed message remains fully recoverable -- age does not disqualify recovery.';
 
     -- ==================================================================
-    -- TEST E -- the bounded predicate is actually present in the
-    -- deployed procedure (live catalog check).
+    -- TEST E -- the bounded, targeted-window predicate is actually present
+    -- in the deployed procedure (live catalog check).
+    --
+    -- Migration 204 restructured the supersession subquery to read
+    -- directly from telemetry.raw_messages (alias r2m) and apply the
+    -- bucket_start/deadline window plus the rtdata-is-array guard BEFORE
+    -- expanding JSON, instead of going through telemetry.v_rtdata (whose
+    -- alias was r2, carrying received_at itself). r2 is now only the
+    -- jsonb_array_elements() output alias and no longer has a received_at
+    -- column at all -- so this check validates the actual semantic
+    -- property (targeted source table, both window bounds, guard-then-
+    -- expand ordering) rather than a literal string tied to the
+    -- pre-migration-204 alias, which no longer exists.
     -- ==================================================================
 
     IF pg_get_functiondef('telemetry.recover_failed_raw_messages(integer)'::regprocedure)
-        NOT ILIKE '%r2.received_at>=ce.bucket_start%'
+        NOT ILIKE '%FROM telemetry.raw_messages r2m%WHERE r2m.received_at>=ce.bucket_start%AND r2m.received_at<=ce.deadline%AND jsonb_typeof(r2m.payload->%rtdata%)=%array%%jsonb_array_elements(r2m.payload->%rtdata%) r2(value)%'
     THEN
-        RAISE EXCEPTION 'TEST E FAILED: the deployed telemetry.recover_failed_raw_messages() does not contain the lower-bound predicate r2.received_at>=ce.bucket_start -- the historical unbounded scan may have returned';
+        RAISE EXCEPTION 'TEST E FAILED: the deployed telemetry.recover_failed_raw_messages() does not read competing rows from telemetry.raw_messages with both the bucket_start/deadline window and the rtdata-is-array guard applied before jsonb_array_elements -- the historical unbounded scan may have returned';
     END IF;
 
-    RAISE NOTICE 'TEST E passed: the bounded supersession predicate is present in the deployed procedure.';
+    RAISE NOTICE 'TEST E passed: the deployed procedure sources competing rows from telemetry.raw_messages, bounded by both ce.bucket_start and ce.deadline, with the rtdata-is-array guard applied before JSON expansion.';
 
 END;
 $test$;
