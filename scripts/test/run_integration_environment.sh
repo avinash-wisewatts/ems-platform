@@ -121,6 +121,10 @@ echo
 echo "[normalization-bounded-catchup-window] Running normalization bounded catch-up window assertions..."
 "${SCRIPT_DIR}/assert_normalization_bounded_catchup_window.sh"
 
+echo
+echo "[recovery-retention-age-population] Running recovery retention-age population assertions..."
+"${SCRIPT_DIR}/assert_recovery_retention_age_population.sh"
+
 echo "[14/14] Verifying migration ledger..."
 ledger="$(
     docker compose \

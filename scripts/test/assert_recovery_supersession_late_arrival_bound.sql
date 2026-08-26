@@ -25,8 +25,13 @@
 --     C. a later sample OUTSIDE the tolerance window is NOT treated as a
 --        superseder (the failed message recovers exactly as if the
 --        out-of-window sample did not exist);
---     D. an old failed message (bucket from 60 days ago) remains fully
---        recoverable -- age never disqualifies recovery;
+--     D. (updated 2026-08-26 for migration 206) an old failed message
+--        (bucket from 60 days ago, older than any plausible retention
+--        policy) is immediately marked PERMANENT_FAILURE by migration
+--        206's age-based population selection, without running the
+--        supersession/normalization logic -- this test originally asserted
+--        the opposite ("age never disqualifies recovery"), which migration
+--        206 deliberately overturned; see that migration's header;
 --     E. the bounded predicate is actually present in the deployed
 --        procedure (a live catalog check, not a text/file check), so the
 --        historical unbounded scan cannot silently return.
@@ -274,9 +279,21 @@ BEGIN
     RAISE NOTICE 'TEST C passed: a later sample outside the tolerance window is correctly NOT treated as a superseder.';
 
     -- ==================================================================
-    -- TEST D -- an old failed message (60 days old) remains fully
-    -- recoverable. Age must never disqualify recovery; only
-    -- replay_attempt_count does.
+    -- TEST D -- superseded by migration 206 (2026-08-26): population
+    -- selection is now deliberately age-based against the live
+    -- telemetry.raw_messages retention policy, not existence-based. A
+    -- candidate whose raw_received_at is older than the current dynamic
+    -- retention cutoff is immediately marked PERMANENT_FAILURE without
+    -- running the supersession/normalization logic below -- this is the
+    -- intended new behavior (see migration 206's header), not a
+    -- regression. This test still uses a fixed 60-day-old bucket, which is
+    -- older than every plausible deployed retention policy, so it now
+    -- proves the opposite of what it originally asserted: age alone
+    -- disqualifies recovery, and does so without touching
+    -- capture_bucket_samples/normalized_points at all. Dynamic-cutoff
+    -- correctness itself (reading the live policy, not a hard-coded
+    -- duration) is covered by
+    -- scripts/test/assert_recovery_retention_age_population.sql.
     -- ==================================================================
 
     v_bucket_start := date_trunc('minute', now() - INTERVAL '60 days');
@@ -305,11 +322,19 @@ BEGIN
     FROM telemetry.raw_message_failures
     WHERE raw_received_at = v_bucket_start + INTERVAL '10 seconds' AND raw_message_id = v_msg_id;
 
-    IF v_status <> 'RECOVERED' THEN
-        RAISE EXCEPTION 'TEST D FAILED: a 60-day-old failed message did not recover, got status %', v_status;
+    IF v_status <> 'PERMANENT_FAILURE' THEN
+        RAISE EXCEPTION 'TEST D FAILED: a 60-day-old failed message (older than any plausible retention policy) should be immediately marked PERMANENT_FAILURE by migration 206''s age-based population selection, got status %', v_status;
     END IF;
 
-    RAISE NOTICE 'TEST D passed: an old (60-day) failed message remains fully recoverable -- age does not disqualify recovery.';
+    SELECT count(*) INTO v_capture_count
+    FROM telemetry.capture_bucket_samples
+    WHERE device_id = v_device AND bucket_start = v_bucket_start AND raw_message_id = v_msg_id;
+
+    IF v_capture_count <> 0 THEN
+        RAISE EXCEPTION 'TEST D FAILED: a retention-expired candidate must not run the supersession/normalization logic at all, but found % capture_bucket_samples row(s)', v_capture_count;
+    END IF;
+
+    RAISE NOTICE 'TEST D passed: an old (60-day) failed message -- older than any plausible retention policy -- is now immediately marked PERMANENT_FAILURE by migration 206, without running the supersession logic.';
 
     -- ==================================================================
     -- TEST E -- the bounded, targeted-window predicate is actually present
