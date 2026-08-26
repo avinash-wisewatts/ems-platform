@@ -109,6 +109,10 @@ echo
 echo "[recovery-supersession-late-arrival-bound] Running recovery supersession late-arrival bound assertions..."
 "${SCRIPT_DIR}/assert_recovery_supersession_late_arrival_bound.sh"
 
+echo
+echo "[recovery-normalized-points-targeted-lookup] Running recovery normalized-points targeted-lookup assertions..."
+"${SCRIPT_DIR}/assert_recovery_normalized_points_targeted_lookup.sh"
+
 echo "[14/14] Verifying migration ledger..."
 ledger="$(
     docker compose \
