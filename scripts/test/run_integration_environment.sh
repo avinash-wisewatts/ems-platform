@@ -117,6 +117,10 @@ echo
 echo "[recovery-per-candidate-commit] Running recovery per-candidate commit assertions..."
 "${SCRIPT_DIR}/assert_recovery_per_candidate_commit.sh"
 
+echo
+echo "[normalization-bounded-catchup-window] Running normalization bounded catch-up window assertions..."
+"${SCRIPT_DIR}/assert_normalization_bounded_catchup_window.sh"
+
 echo "[14/14] Verifying migration ledger..."
 ledger="$(
     docker compose \
