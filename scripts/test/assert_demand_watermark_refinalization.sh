@@ -49,7 +49,20 @@ psql -X -v ON_ERROR_STOP=1 -U ems_admin -d ems_test <<'SQL'
 BEGIN;
 
 -- Block the scheduler for the duration (re-entrant for this session's own CALLs).
+-- Hold ALL seven forward-job advisory keys, not just demand's: this test does
+-- CREATE/DROP TRIGGER on the shared telemetry.pipeline_state table, and any
+-- concurrently-scheduled forward job (energy cascade / environment_daily) that
+-- UPDATEs pipeline_state would deadlock against that DDL. With every key held,
+-- each scheduled run takes its normal SKIPPED_LOCKED path instead. Mirrors the
+-- migration-209 (assert_energy_consumption_cascade_watermarks.sql) and
+-- migration-211 (assert_environment_daily_watermark.sh) idiom.
+SELECT pg_advisory_xact_lock(hashtextextended('analytics.run_energy_consumption_1min_job', 0));
+SELECT pg_advisory_xact_lock(hashtextextended('analytics.run_energy_consumption_5min_job', 0));
+SELECT pg_advisory_xact_lock(hashtextextended('analytics.run_energy_consumption_15min_job', 0));
+SELECT pg_advisory_xact_lock(hashtextextended('analytics.run_energy_consumption_hourly_job', 0));
+SELECT pg_advisory_xact_lock(hashtextextended('analytics.run_energy_consumption_daily_job', 0));
 SELECT pg_advisory_xact_lock(hashtextextended('analytics.run_demand_calculation_job', 0));
+SELECT pg_advisory_xact_lock(hashtextextended('telemetry.run_environment_daily_job', 0));
 
 CREATE TEMP TABLE t210 (k text PRIMARY KEY, u uuid, t timestamptz, n numeric) ON COMMIT DROP;
 
