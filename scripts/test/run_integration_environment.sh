@@ -122,8 +122,40 @@ echo "[normalization-bounded-catchup-window] Running normalization bounded catch
 "${SCRIPT_DIR}/assert_normalization_bounded_catchup_window.sh"
 
 echo
+echo "[energy-environment-routing-bounded-catchup-window] Running energy/environment routing bounded catch-up window assertions..."
+"${SCRIPT_DIR}/assert_energy_environment_routing_bounded_catchup_window.sh"
+
+echo
+echo "[analytics-job-hardening] Running analytical-tier job hardening assertions..."
+"${SCRIPT_DIR}/assert_analytics_job_hardening.sh"
+
+echo
+echo "[analytics-job-self-overlap] Running analytical-tier job self-overlap (cross-session) assertions..."
+"${SCRIPT_DIR}/assert_analytics_job_self_overlap.sh"
+
+echo
+echo "[energy-consumption-cascade-watermarks] Running energy-consumption cascade watermark assertions..."
+"${SCRIPT_DIR}/assert_energy_consumption_cascade_watermarks.sh"
+
+echo
 echo "[recovery-retention-age-population] Running recovery retention-age population assertions..."
 "${SCRIPT_DIR}/assert_recovery_retention_age_population.sh"
+
+echo
+echo "[demand-watermark-refinalization] Running demand watermark + re-finalization assertions..."
+"${SCRIPT_DIR}/assert_demand_watermark_refinalization.sh"
+
+echo
+echo "[environment-daily-watermark] Running environment_daily watermark assertions..."
+"${SCRIPT_DIR}/assert_environment_daily_watermark.sh"
+
+echo
+echo "[analytical-reconciliation] Running analytical reconciliation layer (migration 213) assertions..."
+"${SCRIPT_DIR}/assert_analytical_reconciliation.sh"
+
+echo
+echo "[pipeline-health-view] Running analytics.v_pipeline_health (migration 214) assertions..."
+"${SCRIPT_DIR}/assert_pipeline_health_view.sh"
 
 echo "[14/14] Verifying migration ledger..."
 ledger="$(
