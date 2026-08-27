@@ -809,4 +809,109 @@ SELECT 'cross-session SKIPPED_LOCKED assertion passed.' AS result;
 SQL
 
 printf '%s\n' 'PASS: J (cross-session)  reconcile records SKIPPED_LOCKED when the forward job holds the advisory lock'
+
+# ==========================================================================
+# PART 3 — bgw_job_id_seq desynchronisation regression
+#
+# Reproduces the exact staging deploy failure: _timescaledb_catalog.bgw_job_id_seq
+# lagging max(_timescaledb_config.bgw_job.id), which made migration 213's add_job()
+# loop fail with "duplicate key value violates unique constraint bgw_job_pkey".
+# Migration 213's section-9 sequence-resilience guard must make job registration
+# succeed under that condition.
+#
+# Rollback-only: delete_job/add_job are transactional; setval() is NOT, so the
+# sequence is explicitly re-healed to a safe (>= max id) value before ROLLBACK
+# drops the jobs this block creates. Net effect on the disposable DB: the
+# sequence is left at or ahead of max(id) -- the correct, safe state.
+# ==========================================================================
+psql_f <<'SQL'
+BEGIN;
+
+DO $seqreg$
+DECLARE
+    v_seq      CONSTANT text := '_timescaledb_catalog.bgw_job_id_seq';
+    v_orig_max bigint;
+    v_new_cnt  int;
+    v_new_min  bigint;
+    v_anchor   timestamptz := date_trunc('hour', now()) + INTERVAL '1 hour';
+    r RECORD;
+BEGIN
+    IF to_regclass(v_seq) IS NULL THEN
+        RAISE NOTICE 'PART3 SKIPPED: % not present on this TimescaleDB build', v_seq;
+        RETURN;
+    END IF;
+
+    -- Tear the seven reconcile jobs down so they can be re-registered.
+    PERFORM public.delete_job(job_id)
+    FROM timescaledb_information.jobs
+    WHERE proc_name LIKE 'reconcile\_%' AND proc_schema IN ('analytics','telemetry');
+
+    SELECT COALESCE(max(id), 0) INTO v_orig_max FROM _timescaledb_config.bgw_job;
+
+    -- FORCE the failure precondition: is_called=false => the next nextval()
+    -- returns exactly this value, which is a live bgw_job id => PK collision.
+    PERFORM setval(v_seq, v_orig_max - 1, false);
+
+    -- ---- migration 213 section-9 guard, verbatim -----------------------------
+    PERFORM setval(
+        v_seq,
+        GREATEST(
+            (SELECT last_value FROM _timescaledb_catalog.bgw_job_id_seq),
+            (SELECT COALESCE(max(id), 0) FROM _timescaledb_config.bgw_job)
+        ),
+        true
+    );
+    -- -----------------------------------------------------------------------
+
+    -- Re-register the seven reconcile jobs (mirrors migration 213 section 9).
+    FOR r IN
+        SELECT * FROM (VALUES
+            ('analytics'::text,'reconcile_energy_consumption_1min'::text,   INTERVAL '1 hour',  INTERVAL '31 minutes', jsonb_build_object('reconcile_window','2 days','coarse','1 hour','n_max',6)),
+            ('analytics','reconcile_energy_consumption_5min',   INTERVAL '1 hour',  INTERVAL '33 minutes', jsonb_build_object('reconcile_window','7 days','coarse','1 hour','n_max',6)),
+            ('analytics','reconcile_energy_consumption_15min',  INTERVAL '6 hours', INTERVAL '37 minutes', jsonb_build_object('reconcile_window','8 days','coarse','1 hour','n_max',6)),
+            ('analytics','reconcile_energy_consumption_hourly', INTERVAL '12 hours',INTERVAL '41 minutes', jsonb_build_object('reconcile_window','10 days','coarse','1 hour','n_max',6)),
+            ('analytics','reconcile_energy_consumption_daily',  INTERVAL '24 hours',INTERVAL '47 minutes', jsonb_build_object('reconcile_window','21 days','coarse','1 day','n_max',6)),
+            ('analytics','reconcile_demand_intervals',          INTERVAL '1 hour',  INTERVAL '29 minutes', jsonb_build_object('reconcile_window','6 hours','lookback','3 hours')),
+            ('telemetry','reconcile_environment_daily',         INTERVAL '24 hours',INTERVAL '51 minutes', jsonb_build_object('reconcile_window','35 days','n_max',8))
+        ) AS t(sch,prc,sched,offs,cfg)
+    LOOP
+        PERFORM add_job(
+            (r.sch||'.'||r.prc)::regproc,
+            schedule_interval => r.sched,
+            initial_start     => v_anchor + r.offs,
+            config            => r.cfg,
+            check_config      => 'config.assert_reconciliation_job_config'::regproc,
+            fixed_schedule    => TRUE
+        );
+    END LOOP;
+
+    SELECT count(*), COALESCE(min(job_id), 0)
+    INTO v_new_cnt, v_new_min
+    FROM timescaledb_information.jobs
+    WHERE proc_name LIKE 'reconcile\_%' AND proc_schema IN ('analytics','telemetry');
+
+    IF v_new_cnt <> 7 THEN
+        RAISE EXCEPTION 'PART3 FAILED: expected 7 reconcile jobs registered under a desynced sequence, got %', v_new_cnt;
+    END IF;
+    IF v_new_min <= v_orig_max THEN
+        RAISE EXCEPTION 'PART3 FAILED: re-registered job id % is not > pre-existing max id % -- the guard did not advance the sequence', v_new_min, v_orig_max;
+    END IF;
+
+    -- Re-heal the non-transactional sequence before ROLLBACK removes these jobs.
+    PERFORM setval(
+        v_seq,
+        GREATEST((SELECT last_value FROM _timescaledb_catalog.bgw_job_id_seq), v_orig_max),
+        true
+    );
+
+    RAISE NOTICE 'PART3: 7 reconcile jobs registered under a desynced bgw_job_id_seq; min new id % > pre-existing max %', v_new_min, v_orig_max;
+END
+$seqreg$;
+
+ROLLBACK;
+
+SELECT 'bgw_job_id_seq desynchronisation regression passed.' AS result;
+SQL
+
+printf '%s\n' 'PASS: PART 3 (sequence-resilience)  migration 213 guard registers all 7 reconcile jobs when bgw_job_id_seq lags max(bgw_job.id)'
 printf '%s\n' 'PASS: analytical reconciliation assertions completed.'

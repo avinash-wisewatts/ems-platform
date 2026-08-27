@@ -1172,6 +1172,37 @@ COMMENT ON PROCEDURE telemetry.reconcile_environment_daily(integer, jsonb) IS
 --    offset so a reconcile does not perpetually lose the advisory-lock race to
 --    a forward run.
 -- ----------------------------------------------------------------------------
+
+-- Sequence-resilience guard (must run before the add_job loop below).
+-- On some TimescaleDB installations -- extension upgrades, a catalog
+-- dump/restore, or historical add_job/delete_job churn -- the sequence
+-- _timescaledb_catalog.bgw_job_id_seq that TimescaleDB uses to allocate job
+-- ids can fall behind max(_timescaledb_config.bgw_job.id). The next add_job()
+-- then nextval()s an id that already exists and fails with
+--   ERROR: duplicate key value violates unique constraint "bgw_job_pkey"
+-- (observed on staging: seq last_value 1113 vs max(id) 1114). Advance the
+-- sequence to at least the current max id, using GREATEST so a sequence that
+-- is legitimately ahead (e.g. after delete_job) is never moved backwards.
+-- setval(..., <v>, true) sets is_called=true, so the next nextval() returns
+-- <v>+1 -> strictly greater than every existing id. Idempotent, and a plain
+-- no-op wherever the sequence is already consistent. Guarded by to_regclass
+-- so a future TimescaleDB that renames/removes the sequence just skips this.
+DO $seqfix$
+BEGIN
+    IF to_regclass('_timescaledb_catalog.bgw_job_id_seq') IS NOT NULL THEN
+        PERFORM setval(
+            '_timescaledb_catalog.bgw_job_id_seq',
+            GREATEST(
+                (SELECT last_value FROM _timescaledb_catalog.bgw_job_id_seq),
+                (SELECT COALESCE(max(id), 0) FROM _timescaledb_config.bgw_job)
+            ),
+            true
+        );
+        RAISE NOTICE 'Migration 213: bgw_job_id_seq aligned to >= max(bgw_job.id) before add_job';
+    END IF;
+END
+$seqfix$;
+
 DO $jobs$
 DECLARE
     r        RECORD;
