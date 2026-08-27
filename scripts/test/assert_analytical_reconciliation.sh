@@ -813,16 +813,25 @@ printf '%s\n' 'PASS: J (cross-session)  reconcile records SKIPPED_LOCKED when th
 # ==========================================================================
 # PART 3 — bgw_job_id_seq desynchronisation regression
 #
-# Reproduces the exact staging deploy failure: _timescaledb_catalog.bgw_job_id_seq
-# lagging max(_timescaledb_config.bgw_job.id), which made migration 213's add_job()
-# loop fail with "duplicate key value violates unique constraint bgw_job_pkey".
-# Migration 213's section-9 sequence-resilience guard must make job registration
-# succeed under that condition.
+# Reproduces the EXACT staging deploy failure: _timescaledb_catalog.bgw_job_id_seq
+# lagging max(_timescaledb_config.bgw_job.id), so the first operation in
+# migration 213 that allocates a background-job id -- add_retention_policy() in
+# section 1, which calls add_job() internally -- fails with
+#   ERROR: duplicate key value violates unique constraint "bgw_job_pkey"
 #
-# Rollback-only: delete_job/add_job are transactional; setval() is NOT, so the
-# sequence is explicitly re-healed to a safe (>= max id) value before ROLLBACK
-# drops the jobs this block creates. Net effect on the disposable DB: the
-# sequence is left at or ahead of max(id) -- the correct, safe state.
+#   3a  NEGATIVE CONTROL: with the desync in place and NO guard, prove
+#       add_retention_policy() collides (SQLSTATE 23505) -- the staging failure.
+#   3b  THE FIX: same desync, run migration 213's section-0 guard verbatim,
+#       then run migration 213's section-1 shape (CREATE TABLE ->
+#       create_hypertable -> index -> add_retention_policy) and assert it
+#       SUCCEEDS and the 180-day retention job exists.
+#   3c  Section-9 coverage retained: same desync + guard, tear down and
+#       re-register the seven reconcile jobs via add_job().
+#
+# Rollback-only. add_job/add_retention_policy/CREATE TABLE are transactional;
+# setval() is NOT, so the sequence is explicitly re-healed to a safe (>= max id)
+# value before ROLLBACK. Throwaway hypertables (analytics._t213_seqreg_*) never
+# touch analytics.pipeline_reconciliation_log or analytics.v_pipeline_health.
 # ==========================================================================
 psql_f <<'SQL'
 BEGIN;
@@ -831,6 +840,8 @@ DO $seqreg$
 DECLARE
     v_seq      CONSTANT text := '_timescaledb_catalog.bgw_job_id_seq';
     v_orig_max bigint;
+    v_sqlstate text;
+    v_ret_jobs int;
     v_new_cnt  int;
     v_new_min  bigint;
     v_anchor   timestamptz := date_trunc('hour', now()) + INTERVAL '1 hour';
@@ -841,29 +852,79 @@ BEGIN
         RETURN;
     END IF;
 
-    -- Tear the seven reconcile jobs down so they can be re-registered.
+    -- ================= 3a. NEGATIVE CONTROL (no guard) =====================
+    SELECT COALESCE(max(id), 0) INTO v_orig_max FROM _timescaledb_config.bgw_job;
+    -- is_called=false => the next nextval() returns exactly this value, which
+    -- is a live bgw_job id => add_retention_policy()'s internal add_job() will
+    -- collide on bgw_job_pkey (create_hypertable itself allocates no job id).
+    PERFORM setval(v_seq, v_orig_max - 1, false);
+    BEGIN
+        CREATE TABLE analytics._t213_seqreg_probe (ran_at timestamptz NOT NULL, v int);
+        PERFORM create_hypertable('analytics._t213_seqreg_probe', 'ran_at',
+            chunk_time_interval => INTERVAL '30 days');
+        CREATE INDEX ix_t213_seqreg_probe ON analytics._t213_seqreg_probe (ran_at DESC);
+        PERFORM add_retention_policy('analytics._t213_seqreg_probe', INTERVAL '180 days');
+        RAISE EXCEPTION 'PART3 FAILED (3a): add_retention_policy() unexpectedly succeeded on a desynced sequence';
+    EXCEPTION
+        WHEN unique_violation THEN
+            v_sqlstate := SQLSTATE;      -- 23505 -- the staging failure, reproduced
+        WHEN OTHERS THEN
+            IF SQLERRM LIKE 'PART3 FAILED%' THEN RAISE; END IF;
+            RAISE EXCEPTION 'PART3 FAILED (3a): expected unique_violation on add_retention_policy(), got % / %', SQLSTATE, SQLERRM;
+    END;
+    IF v_sqlstate IS DISTINCT FROM '23505' THEN
+        RAISE EXCEPTION 'PART3 FAILED (3a): staging failure mode not reproduced (sqlstate %)', v_sqlstate;
+    END IF;
+    RAISE NOTICE 'PART3 3a: reproduced the staging failure -- add_retention_policy() -> bgw_job_pkey (sqlstate 23505) on a desynced bgw_job_id_seq';
+
+    -- ================= 3b. THE FIX: guard + section-1 path =================
+    SELECT COALESCE(max(id), 0) INTO v_orig_max FROM _timescaledb_config.bgw_job;
+    PERFORM setval(v_seq, v_orig_max - 1, false);          -- re-arm the exact collision
+
+    -- migration 213 section-0 guard, VERBATIM
+    IF to_regclass('_timescaledb_catalog.bgw_job_id_seq') IS NOT NULL THEN
+        PERFORM setval(
+            '_timescaledb_catalog.bgw_job_id_seq',
+            GREATEST(
+                (SELECT last_value FROM _timescaledb_catalog.bgw_job_id_seq),
+                (SELECT COALESCE(max(id), 0) FROM _timescaledb_config.bgw_job)
+            ),
+            true
+        );
+    END IF;
+
+    -- migration 213 section-1 shape: CREATE TABLE -> create_hypertable -> index
+    -- -> add_retention_policy  (must now succeed under the once-desynced seq).
+    CREATE TABLE analytics._t213_seqreg_fixed (ran_at timestamptz NOT NULL, v int);
+    PERFORM create_hypertable('analytics._t213_seqreg_fixed', 'ran_at',
+        chunk_time_interval => INTERVAL '30 days', if_not_exists => TRUE);
+    CREATE INDEX ix_t213_seqreg_fixed ON analytics._t213_seqreg_fixed (ran_at DESC);
+    PERFORM add_retention_policy('analytics._t213_seqreg_fixed',
+        INTERVAL '180 days', if_not_exists => TRUE);
+
+    SELECT count(*) INTO v_ret_jobs
+    FROM timescaledb_information.jobs
+    WHERE proc_name = 'policy_retention'
+      AND hypertable_name = '_t213_seqreg_fixed'
+      AND (config ->> 'drop_after')::interval = INTERVAL '180 days';
+    IF v_ret_jobs <> 1 THEN
+        RAISE EXCEPTION 'PART3 FAILED (3b): expected exactly 1 180-day retention job after the guarded add_retention_policy() path, got %', v_ret_jobs;
+    END IF;
+    RAISE NOTICE 'PART3 3b: guarded add_retention_policy() succeeded under a desynced bgw_job_id_seq; 180-day retention job present';
+
+    -- ================= 3c. Section-9 add_job() loop coverage ===============
+    SELECT COALESCE(max(id), 0) INTO v_orig_max FROM _timescaledb_config.bgw_job;
+    PERFORM setval(v_seq, v_orig_max - 1, false);
+    IF to_regclass('_timescaledb_catalog.bgw_job_id_seq') IS NOT NULL THEN
+        PERFORM setval('_timescaledb_catalog.bgw_job_id_seq',
+            GREATEST((SELECT last_value FROM _timescaledb_catalog.bgw_job_id_seq),
+                     (SELECT COALESCE(max(id), 0) FROM _timescaledb_config.bgw_job)), true);
+    END IF;
+
     PERFORM public.delete_job(job_id)
     FROM timescaledb_information.jobs
     WHERE proc_name LIKE 'reconcile\_%' AND proc_schema IN ('analytics','telemetry');
 
-    SELECT COALESCE(max(id), 0) INTO v_orig_max FROM _timescaledb_config.bgw_job;
-
-    -- FORCE the failure precondition: is_called=false => the next nextval()
-    -- returns exactly this value, which is a live bgw_job id => PK collision.
-    PERFORM setval(v_seq, v_orig_max - 1, false);
-
-    -- ---- migration 213 section-9 guard, verbatim -----------------------------
-    PERFORM setval(
-        v_seq,
-        GREATEST(
-            (SELECT last_value FROM _timescaledb_catalog.bgw_job_id_seq),
-            (SELECT COALESCE(max(id), 0) FROM _timescaledb_config.bgw_job)
-        ),
-        true
-    );
-    -- -----------------------------------------------------------------------
-
-    -- Re-register the seven reconcile jobs (mirrors migration 213 section 9).
     FOR r IN
         SELECT * FROM (VALUES
             ('analytics'::text,'reconcile_energy_consumption_1min'::text,   INTERVAL '1 hour',  INTERVAL '31 minutes', jsonb_build_object('reconcile_window','2 days','coarse','1 hour','n_max',6)),
@@ -889,29 +950,28 @@ BEGIN
     INTO v_new_cnt, v_new_min
     FROM timescaledb_information.jobs
     WHERE proc_name LIKE 'reconcile\_%' AND proc_schema IN ('analytics','telemetry');
-
     IF v_new_cnt <> 7 THEN
-        RAISE EXCEPTION 'PART3 FAILED: expected 7 reconcile jobs registered under a desynced sequence, got %', v_new_cnt;
+        RAISE EXCEPTION 'PART3 FAILED (3c): expected 7 reconcile jobs registered under a desynced sequence, got %', v_new_cnt;
     END IF;
     IF v_new_min <= v_orig_max THEN
-        RAISE EXCEPTION 'PART3 FAILED: re-registered job id % is not > pre-existing max id % -- the guard did not advance the sequence', v_new_min, v_orig_max;
+        RAISE EXCEPTION 'PART3 FAILED (3c): re-registered job id % is not > pre-existing max id %', v_new_min, v_orig_max;
     END IF;
+    RAISE NOTICE 'PART3 3c: 7 reconcile jobs registered under a desynced bgw_job_id_seq; min new id % > pre-existing max %', v_new_min, v_orig_max;
 
-    -- Re-heal the non-transactional sequence before ROLLBACK removes these jobs.
+    -- Re-heal the non-transactional sequence before ROLLBACK drops this block's jobs.
     PERFORM setval(
         v_seq,
-        GREATEST((SELECT last_value FROM _timescaledb_catalog.bgw_job_id_seq), v_orig_max),
+        GREATEST((SELECT last_value FROM _timescaledb_catalog.bgw_job_id_seq),
+                 (SELECT COALESCE(max(id), 0) FROM _timescaledb_config.bgw_job)),
         true
     );
-
-    RAISE NOTICE 'PART3: 7 reconcile jobs registered under a desynced bgw_job_id_seq; min new id % > pre-existing max %', v_new_min, v_orig_max;
 END
 $seqreg$;
 
 ROLLBACK;
 
-SELECT 'bgw_job_id_seq desynchronisation regression passed.' AS result;
+SELECT 'bgw_job_id_seq desync regression (add_retention_policy + add_job) passed.' AS result;
 SQL
 
-printf '%s\n' 'PASS: PART 3 (sequence-resilience)  migration 213 guard registers all 7 reconcile jobs when bgw_job_id_seq lags max(bgw_job.id)'
+printf '%s\n' 'PASS: PART 3 (sequence-resilience)  migration 213 section-0 guard: add_retention_policy() collides without it (3a), succeeds with it (3b), section-9 add_job() loop still resilient (3c) -- all under a desynced bgw_job_id_seq'
 printf '%s\n' 'PASS: analytical reconciliation assertions completed.'
