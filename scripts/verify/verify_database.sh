@@ -110,6 +110,48 @@ else
 fi
 
 # ------------------------------------------------------------
+# PostgreSQL connection-slot capacity
+#
+# compose.yaml runs `postgres -c max_connections=50 -c
+# superuser_reserved_connections=3`. This asserts the EFFECTIVE runtime
+# value after a container (re)start -- max_connections is a postmaster
+# setting, so if this reports the old value the timescaledb container has
+# not been recreated since the compose.yaml change landed. Remediate with a
+# one-time, deliberate:
+#     docker compose -f compose.yaml up -d --no-deps timescaledb
+# (clean restart; the PGDATA bind volume is reattached unchanged).
+# ------------------------------------------------------------
+
+CONN_CAPACITY="$(
+    psql_query "
+        SELECT current_setting('max_connections')::int
+            || '|' ||
+            (
+                current_setting('max_connections')::int
+                - current_setting('superuser_reserved_connections')::int
+            );
+    " 2>/dev/null | tr -d '[:space:]' || true
+)"
+
+MAX_CONNECTIONS="${CONN_CAPACITY%%|*}"
+USABLE_SLOTS="${CONN_CAPACITY##*|}"
+
+if [[ "${MAX_CONNECTIONS}" =~ ^[0-9]+$ && "${MAX_CONNECTIONS}" -ge 50 ]]; then
+    pass "Effective max_connections is ${MAX_CONNECTIONS} (>= 50)"
+else
+    fail "Effective max_connections is ${MAX_CONNECTIONS:-unknown} (expected >= 50). \
+Recreate the timescaledb container to apply compose.yaml: \
+docker compose -f compose.yaml up -d --no-deps timescaledb"
+fi
+
+if [[ "${USABLE_SLOTS}" =~ ^[0-9]+$ && "${USABLE_SLOTS}" -ge 45 ]]; then
+    pass "Non-superuser connection slots available: ${USABLE_SLOTS} (>= 45)"
+else
+    fail "Non-superuser connection slots: ${USABLE_SLOTS:-unknown} (expected >= 45; \
+max_connections minus superuser_reserved_connections)"
+fi
+
+# ------------------------------------------------------------
 # TimescaleDB extension
 # ------------------------------------------------------------
 
