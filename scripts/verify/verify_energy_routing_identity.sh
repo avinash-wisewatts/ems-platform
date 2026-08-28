@@ -59,7 +59,20 @@ else
 fi
 
 # 2. Behavioural: recent GOOD active power in normalized_points but NULL in
-#    the meter's latest energy_measurements bucket.
+#    the meter's latest *settled* energy_measurements bucket.
+#
+#    "Settled" = older than SETTLE_MINUTES (default 10). The routing loader
+#    only (re)writes a bucket while it is within its capture-bucket correction
+#    deadline (bucket_start + capture_interval + late_arrival_tolerance,
+#    typically ~3 min) plus one routing cycle. A bucket younger than that may
+#    legitimately not carry power yet -- and, critically, in the minute right
+#    after this very migration deploys, the newest bucket can still be one the
+#    OLD loader wrote. Judging only settled buckets makes this a true
+#    regression gate, not a deploy-timing race. Historical NULLs older than
+#    the recovery backfill window are out of scope here (separate, authorized
+#    backfill), so the check is bounded to the last 2 hours.
+SETTLE_MINUTES="${ENERGY_ROUTING_SETTLE_MINUTES:-10}"
+
 OFFENDERS="$(
 psql_q "
 WITH recent_src AS (
@@ -71,16 +84,17 @@ WITH recent_src AS (
       AND np.event_time > now() - interval '30 minutes'
     GROUP BY np.device_id
 ),
-latest_em AS (
+latest_settled_em AS (
     SELECT DISTINCT ON (em.device_id)
            em.device_id, em.bucket_start, em.active_power_total_w
     FROM telemetry.energy_measurements em
     JOIN recent_src rs ON rs.device_id = em.device_id
-    WHERE em.bucket_start > now() - interval '2 hours'
+    WHERE em.bucket_start <= now() - interval '${SETTLE_MINUTES} minutes'
+      AND em.bucket_start >  now() - interval '2 hours'
     ORDER BY em.device_id, em.bucket_start DESC
 )
 SELECT count(*)
-FROM latest_em
+FROM latest_settled_em
 WHERE active_power_total_w IS NULL;
 " 2>/dev/null || echo ERR
 )"
@@ -90,9 +104,9 @@ if [[ "${OFFENDERS}" == "ERR" ]]; then
     exit 0
 fi
 if [[ "${OFFENDERS}" =~ ^[0-9]+$ ]] && (( OFFENDERS > 0 )); then
-    echo "[FAIL] ${OFFENDERS} meter(s) have recent GOOD ACTIVE_POWER_TOTAL in normalized_points but NULL active_power_total_w in their latest energy_measurements bucket -- the migration-207 routing-identity regression signature."
+    echo "[FAIL] ${OFFENDERS} meter(s) have recent GOOD ACTIVE_POWER_TOTAL in normalized_points but NULL active_power_total_w in their latest SETTLED (>${SETTLE_MINUTES}m) energy_measurements bucket -- the migration-207 routing-identity regression signature."
     exit 1
 fi
 
-echo "[PASS] no meter shows recent GOOD source active power with a NULL routed value."
+echo "[PASS] no meter shows recent GOOD source active power with a NULL routed value in a settled bucket."
 exit 0
