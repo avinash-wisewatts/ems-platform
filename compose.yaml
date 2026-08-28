@@ -15,6 +15,43 @@ services:
 
     restart: unless-stopped
 
+    # PostgreSQL runtime configuration, managed declaratively here rather than
+    # by editing postgresql.conf inside the persisted PGDATA volume.
+    #
+    # `postgres -c <name>=<value>` command-line settings have the HIGHEST
+    # precedence in PostgreSQL -- they override both postgresql.conf and
+    # postgresql.auto.conf -- so the effective value is deterministic
+    # regardless of whatever the initdb-time postgresql.conf still contains.
+    # PGDATA and its postgresql.conf are never read/written by this change.
+    #
+    # max_connections is a `postmaster` setting: it only takes effect when the
+    # timescaledb container is (re)created. scripts/release/deploy_release.sh
+    # deliberately never recreates timescaledb, so after this file lands on a
+    # host a ONE-TIME, deliberate recreate is required to apply it:
+    #
+    #     docker compose -f compose.yaml up -d --no-deps timescaledb
+    #
+    # (clean restart; the PGDATA bind volume is reattached unchanged). This is
+    # the same deliberate-infra-recreate model already used for Grafana plugin
+    # / version changes. scripts/verify/verify_database.sh asserts the
+    # effective max_connections after the restart.
+    #
+    # Root cause is insufficient connection-slot headroom (slot exhaustion),
+    # NOT a Grafana query / dashboard SQL / datasource defect. Observed on
+    # staging via pg_stat_activity: max_connections=25,
+    # superuser_reserved_connections=3 -> 22 slots for normal roles; concurrent
+    # holders grafana_reader=10, ems_app=7, telegraf=1; total pg_stat_activity
+    # entries reached 31. Normal-role demand exceeded the 22-slot ceiling, so
+    # new sessions failed with "remaining connection slots are reserved for
+    # roles with the SUPERUSER attribute". 50 total - 3 reserved = 47 usable
+    # restores headroom above the observed peak.
+    command:
+      - postgres
+      - -c
+      - max_connections=50
+      - -c
+      - superuser_reserved_connections=3
+
     env_file:
       - .env
 

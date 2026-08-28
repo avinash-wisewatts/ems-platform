@@ -284,6 +284,68 @@ for what this means honestly.
   `docker compose -f compose.yaml config -q` and
   `docker compose -f compose.test.yaml config -q` both validate cleanly
   after these edits.
+
+### PostgreSQL runtime configuration (added 2026-08-28)
+
+PostgreSQL runtime settings are managed **declaratively in `compose.yaml`**,
+not by editing `postgresql.conf` inside the persisted PGDATA volume. The
+`timescaledb` service now runs:
+
+```
+command: [postgres, -c, max_connections=50, -c, superuser_reserved_connections=3]
+```
+
+`postgres -c name=value` command-line settings have the **highest** precedence
+in PostgreSQL — they override both `postgresql.conf` and
+`postgresql.auto.conf`, so the effective value is deterministic regardless of
+the initdb-time file (which staging still has at `max_connections=25`). PGDATA
+and its `postgresql.conf` are never read or written by this change.
+
+**Applying it (one-time per host, separately authorized — NOT part of the
+release commit):** `max_connections` is a `postmaster` setting — it only takes
+effect when the container is (re)created. `deploy_release.sh` deliberately
+never names `timescaledb`, so the `compose.yaml` change is *delivered* by the
+normal release (`git fetch` / `git checkout <release-sha>` that
+`deploy_release.sh` already performs) but does **not** self-apply. After the
+release is on staging, an explicitly authorized operator runs **once**:
+
+```
+docker compose -f compose.yaml up -d --no-deps timescaledb
+```
+
+This is a clean ~5-second restart; the PGDATA bind volume
+(`${TIMESCALEDB_DATA_PATH:-./postgres/data/pgdata}`) is reattached unchanged. It
+is the same "deliberate infra-service recreate" model already used for Grafana
+plugin / version changes, and is never bundled into the code commit/PR.
+
+**Verification:** `scripts/verify/verify_database.sh` asserts the *effective*
+`max_connections >= 50` and non-superuser usable slots (`max_connections -
+superuser_reserved_connections`) `>= 45`. It is invoked by
+`scripts/release/post_deploy_verify.sh` (the `deploy-staging.yml` /
+`verify-staging` gate) and by `scripts/verify/verify_all.sh`
+(`scripts/bootstrap/08_post_checks.sh`). The check **fails until the one-time
+recreate is done**, then passes on every subsequent deploy — making the
+required operator step self-announcing rather than silent.
+
+**Root cause:** insufficient connection-slot headroom (slot exhaustion) — **not**
+a Grafana query, dashboard SQL, or datasource defect. Observed on staging via
+`pg_stat_activity`: `max_connections=25`, `superuser_reserved_connections=3`
+(22 slots for normal roles); concurrent holders `grafana_reader=10`,
+`ems_app=7`, `telegraf=1`; total `pg_stat_activity` entries reached 31.
+Normal-role demand exceeded the 22-slot ceiling, so new sessions failed with
+`remaining connection slots are reserved for roles with the SUPERUSER
+attribute`. This surfaces on Grafana's PostgreSQL-backed panels (which open a
+datasource connection) while live-datasource tiles (which do not) are
+unaffected; datasource `/health` and a lone `psql` also succeed because they
+only fail once the pool is already saturated.
+
+**Sizing:** 50 total − 3 SUPERUSER-reserved = 47 usable — headroom above the
+observed peak of 31. `shared_buffers` / `work_mem` / background-worker settings
+are intentionally left untouched (the 25→50 per-connection memory delta is
+negligible against `shm_size: 512m`). Grafana datasource pool settings
+(`maxOpenConns` / `maxIdleConns`) are intentionally **not** changed at this
+stage — PostgreSQL capacity is the immediate issue. `compose.test.yaml` is not
+changed (the disposable CI test database has no comparable connection pressure).
 - `admin-portal` and `grafana` host bind addresses are environment-specific,
   following the same pattern as `TIMESCALEDB_DATA_PATH` above:
   `ports: - "${ADMIN_PORTAL_BIND_HOST:-127.0.0.1}:8080:8080"` and
