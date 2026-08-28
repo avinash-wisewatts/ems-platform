@@ -21,7 +21,10 @@ logger = logging.getLogger(__name__)
 
 settings = get_live_settings()
 pool: AsyncConnectionPool | None = None
-broker: LiveTelemetryBroker | None = None
+# One LiveTelemetryBroker per configured MQTT broker (Broker #1 always;
+# Broker #2 when the MQTT2_* set is supplied). All run simultaneously and
+# share the same publish_device_update callback and the same DB pool.
+brokers: list[LiveTelemetryBroker] = []
 hub = AssetLiveHub()
 grafana_hub = GrafanaAssetLiveHub()
 
@@ -233,7 +236,7 @@ async def publish_device_update(device_id: str) -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-    global pool, broker
+    global pool, brokers
     pool = AsyncConnectionPool(
         conninfo=settings.database_dsn,
         min_size=1,
@@ -243,24 +246,32 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     )
     await pool.open()
     await pool.wait()
-    broker = LiveTelemetryBroker(
-        pool=pool,
-        host=settings.mqtt_host,
-        port=settings.mqtt_port,
-        username=settings.mqtt_username,
-        password=settings.mqtt_password,
-        client_id=settings.mqtt_client_id,
-        use_tls=settings.mqtt_tls,
-        on_device_update=publish_device_update,
-        ingest_max_concurrency=settings.live_ingest_max_concurrency,
-    )
-    await broker.start()
+    brokers = [
+        LiveTelemetryBroker(
+            pool=pool,
+            host=broker_config.host,
+            port=broker_config.port,
+            username=broker_config.username,
+            password=broker_config.password,
+            client_id=broker_config.client_id,
+            use_tls=broker_config.use_tls,
+            on_device_update=publish_device_update,
+            ingest_max_concurrency=settings.live_ingest_max_concurrency,
+        )
+        for broker_config in settings.broker_configs()
+    ]
+    for live_broker in brokers:
+        await live_broker.start()
     try:
         yield
     finally:
-        await broker.stop()
+        for live_broker in brokers:
+            try:
+                await live_broker.stop()
+            except Exception:
+                logger.exception("Error stopping a live MQTT broker client")
+        brokers = []
         await pool.close()
-        broker = None
         pool = None
 
 
@@ -288,34 +299,54 @@ async def database_health() -> bool:
         return False
 
 
-@app.get("/health")
-async def health() -> JSONResponse:
-    db_ok = await database_health()
-    broker_state = broker.health_snapshot() if broker is not None else {
-        "mqtt_connected": False,
-        "subscriptions_confirmed": 0,
-        "subscriptions_expected": 0,
-        "last_connect_at": None,
-        "last_disconnect_at": None,
-        "last_message_at": None,
-        "last_ingest_success_at": None,
-        "last_ingest_error_at": None,
-        "last_ingest_error": None,
-        "message_count": 0,
-        "ingest_success_count": 0,
-        "ingest_failure_count": 0,
-    }
-    subscriptions_ready = (
-        broker_state["subscriptions_expected"] > 0
+_EMPTY_BROKER_STATE = {
+    "mqtt_connected": False,
+    "subscriptions_confirmed": 0,
+    "subscriptions_expected": 0,
+    "last_connect_at": None,
+    "last_disconnect_at": None,
+    "last_message_at": None,
+    "last_ingest_success_at": None,
+    "last_ingest_error_at": None,
+    "last_ingest_error": None,
+    "message_count": 0,
+    "ingest_success_count": 0,
+    "ingest_failure_count": 0,
+}
+
+
+def _broker_state_ready(broker_state: dict) -> bool:
+    return bool(
+        broker_state["mqtt_connected"]
+        and broker_state["subscriptions_expected"] > 0
         and broker_state["subscriptions_confirmed"]
         >= broker_state["subscriptions_expected"]
     )
-    ready = bool(db_ok and broker_state["mqtt_connected"] and subscriptions_ready)
+
+
+@app.get("/health")
+async def health() -> JSONResponse:
+    db_ok = await database_health()
+    expected_brokers = len(settings.broker_configs())
+    broker_states = [live_broker.health_snapshot() for live_broker in brokers]
+    # Readiness requires the database, every configured broker to be present,
+    # and every broker connected with all of its subscriptions confirmed. A
+    # single missing or unsubscribed broker keeps the service "degraded".
+    subscriptions_ready = (
+        expected_brokers > 0
+        and len(broker_states) == expected_brokers
+        and all(_broker_state_ready(state) for state in broker_states)
+    )
+    ready = bool(db_ok and subscriptions_ready)
     body = {
         "status": "ok" if ready else "degraded",
         "service": "live-telemetry",
         "database": {"connected": db_ok},
-        "broker": broker_state,
+        "brokers_expected": expected_brokers,
+        "brokers_ready": sum(1 for state in broker_states if _broker_state_ready(state)),
+        "brokers": broker_states,
+        # Backwards-compatible single-broker view (Broker #1).
+        "broker": broker_states[0] if broker_states else dict(_EMPTY_BROKER_STATE),
     }
     return JSONResponse(body, status_code=200 if ready else 503)
 

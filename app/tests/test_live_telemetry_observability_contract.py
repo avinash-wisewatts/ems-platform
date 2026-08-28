@@ -25,7 +25,9 @@ def test_broker_tracks_connection_subscription_and_ingest_state():
 
 def test_health_checks_database_and_live_broker_readiness():
     assert 'await cursor.execute("SELECT 1")' in LIVE_MAIN
-    assert "broker.health_snapshot()" in LIVE_MAIN
+    # Health aggregates every configured broker (one or two); each contributes
+    # its own health_snapshot().
+    assert "live_broker.health_snapshot() for live_broker in brokers" in LIVE_MAIN
     assert '"status": "ok" if ready else "degraded"' in LIVE_MAIN
     assert "status_code=200 if ready else 503" in LIVE_MAIN
     assert "subscriptions_ready" in LIVE_MAIN

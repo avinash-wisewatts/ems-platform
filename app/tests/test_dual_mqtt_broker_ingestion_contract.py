@@ -1,0 +1,224 @@
+"""Static contract coverage for simultaneous dual-MQTT-broker ingestion.
+
+Everything here is parsed/constructed from repository files and the
+application configuration model. No MQTT broker connection is opened and no
+MQTT message is ever published or subscribed.
+"""
+
+import tomllib
+from pathlib import Path
+
+import pytest
+from pydantic import ValidationError
+
+from src.live_config import BrokerConfig, LiveSettings
+
+ROOT = Path(__file__).resolve().parents[2]
+TELEGRAF_CONF_TEXT = (ROOT / "telegraf/config/telegraf.conf").read_text()
+TELEGRAF_CONF = tomllib.loads(TELEGRAF_CONF_TEXT)
+LIVE_MAIN = (ROOT / "app/src/live_main.py").read_text()
+LIVE_CONFIG = (ROOT / "app/src/live_config.py").read_text()
+BOOTSTRAP_VALIDATE = (ROOT / "scripts/bootstrap/02_validate_env.sh").read_text()
+TELEGRAF_ENV_EXAMPLE = ROOT / "telegraf/.env.example"
+LIVE_ENV_EXAMPLE = (ROOT / "app/live-telemetry.env.example").read_text()
+
+TOPIC_PATTERNS = ["wwems/v1/+/+/+/telemetry", "wwems/v1/+/+/+/+/telemetry"]
+
+
+# --------------------------------------------------------------------------- #
+# Telegraf: two independent mqtt_consumer instances, one PostgreSQL output    #
+# --------------------------------------------------------------------------- #
+def _consumers() -> list[dict]:
+    return TELEGRAF_CONF["inputs"]["mqtt_consumer"]
+
+
+def test_telegraf_has_exactly_two_independent_mqtt_consumers():
+    assert len(_consumers()) == 2
+    assert len(TELEGRAF_CONF["outputs"]["postgresql"]) == 1
+
+
+def test_broker1_consumer_is_functionally_unchanged():
+    broker1 = _consumers()[0]
+    assert broker1["servers"] == ["ssl://${MQTT_HOST}:${MQTT_PORT}"]
+    assert broker1["username"] == "${MQTT_USERNAME}"
+    assert broker1["password"] == "${MQTT_PASSWORD}"
+    assert broker1["name_override"] == "mqtt_staging"
+    assert broker1["qos"] == 1
+    assert broker1["topics"] == TOPIC_PATTERNS
+    # Broker #1 carries no provenance tag (its absence is the distinguisher).
+    assert "tags" not in broker1
+
+
+def test_broker2_consumer_uses_mqtt2_variables():
+    broker2 = _consumers()[1]
+    assert broker2["servers"] == ["ssl://${MQTT2_HOST}:${MQTT2_PORT}"]
+    assert broker2["username"] == "${MQTT2_USERNAME}"
+    assert broker2["password"] == "${MQTT2_PASSWORD}"
+
+
+def test_both_consumers_share_topics_qos_and_name_override():
+    for consumer in _consumers():
+        assert consumer["name_override"] == "mqtt_staging"
+        assert consumer["qos"] == 1
+        assert consumer["topics"] == TOPIC_PATTERNS
+        assert consumer["data_format"] == "value"
+        assert consumer["data_type"] == "string"
+
+
+def test_broker2_has_operational_provenance_tag_only():
+    broker2 = _consumers()[1]
+    assert broker2["tags"] == {"broker": "2"}
+
+
+def test_not_implemented_as_a_failover_servers_array():
+    # A multi-entry servers array is Telegraf failover, not simultaneous
+    # fan-in. Each consumer must point at exactly one broker.
+    for consumer in _consumers():
+        assert len(consumer["servers"]) == 1
+
+
+def test_postgresql_output_is_unchanged_single_instance():
+    output = TELEGRAF_CONF["outputs"]["postgresql"][0]
+    assert output["schema"] == "public"
+    assert output["tags_as_jsonb"] is True
+    assert output["fields_as_jsonb"] is True
+    assert "public.mqtt_staging" in TELEGRAF_CONF_TEXT or "mqtt_staging" in TELEGRAF_CONF_TEXT
+
+
+# --------------------------------------------------------------------------- #
+# LiveSettings: construct one or two brokers, reject partial config           #
+# --------------------------------------------------------------------------- #
+def test_single_broker_is_the_default(monkeypatch):
+    for name in ("MQTT2_HOST", "MQTT2_USERNAME", "MQTT2_PASSWORD", "MQTT2_LIVE_CLIENT_ID"):
+        monkeypatch.delenv(name, raising=False)
+    configs = LiveSettings().broker_configs()
+    assert len(configs) == 1
+    assert isinstance(configs[0], BrokerConfig)
+    assert configs[0].client_id == LiveSettings().mqtt_client_id
+
+
+def test_two_brokers_when_full_mqtt2_set_supplied(monkeypatch):
+    monkeypatch.setenv("MQTT2_HOST", "second-broker.internal")
+    monkeypatch.setenv("MQTT2_PORT", "8884")
+    monkeypatch.setenv("MQTT2_USERNAME", "second-user")
+    monkeypatch.setenv("MQTT2_PASSWORD", "second-pass")
+    monkeypatch.setenv("MQTT2_LIVE_CLIENT_ID", "ems-live-telemetry-b2")
+
+    configs = LiveSettings().broker_configs()
+    assert len(configs) == 2
+    assert configs[0].host != configs[1].host
+    assert configs[1].host == "second-broker.internal"
+    assert configs[1].port == 8884
+    assert configs[1].username == "second-user"
+    assert configs[1].password == "second-pass"
+    # Distinct client ids are mandatory for two concurrent MQTT connections.
+    assert configs[0].client_id != configs[1].client_id
+    assert configs[1].client_id == "ems-live-telemetry-b2"
+
+
+def test_partial_second_broker_is_rejected(monkeypatch):
+    monkeypatch.setenv("MQTT2_HOST", "second-broker.internal")
+    monkeypatch.delenv("MQTT2_USERNAME", raising=False)
+    monkeypatch.delenv("MQTT2_PASSWORD", raising=False)
+    monkeypatch.delenv("MQTT2_LIVE_CLIENT_ID", raising=False)
+    with pytest.raises(ValidationError) as excinfo:
+        LiveSettings()
+    assert "partially configured" in str(excinfo.value)
+
+
+def test_second_broker_reusing_broker1_client_id_is_rejected(monkeypatch):
+    monkeypatch.setenv("MQTT2_HOST", "second-broker.internal")
+    monkeypatch.setenv("MQTT2_USERNAME", "second-user")
+    monkeypatch.setenv("MQTT2_PASSWORD", "second-pass")
+    monkeypatch.setenv("MQTT2_LIVE_CLIENT_ID", LiveSettings().mqtt_client_id)
+    with pytest.raises(ValidationError) as excinfo:
+        LiveSettings()
+    assert "must differ" in str(excinfo.value)
+
+
+def test_second_broker_tls_defaults_to_first_and_is_overridable(monkeypatch):
+    monkeypatch.setenv("MQTT2_HOST", "second-broker.internal")
+    monkeypatch.setenv("MQTT2_USERNAME", "second-user")
+    monkeypatch.setenv("MQTT2_PASSWORD", "second-pass")
+    monkeypatch.setenv("MQTT2_LIVE_CLIENT_ID", "ems-live-telemetry-b2")
+    monkeypatch.delenv("MQTT2_TLS", raising=False)
+    inherited = LiveSettings()
+    assert inherited.broker_configs()[1].use_tls == inherited.mqtt_tls
+
+    monkeypatch.setenv("MQTT2_TLS", "false")
+    overridden = LiveSettings().broker_configs()
+    assert overridden[1].use_tls is False
+
+
+# --------------------------------------------------------------------------- #
+# live_main: two brokers run together, /health aggregates, readiness strict   #
+# --------------------------------------------------------------------------- #
+def test_live_main_starts_and_stops_every_configured_broker():
+    assert "brokers: list[LiveTelemetryBroker]" in LIVE_MAIN
+    assert "for broker_config in settings.broker_configs()" in LIVE_MAIN
+    assert "await live_broker.start()" in LIVE_MAIN
+    assert "await live_broker.stop()" in LIVE_MAIN
+    # Reuses the existing broker implementation, not a second one.
+    assert LIVE_MAIN.count("from src.live_telemetry.broker import LiveTelemetryBroker") == 1
+
+
+def test_live_main_health_aggregates_all_brokers():
+    assert "broker_states = [live_broker.health_snapshot() for live_broker in brokers]" in LIVE_MAIN
+    assert '"brokers_expected": expected_brokers' in LIVE_MAIN
+    assert '"brokers": broker_states' in LIVE_MAIN
+
+
+def test_live_main_readiness_requires_every_broker_and_subscription():
+    assert "len(broker_states) == expected_brokers" in LIVE_MAIN
+    assert "all(_broker_state_ready(state) for state in broker_states)" in LIVE_MAIN
+    assert "ready = bool(db_ok and subscriptions_ready)" in LIVE_MAIN
+    assert '"status": "ok" if ready else "degraded"' in LIVE_MAIN
+    assert "status_code=200 if ready else 503" in LIVE_MAIN
+
+
+# --------------------------------------------------------------------------- #
+# bootstrap env validation: MQTT2 group is all-or-nothing, nothing weakened   #
+# --------------------------------------------------------------------------- #
+def test_bootstrap_validates_second_broker_group_without_weakening_broker1():
+    assert "check_all_or_none" in BOOTSTRAP_VALIDATE
+    assert "MQTT2_HOST MQTT2_PORT MQTT2_USERNAME MQTT2_PASSWORD" in BOOTSTRAP_VALIDATE
+    assert "MQTT2_LIVE_CLIENT_ID" in BOOTSTRAP_VALIDATE
+    # Existing Broker #1 checks remain intact.
+    for name in ("MQTT_HOST", "MQTT_PORT", "MQTT_USERNAME", "MQTT_PASSWORD"):
+        assert f'check_variable "${{TELEGRAF_ENV}}" "{name}"' in BOOTSTRAP_VALIDATE
+
+
+# --------------------------------------------------------------------------- #
+# Placeholder-only example files                                             #
+# --------------------------------------------------------------------------- #
+def test_telegraf_env_example_exists_with_both_brokers_and_placeholders():
+    assert TELEGRAF_ENV_EXAMPLE.is_file()
+    text = TELEGRAF_ENV_EXAMPLE.read_text()
+    for name in (
+        "MQTT_HOST",
+        "MQTT_USERNAME",
+        "MQTT2_HOST",
+        "MQTT2_USERNAME",
+        "MQTT2_PASSWORD",
+        "POSTGRES_USER",
+        "POSTGRES_DB",
+    ):
+        assert name in text
+    assert "replace-me" in text
+    assert "hivemq.cloud" not in text or "your-cluster" in text
+
+
+def test_live_env_example_documents_optional_second_broker():
+    assert "MQTT2_LIVE_CLIENT_ID" in LIVE_ENV_EXAMPLE
+    assert "MQTT2_HOST" in LIVE_ENV_EXAMPLE
+    assert "NOT failover" in LIVE_ENV_EXAMPLE or "not failover" in LIVE_ENV_EXAMPLE.lower()
+
+
+# --------------------------------------------------------------------------- #
+# Guard: this contract test never touches a live broker                       #
+# --------------------------------------------------------------------------- #
+def test_this_module_never_publishes_or_connects_mqtt():
+    module_text = Path(__file__).read_text()
+    assert "import paho" not in module_text
+    assert ".publish(" not in module_text
+    assert ".connect(" not in module_text

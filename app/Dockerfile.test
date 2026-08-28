@@ -16,6 +16,11 @@ RUN pip install \
 COPY pytest.ini /workspace/pytest.ini
 COPY compose.yaml /workspace/compose.yaml
 COPY grafana/plugin-src/wisewatts-live-datasource/src/datasource.ts /workspace/grafana/plugin-src/wisewatts-live-datasource/src/datasource.ts
+# Static contract inputs for test_dual_mqtt_broker_ingestion_contract.py.
+COPY telegraf/config/telegraf.conf /workspace/telegraf/config/telegraf.conf
+COPY telegraf/.env.example /workspace/telegraf/.env.example
+COPY app/live-telemetry.env.example /workspace/app/live-telemetry.env.example
+COPY scripts/bootstrap /workspace/scripts/bootstrap
 COPY app/src /workspace/app/src
 COPY app/tests /workspace/app/tests
 COPY postgres/ddl /workspace/postgres/ddl
