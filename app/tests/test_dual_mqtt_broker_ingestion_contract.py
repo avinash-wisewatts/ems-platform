@@ -49,11 +49,27 @@ def test_broker1_consumer_is_functionally_unchanged():
     assert "tags" not in broker1
 
 
-def test_broker2_consumer_uses_mqtt2_variables():
+def test_broker2_consumer_uses_dedicated_telegraf_credentials():
     broker2 = _consumers()[1]
     assert broker2["servers"] == ["ssl://${MQTT2_HOST}:${MQTT2_PORT}"]
-    assert broker2["username"] == "${MQTT2_USERNAME}"
-    assert broker2["password"] == "${MQTT2_PASSWORD}"
+    # Telegraf's Broker #2 identity is its OWN, not the live subscriber's.
+    assert broker2["username"] == "${MQTT2_TELEGRAF_USERNAME}"
+    assert broker2["password"] == "${MQTT2_TELEGRAF_PASSWORD}"
+
+
+def test_broker2_telegraf_and_live_credentials_are_not_conflated():
+    # The Telegraf consumer must not reference the live subscriber's creds...
+    assert "${MQTT2_LIVE_USERNAME}" not in TELEGRAF_CONF_TEXT
+    assert "${MQTT2_LIVE_PASSWORD}" not in TELEGRAF_CONF_TEXT
+    # ...and neither path may use an ambiguous shared MQTT2_USERNAME/PASSWORD.
+    assert "MQTT2_USERNAME" not in TELEGRAF_CONF_TEXT
+    assert "MQTT2_PASSWORD" not in TELEGRAF_CONF_TEXT
+    assert "MQTT2_USERNAME" not in LIVE_CONFIG
+    assert "MQTT2_PASSWORD" not in LIVE_CONFIG
+    # The live config model references only its dedicated live credentials.
+    assert 'alias="MQTT2_LIVE_USERNAME"' in LIVE_CONFIG
+    assert 'alias="MQTT2_LIVE_PASSWORD"' in LIVE_CONFIG
+    assert "MQTT2_TELEGRAF_USERNAME" not in LIVE_CONFIG
 
 
 def test_both_consumers_share_topics_qos_and_name_override():
@@ -88,20 +104,35 @@ def test_postgresql_output_is_unchanged_single_instance():
 # --------------------------------------------------------------------------- #
 # LiveSettings: construct one or two brokers, reject partial config           #
 # --------------------------------------------------------------------------- #
-def test_single_broker_is_the_default(monkeypatch):
-    for name in ("MQTT2_HOST", "MQTT2_USERNAME", "MQTT2_PASSWORD", "MQTT2_LIVE_CLIENT_ID"):
+_MQTT2_LIVE_ENV = (
+    "MQTT2_HOST",
+    "MQTT2_PORT",
+    "MQTT2_LIVE_USERNAME",
+    "MQTT2_LIVE_PASSWORD",
+    "MQTT2_LIVE_CLIENT_ID",
+    "MQTT2_TLS",
+)
+
+
+def _clear_mqtt2(monkeypatch):
+    for name in _MQTT2_LIVE_ENV:
         monkeypatch.delenv(name, raising=False)
+
+
+def test_single_broker_is_the_default(monkeypatch):
+    _clear_mqtt2(monkeypatch)
     configs = LiveSettings().broker_configs()
     assert len(configs) == 1
     assert isinstance(configs[0], BrokerConfig)
     assert configs[0].client_id == LiveSettings().mqtt_client_id
 
 
-def test_two_brokers_when_full_mqtt2_set_supplied(monkeypatch):
+def test_two_brokers_when_full_mqtt2_live_set_supplied(monkeypatch):
+    _clear_mqtt2(monkeypatch)
     monkeypatch.setenv("MQTT2_HOST", "second-broker.internal")
     monkeypatch.setenv("MQTT2_PORT", "8884")
-    monkeypatch.setenv("MQTT2_USERNAME", "second-user")
-    monkeypatch.setenv("MQTT2_PASSWORD", "second-pass")
+    monkeypatch.setenv("MQTT2_LIVE_USERNAME", "second-live-user")
+    monkeypatch.setenv("MQTT2_LIVE_PASSWORD", "second-live-pass")
     monkeypatch.setenv("MQTT2_LIVE_CLIENT_ID", "ems-live-telemetry-b2")
 
     configs = LiveSettings().broker_configs()
@@ -109,28 +140,40 @@ def test_two_brokers_when_full_mqtt2_set_supplied(monkeypatch):
     assert configs[0].host != configs[1].host
     assert configs[1].host == "second-broker.internal"
     assert configs[1].port == 8884
-    assert configs[1].username == "second-user"
-    assert configs[1].password == "second-pass"
+    # Broker #2 live path uses its dedicated live credentials.
+    assert configs[1].username == "second-live-user"
+    assert configs[1].password == "second-live-pass"
     # Distinct client ids are mandatory for two concurrent MQTT connections.
     assert configs[0].client_id != configs[1].client_id
     assert configs[1].client_id == "ems-live-telemetry-b2"
 
 
-def test_partial_second_broker_is_rejected(monkeypatch):
+def test_live_config_ignores_telegraf_broker2_credentials(monkeypatch):
+    # A Telegraf-only credential set must NOT be enough to construct a live
+    # Broker #2 -- the live path requires its own MQTT2_LIVE_* identity.
+    _clear_mqtt2(monkeypatch)
     monkeypatch.setenv("MQTT2_HOST", "second-broker.internal")
-    monkeypatch.delenv("MQTT2_USERNAME", raising=False)
-    monkeypatch.delenv("MQTT2_PASSWORD", raising=False)
-    monkeypatch.delenv("MQTT2_LIVE_CLIENT_ID", raising=False)
+    monkeypatch.setenv("MQTT2_TELEGRAF_USERNAME", "second-telegraf-user")
+    monkeypatch.setenv("MQTT2_TELEGRAF_PASSWORD", "second-telegraf-pass")
+    with pytest.raises(ValidationError) as excinfo:
+        LiveSettings()
+    assert "partially configured" in str(excinfo.value)
+
+
+def test_partial_second_broker_is_rejected(monkeypatch):
+    _clear_mqtt2(monkeypatch)
+    monkeypatch.setenv("MQTT2_HOST", "second-broker.internal")
     with pytest.raises(ValidationError) as excinfo:
         LiveSettings()
     assert "partially configured" in str(excinfo.value)
 
 
 def test_second_broker_reusing_broker1_client_id_is_rejected(monkeypatch):
+    _clear_mqtt2(monkeypatch)
     broker1_client_id = LiveSettings().mqtt_client_id  # resolved before any MQTT2_* env
     monkeypatch.setenv("MQTT2_HOST", "second-broker.internal")
-    monkeypatch.setenv("MQTT2_USERNAME", "second-user")
-    monkeypatch.setenv("MQTT2_PASSWORD", "second-pass")
+    monkeypatch.setenv("MQTT2_LIVE_USERNAME", "second-live-user")
+    monkeypatch.setenv("MQTT2_LIVE_PASSWORD", "second-live-pass")
     monkeypatch.setenv("MQTT2_LIVE_CLIENT_ID", broker1_client_id)
     with pytest.raises(ValidationError) as excinfo:
         LiveSettings()
@@ -138,11 +181,11 @@ def test_second_broker_reusing_broker1_client_id_is_rejected(monkeypatch):
 
 
 def test_second_broker_tls_defaults_to_first_and_is_overridable(monkeypatch):
+    _clear_mqtt2(monkeypatch)
     monkeypatch.setenv("MQTT2_HOST", "second-broker.internal")
-    monkeypatch.setenv("MQTT2_USERNAME", "second-user")
-    monkeypatch.setenv("MQTT2_PASSWORD", "second-pass")
+    monkeypatch.setenv("MQTT2_LIVE_USERNAME", "second-live-user")
+    monkeypatch.setenv("MQTT2_LIVE_PASSWORD", "second-live-pass")
     monkeypatch.setenv("MQTT2_LIVE_CLIENT_ID", "ems-live-telemetry-b2")
-    monkeypatch.delenv("MQTT2_TLS", raising=False)
     inherited = LiveSettings()
     assert inherited.broker_configs()[1].use_tls == inherited.mqtt_tls
 
@@ -180,10 +223,21 @@ def test_live_main_readiness_requires_every_broker_and_subscription():
 # --------------------------------------------------------------------------- #
 # bootstrap env validation: MQTT2 group is all-or-nothing, nothing weakened   #
 # --------------------------------------------------------------------------- #
-def test_bootstrap_validates_second_broker_group_without_weakening_broker1():
+def test_bootstrap_validates_both_distinct_broker2_credential_pairs():
     assert "check_all_or_none" in BOOTSTRAP_VALIDATE
-    assert "MQTT2_HOST MQTT2_PORT MQTT2_USERNAME MQTT2_PASSWORD" in BOOTSTRAP_VALIDATE
-    assert "MQTT2_LIVE_CLIENT_ID" in BOOTSTRAP_VALIDATE
+    # Telegraf group: dedicated Telegraf credentials.
+    assert (
+        "MQTT2_HOST MQTT2_PORT MQTT2_TELEGRAF_USERNAME MQTT2_TELEGRAF_PASSWORD"
+        in BOOTSTRAP_VALIDATE
+    )
+    # Live group: dedicated live credentials + distinct client id.
+    assert (
+        "MQTT2_HOST MQTT2_PORT MQTT2_LIVE_USERNAME MQTT2_LIVE_PASSWORD MQTT2_LIVE_CLIENT_ID"
+        in BOOTSTRAP_VALIDATE
+    )
+    # The ambiguous shared names must not appear anywhere in validation.
+    assert "MQTT2_USERNAME" not in BOOTSTRAP_VALIDATE
+    assert "MQTT2_PASSWORD" not in BOOTSTRAP_VALIDATE
     # Existing Broker #1 checks remain intact.
     for name in ("MQTT_HOST", "MQTT_PORT", "MQTT_USERNAME", "MQTT_PASSWORD"):
         assert f'check_variable "${{TELEGRAF_ENV}}" "{name}"' in BOOTSTRAP_VALIDATE
@@ -192,26 +246,35 @@ def test_bootstrap_validates_second_broker_group_without_weakening_broker1():
 # --------------------------------------------------------------------------- #
 # Placeholder-only example files                                             #
 # --------------------------------------------------------------------------- #
-def test_telegraf_env_example_exists_with_both_brokers_and_placeholders():
+def test_telegraf_env_example_uses_dedicated_telegraf_broker2_creds_placeholders():
     assert TELEGRAF_ENV_EXAMPLE.is_file()
     text = TELEGRAF_ENV_EXAMPLE.read_text()
     for name in (
         "MQTT_HOST",
         "MQTT_USERNAME",
         "MQTT2_HOST",
-        "MQTT2_USERNAME",
-        "MQTT2_PASSWORD",
+        "MQTT2_PORT",
+        "MQTT2_TELEGRAF_USERNAME",
+        "MQTT2_TELEGRAF_PASSWORD",
         "POSTGRES_USER",
         "POSTGRES_DB",
     ):
         assert name in text
+    # No live creds, no ambiguous shared names in the Telegraf template.
+    assert "MQTT2_LIVE_USERNAME" not in text
+    assert "MQTT2_USERNAME" not in text
+    assert "MQTT2_PASSWORD" not in text
     assert "replace-me" in text
     assert "hivemq.cloud" not in text or "your-cluster" in text
 
 
-def test_live_env_example_documents_optional_second_broker():
-    assert "MQTT2_LIVE_CLIENT_ID" in LIVE_ENV_EXAMPLE
-    assert "MQTT2_HOST" in LIVE_ENV_EXAMPLE
+def test_live_env_example_uses_dedicated_live_broker2_creds_placeholders():
+    for name in ("MQTT2_HOST", "MQTT2_LIVE_USERNAME", "MQTT2_LIVE_PASSWORD", "MQTT2_LIVE_CLIENT_ID"):
+        assert name in LIVE_ENV_EXAMPLE
+    # No Telegraf creds, no ambiguous shared names in the live template.
+    assert "MQTT2_TELEGRAF_USERNAME" not in LIVE_ENV_EXAMPLE
+    assert "MQTT2_USERNAME" not in LIVE_ENV_EXAMPLE
+    assert "MQTT2_PASSWORD" not in LIVE_ENV_EXAMPLE
     assert "NOT failover" in LIVE_ENV_EXAMPLE or "not failover" in LIVE_ENV_EXAMPLE.lower()
 
 

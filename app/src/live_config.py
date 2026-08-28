@@ -39,14 +39,18 @@ class LiveSettings(BaseSettings):
     mqtt_tls: bool = Field(default=True, alias="MQTT_TLS")
 
     # Optional second MQTT broker consumed simultaneously (not failover).
-    # Either supply the full set (MQTT2_HOST, MQTT2_PORT, MQTT2_USERNAME,
-    # MQTT2_PASSWORD, MQTT2_LIVE_CLIENT_ID) or none of it. A partial set is a
-    # configuration error and is rejected below. When unset, the service
-    # behaves exactly as before with a single broker.
+    # Host/port/TLS are shared with the Telegraf consumer; the live subscriber
+    # uses its OWN dedicated credentials (MQTT2_LIVE_USERNAME /
+    # MQTT2_LIVE_PASSWORD) and client id, distinct from the Telegraf consumer's
+    # MQTT2_TELEGRAF_* identity -- mirroring Broker #1's per-path split.
+    # Either supply the full live set (MQTT2_HOST, MQTT2_PORT,
+    # MQTT2_LIVE_USERNAME, MQTT2_LIVE_PASSWORD, MQTT2_LIVE_CLIENT_ID) or none
+    # of it. A partial set is a configuration error and is rejected below.
+    # When unset, the service behaves exactly as before with a single broker.
     mqtt2_host: str | None = Field(default=None, alias="MQTT2_HOST")
     mqtt2_port: int = Field(default=8883, alias="MQTT2_PORT")
-    mqtt2_username: str | None = Field(default=None, alias="MQTT2_USERNAME")
-    mqtt2_password: str | None = Field(default=None, alias="MQTT2_PASSWORD")
+    mqtt2_live_username: str | None = Field(default=None, alias="MQTT2_LIVE_USERNAME")
+    mqtt2_live_password: str | None = Field(default=None, alias="MQTT2_LIVE_PASSWORD")
     mqtt2_client_id: str | None = Field(default=None, alias="MQTT2_LIVE_CLIENT_ID")
     # Defaults to the Broker #1 TLS setting when not explicitly provided.
     mqtt2_tls: bool | None = Field(default=None, alias="MQTT2_TLS")
@@ -75,8 +79,8 @@ class LiveSettings(BaseSettings):
     def _validate_second_broker(self) -> "LiveSettings":
         second_broker_fields = {
             "MQTT2_HOST": self.mqtt2_host,
-            "MQTT2_USERNAME": self.mqtt2_username,
-            "MQTT2_PASSWORD": self.mqtt2_password,
+            "MQTT2_LIVE_USERNAME": self.mqtt2_live_username,
+            "MQTT2_LIVE_PASSWORD": self.mqtt2_live_password,
             "MQTT2_LIVE_CLIENT_ID": self.mqtt2_client_id,
         }
         supplied = {name for name, value in second_broker_fields.items() if value}
@@ -124,8 +128,8 @@ class LiveSettings(BaseSettings):
                 BrokerConfig(
                     host=self.mqtt2_host,
                     port=self.mqtt2_port,
-                    username=self.mqtt2_username,
-                    password=self.mqtt2_password,
+                    username=self.mqtt2_live_username,
+                    password=self.mqtt2_live_password,
                     client_id=self.mqtt2_client_id,
                     use_tls=self.mqtt_tls if self.mqtt2_tls is None else self.mqtt2_tls,
                 )
