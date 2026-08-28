@@ -112,15 +112,16 @@ check_variable "${TELEGRAF_ENV}" "MQTT_USERNAME"
 check_variable "${TELEGRAF_ENV}" "MQTT_PASSWORD"
 
 # Optional simultaneous second MQTT broker for Telegraf ingestion
-# (telegraf.conf second [[inputs.mqtt_consumer]]). All-or-nothing.
-check_all_or_none "${TELEGRAF_ENV}" "Telegraf Broker #2 (MQTT2_*)" \
-    MQTT2_HOST MQTT2_PORT MQTT2_USERNAME MQTT2_PASSWORD
+# (telegraf.conf second [[inputs.mqtt_consumer]]). All-or-nothing. Uses the
+# DEDICATED Telegraf subscriber credentials, separate from the live ones.
+check_all_or_none "${TELEGRAF_ENV}" "Telegraf Broker #2 (MQTT2_TELEGRAF_*)" \
+    MQTT2_HOST MQTT2_PORT MQTT2_TELEGRAF_USERNAME MQTT2_TELEGRAF_PASSWORD
 
 # Optional simultaneous second MQTT broker for the live-telemetry service.
 # Validated consistently with LiveSettings.broker_configs(): the full set
-# including a distinct client id, or nothing.
-check_all_or_none "${LIVE_TELEMETRY_ENV}" "live-telemetry Broker #2 (MQTT2_*)" \
-    MQTT2_HOST MQTT2_PORT MQTT2_USERNAME MQTT2_PASSWORD MQTT2_LIVE_CLIENT_ID
+# with its OWN dedicated credentials and a distinct client id, or nothing.
+check_all_or_none "${LIVE_TELEMETRY_ENV}" "live-telemetry Broker #2 (MQTT2_LIVE_*)" \
+    MQTT2_HOST MQTT2_PORT MQTT2_LIVE_USERNAME MQTT2_LIVE_PASSWORD MQTT2_LIVE_CLIENT_ID
 
 check_variable "${GRAFANA_ENV}" "GF_SECURITY_ADMIN_USER"
 check_variable "${GRAFANA_ENV}" "GF_SECURITY_ADMIN_PASSWORD"
