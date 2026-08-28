@@ -49,9 +49,53 @@ check_variable() {
     fi
 }
 
+check_all_or_none() {
+    # Second-broker configuration is opt-in, but must be all-or-nothing:
+    # if any variable in the group is set (non-empty), every variable in the
+    # group must be set. Mirrors LiveSettings._validate_second_broker so a
+    # host cannot deploy a half-configured Broker #2.
+    local file_path="$1"
+    shift
+    local group_label="$1"
+    shift
+
+    if [[ ! -f "${file_path}" ]]; then
+        return
+    fi
+
+    local any_present=0
+    local missing=()
+    local variable_name value
+    for variable_name in "$@"; do
+        value="$(
+            awk -F= -v key="${variable_name}" '
+                $1 == key { sub(/^[^=]*=/, ""); print; exit }
+            ' "${file_path}"
+        )"
+        if [[ -n "${value}" ]]; then
+            any_present=1
+        else
+            missing+=("${variable_name}")
+        fi
+    done
+
+    if [[ "${any_present}" -eq 0 ]]; then
+        printf '[INFO] %s not configured in %s (single-broker mode)\n' \
+            "${group_label}" "${file_path}"
+    elif [[ "${#missing[@]}" -gt 0 ]]; then
+        printf '[FAIL] %s is partially configured in %s; missing: %s\n' \
+            "${group_label}" "${file_path}" "${missing[*]}" >&2
+        FAILURES=$((FAILURES + 1))
+    else
+        printf '[PASS] %s is fully configured in %s\n' \
+            "${group_label}" "${file_path}"
+    fi
+}
+
 ROOT_ENV="${PROJECT_ROOT}/.env"
 TELEGRAF_ENV="${PROJECT_ROOT}/telegraf/.env"
 GRAFANA_ENV="${PROJECT_ROOT}/grafana/.env"
+LIVE_TELEMETRY_ENV="${PROJECT_ROOT}/app/live-telemetry.env"
 
 check_file "${ROOT_ENV}"
 check_file "${TELEGRAF_ENV}"
@@ -66,6 +110,17 @@ check_variable "${TELEGRAF_ENV}" "MQTT_PORT"
 check_variable "${TELEGRAF_ENV}" "MQTT_TOPIC"
 check_variable "${TELEGRAF_ENV}" "MQTT_USERNAME"
 check_variable "${TELEGRAF_ENV}" "MQTT_PASSWORD"
+
+# Optional simultaneous second MQTT broker for Telegraf ingestion
+# (telegraf.conf second [[inputs.mqtt_consumer]]). All-or-nothing.
+check_all_or_none "${TELEGRAF_ENV}" "Telegraf Broker #2 (MQTT2_*)" \
+    MQTT2_HOST MQTT2_PORT MQTT2_USERNAME MQTT2_PASSWORD
+
+# Optional simultaneous second MQTT broker for the live-telemetry service.
+# Validated consistently with LiveSettings.broker_configs(): the full set
+# including a distinct client id, or nothing.
+check_all_or_none "${LIVE_TELEMETRY_ENV}" "live-telemetry Broker #2 (MQTT2_*)" \
+    MQTT2_HOST MQTT2_PORT MQTT2_USERNAME MQTT2_PASSWORD MQTT2_LIVE_CLIENT_ID
 
 check_variable "${GRAFANA_ENV}" "GF_SECURITY_ADMIN_USER"
 check_variable "${GRAFANA_ENV}" "GF_SECURITY_ADMIN_PASSWORD"

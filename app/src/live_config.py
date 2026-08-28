@@ -1,7 +1,20 @@
+from dataclasses import dataclass
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+@dataclass(frozen=True)
+class BrokerConfig:
+    """Connection parameters for one MQTT broker the live service subscribes to."""
+
+    host: str
+    port: int
+    username: str
+    password: str
+    client_id: str
+    use_tls: bool
 
 
 class LiveSettings(BaseSettings):
@@ -25,6 +38,19 @@ class LiveSettings(BaseSettings):
     mqtt_client_id: str = Field(default="ems-live-telemetry", alias="MQTT_LIVE_CLIENT_ID")
     mqtt_tls: bool = Field(default=True, alias="MQTT_TLS")
 
+    # Optional second MQTT broker consumed simultaneously (not failover).
+    # Either supply the full set (MQTT2_HOST, MQTT2_PORT, MQTT2_USERNAME,
+    # MQTT2_PASSWORD, MQTT2_LIVE_CLIENT_ID) or none of it. A partial set is a
+    # configuration error and is rejected below. When unset, the service
+    # behaves exactly as before with a single broker.
+    mqtt2_host: str | None = Field(default=None, alias="MQTT2_HOST")
+    mqtt2_port: int = Field(default=8883, alias="MQTT2_PORT")
+    mqtt2_username: str | None = Field(default=None, alias="MQTT2_USERNAME")
+    mqtt2_password: str | None = Field(default=None, alias="MQTT2_PASSWORD")
+    mqtt2_client_id: str | None = Field(default=None, alias="MQTT2_LIVE_CLIENT_ID")
+    # Defaults to the Broker #1 TLS setting when not explicitly provided.
+    mqtt2_tls: bool | None = Field(default=None, alias="MQTT2_TLS")
+
     grafana_stream_token: str = Field(min_length=32, alias="EMS_GRAFANA_STREAM_TOKEN")
 
     # Bounds concurrent telemetry.ingest_live_rtdata() calls so an MQTT burst
@@ -45,12 +71,66 @@ class LiveSettings(BaseSettings):
 
     model_config = SettingsConfigDict(extra="ignore", case_sensitive=True)
 
+    @model_validator(mode="after")
+    def _validate_second_broker(self) -> "LiveSettings":
+        second_broker_fields = {
+            "MQTT2_HOST": self.mqtt2_host,
+            "MQTT2_USERNAME": self.mqtt2_username,
+            "MQTT2_PASSWORD": self.mqtt2_password,
+            "MQTT2_LIVE_CLIENT_ID": self.mqtt2_client_id,
+        }
+        supplied = {name for name, value in second_broker_fields.items() if value}
+        if not supplied:
+            return self
+        missing = sorted(set(second_broker_fields) - supplied)
+        if missing:
+            raise ValueError(
+                "Second MQTT broker is partially configured. Supply all of "
+                f"{sorted(second_broker_fields)} or none. Missing: {missing}."
+            )
+        if self.mqtt2_client_id == self.mqtt_client_id:
+            raise ValueError(
+                "MQTT2_LIVE_CLIENT_ID must differ from MQTT_LIVE_CLIENT_ID; "
+                "an MQTT broker rejects a second connection reusing a client id."
+            )
+        return self
+
     @property
     def database_dsn(self) -> str:
         return (
             f"host={self.db_host} port={self.db_port} dbname={self.db_name} "
             f"user={self.db_user} password={self.db_password}"
         )
+
+    def broker_configs(self) -> list[BrokerConfig]:
+        """Every MQTT broker the live service must subscribe to, in order.
+
+        Always contains Broker #1 (the existing MQTT_* variables). Contains a
+        second entry only when the full MQTT2_* set is supplied; partial
+        configuration is already rejected by ``_validate_second_broker``.
+        """
+        brokers = [
+            BrokerConfig(
+                host=self.mqtt_host,
+                port=self.mqtt_port,
+                username=self.mqtt_username,
+                password=self.mqtt_password,
+                client_id=self.mqtt_client_id,
+                use_tls=self.mqtt_tls,
+            )
+        ]
+        if self.mqtt2_host:
+            brokers.append(
+                BrokerConfig(
+                    host=self.mqtt2_host,
+                    port=self.mqtt2_port,
+                    username=self.mqtt2_username,
+                    password=self.mqtt2_password,
+                    client_id=self.mqtt2_client_id,
+                    use_tls=self.mqtt_tls if self.mqtt2_tls is None else self.mqtt2_tls,
+                )
+            )
+        return brokers
 
 
 @lru_cache
