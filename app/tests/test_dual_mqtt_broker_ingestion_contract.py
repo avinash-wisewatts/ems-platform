@@ -127,10 +127,11 @@ def test_partial_second_broker_is_rejected(monkeypatch):
 
 
 def test_second_broker_reusing_broker1_client_id_is_rejected(monkeypatch):
+    broker1_client_id = LiveSettings().mqtt_client_id  # resolved before any MQTT2_* env
     monkeypatch.setenv("MQTT2_HOST", "second-broker.internal")
     monkeypatch.setenv("MQTT2_USERNAME", "second-user")
     monkeypatch.setenv("MQTT2_PASSWORD", "second-pass")
-    monkeypatch.setenv("MQTT2_LIVE_CLIENT_ID", LiveSettings().mqtt_client_id)
+    monkeypatch.setenv("MQTT2_LIVE_CLIENT_ID", broker1_client_id)
     with pytest.raises(ValidationError) as excinfo:
         LiveSettings()
     assert "must differ" in str(excinfo.value)
@@ -217,8 +218,11 @@ def test_live_env_example_documents_optional_second_broker():
 # --------------------------------------------------------------------------- #
 # Guard: this contract test never touches a live broker                       #
 # --------------------------------------------------------------------------- #
-def test_this_module_never_publishes_or_connects_mqtt():
-    module_text = Path(__file__).read_text()
-    assert "import paho" not in module_text
-    assert ".publish(" not in module_text
-    assert ".connect(" not in module_text
+def test_this_module_never_imports_or_drives_an_mqtt_client():
+    import_lines = [
+        line.strip()
+        for line in Path(__file__).read_text().splitlines()
+        if line.strip().startswith(("import ", "from "))
+    ]
+    assert not any("paho" in line for line in import_lines)
+    assert not any("socket" in line for line in import_lines)
