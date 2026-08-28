@@ -521,6 +521,17 @@ CREATE TABLE IF NOT EXISTS metadata.logical_points (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- metadata.logical_points.name is the authoritative, vendor-neutral semantic
+-- identity of a metric across every environment; metadata.logical_points.id is
+-- only a database-local surrogate key. Enforce global name uniqueness here, at
+-- the foundational DDL layer, so the contract exists BEFORE any reference seed
+-- (seeds/reference/13_*) inserts a logical point. Historically this index was
+-- created later, by seeds/reference/63_environment_logical_points.sql; that
+-- CREATE ... IF NOT EXISTS stays in place as a harmless backstop, and forward
+-- migration 215 re-asserts it idempotently for pre-existing databases.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_logical_points_name
+    ON metadata.logical_points (name);
+
 
 
 CREATE TABLE IF NOT EXISTS metadata.asset_points (
