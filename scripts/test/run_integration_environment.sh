@@ -157,6 +157,10 @@ echo
 echo "[pipeline-health-view] Running analytics.v_pipeline_health (migration 214) assertions..."
 "${SCRIPT_DIR}/assert_pipeline_health_view.sh"
 
+echo
+echo "[energy-routing-identity-by-name] Running energy-routing metric-identity (migration 215) assertions..."
+"${SCRIPT_DIR}/assert_energy_routing_identity_by_name.sh"
+
 echo "[14/14] Verifying migration ledger..."
 ledger="$(
     docker compose \

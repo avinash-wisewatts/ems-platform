@@ -75,6 +75,18 @@ fi
 
 echo
 echo "============================================================"
+echo "REQUIRED: Energy Routing Metric-Identity Verification"
+echo "============================================================"
+# E6 (migration 215): fails only on the migration-207 regression signature
+# -- recent GOOD active power in normalized_points with a NULL routed value,
+# or a loader that resolves electrical signals by a hard-coded UUID. Passes
+# cleanly when no energy meter is commissioned.
+if ! "${VERIFY_DIR}/verify_energy_routing_identity.sh"; then
+    REQUIRED_FAILED=1
+fi
+
+echo
+echo "============================================================"
 echo "ADVISORY: Telemetry Pipeline Verification (non-blocking)"
 echo "============================================================"
 echo "Known: normalization/energy/environment stages fail while staging has"
