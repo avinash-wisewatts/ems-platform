@@ -84,6 +84,7 @@ DECLARE
     v_msg_last       BIGINT;
     v_msg_early      BIGINT;
     v_msg_t4         BIGINT;
+    v_rawid          BIGINT;
     v_t0             TIMESTAMPTZ;
     v_elapsed        NUMERIC;
     v_status         TEXT;
@@ -147,9 +148,9 @@ BEGIN
             FROM generate_series(1,3) d));
         INSERT INTO telemetry.raw_messages(received_at, source_protocol, source_topic, payload)
         VALUES (v_bucket + make_interval(secs => i*3) + INTERVAL '0.4 seconds', 'MQTT', 'test/recovery/dense', v_pl)
-        RETURNING id INTO v_id;
-        IF i = 0  THEN v_msg_early := v_id; END IF;
-        IF i = 17 THEN v_msg_last  := v_id; END IF;
+        RETURNING id INTO v_rawid;
+        IF i = 0  THEN v_msg_early := v_rawid; END IF;
+        IF i = 17 THEN v_msg_last  := v_rawid; END IF;
     END LOOP;
 
     -- T3 helper: same-bucket late arrival -- received at bucket+400s (deep in the

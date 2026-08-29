@@ -3,7 +3,7 @@
 --   scripts/test/assert_normalization_bounded_catchup_window.sql
 --
 -- Purpose:
---   Regression test for migrations 205 AND 212.
+--   Regression test for migrations 205, 212 AND 221.
 --
 --   Migration 205: telemetry.load_normalized_points_incremental() gains an
 --   optional p_max_window INTERVAL parameter (default NULL) that caps its
@@ -55,6 +55,14 @@
 --        raw row's uid matches no registered device, so zero normalized_points
 --        rows are produced by any call above -- this test only exercises the
 --        window-boundary computation (D already catalog-checks the loader body).
+--     M. (221) the deployed loader's selected_elements CTE accesses
+--        telemetry.raw_messages on the FULL primary key AND the loader's own
+--        window -- rm.received_at = s.raw_received_at AND rm.id =
+--        s.raw_message_id AND rm.received_at > v_window_start AND
+--        rm.received_at <= v_window_end -- and no longer on rm.id alone;
+--        raw_resolved still carries the identical (v_window_start,
+--        v_window_end] bound; the window/lock/state/rollback contract above
+--        (A-L) still holds unchanged with the 221 body.
 --
 --   telemetry.load_normalized_points_incremental() and
 --   telemetry.run_normalization_job() contain no intermediate COMMIT (confirmed
@@ -318,6 +326,56 @@ BEGIN
         RAISE EXCEPTION 'TEST L FAILED: the boundary-only fixture unexpectedly produced normalized_points rows';
     END IF;
     RAISE NOTICE 'TEST L passed: no normalized_points produced -- selection/calculation semantics untouched.';
+
+    -- ==================================================================
+    -- TEST M (migration 221, contract) -- the deployed loader's
+    -- selected_elements CTE accesses telemetry.raw_messages on the FULL
+    -- primary key (received_at, id) AND bounds rm.received_at to the
+    -- loader's own (v_window_start, v_window_end] window, not on id alone.
+    -- This is the query-plan fix: an id-only join forces a full-hypertable
+    -- Parallel Append + Hash Join + compressed-chunk decompression on every
+    -- run; the composite key ALONE does not change the plan (verified by
+    -- staging EXPLAIN); the literal received_at range is what enables
+    -- single-chunk exclusion. Catalog check only (like TEST D / J).
+    -- ==================================================================
+    v_def := pg_get_functiondef('telemetry.load_normalized_points_incremental(interval,interval)'::regprocedure);
+
+    -- Normalise whitespace so the assertion is insensitive to indentation/line breaks.
+    v_def := regexp_replace(v_def, '\s+', ' ', 'g');
+
+    IF v_def NOT ILIKE '%JOIN telemetry.raw_messages rm ON rm.received_at=s.raw_received_at AND rm.id=s.raw_message_id AND rm.received_at > v_window_start AND rm.received_at <= v_window_end%'
+    THEN
+        RAISE EXCEPTION 'TEST M FAILED: selected_elements does not access telemetry.raw_messages on the full primary key AND the (v_window_start, v_window_end] range (expected: ON rm.received_at=s.raw_received_at AND rm.id=s.raw_message_id AND rm.received_at > v_window_start AND rm.received_at <= v_window_end)';
+    END IF;
+
+    -- The bare id-only join form must be gone (all four predicates are
+    -- required; "rm.id=s.raw_message_id JOIN" would mean the regression was
+    -- reverted to the id-only join).
+    IF v_def ILIKE '%JOIN telemetry.raw_messages rm ON rm.id=s.raw_message_id JOIN%'
+    THEN
+        RAISE EXCEPTION 'TEST M FAILED: selected_elements still uses the id-only telemetry.raw_messages join';
+    END IF;
+
+    -- The candidate scan (raw_resolved) must still carry the identical
+    -- (v_window_start, v_window_end] bound -- selected_elements now applies
+    -- the SAME predicate, which is why it stays provably lossless.
+    IF v_def NOT ILIKE '%WHERE r.received_at > v_window_start AND r.received_at <= v_window_end%'
+    THEN
+        RAISE EXCEPTION 'TEST M FAILED: raw_resolved no longer carries the (v_window_start, v_window_end] bound that makes the selected_elements bound lossless';
+    END IF;
+
+    -- Everything else the 221 body must still contain, unchanged:
+    IF v_def NOT ILIKE '%pg_try_advisory_xact_lock(%'
+       OR v_def NOT ILIKE '%SKIPPED_LOCKED%'
+       OR v_def NOT ILIKE '%last_status=''FAILED''%'
+       OR v_def NOT ILIKE '%EXCEPTION WHEN OTHERS%'
+       OR v_def NOT ILIKE '%LEAST(v_window_end, v_previous_checkpoint + p_max_window)%'
+       OR v_def NOT ILIKE '%v_previous_checkpoint-v_dynamic_overlap%'
+       OR v_def NOT ILIKE '%DISTINCT ON (raw_message_id,device_id,event_time,logical_point_id)%'
+    THEN
+        RAISE EXCEPTION 'TEST M FAILED: a 221 body invariant (lock / SKIPPED_LOCKED / FAILED / EXCEPTION / 205 bound / overlap / DISTINCT ON) is missing';
+    END IF;
+    RAISE NOTICE 'TEST M passed: selected_elements joins raw_messages on the full PK; all lock/state/rollback/window invariants intact.';
 
 END;
 $test$;
