@@ -142,6 +142,10 @@ echo "[recovery-retention-age-population] Running recovery retention-age populat
 "${SCRIPT_DIR}/assert_recovery_retention_age_population.sh"
 
 echo
+echo "[recovery-onboarding-aware-deferral] Running recovery onboarding-aware deferral (migration 218) assertions..."
+"${SCRIPT_DIR}/assert_recovery_onboarding_aware_deferral.sh"
+
+echo
 echo "[demand-watermark-refinalization] Running demand watermark + re-finalization assertions..."
 "${SCRIPT_DIR}/assert_demand_watermark_refinalization.sh"
 

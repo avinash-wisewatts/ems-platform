@@ -87,8 +87,9 @@ BEGIN
     VALUES (v_org, v_site, 'Recovery Commit Test Gateway', 'RECOVERY-COMMIT-GW')
     RETURNING id INTO v_gateway;
 
-    INSERT INTO metadata.devices(organization_id, gateway_id, profile_id, name, external_id)
-    VALUES (v_org, v_gateway, v_profile, 'Recovery Commit Test Device', 'RECOVERY-COMMIT-DEV')
+    -- Migration 218: recovery now requires a commissioned (ACTIVE) device.
+    INSERT INTO metadata.devices(organization_id, gateway_id, profile_id, name, external_id, lifecycle_status)
+    VALUES (v_org, v_gateway, v_profile, 'Recovery Commit Test Device', 'RECOVERY-COMMIT-DEV', 'ACTIVE')
     RETURNING id INTO v_device;
 
     INSERT INTO metadata.device_identifiers(device_id, identifier_type, identifier_value)
