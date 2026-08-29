@@ -161,6 +161,14 @@ echo
 echo "[energy-routing-identity-by-name] Running energy-routing metric-identity (migration 215) assertions..."
 "${SCRIPT_DIR}/assert_energy_routing_identity_by_name.sh"
 
+echo
+echo "[calculated-at-value-aware] Running value-aware calculated_at (migration 216) assertions..."
+"${SCRIPT_DIR}/assert_energy_consumption_calculated_at_value_aware.sh"
+
+echo
+echo "[hourly-forward-window-utc] Running hourly forward-window UTC-hour alignment (migration 217) assertions..."
+"${SCRIPT_DIR}/assert_hourly_forward_window_utc_aligned.sh"
+
 echo "[14/14] Verifying migration ledger..."
 ledger="$(
     docker compose \
