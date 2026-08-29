@@ -391,6 +391,10 @@ DECLARE
     v_cp    timestamptz := date_bin('1 hour', now(), TIMESTAMPTZ '2000-01-01 00:00:00+00') - INTERVAL '3 days' + INTERVAL '2 hours';
     v_before timestamptz; v_si bigint; v_outcome text; v_ws timestamptz; v_we timestamptz;
     v_iso_calc timestamptz;
+    v_iso_ctid tid;   -- physical tuple id: migration 216 makes calculated_at value-aware,
+                      -- so calculated_at alone can no longer distinguish "row untouched"
+                      -- from "row rewritten with identical values"; ctid changes on ANY
+                      -- heap-tuple rewrite (HOT or cold) and does not.
 BEGIN
     PERFORM pg_temp.seed15('ist', v_dev, v_hr,                     4, v_hr + INTERVAL '1 min');
     PERFORM pg_temp.seed15('ist', v_dev, v_hr + INTERVAL '15 min', 5, v_hr + INTERVAL '1 min');
@@ -407,7 +411,7 @@ BEGIN
        gap_interval_count, reset_interval_count, rollover_interval_count, invalid_interval_count, calculated_at)
     VALUES (v_hr - INTERVAL '2 hours', (SELECT u FROM r213 WHERE k='org'), (SELECT u FROM r213 WHERE k='ny'), v_iso,
             7, 7, 0, 0, 0, 0, 0, 0, 0, v_hr - INTERVAL '2 hours' + INTERVAL '2 min');
-    SELECT calculated_at INTO v_iso_calc FROM analytics.energy_consumption_hourly
+    SELECT calculated_at, ctid INTO v_iso_calc, v_iso_ctid FROM analytics.energy_consumption_hourly
       WHERE device_id = v_iso AND bucket_start = v_hr - INTERVAL '2 hours';
 
     UPDATE telemetry.pipeline_state SET last_received_at = v_cp, last_status='SUCCESS'
@@ -437,11 +441,19 @@ BEGIN
     IF (SELECT calculated_at FROM analytics.energy_consumption_hourly
         WHERE device_id = v_iso AND bucket_start = v_hr - INTERVAL '2 hours')
        IS DISTINCT FROM v_iso_calc THEN
-        RAISE EXCEPTION 'X FAILED: a correct hourly row outside the repaired coarse bucket was rewritten';
+        RAISE EXCEPTION 'X FAILED: a correct hourly row outside the repaired coarse bucket had its calculated_at changed';
+    END IF;
+    -- strengthened (migration 216): the tuple must not have been rewritten AT ALL,
+    -- even with byte-identical values -- calculated_at is now value-aware and would
+    -- be preserved on a spurious no-op re-refresh, so check the physical row version.
+    IF (SELECT ctid FROM analytics.energy_consumption_hourly
+        WHERE device_id = v_iso AND bucket_start = v_hr - INTERVAL '2 hours')
+       IS DISTINCT FROM v_iso_ctid THEN
+        RAISE EXCEPTION 'X FAILED: a correct hourly row outside the repaired coarse bucket was rewritten (ctid moved) even though its calculated_at was preserved';
     END IF;
 END;
 $t$;
-\echo 'PASS: H/X  hourly MISSING_CHILD repaired (source_interval_count = SUM) via refresh_energy_consumption_hourly; window = [cp - reconcile_window, cp); forward checkpoint intact; correct rows for other devices untouched'
+\echo 'PASS: H/X  hourly MISSING_CHILD repaired (source_interval_count = SUM) via refresh_energy_consumption_hourly; window = [cp - reconcile_window, cp); forward checkpoint intact; a correct row in another coarse bucket is not rewritten (calculated_at AND ctid unchanged)'
 
 -- ======================================================================
 -- I. hourly idempotency: a second immediate run is HEALTHY, 0 repaired.
