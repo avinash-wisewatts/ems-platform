@@ -34,7 +34,15 @@
 --        206 deliberately overturned; see that migration's header;
 --     E. the bounded predicate is actually present in the deployed
 --        procedure (a live catalog check, not a text/file check), so the
---        historical unbounded scan cannot silently return.
+--        historical unbounded scan cannot silently return;
+--     F. (migration 220) the supersession NOT EXISTS tests same-bucket
+--        membership by interval containment against ce's own bucket, not by
+--        re-invoking telemetry.resolve_site_capture_bucket() per competing
+--        rtdata element (the dense-publisher fan-out that kept Job 1077
+--        hitting its 10-minute cap); exactly two resolve_site_capture_bucket
+--        call sites remain (current_elements + v_has_normalized); and every
+--        config.telemetry_capture_policies row is WALL_CLOCK, the precondition
+--        for that interval derivation.
 --
 --   Migration 203 note: telemetry.recover_failed_raw_messages() now commits
 --   after each candidate (see migration 203) and therefore MUST be invoked
@@ -360,6 +368,50 @@ BEGIN
     END IF;
 
     RAISE NOTICE 'TEST E passed: the deployed procedure sources competing rows from telemetry.raw_messages, bounded by both ce.bucket_start and ce.deadline, with the rtdata-is-array guard applied before JSON expansion.';
+
+    -- ==================================================================
+    -- TEST F (migration 220) -- the supersession NOT EXISTS tests
+    -- same-bucket membership by INTERVAL CONTAINMENT against ce's own
+    -- bucket, not by re-invoking telemetry.resolve_site_capture_bucket()
+    -- per competing rtdata element. Live catalog check: the interval
+    -- predicate is present and the per-competing-element bucket
+    -- re-resolution (alias b2 / "b2.bucket_start=ce.bucket_start") is gone.
+    -- current_elements still calls resolve_site_capture_bucket() once (the
+    -- sole bucket authority) and the v_has_normalized check still calls it
+    -- once per candidate; only the per-element fan-out was removed, so the
+    -- deployed body must contain resolve_site_capture_bucket exactly twice.
+    -- ==================================================================
+
+    IF pg_get_functiondef('telemetry.recover_failed_raw_messages(integer)'::regprocedure)
+        NOT ILIKE '%COALESCE(ts2.source_timestamp,r2m.received_at) >= ce.bucket_start%COALESCE(ts2.source_timestamp,r2m.received_at) <%ce.bucket_start + make_interval(secs => ce.capture_interval_seconds)%'
+    THEN
+        RAISE EXCEPTION 'TEST F FAILED (migration 220): the supersession NOT EXISTS does not test same-bucket membership by interval containment against ce.bucket_start / ce.capture_interval_seconds';
+    END IF;
+
+    IF pg_get_functiondef('telemetry.recover_failed_raw_messages(integer)'::regprocedure)
+        ILIKE '%) b2%WHERE lower(r2.value->>%uid%) IN%b2.bucket_start=ce.bucket_start%'
+    THEN
+        RAISE EXCEPTION 'TEST F FAILED (migration 220): the per-competing-element resolve_site_capture_bucket() fan-out (alias b2, b2.bucket_start=ce.bucket_start) is still present in the supersession subquery';
+    END IF;
+
+    IF ( length(pg_get_functiondef('telemetry.recover_failed_raw_messages(integer)'::regprocedure))
+         - length(replace(pg_get_functiondef('telemetry.recover_failed_raw_messages(integer)'::regprocedure),
+                          'CROSS JOIN LATERAL telemetry.resolve_site_capture_bucket', ''))
+       ) / length('CROSS JOIN LATERAL telemetry.resolve_site_capture_bucket') <> 2
+    THEN
+        RAISE EXCEPTION 'TEST F FAILED (migration 220): expected exactly 2 CROSS JOIN LATERAL telemetry.resolve_site_capture_bucket call sites (current_elements + v_has_normalized); the per-element supersession call must be removed and no other added';
+    END IF;
+
+    -- Precondition for migration 220's interval derivation: every deployed
+    -- capture policy uses WALL_CLOCK alignment. If a non-WALL_CLOCK mode is
+    -- ever introduced, the interval-containment test is no longer provably
+    -- equivalent to resolve_site_capture_bucket() and migration 220 must be
+    -- re-audited for that mode.
+    IF EXISTS (SELECT 1 FROM config.telemetry_capture_policies WHERE alignment_mode <> 'WALL_CLOCK') THEN
+        RAISE EXCEPTION 'TEST F FAILED (migration 220 precondition): a config.telemetry_capture_policies row uses alignment_mode <> ''WALL_CLOCK''. Migration 220''s supersession interval-containment derivation must be re-audited for the new alignment mode before this is safe.';
+    END IF;
+
+    RAISE NOTICE 'TEST F passed (migration 220): supersession same-bucket test is interval-containment against ce''s own bucket; per-element resolve_site_capture_bucket() fan-out removed (exactly 2 call sites remain); all capture policies are WALL_CLOCK.';
 
 END;
 $test$;
