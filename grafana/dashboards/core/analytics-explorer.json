@@ -8,7 +8,7 @@
   ],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 18,
+  "version": 20,
   "editable": false,
   "time": {
     "from": "now-24h",
@@ -160,7 +160,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "WITH selection AS (\n    SELECT\n        CASE\n            WHEN array_length(NULLIF(ARRAY[${Asset:singlequote}]::uuid[], ARRAY[NULL::uuid]), 1) <= 5\n            THEN ARRAY[${Asset:singlequote}]::uuid[]\n            ELSE ARRAY[]::uuid[]\n        END AS asset_ids,\n        CASE\n            WHEN array_length(NULLIF(ARRAY[${Metric:singlequote}]::text[], ARRAY[NULL::text]), 1) <= 5\n            THEN ARRAY[${Metric:singlequote}]::text[]\n            ELSE ARRAY[]::text[]\n        END AS logical_points\n),\n\nraw_data AS (\n    SELECT\n        x.interval_start,\n        COALESCE(sel_a.asset_name, x.asset_id::text) AS asset_name,\n        COALESCE(sel_p.logical_point, x.logical_point_id::text) AS logical_point_name,\n        x.avg_value,\n        x.max_value\n\n    FROM selection\n\n    CROSS JOIN LATERAL analytics.get_grafana_explorer_intervals(\n        ${__org.id}::bigint,\n        selection.asset_ids,\n        selection.logical_points,\n        $__timeFrom()::timestamptz,\n        $__timeTo()::timestamptz\n    ) AS x\n\n    LEFT JOIN LATERAL (\n        SELECT asset_name\n        FROM analytics.v_grafana_asset_selector\n        WHERE asset_id = x.asset_id\n          AND grafana_org_id = ${__org.id}\n        LIMIT 1\n    ) AS sel_a ON TRUE\n\n    LEFT JOIN LATERAL (\n        SELECT logical_point\n        FROM analytics.v_grafana_asset_point_selector\n        WHERE logical_point_id = x.logical_point_id\n          AND grafana_org_id = ${__org.id}\n        LIMIT 1\n    ) AS sel_p ON TRUE\n)\n\nSELECT\n    interval_start AS time,\n\n    CASE\n        WHEN logical_point_name ILIKE '%ENERGY%' THEN\n            GREATEST(\n                0,\n                max_value - LAG(max_value) OVER (\n                    PARTITION BY asset_name, logical_point_name\n                    ORDER BY interval_start\n                )\n            )\n        ELSE avg_value\n    END AS value,\n\n    asset_name || ' - ' || logical_point_name AS metric\n\nFROM raw_data\n\nORDER BY interval_start",
+          "rawSql": "WITH selection AS (\n    SELECT\n        CASE\n            WHEN array_length(NULLIF(ARRAY[${Asset:singlequote}]::uuid[], ARRAY[NULL::uuid]), 1) <= 5\n            THEN ARRAY[${Asset:singlequote}]::uuid[]\n            ELSE ARRAY[]::uuid[]\n        END AS asset_ids,\n        CASE\n            WHEN array_length(NULLIF(ARRAY[${Metric:singlequote}]::text[], ARRAY[NULL::text]), 1) <= 5\n            THEN ARRAY[${Metric:singlequote}]::text[]\n            ELSE ARRAY[]::text[]\n        END AS logical_points\n),\n\nraw_data AS (\n    SELECT\n        x.interval_start,\n        COALESCE(sel_a.asset_name, x.asset_id::text) AS asset_name,\n        COALESCE(sel_p.logical_point, x.logical_point_id::text) AS logical_point_name,\n        x.avg_value,\n        x.max_value\n\n    FROM selection\n\n    CROSS JOIN LATERAL analytics.get_grafana_explorer_intervals(\n        ${__org.id}::bigint,\n        selection.asset_ids,\n        selection.logical_points,\n        $__timeFrom()::timestamptz,\n        $__timeTo()::timestamptz\n    ) AS x\n\n    LEFT JOIN LATERAL (\n        SELECT asset_name\n        FROM analytics.v_grafana_asset_selector\n        WHERE asset_id = x.asset_id\n          AND grafana_org_id = ${__org.id}\n        LIMIT 1\n    ) AS sel_a ON TRUE\n\n    LEFT JOIN LATERAL (\n        SELECT logical_point\n        FROM analytics.v_grafana_asset_point_selector\n        WHERE logical_point_id = x.logical_point_id\n          AND grafana_org_id = ${__org.id}\n        LIMIT 1\n    ) AS sel_p ON TRUE\n)\n\nSELECT\n    interval_start AS time,\n\n    CASE\n        WHEN logical_point_name ILIKE '%ENERGY%' THEN\n            GREATEST(\n                0,\n                max_value - LAG(max_value) OVER (\n                    PARTITION BY asset_name, logical_point_name\n                    ORDER BY interval_start\n                )\n            )\n        ELSE avg_value\n    END AS value,\n\n    asset_name || ' - ' || logical_point_name AS metric\n\nFROM raw_data\n\nORDER BY metric, interval_start",
           "refId": "A"
         }
       ],
@@ -170,11 +170,13 @@
           "sort": "none"
         },
         "legend": {
+          "showLegend": false,
           "displayMode": "table",
           "placement": "bottom",
           "calcs": [
+            "mean",
             "max",
-            "mean"
+            "min"
           ]
         }
       },
@@ -244,18 +246,15 @@
             "properties": [
               {
                 "id": "custom.drawStyle",
-                "value": "bars"
+                "value": "line"
+              },
+              {
+                "id": "custom.lineInterpolation",
+                "value": "linear"
               },
               {
                 "id": "custom.fillOpacity",
-                "value": 80
-              },
-              {
-                "id": "custom.stacking",
-                "value": {
-                  "mode": "none",
-                  "group": "A"
-                }
+                "value": 8
               }
             ]
           },
@@ -408,6 +407,216 @@
               {
                 "id": "custom.axisLabel",
                 "value": "Phase angle"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 10,
+      "title": "Summary (per metric, aggregated across selected assets)",
+      "description": "Metric-level rollup of the same analytics.get_grafana_explorer_intervals data feeding the chart above, for the currently selected dashboard time range. Energy aggregates additively (Total = sum of per-asset consumption, Average = sum of per-asset mean interval consumption); Power/Current/Voltage/Power Factor aggregate as the mean of the per-asset averages, with Max/Min taken as the true extremes across assets. Total is blank where it is not a meaningful quantity. Blank = not applicable / no data; a genuine measured zero renders as 0.00.",
+      "type": "table",
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ems-timescaledb"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ems-timescaledb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH selection AS ( SELECT CASE WHEN array_length(NULLIF(ARRAY[${Asset:singlequote}]::uuid[], ARRAY[NULL::uuid]), 1) <= 5 THEN ARRAY[${Asset:singlequote}]::uuid[] ELSE ARRAY[]::uuid[] END AS asset_ids, CASE WHEN array_length(NULLIF(ARRAY[${Metric:singlequote}]::text[], ARRAY[NULL::text]), 1) <= 5 THEN ARRAY[${Metric:singlequote}]::text[] ELSE ARRAY[]::text[] END AS logical_points ), raw_data AS ( SELECT x.interval_start, COALESCE(sel_a.asset_name, x.asset_id::text) AS asset_name, COALESCE(sel_p.logical_point, x.logical_point_id::text) AS logical_point_name, x.avg_value, x.min_value, x.max_value FROM selection CROSS JOIN LATERAL analytics.get_grafana_explorer_intervals( ${__org.id}::bigint, selection.asset_ids, selection.logical_points, $__timeFrom()::timestamptz, $__timeTo()::timestamptz ) AS x LEFT JOIN LATERAL ( SELECT asset_name FROM analytics.v_grafana_asset_selector WHERE asset_id = x.asset_id AND grafana_org_id = ${__org.id} LIMIT 1 ) AS sel_a ON TRUE LEFT JOIN LATERAL ( SELECT logical_point FROM analytics.v_grafana_asset_point_selector WHERE logical_point_id = x.logical_point_id AND grafana_org_id = ${__org.id} LIMIT 1 ) AS sel_p ON TRUE ), delta_data AS ( SELECT asset_name, logical_point_name, (logical_point_name ILIKE '%ENERGY%') AS is_energy, CASE WHEN logical_point_name ILIKE '%ENERGY%' THEN GREATEST(0, max_value - LAG(max_value) OVER (PARTITION BY asset_name, logical_point_name ORDER BY interval_start)) ELSE avg_value END AS series_value, min_value, max_value FROM raw_data ), per_series AS ( SELECT asset_name, logical_point_name, CASE WHEN logical_point_name ILIKE '%ENERGY%' THEN 'energy' WHEN logical_point_name ILIKE '%POWER_FACTOR%' THEN 'pf' WHEN logical_point_name ILIKE '%THD%' THEN 'thd' WHEN logical_point_name ILIKE '%POWER%' THEN 'power' WHEN logical_point_name ILIKE '%VOLTAGE%' THEN 'voltage' WHEN logical_point_name ILIKE '%CURRENT%' THEN 'current' WHEN logical_point_name ILIKE '%FREQUENCY%' THEN 'frequency' WHEN logical_point_name ILIKE '%TEMPERATURE%' THEN 'temperature' WHEN logical_point_name ILIKE '%HUMIDITY%' THEN 'humidity' WHEN logical_point_name ILIKE '%ILLUMINANCE%' THEN 'illuminance' WHEN logical_point_name ILIKE '%PHASE_ANGLE%' THEN 'phase_angle' ELSE 'other' END AS family, CASE WHEN bool_or(is_energy) THEN SUM(series_value) ELSE NULL END AS total_v, AVG(series_value) AS avg_v, CASE WHEN bool_or(is_energy) THEN MAX(series_value) ELSE MAX(max_value) END AS max_v, CASE WHEN bool_or(is_energy) THEN MIN(series_value) ELSE MIN(min_value) END AS min_v FROM delta_data GROUP BY asset_name, logical_point_name ), per_metric AS ( SELECT logical_point_name, family, CASE WHEN family = 'energy' THEN SUM(total_v) ELSE NULL END AS total_v, CASE WHEN family = 'energy' THEN SUM(avg_v) ELSE AVG(avg_v) END AS avg_v, MAX(max_v) AS max_v, MIN(min_v) AS min_v FROM per_series GROUP BY logical_point_name, family ) SELECT logical_point_name AS \"Meter\", CASE WHEN family = 'energy' THEN to_char(total_v / 1000.0, 'FM999999990.00') || ' kWh' WHEN family = 'power' THEN CASE WHEN abs(total_v) >= 1000 THEN to_char(total_v / 1000.0, 'FM999999990.00') || ' kW' ELSE to_char(total_v, 'FM999999990.00') || ' W' END WHEN family = 'current' THEN to_char(total_v, 'FM999999990.00') || ' A' WHEN family = 'voltage' THEN to_char(total_v, 'FM999999990.00') || ' V' WHEN family = 'pf' THEN to_char(total_v, 'FM999999990.00') WHEN family = 'thd' THEN to_char(total_v, 'FM999999990.00') || ' %' WHEN family = 'frequency' THEN to_char(total_v, 'FM999999990.00') || ' Hz' WHEN family = 'temperature' THEN to_char(total_v, 'FM999999990.00') || ' \u00b0C' WHEN family = 'humidity' THEN to_char(total_v, 'FM999999990.00') || ' %' WHEN family = 'illuminance' THEN to_char(total_v, 'FM999999990.00') || ' %' WHEN family = 'phase_angle' THEN to_char(total_v, 'FM999999990.00') || ' \u00b0' ELSE to_char(total_v, 'FM999999990.00') END AS \"Total\", CASE WHEN family = 'energy' THEN to_char(avg_v / 1000.0, 'FM999999990.00') || ' kWh' WHEN family = 'power' THEN CASE WHEN abs(avg_v) >= 1000 THEN to_char(avg_v / 1000.0, 'FM999999990.00') || ' kW' ELSE to_char(avg_v, 'FM999999990.00') || ' W' END WHEN family = 'current' THEN to_char(avg_v, 'FM999999990.00') || ' A' WHEN family = 'voltage' THEN to_char(avg_v, 'FM999999990.00') || ' V' WHEN family = 'pf' THEN to_char(avg_v, 'FM999999990.00') WHEN family = 'thd' THEN to_char(avg_v, 'FM999999990.00') || ' %' WHEN family = 'frequency' THEN to_char(avg_v, 'FM999999990.00') || ' Hz' WHEN family = 'temperature' THEN to_char(avg_v, 'FM999999990.00') || ' \u00b0C' WHEN family = 'humidity' THEN to_char(avg_v, 'FM999999990.00') || ' %' WHEN family = 'illuminance' THEN to_char(avg_v, 'FM999999990.00') || ' %' WHEN family = 'phase_angle' THEN to_char(avg_v, 'FM999999990.00') || ' \u00b0' ELSE to_char(avg_v, 'FM999999990.00') END AS \"Average\", CASE WHEN family = 'energy' THEN to_char(max_v / 1000.0, 'FM999999990.00') || ' kWh' WHEN family = 'power' THEN CASE WHEN abs(max_v) >= 1000 THEN to_char(max_v / 1000.0, 'FM999999990.00') || ' kW' ELSE to_char(max_v, 'FM999999990.00') || ' W' END WHEN family = 'current' THEN to_char(max_v, 'FM999999990.00') || ' A' WHEN family = 'voltage' THEN to_char(max_v, 'FM999999990.00') || ' V' WHEN family = 'pf' THEN to_char(max_v, 'FM999999990.00') WHEN family = 'thd' THEN to_char(max_v, 'FM999999990.00') || ' %' WHEN family = 'frequency' THEN to_char(max_v, 'FM999999990.00') || ' Hz' WHEN family = 'temperature' THEN to_char(max_v, 'FM999999990.00') || ' \u00b0C' WHEN family = 'humidity' THEN to_char(max_v, 'FM999999990.00') || ' %' WHEN family = 'illuminance' THEN to_char(max_v, 'FM999999990.00') || ' %' WHEN family = 'phase_angle' THEN to_char(max_v, 'FM999999990.00') || ' \u00b0' ELSE to_char(max_v, 'FM999999990.00') END AS \"Max\", CASE WHEN family = 'energy' THEN to_char(min_v / 1000.0, 'FM999999990.00') || ' kWh' WHEN family = 'power' THEN CASE WHEN abs(min_v) >= 1000 THEN to_char(min_v / 1000.0, 'FM999999990.00') || ' kW' ELSE to_char(min_v, 'FM999999990.00') || ' W' END WHEN family = 'current' THEN to_char(min_v, 'FM999999990.00') || ' A' WHEN family = 'voltage' THEN to_char(min_v, 'FM999999990.00') || ' V' WHEN family = 'pf' THEN to_char(min_v, 'FM999999990.00') WHEN family = 'thd' THEN to_char(min_v, 'FM999999990.00') || ' %' WHEN family = 'frequency' THEN to_char(min_v, 'FM999999990.00') || ' Hz' WHEN family = 'temperature' THEN to_char(min_v, 'FM999999990.00') || ' \u00b0C' WHEN family = 'humidity' THEN to_char(min_v, 'FM999999990.00') || ' %' WHEN family = 'illuminance' THEN to_char(min_v, 'FM999999990.00') || ' %' WHEN family = 'phase_angle' THEN to_char(min_v, 'FM999999990.00') || ' \u00b0' ELSE to_char(min_v, 'FM999999990.00') END AS \"Min\" FROM per_metric ORDER BY logical_point_name",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "countRows": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": ""
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "right",
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Meter"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "left"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 11,
+      "title": "Individual (per asset and metric)",
+      "description": "Per (asset, metric) breakdown of the same analytics.get_grafana_explorer_intervals data feeding the chart above, for the currently selected dashboard time range. Rows are generated dynamically from the selected assets and metrics. Energy uses the same per-interval consumption delta as the chart (Total = summed consumption over the range); Power/Current/Voltage/Power Factor use the function's native per-bucket average for Average and its native extremes for Max/Min. Total is blank where it is not a meaningful quantity. Blank = not applicable / no data; a genuine measured zero renders as 0.00. Missing samples are never treated as zero.",
+      "type": "table",
+      "gridPos": {
+        "x": 0,
+        "y": 28,
+        "w": 24,
+        "h": 14
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "ems-timescaledb"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "ems-timescaledb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH selection AS ( SELECT CASE WHEN array_length(NULLIF(ARRAY[${Asset:singlequote}]::uuid[], ARRAY[NULL::uuid]), 1) <= 5 THEN ARRAY[${Asset:singlequote}]::uuid[] ELSE ARRAY[]::uuid[] END AS asset_ids, CASE WHEN array_length(NULLIF(ARRAY[${Metric:singlequote}]::text[], ARRAY[NULL::text]), 1) <= 5 THEN ARRAY[${Metric:singlequote}]::text[] ELSE ARRAY[]::text[] END AS logical_points ), raw_data AS ( SELECT x.interval_start, COALESCE(sel_a.asset_name, x.asset_id::text) AS asset_name, COALESCE(sel_p.logical_point, x.logical_point_id::text) AS logical_point_name, x.avg_value, x.min_value, x.max_value FROM selection CROSS JOIN LATERAL analytics.get_grafana_explorer_intervals( ${__org.id}::bigint, selection.asset_ids, selection.logical_points, $__timeFrom()::timestamptz, $__timeTo()::timestamptz ) AS x LEFT JOIN LATERAL ( SELECT asset_name FROM analytics.v_grafana_asset_selector WHERE asset_id = x.asset_id AND grafana_org_id = ${__org.id} LIMIT 1 ) AS sel_a ON TRUE LEFT JOIN LATERAL ( SELECT logical_point FROM analytics.v_grafana_asset_point_selector WHERE logical_point_id = x.logical_point_id AND grafana_org_id = ${__org.id} LIMIT 1 ) AS sel_p ON TRUE ), delta_data AS ( SELECT asset_name, logical_point_name, (logical_point_name ILIKE '%ENERGY%') AS is_energy, CASE WHEN logical_point_name ILIKE '%ENERGY%' THEN GREATEST(0, max_value - LAG(max_value) OVER (PARTITION BY asset_name, logical_point_name ORDER BY interval_start)) ELSE avg_value END AS series_value, min_value, max_value FROM raw_data ), per_series AS ( SELECT asset_name, logical_point_name, CASE WHEN logical_point_name ILIKE '%ENERGY%' THEN 'energy' WHEN logical_point_name ILIKE '%POWER_FACTOR%' THEN 'pf' WHEN logical_point_name ILIKE '%THD%' THEN 'thd' WHEN logical_point_name ILIKE '%POWER%' THEN 'power' WHEN logical_point_name ILIKE '%VOLTAGE%' THEN 'voltage' WHEN logical_point_name ILIKE '%CURRENT%' THEN 'current' WHEN logical_point_name ILIKE '%FREQUENCY%' THEN 'frequency' WHEN logical_point_name ILIKE '%TEMPERATURE%' THEN 'temperature' WHEN logical_point_name ILIKE '%HUMIDITY%' THEN 'humidity' WHEN logical_point_name ILIKE '%ILLUMINANCE%' THEN 'illuminance' WHEN logical_point_name ILIKE '%PHASE_ANGLE%' THEN 'phase_angle' ELSE 'other' END AS family, CASE WHEN bool_or(is_energy) THEN SUM(series_value) ELSE NULL END AS total_v, AVG(series_value) AS avg_v, CASE WHEN bool_or(is_energy) THEN MAX(series_value) ELSE MAX(max_value) END AS max_v, CASE WHEN bool_or(is_energy) THEN MIN(series_value) ELSE MIN(min_value) END AS min_v FROM delta_data GROUP BY asset_name, logical_point_name ) SELECT (ROW_NUMBER() OVER (ORDER BY (asset_name || ' - ' || logical_point_name)) - 1) AS \"Color\", asset_name || ' - ' || logical_point_name AS \"Meter\", CASE WHEN family = 'energy' THEN to_char(total_v / 1000.0, 'FM999999990.00') || ' kWh' WHEN family = 'power' THEN CASE WHEN abs(total_v) >= 1000 THEN to_char(total_v / 1000.0, 'FM999999990.00') || ' kW' ELSE to_char(total_v, 'FM999999990.00') || ' W' END WHEN family = 'current' THEN to_char(total_v, 'FM999999990.00') || ' A' WHEN family = 'voltage' THEN to_char(total_v, 'FM999999990.00') || ' V' WHEN family = 'pf' THEN to_char(total_v, 'FM999999990.00') WHEN family = 'thd' THEN to_char(total_v, 'FM999999990.00') || ' %' WHEN family = 'frequency' THEN to_char(total_v, 'FM999999990.00') || ' Hz' WHEN family = 'temperature' THEN to_char(total_v, 'FM999999990.00') || ' \u00b0C' WHEN family = 'humidity' THEN to_char(total_v, 'FM999999990.00') || ' %' WHEN family = 'illuminance' THEN to_char(total_v, 'FM999999990.00') || ' %' WHEN family = 'phase_angle' THEN to_char(total_v, 'FM999999990.00') || ' \u00b0' ELSE to_char(total_v, 'FM999999990.00') END AS \"Total\", CASE WHEN family = 'energy' THEN to_char(avg_v / 1000.0, 'FM999999990.00') || ' kWh' WHEN family = 'power' THEN CASE WHEN abs(avg_v) >= 1000 THEN to_char(avg_v / 1000.0, 'FM999999990.00') || ' kW' ELSE to_char(avg_v, 'FM999999990.00') || ' W' END WHEN family = 'current' THEN to_char(avg_v, 'FM999999990.00') || ' A' WHEN family = 'voltage' THEN to_char(avg_v, 'FM999999990.00') || ' V' WHEN family = 'pf' THEN to_char(avg_v, 'FM999999990.00') WHEN family = 'thd' THEN to_char(avg_v, 'FM999999990.00') || ' %' WHEN family = 'frequency' THEN to_char(avg_v, 'FM999999990.00') || ' Hz' WHEN family = 'temperature' THEN to_char(avg_v, 'FM999999990.00') || ' \u00b0C' WHEN family = 'humidity' THEN to_char(avg_v, 'FM999999990.00') || ' %' WHEN family = 'illuminance' THEN to_char(avg_v, 'FM999999990.00') || ' %' WHEN family = 'phase_angle' THEN to_char(avg_v, 'FM999999990.00') || ' \u00b0' ELSE to_char(avg_v, 'FM999999990.00') END AS \"Average\", CASE WHEN family = 'energy' THEN to_char(max_v / 1000.0, 'FM999999990.00') || ' kWh' WHEN family = 'power' THEN CASE WHEN abs(max_v) >= 1000 THEN to_char(max_v / 1000.0, 'FM999999990.00') || ' kW' ELSE to_char(max_v, 'FM999999990.00') || ' W' END WHEN family = 'current' THEN to_char(max_v, 'FM999999990.00') || ' A' WHEN family = 'voltage' THEN to_char(max_v, 'FM999999990.00') || ' V' WHEN family = 'pf' THEN to_char(max_v, 'FM999999990.00') WHEN family = 'thd' THEN to_char(max_v, 'FM999999990.00') || ' %' WHEN family = 'frequency' THEN to_char(max_v, 'FM999999990.00') || ' Hz' WHEN family = 'temperature' THEN to_char(max_v, 'FM999999990.00') || ' \u00b0C' WHEN family = 'humidity' THEN to_char(max_v, 'FM999999990.00') || ' %' WHEN family = 'illuminance' THEN to_char(max_v, 'FM999999990.00') || ' %' WHEN family = 'phase_angle' THEN to_char(max_v, 'FM999999990.00') || ' \u00b0' ELSE to_char(max_v, 'FM999999990.00') END AS \"Max\", CASE WHEN family = 'energy' THEN to_char(min_v / 1000.0, 'FM999999990.00') || ' kWh' WHEN family = 'power' THEN CASE WHEN abs(min_v) >= 1000 THEN to_char(min_v / 1000.0, 'FM999999990.00') || ' kW' ELSE to_char(min_v, 'FM999999990.00') || ' W' END WHEN family = 'current' THEN to_char(min_v, 'FM999999990.00') || ' A' WHEN family = 'voltage' THEN to_char(min_v, 'FM999999990.00') || ' V' WHEN family = 'pf' THEN to_char(min_v, 'FM999999990.00') WHEN family = 'thd' THEN to_char(min_v, 'FM999999990.00') || ' %' WHEN family = 'frequency' THEN to_char(min_v, 'FM999999990.00') || ' Hz' WHEN family = 'temperature' THEN to_char(min_v, 'FM999999990.00') || ' \u00b0C' WHEN family = 'humidity' THEN to_char(min_v, 'FM999999990.00') || ' %' WHEN family = 'illuminance' THEN to_char(min_v, 'FM999999990.00') || ' %' WHEN family = 'phase_angle' THEN to_char(min_v, 'FM999999990.00') || ' \u00b0' ELSE to_char(min_v, 'FM999999990.00') END AS \"Min\" FROM per_series ORDER BY \"Meter\"",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "countRows": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": ""
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "right",
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Meter"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "left"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Color"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": " "
+              },
+              {
+                "id": "custom.width",
+                "value": 28
+              },
+              {
+                "id": "custom.align",
+                "value": "center"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background-solid"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "range",
+                    "options": {
+                      "from": 0,
+                      "to": 999,
+                      "result": {
+                        "text": ""
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "color": "#7EB26D", "value": null },
+                    { "color": "#EAB839", "value": 1 },
+                    { "color": "#6ED0E0", "value": 2 },
+                    { "color": "#EF843C", "value": 3 },
+                    { "color": "#E24D42", "value": 4 },
+                    { "color": "#1F78C1", "value": 5 },
+                    { "color": "#BA43A9", "value": 6 },
+                    { "color": "#705DA0", "value": 7 },
+                    { "color": "#508642", "value": 8 },
+                    { "color": "#CCA300", "value": 9 },
+                    { "color": "#447EBC", "value": 10 },
+                    { "color": "#C15C17", "value": 11 },
+                    { "color": "#890F02", "value": 12 },
+                    { "color": "#0A437C", "value": 13 },
+                    { "color": "#6D1F62", "value": 14 },
+                    { "color": "#584477", "value": 15 },
+                    { "color": "#B7DBAB", "value": 16 },
+                    { "color": "#F4D598", "value": 17 },
+                    { "color": "#70DBED", "value": 18 },
+                    { "color": "#F9BA8F", "value": 19 },
+                    { "color": "#F29191", "value": 20 },
+                    { "color": "#82B5D8", "value": 21 },
+                    { "color": "#E5A8E2", "value": 22 },
+                    { "color": "#AEA2E0", "value": 23 },
+                    { "color": "#629E51", "value": 24 }
+                  ]
+                }
               }
             ]
           }
