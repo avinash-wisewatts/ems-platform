@@ -519,3 +519,67 @@ def test_table_panels_keep_existing_metric_unit_conventions():
         assert "|| ' V'" in sql     # voltage
         # Power Factor: unitless -- formatted number, no unit suffix.
         assert "WHEN family = 'pf' THEN to_char(" in sql
+
+
+def test_table_panels_cover_every_unit_family_the_chart_defines():
+    # The chart (panel 5) assigns real units to Frequency, Temperature,
+    # Humidity, Illuminance, THD and Phase Angle via byRegexp overrides
+    # (.*FREQUENCY.*, .*TEMPERATURE.*, .*HUMIDITY.*, .*ILLUMINANCE.*,
+    # .*THD.*, .*PHASE_ANGLE.*). Any metric family the chart units must
+    # not silently fall through to the tables' bare-number 'other' branch
+    # -- that would violate cross-surface unit consistency.
+    for pid in (10, 11):
+        sql = _table_sql(pid)
+
+        assert "WHEN logical_point_name ILIKE '%THD%' THEN 'thd'" in sql
+        assert "WHEN logical_point_name ILIKE '%FREQUENCY%' THEN 'frequency'" in sql
+        assert "WHEN logical_point_name ILIKE '%TEMPERATURE%' THEN 'temperature'" in sql
+        assert "WHEN logical_point_name ILIKE '%HUMIDITY%' THEN 'humidity'" in sql
+        assert "WHEN logical_point_name ILIKE '%ILLUMINANCE%' THEN 'illuminance'" in sql
+        assert "WHEN logical_point_name ILIKE '%PHASE_ANGLE%' THEN 'phase_angle'" in sql
+
+        assert "WHEN family = 'thd' THEN to_char(" in sql and "|| ' %'" in sql
+        assert "WHEN family = 'frequency' THEN to_char(" in sql and "|| ' Hz'" in sql
+        assert "WHEN family = 'temperature' THEN to_char(" in sql and "|| ' °C'" in sql
+        assert "WHEN family = 'humidity' THEN to_char(" in sql
+        assert "WHEN family = 'illuminance' THEN to_char(" in sql
+        assert "WHEN family = 'phase_angle' THEN to_char(" in sql and "|| ' °'" in sql
+
+
+def test_dashboard_json_uses_ascii_escapes_not_literal_bytes_for_non_ascii_units():
+    # DASHBOARD.read_text() below has no explicit encoding, so on a
+    # non-UTF-8-default Windows codepage it mis-decodes a literal
+    # multi-byte UTF-8 character (a real degree sign came back as the
+    # classic "Â°" mojibake during development). The file already has a
+    # safe convention for this -- the Site/Location/AssetType/Asset
+    # variable queries spell the em dash as the pure-ASCII '—' JSON
+    # escape, which any reader decodes correctly regardless of its own
+    # encoding. The degree sign in the Temperature/Phase Angle unit
+    # suffixes must follow the same convention, not a literal byte.
+    raw_bytes = DASHBOARD.read_bytes()
+
+    assert "°".encode("utf-8") not in raw_bytes
+    assert b"\\u00b0" in raw_bytes
+
+
+def test_thd_family_takes_precedence_over_current_and_voltage():
+    # Real production data includes a logical point literally named
+    # CURRENT_THD_TOTAL (see postgres/ddl/78_eniscope_total_current_thd.sql
+    # and the seeded metadata.logical_points catalog) -- it contains the
+    # substring 'CURRENT', so a naive first-match CASE ordering would
+    # misclassify it as family 'current' (unit A) instead of 'thd' (unit
+    # %). The chart itself gets this right because Grafana applies
+    # byRegexp overrides in array order with later matches winning, and
+    # .*THD.* is declared after .*VOLTAGE.* and .*CURRENT.* in panel 5's
+    # overrides -- so THD's percent unit overwrites theirs for a matching
+    # series. The SQL CASE here is first-match-wins, so it must check THD
+    # *before* VOLTAGE/CURRENT to reproduce the same effective result.
+    for pid in (10, 11):
+        sql = _table_sql(pid)
+        family_case = sql[
+            sql.index("CASE WHEN logical_point_name ILIKE '%ENERGY%' THEN 'energy'")
+            : sql.index("END AS family")
+        ]
+
+        assert family_case.index("'thd'") < family_case.index("'voltage'")
+        assert family_case.index("'thd'") < family_case.index("'current'")
