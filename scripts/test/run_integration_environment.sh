@@ -173,6 +173,10 @@ echo
 echo "[hourly-forward-window-utc] Running hourly forward-window UTC-hour alignment (migration 217) assertions..."
 "${SCRIPT_DIR}/assert_hourly_forward_window_utc_aligned.sh"
 
+echo
+echo "[airsense-environmental-sensor-compatibility] Running Air Sense / Environmental Sensor telemetry-profile compatibility (migration 219) assertions..."
+"${SCRIPT_DIR}/assert_airsense_environmental_sensor_compatibility.sh"
+
 echo "[14/14] Verifying migration ledger..."
 ledger="$(
     docker compose \
