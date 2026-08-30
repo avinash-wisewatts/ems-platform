@@ -95,9 +95,18 @@ BEGIN
 
     -- Migration 218: recovery now requires a commissioned (ACTIVE) device; a
     -- REGISTERED fixture device would be DEFERRED_UNCOMMISSIONED, not recovered.
-    INSERT INTO metadata.devices(organization_id, gateway_id, profile_id, name, external_id, lifecycle_status)
-    VALUES (v_org, v_gateway, v_profile, 'Recovery Retention Age Test Device', 'RECOVERY-RETENTION-AGE-DEV', 'ACTIVE')
+    -- Create it REGISTERED, then reach ACTIVE the one controlled way
+    -- metadata.reject_uncommissioned_active_device() permits: as ems_admin
+    -- with ems.controlled_device_commissioning_id set to this device id --
+    -- exactly what admin.commission_device() does. A bare INSERT ... 'ACTIVE'
+    -- is rejected by that trigger.
+    INSERT INTO metadata.devices(organization_id, gateway_id, profile_id, name, external_id)
+    VALUES (v_org, v_gateway, v_profile, 'Recovery Retention Age Test Device', 'RECOVERY-RETENTION-AGE-DEV')
     RETURNING id INTO v_device;
+
+    PERFORM set_config('ems.controlled_device_commissioning_id', v_device::text, true);
+    UPDATE metadata.devices SET lifecycle_status = 'ACTIVE' WHERE id = v_device;
+    PERFORM set_config('ems.controlled_device_commissioning_id', '', true);
 
     INSERT INTO metadata.device_identifiers(device_id, identifier_type, identifier_value)
     VALUES (v_device, 'MQTT_UID', 'TEST:RECOVERY:RETENTION:AGE:001');
@@ -129,9 +138,9 @@ BEGIN
     RETURNING id INTO v_msg_id;
 
     INSERT INTO telemetry.raw_message_failures(
-        raw_received_at, raw_message_id, failure_code, source_protocol, payload
+        raw_received_at, raw_message_id, failure_code, source_protocol, source_identifier, payload
     ) VALUES (
-        v_bucket_start + INTERVAL '10 seconds', v_msg_id, 'UNRESOLVED_DEVICE_ELEMENTS', 'MQTT',
+        v_bucket_start + INTERVAL '10 seconds', v_msg_id, 'UNRESOLVED_DEVICE_ELEMENTS', 'MQTT', 'TEST:RECOVERY:RETENTION:AGE:001',
         jsonb_build_object('rtdata', jsonb_build_array(jsonb_build_object('uid', 'TEST:RECOVERY:RETENTION:AGE:001')))
     );
 
@@ -168,9 +177,9 @@ BEGIN
     RETURNING id INTO v_msg_id;
 
     INSERT INTO telemetry.raw_message_failures(
-        raw_received_at, raw_message_id, failure_code, source_protocol, payload
+        raw_received_at, raw_message_id, failure_code, source_protocol, source_identifier, payload
     ) VALUES (
-        v_bucket_start + INTERVAL '10 seconds', v_msg_id, 'UNRESOLVED_DEVICE_ELEMENTS', 'MQTT',
+        v_bucket_start + INTERVAL '10 seconds', v_msg_id, 'UNRESOLVED_DEVICE_ELEMENTS', 'MQTT', 'TEST:RECOVERY:RETENTION:AGE:001',
         jsonb_build_object('rtdata', jsonb_build_array(jsonb_build_object('uid', 'TEST:RECOVERY:RETENTION:AGE:001')))
     );
 

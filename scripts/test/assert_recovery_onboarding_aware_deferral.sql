@@ -182,7 +182,24 @@ BEGIN
     -- T2 -- commission the device; the deferred candidate becomes eligible
     -- again on the next bare CALL and recovers through the full path.
     -- ==================================================================
+    -- Reach ACTIVE the one controlled way metadata.reject_uncommissioned_
+    -- active_device() permits: as ems_admin with ems.controlled_device_
+    -- commissioning_id set to this device id -- exactly what
+    -- admin.commission_device() does.
+    PERFORM set_config('ems.controlled_device_commissioning_id', v_device::text, true);
     UPDATE metadata.devices SET lifecycle_status = 'ACTIVE' WHERE id = v_device;
+    PERFORM set_config('ems.controlled_device_commissioning_id', '', true);
+
+    -- T1 deferred the candidate with next_replay_at = clock_timestamp() + 1h
+    -- (asserted above). The recovery loop only re-scans a
+    -- DEFERRED_UNCOMMISSIONED row once coalesce(next_replay_at,...) <=
+    -- clock_timestamp(), i.e. on the FIRST scheduled Job 1077 run at or after
+    -- that hour elapses. Wind next_replay_at back to simulate that run
+    -- arriving after the device was commissioned -- exactly the automatic,
+    -- no-operator-step re-join the migration documents.
+    UPDATE telemetry.raw_message_failures
+    SET next_replay_at = clock_timestamp() - INTERVAL '1 minute'
+    WHERE raw_received_at = v_bucket_start + INTERVAL '10 seconds' AND raw_message_id = v_msg_id;
 
     CALL telemetry.recover_failed_raw_messages(10);
 
