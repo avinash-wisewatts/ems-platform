@@ -87,9 +87,19 @@ BEGIN
     VALUES (v_org, v_site, 'Recovery Commit Test Gateway', 'RECOVERY-COMMIT-GW')
     RETURNING id INTO v_gateway;
 
+    -- Migration 218: recovery now requires a commissioned (ACTIVE) device.
+    -- Create it REGISTERED, then reach ACTIVE the one controlled way
+    -- metadata.reject_uncommissioned_active_device() permits: as ems_admin
+    -- with ems.controlled_device_commissioning_id set to this device id --
+    -- exactly what admin.commission_device() does. A bare INSERT ... 'ACTIVE'
+    -- is rejected by that trigger.
     INSERT INTO metadata.devices(organization_id, gateway_id, profile_id, name, external_id)
     VALUES (v_org, v_gateway, v_profile, 'Recovery Commit Test Device', 'RECOVERY-COMMIT-DEV')
     RETURNING id INTO v_device;
+
+    PERFORM set_config('ems.controlled_device_commissioning_id', v_device::text, true);
+    UPDATE metadata.devices SET lifecycle_status = 'ACTIVE' WHERE id = v_device;
+    PERFORM set_config('ems.controlled_device_commissioning_id', '', true);
 
     INSERT INTO metadata.device_identifiers(device_id, identifier_type, identifier_value)
     VALUES (v_device, 'MQTT_UID', 'TEST:RECOVERY:COMMIT:001');
@@ -132,8 +142,8 @@ BEGIN
         jsonb_build_object('rtdata', jsonb_build_array(jsonb_build_object(
             'uid', 'TEST:RECOVERY:COMMIT:001', 'ts', extract(epoch FROM v_bucket + INTERVAL '10 seconds')::text, 'P', 1.0))))
     RETURNING id INTO v_msg1;
-    INSERT INTO telemetry.raw_message_failures(raw_received_at, raw_message_id, failure_code, source_protocol, payload)
-    VALUES (v_bucket + INTERVAL '10 seconds', v_msg1, 'UNRESOLVED_DEVICE_ELEMENTS', 'MQTT',
+    INSERT INTO telemetry.raw_message_failures(raw_received_at, raw_message_id, failure_code, source_protocol, source_identifier, payload)
+    VALUES (v_bucket + INTERVAL '10 seconds', v_msg1, 'UNRESOLVED_DEVICE_ELEMENTS', 'MQTT', 'TEST:RECOVERY:COMMIT:001',
         jsonb_build_object('rtdata', jsonb_build_array(jsonb_build_object('uid', 'TEST:RECOVERY:COMMIT:001'))));
 
     v_bucket := date_trunc('minute', now() - INTERVAL '5 hours');
@@ -142,8 +152,8 @@ BEGIN
         jsonb_build_object('rtdata', jsonb_build_array(jsonb_build_object(
             'uid', 'TEST:RECOVERY:COMMIT:001', 'ts', extract(epoch FROM v_bucket + INTERVAL '10 seconds')::text, 'P', 2.0))))
     RETURNING id INTO v_msg2;
-    INSERT INTO telemetry.raw_message_failures(raw_received_at, raw_message_id, failure_code, source_protocol, payload)
-    VALUES (v_bucket + INTERVAL '10 seconds', v_msg2, 'UNRESOLVED_DEVICE_ELEMENTS', 'MQTT',
+    INSERT INTO telemetry.raw_message_failures(raw_received_at, raw_message_id, failure_code, source_protocol, source_identifier, payload)
+    VALUES (v_bucket + INTERVAL '10 seconds', v_msg2, 'UNRESOLVED_DEVICE_ELEMENTS', 'MQTT', 'TEST:RECOVERY:COMMIT:001',
         jsonb_build_object('rtdata', jsonb_build_array(jsonb_build_object('uid', 'TEST:RECOVERY:COMMIT:001'))));
 
     v_bucket := date_trunc('minute', now() - INTERVAL '4 hours');
@@ -152,8 +162,8 @@ BEGIN
         jsonb_build_object('rtdata', jsonb_build_array(jsonb_build_object(
             'uid', 'TEST:RECOVERY:COMMIT:001', 'ts', extract(epoch FROM v_bucket + INTERVAL '10 seconds')::text, 'P', 3.0))))
     RETURNING id INTO v_msg3;
-    INSERT INTO telemetry.raw_message_failures(raw_received_at, raw_message_id, failure_code, source_protocol, payload)
-    VALUES (v_bucket + INTERVAL '10 seconds', v_msg3, 'UNRESOLVED_DEVICE_ELEMENTS', 'MQTT',
+    INSERT INTO telemetry.raw_message_failures(raw_received_at, raw_message_id, failure_code, source_protocol, source_identifier, payload)
+    VALUES (v_bucket + INTERVAL '10 seconds', v_msg3, 'UNRESOLVED_DEVICE_ELEMENTS', 'MQTT', 'TEST:RECOVERY:COMMIT:001',
         jsonb_build_object('rtdata', jsonb_build_array(jsonb_build_object('uid', 'TEST:RECOVERY:COMMIT:001'))));
 
     CALL telemetry.recover_failed_raw_messages(10);
@@ -200,8 +210,8 @@ BEGIN
         jsonb_build_object('rtdata', jsonb_build_array(jsonb_build_object(
             'uid', 'TEST:RECOVERY:COMMIT:001', 'ts', extract(epoch FROM v_bucket + INTERVAL '10 seconds')::text, 'P', 4.0))))
     RETURNING id INTO v_msg_old;
-    INSERT INTO telemetry.raw_message_failures(raw_received_at, raw_message_id, failure_code, source_protocol, payload)
-    VALUES (v_bucket + INTERVAL '10 seconds', v_msg_old, 'UNRESOLVED_DEVICE_ELEMENTS', 'MQTT',
+    INSERT INTO telemetry.raw_message_failures(raw_received_at, raw_message_id, failure_code, source_protocol, source_identifier, payload)
+    VALUES (v_bucket + INTERVAL '10 seconds', v_msg_old, 'UNRESOLVED_DEVICE_ELEMENTS', 'MQTT', 'TEST:RECOVERY:COMMIT:001',
         jsonb_build_object('rtdata', jsonb_build_array(jsonb_build_object('uid', 'TEST:RECOVERY:COMMIT:001'))));
 
     v_bucket := date_trunc('minute', now() - INTERVAL '2 hours');
@@ -210,8 +220,8 @@ BEGIN
         jsonb_build_object('rtdata', jsonb_build_array(jsonb_build_object(
             'uid', 'TEST:RECOVERY:COMMIT:001', 'ts', extract(epoch FROM v_bucket + INTERVAL '10 seconds')::text, 'P', 5.0))))
     RETURNING id INTO v_msg_new;
-    INSERT INTO telemetry.raw_message_failures(raw_received_at, raw_message_id, failure_code, source_protocol, payload)
-    VALUES (v_bucket + INTERVAL '10 seconds', v_msg_new, 'UNRESOLVED_DEVICE_ELEMENTS', 'MQTT',
+    INSERT INTO telemetry.raw_message_failures(raw_received_at, raw_message_id, failure_code, source_protocol, source_identifier, payload)
+    VALUES (v_bucket + INTERVAL '10 seconds', v_msg_new, 'UNRESOLVED_DEVICE_ELEMENTS', 'MQTT', 'TEST:RECOVERY:COMMIT:001',
         jsonb_build_object('rtdata', jsonb_build_array(jsonb_build_object('uid', 'TEST:RECOVERY:COMMIT:001'))));
 
     CALL telemetry.recover_failed_raw_messages(1);
