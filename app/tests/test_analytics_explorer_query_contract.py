@@ -311,16 +311,65 @@ def test_panel_5_native_legend_is_hidden_in_favor_of_the_individual_table():
     assert _panel(5)["options"]["legend"]["showLegend"] is False
 
 
-def test_panel_5_orders_by_series_name_for_deterministic_palette_indexing():
-    # Grafana's default 'palette-classic' field color mode assigns colors
-    # by each series' first-appearance order in the query result once
-    # pivoted to wide format. Sorting by the metric label (not just
-    # interval_start) makes that first-appearance order deterministic and
-    # alphabetical, so the Individual table's colour swatches (sorted the
-    # same way) can reproduce the same index -> colour mapping.
+def test_panel_5_orders_by_time_first_to_avoid_long_to_wide_conversion_error():
+    # Grafana's SQL backend converts a "time_series"-format long
+    # dataframe to wide by scanning rows in order and requires the time
+    # column to be non-decreasing across the *entire* result set. An
+    # earlier revision sorted by the metric label first (to make
+    # palette-classic colour indexing deterministic), which makes the
+    # overall time column jump backwards at every series boundary --
+    # exactly what produces Grafana's "unable to process the data because
+    # it is not sorted in ascending order by time" error for any
+    # multi-asset or multi-metric selection. interval_start must be the
+    # primary sort key so the conversion never sees time go backwards.
     sql = _panel(5)["targets"][0]["rawSql"]
 
-    assert "ORDER BY metric, interval_start" in sql
+    order_by = sql[sql.rindex("ORDER BY"):]
+    assert order_by.startswith("ORDER BY\n    interval_start,")
+
+
+def test_panel_5_still_orders_series_deterministically_within_each_timestamp():
+    # Time is now the primary sort key (see above), but a secondary,
+    # deterministic tie-break is preserved within each timestamp so the
+    # wide-format column creation order -- and therefore palette-classic's
+    # colour assignment -- stays aligned with the Individual table's
+    # metric-first-then-asset row order (see
+    # test_individual_table_is_grouped_by_metric_with_energy_first),
+    # keeping the colour swatches an accurate legend for the chart.
+    sql = _panel(5)["targets"][0]["rawSql"]
+    order_by = sql[sql.rindex("ORDER BY"):]
+
+    assert "WHEN logical_point_name ILIKE '%ENERGY%' THEN 0" in order_by
+    assert order_by.rstrip().endswith("logical_point_name,\n    asset_name")
+
+
+def test_panel_5_order_by_thd_precedes_current_and_voltage():
+    # Same CURRENT_THD_TOTAL precedence hazard as the table family
+    # classification (see test_thd_family_takes_precedence_over_current_
+    # and_voltage below) -- the chart's inline tie-break CASE must check
+    # THD before CURRENT/VOLTAGE too, or a real THD point would sort (and
+    # therefore colour-index) as if it were Current.
+    sql = _panel(5)["targets"][0]["rawSql"]
+    order_by = sql[sql.rindex("ORDER BY"):]
+
+    assert order_by.index("THD") < order_by.index("CURRENT")
+    assert order_by.index("THD") < order_by.index("VOLTAGE")
+
+
+def test_energy_family_uses_normal_stacking_for_multi_asset_bars():
+    # Grafana dashboard JSON has no per-selection conditional -- stacking
+    # is declared statically per field, not computed from how many assets
+    # are currently selected. Setting mode "normal" is safe for the
+    # single-asset case (a lone series stacks to the same bars it would
+    # render unstacked) while making multiple selected assets' Energy
+    # series render as stacked bars instead of overlapping ones.
+    props = _override_properties(
+        _panel(5),
+        ".*(ENERGY_IMPORT|ENERGY_EXPORT|APPARENT_ENERGY|REACTIVE_ENERGY|"
+        "ENERGY_REACTIVE_EXPORT)_.*",
+    )
+
+    assert props["custom.stacking"] == {"mode": "normal", "group": "A"}
 
 
 def test_panel_5_legend_exposes_avg_max_min_for_the_selected_time_range():
@@ -424,6 +473,15 @@ def test_individual_table_is_keyed_by_asset_and_metric():
     assert "GROUP BY asset_name, logical_point_name" in sql
 
 
+_FAMILY_ORDER_CASE = (
+    "CASE family WHEN 'energy' THEN 0 WHEN 'power' THEN 1 "
+    "WHEN 'voltage' THEN 2 WHEN 'current' THEN 3 WHEN 'frequency' THEN 4 "
+    "WHEN 'pf' THEN 5 WHEN 'temperature' THEN 6 WHEN 'humidity' THEN 7 "
+    "WHEN 'illuminance' THEN 8 WHEN 'thd' THEN 9 WHEN 'phase_angle' THEN 10 "
+    "ELSE 11 END"
+)
+
+
 def test_individual_table_color_column_mirrors_the_chart_legend():
     # The Individual table stands in for the chart's native legend (which
     # is hidden -- see the panel-5 test above), so each row must carry a
@@ -431,16 +489,49 @@ def test_individual_table_color_column_mirrors_the_chart_legend():
     # only lever available for a dynamically-named series in stock
     # Grafana is the index-based 'palette-classic' field color mode, so
     # the swatch is a 0-based row index computed with the *same* ordering
-    # key panel 5 sorts its series by, and the final row order must also
-    # use that key so row N lines up with palette index N.
+    # key panel 5 sorts its series by (metric family, then metric name,
+    # then asset name), and the final row order must use that same key so
+    # row N lines up with palette index N.
     sql = _table_sql(11)
 
     assert (
-        "ROW_NUMBER() OVER (ORDER BY (asset_name || ' - ' || logical_point_name)) - 1"
+        f"ROW_NUMBER() OVER (ORDER BY {_FAMILY_ORDER_CASE}, "
+        "logical_point_name, asset_name) - 1"
         in sql
     )
     assert 'AS "Color"' in sql
-    assert sql.rstrip().endswith('ORDER BY "Meter"')
+    assert sql.rstrip().endswith(
+        f"ORDER BY {_FAMILY_ORDER_CASE}, logical_point_name, asset_name"
+    )
+
+
+def test_individual_table_is_grouped_by_metric_with_energy_first():
+    # Previously the Individual table's row order was effectively grouped
+    # by asset first (it sorted by "asset_name || ' - ' || logical_point_
+    # name", which groups on asset_name because it's the leftmost part of
+    # the concatenation). Rows are now grouped by metric instead -- Energy
+    # first, then the other metric families in the chart's existing
+    # display order -- with a deterministic asset ordering preserved
+    # within each metric group (see also
+    # test_individual_table_color_column_mirrors_the_chart_legend, which
+    # pins down the exact ORDER BY key).
+    sql = _table_sql(11)
+
+    assert "GROUP BY asset_name, logical_point_name" in sql
+    order_by = sql[sql.rindex("ORDER BY"):]
+    assert order_by.startswith(f"ORDER BY {_FAMILY_ORDER_CASE}, logical_point_name")
+    assert order_by.rstrip().endswith("logical_point_name, asset_name")
+
+
+def test_summary_table_orders_energy_first():
+    # Summary must also list Energy metrics before the rest, in the same
+    # family display order as the chart and the Individual table -- not
+    # alphabetically by logical_point_name (which would put e.g.
+    # "ACTIVE_POWER_TOTAL" before "ENERGY_IMPORT_TOTAL").
+    sql = _table_sql(10)
+    order_by = sql[sql.rindex("ORDER BY"):]
+
+    assert order_by.startswith(f"ORDER BY {_FAMILY_ORDER_CASE}, logical_point_name")
 
 
 def test_individual_table_color_column_uses_real_grafana_classic_palette():
