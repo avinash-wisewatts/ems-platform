@@ -110,6 +110,10 @@ echo "[recovery-supersession-late-arrival-bound] Running recovery supersession l
 "${SCRIPT_DIR}/assert_recovery_supersession_late_arrival_bound.sh"
 
 echo
+echo "[recovery-supersession-dense-publisher] Running recovery supersession dense-publisher (migration 220) assertions..."
+"${SCRIPT_DIR}/assert_recovery_supersession_dense_publisher.sh"
+
+echo
 echo "[recovery-normalized-points-targeted-lookup] Running recovery normalized-points targeted-lookup assertions..."
 "${SCRIPT_DIR}/assert_recovery_normalized_points_targeted_lookup.sh"
 
