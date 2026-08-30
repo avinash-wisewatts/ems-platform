@@ -3890,7 +3890,7 @@
       "pluginVersion": "11.6.0"
     }
   ],
-  "refresh": "5s",
+  "refresh": "",
   "schemaVersion": 39,
   "tags": [
     "ems",
@@ -3994,6 +3994,6 @@
   "timezone": "browser",
   "title": "EMS | Asset Overview",
   "uid": "ems-asset-overview",
-  "version": 3,
+  "version": 4,
   "weekStart": ""
 }

@@ -60,11 +60,17 @@ def test_analytics_explorer_has_no_legacy_panels_or_short_history_usage():
     # revival of the old required/blocking site_id chain. The status
     # banner (id 6) was added and then removed again, and the EMS
     # Navigation text panel (id 1) plus its dashboard-level link were
-    # removed too -- panel 5 is now the dashboard's only panel.
+    # removed too.
+    #
+    # Panels 10 (Summary) and 11 (Individual) were later added *below*
+    # the chart as read-only stat tables. They reuse the exact same
+    # analytics.get_grafana_explorer_intervals data path as panel 5 (no
+    # new query surface, no get_grafana_short_history) -- see the
+    # dedicated table-panel contract tests below.
     d = _dashboard()
 
     panel_ids = {p["id"] for p in d["panels"]}
-    assert panel_ids == {5}
+    assert panel_ids == {5, 10, 11}
 
     dashboard_text = json.dumps(d)
     assert "get_grafana_short_history" not in dashboard_text
@@ -295,3 +301,221 @@ def test_panel_5_tooltip_and_legend_use_real_schema_values():
     assert legend["placement"] == "bottom"
     assert "max" in legend["calcs"]
     assert "mean" in legend["calcs"]
+
+
+def test_panel_5_native_legend_is_hidden_in_favor_of_the_individual_table():
+    # The Individual table (panel 11) now doubles as the chart's legend,
+    # colour-swatched per series -- the native Grafana legend would be
+    # redundant, so it's suppressed via showLegend rather than removing
+    # displayMode/placement/calcs (which stay harmless but inert).
+    assert _panel(5)["options"]["legend"]["showLegend"] is False
+
+
+def test_panel_5_orders_by_series_name_for_deterministic_palette_indexing():
+    # Grafana's default 'palette-classic' field color mode assigns colors
+    # by each series' first-appearance order in the query result once
+    # pivoted to wide format. Sorting by the metric label (not just
+    # interval_start) makes that first-appearance order deterministic and
+    # alphabetical, so the Individual table's colour swatches (sorted the
+    # same way) can reproduce the same index -> colour mapping.
+    sql = _panel(5)["targets"][0]["rawSql"]
+
+    assert "ORDER BY metric, interval_start" in sql
+
+
+def test_panel_5_legend_exposes_avg_max_min_for_the_selected_time_range():
+    # The legend must surface the calculated value of every selected
+    # series -- Avg (mean), Max and Min -- computed by Grafana over the
+    # data currently loaded for the dashboard time range, not the whole
+    # history. "mean" first so it renders as "Avg" ahead of Max/Min.
+    calcs = _panel(5)["options"]["legend"]["calcs"]
+
+    assert calcs == ["mean", "max", "min"]
+
+
+def test_panel_5_power_series_render_as_lines_not_bars():
+    # Power-family series (Active / Apparent / Reactive power, the
+    # metric families the dashboard already categorises together) must
+    # draw as lines. Energy stays bars; Voltage / Current / Power
+    # Factor are untouched (they were already lines).
+    props = _override_properties(
+        _panel(5),
+        ".*(ACTIVE_POWER|APPARENT_POWER|REACTIVE_POWER)_.*",
+    )
+
+    assert props["custom.drawStyle"] == "line"
+    assert props["custom.drawStyle"] != "bars"
+
+    energy_props = _override_properties(
+        _panel(5),
+        ".*(ENERGY_IMPORT|ENERGY_EXPORT|APPARENT_ENERGY|REACTIVE_ENERGY|"
+        "ENERGY_REACTIVE_EXPORT)_.*",
+    )
+    assert energy_props["custom.drawStyle"] == "bars"
+
+
+def test_panel_5_power_line_override_keeps_watt_unit_and_axis_label():
+    # Switching bars->line must not disturb the unit / axis semantics
+    # applied by the generic .*POWER.* override.
+    power_props = _override_properties(_panel(5), ".*POWER.*")
+
+    assert power_props["unit"] == "watt"
+    assert power_props["custom.axisLabel"] == "Power"
+
+
+# --------------------------------------------------------------------------
+# Summary (panel 10) and Individual (panel 11) stat tables
+# --------------------------------------------------------------------------
+
+
+def _table_sql(panel_id):
+    return _panel(panel_id)["targets"][0]["rawSql"]
+
+
+def test_summary_and_individual_table_panels_exist_below_the_chart():
+    d = _dashboard()
+    by_id = {p["id"]: p for p in d["panels"]}
+
+    assert set(by_id) == {5, 10, 11}
+
+    for pid in (10, 11):
+        assert by_id[pid]["type"] == "table"
+        # Positioned below the full-height chart (panel 5 is y=0, h=20).
+        assert by_id[pid]["gridPos"]["y"] >= 20
+        assert by_id[pid]["gridPos"]["x"] == 0
+        assert by_id[pid]["gridPos"]["w"] == 24
+
+
+def test_table_panels_reuse_the_safeguarded_explorer_data_path():
+    # No new query surface: the tables route through the same
+    # analytics.get_grafana_explorer_intervals function, the same
+    # 5-asset / 5-metric CASE guard, the same singlequote array
+    # expansion and the same tenant filter as panel 5.
+    for pid in (10, 11):
+        sql = _table_sql(pid)
+        assert "analytics.get_grafana_explorer_intervals" in sql
+        assert "${Asset:singlequote}" in sql
+        assert "${Metric:singlequote}" in sql
+        assert "${Metric:sqlstring}" not in sql
+        assert "${Asset:sqlstring}" not in sql
+        assert "<= 5" in sql
+        assert "ELSE ARRAY[]::uuid[]" in sql
+        assert "ELSE ARRAY[]::text[]" in sql
+        assert "${__org.id}" in sql
+        assert "analytics.v_grafana_asset_selector" in sql
+        assert "analytics.v_grafana_asset_point_selector" in sql
+
+
+def test_table_panels_reuse_the_energy_delta_semantics_of_the_chart():
+    # Energy points are cumulative registers -- interval consumption is
+    # the clamped diff of consecutive max_value readings, identical to
+    # panel 5. avg_value alone is meaningless for energy.
+    for pid in (10, 11):
+        sql = _table_sql(pid)
+        assert "ILIKE '%ENERGY%'" in sql
+        assert "LAG(max_value)" in sql
+        assert "PARTITION BY asset_name, logical_point_name" in sql
+        assert "GREATEST(0" in sql
+
+
+def test_individual_table_is_keyed_by_asset_and_metric():
+    sql = _table_sql(11)
+    assert "asset_name || ' - ' || logical_point_name AS \"Meter\"" in sql
+    assert "GROUP BY asset_name, logical_point_name" in sql
+
+
+def test_individual_table_color_column_mirrors_the_chart_legend():
+    # The Individual table stands in for the chart's native legend (which
+    # is hidden -- see the panel-5 test above), so each row must carry a
+    # colour swatch matching that row's series colour in the chart. The
+    # only lever available for a dynamically-named series in stock
+    # Grafana is the index-based 'palette-classic' field color mode, so
+    # the swatch is a 0-based row index computed with the *same* ordering
+    # key panel 5 sorts its series by, and the final row order must also
+    # use that key so row N lines up with palette index N.
+    sql = _table_sql(11)
+
+    assert (
+        "ROW_NUMBER() OVER (ORDER BY (asset_name || ' - ' || logical_point_name)) - 1"
+        in sql
+    )
+    assert 'AS "Color"' in sql
+    assert sql.rstrip().endswith('ORDER BY "Meter"')
+
+
+def test_individual_table_color_column_uses_real_grafana_classic_palette():
+    # Colours must match Grafana's actual default palette-classic hex
+    # values (packages/grafana-data/src/utils/namedColorsPalette.ts) --
+    # an approximate palette would look plausible but not actually match
+    # the chart. 25 steps cover the dashboard's 5-asset x 5-metric cap.
+    override = next(
+        o for o in _panel(11)["fieldConfig"]["overrides"]
+        if o["matcher"] == {"id": "byName", "options": "Color"}
+    )
+    props = {p["id"]: p["value"] for p in override["properties"]}
+
+    assert props["custom.cellOptions"] == {"type": "color-background-solid"}
+    assert props["color"] == {"mode": "thresholds"}
+
+    steps = props["thresholds"]["steps"]
+    assert len(steps) == 25
+    assert steps[0] == {"color": "#7EB26D", "value": None}
+    assert steps[1] == {"color": "#EAB839", "value": 1}
+    assert steps[-1] == {"color": "#629E51", "value": 24}
+
+    # The raw index must not be shown as a number -- only the swatch colour.
+    mapping = props["mappings"][0]
+    assert mapping["type"] == "range"
+    assert mapping["options"]["result"]["text"] == ""
+
+
+def test_summary_table_aggregates_across_assets_per_metric():
+    sql = _table_sql(10)
+    # Rolls the per-series rows up to one row per metric.
+    assert "per_metric AS (" in sql
+    assert "GROUP BY logical_point_name, family" in sql
+    assert "logical_point_name AS \"Meter\"" in sql
+    # Energy is additive across meters; intensive quantities are averaged.
+    assert "WHEN family = 'energy' THEN SUM(total_v)" in sql
+    assert "WHEN family = 'energy' THEN SUM(avg_v) ELSE AVG(avg_v)" in sql
+
+
+def test_table_panels_emit_blank_not_na_or_zero_for_non_applicable_total():
+    # A non-applicable Total is a SQL NULL (the CASE has no ELSE branch),
+    # which Grafana renders as an empty cell. No 'n/a' / 'N/A' / em-dash
+    # placeholder text, and no noValue / value mapping that would turn a
+    # blank into text or a zero.
+    for pid in (10, 11):
+        panel = _panel(pid)
+        sql = _table_sql(pid)
+
+        assert "n/a" not in sql.lower()
+        assert "—" not in sql  # em dash
+
+        # Total is gated on the energy family with no ELSE branch.
+        assert "END AS \"Total\"" in sql
+        assert "CASE WHEN family = 'energy' THEN to_char(total_v" in sql
+
+        defaults = panel.get("fieldConfig", {}).get("defaults", {})
+        assert "noValue" not in defaults
+        assert defaults.get("mappings", []) == []
+
+
+def test_table_panels_preserve_measured_zero():
+    # to_char(0, 'FM999999990.00') -> '0.00'; a real measured zero is
+    # formatted, never blanked. The format mask keeps a leading zero.
+    for pid in (10, 11):
+        sql = _table_sql(pid)
+        assert "'FM999999990.00'" in sql
+
+
+def test_table_panels_keep_existing_metric_unit_conventions():
+    for pid in (10, 11):
+        sql = _table_sql(pid)
+        assert "|| ' kWh'" in sql   # energy
+        assert "|| ' kW'" in sql    # power (SI-scaled)
+        assert "|| ' W'" in sql
+        assert "|| ' A'" in sql     # current
+        assert "|| ' V'" in sql     # voltage
+        # Power Factor: unitless -- formatted number, no unit suffix.
+        assert "WHEN family = 'pf' THEN to_char(" in sql
