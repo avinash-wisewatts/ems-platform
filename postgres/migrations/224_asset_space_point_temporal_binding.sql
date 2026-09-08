@@ -63,6 +63,15 @@ ALTER TABLE metadata.asset_points
     ADD COLUMN IF NOT EXISTS effective_range TSTZRANGE GENERATED ALWAYS AS
         (tstzrange(effective_from, COALESCE(effective_to, 'infinity'), '[)')) STORED;
 
+-- The pre-existing UNIQUE(asset_id, logical_point_id) constraint is not
+-- time-aware: it would block a point from ever being re-bound to an asset
+-- it was previously (non-overlappingly) bound to, which is a legitimate
+-- historical scenario the temporal model must allow. The new
+-- ex_asset_points_no_overlap GiST exclusion below is its strictly more
+-- correct, temporally-aware replacement, so the old constraint is dropped.
+ALTER TABLE metadata.asset_points
+    DROP CONSTRAINT IF EXISTS asset_points_asset_id_logical_point_id_key;
+
 ALTER TABLE metadata.asset_points
     DROP CONSTRAINT IF EXISTS ck_asset_points_effective_window;
 
