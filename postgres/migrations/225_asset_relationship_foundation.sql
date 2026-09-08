@@ -199,6 +199,20 @@ BEGIN
             v_from_org, v_to_org;
     END IF;
 
+    -- The row's own organization_id is redundant (derivable from either
+    -- asset) and must never be allowed to drift from the assets' actual
+    -- organization. Modeled on trg_validate_asset_hierarchy's parent_asset_id
+    -- vs. NEW.organization_id check (postgres/ddl/87_asset_hierarchy_
+    -- closure.sql) -- the existing table facing this exact same shape of
+    -- problem, since metadata.asset_devices (this migration's other cited
+    -- precedent) has no organization_id column at all and so never had to
+    -- solve it.
+    IF NEW.organization_id IS DISTINCT FROM v_from_org THEN
+        RAISE EXCEPTION
+            'Relationship organization_id (%) does not match the owning organization of its assets (%).',
+            NEW.organization_id, v_from_org;
+    END IF;
+
     -- Type-scoped cycle prevention (all four approved types are
     -- HIERARCHICAL_UP; the check applies to every relationship_type this
     -- table accepts, since compatibility restriction is deferred and no
@@ -227,7 +241,7 @@ $function$;
 
 DROP TRIGGER IF EXISTS trg_validate_asset_relationship ON metadata.asset_relationships;
 CREATE TRIGGER trg_validate_asset_relationship
-BEFORE INSERT OR UPDATE OF from_asset_id, to_asset_id, relationship_type, effective_from, effective_to
+BEFORE INSERT OR UPDATE OF organization_id, from_asset_id, to_asset_id, relationship_type, effective_from, effective_to
 ON metadata.asset_relationships
 FOR EACH ROW
 EXECUTE FUNCTION metadata.validate_asset_relationship();

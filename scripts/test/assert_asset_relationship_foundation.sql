@@ -23,6 +23,11 @@
 --     14. No LOCATED_IN relationship infrastructure is introduced.
 --     15. Many-to-many relationships are allowed where appropriate.
 --     16. Energy subsystem regression/safety checks pass.
+--     17. organization_id mismatched against the owning assets' actual
+--         organization is rejected on INSERT (tenant-isolation fix).
+--     18. UPDATE of organization_id to a different tenant is rejected.
+--     19. UPDATE of from_asset_id to a cross-tenant asset is rejected.
+--     20. UPDATE of to_asset_id to a cross-tenant asset is rejected.
 --
 --   All fixture data (organizations/sites/assets) is created inside this
 --   test's own transaction and rolled back at the end; nothing persists.
@@ -483,6 +488,142 @@ BEGIN
           AND dependent_ns.nspname IN ('telemetry', 'analytics')
     ) THEN
         RAISE EXCEPTION 'TEST FAILURE: an energy/telemetry/analytics object unexpectedly depends on the new relationship tables';
+    END IF;
+END;
+$$;
+
+
+-- ------------------------------------------------------------------
+-- 17. organization_id mismatched against the owning assets' actual
+--     organization is rejected on INSERT, even though from_asset_id
+--     and to_asset_id both belong to the same (other) organization as
+--     each other. Proves the redundant organization_id column cannot
+--     drift from the assets' real ownership. (Bearing PART_OF AHU,
+--     both org_1, but organization_id claimed as org_2.)
+-- ------------------------------------------------------------------
+DO $$
+DECLARE
+    v_raised BOOLEAN := FALSE;
+BEGIN
+    BEGIN
+        INSERT INTO metadata.asset_relationships (organization_id, from_asset_id, to_asset_id, relationship_type, effective_from)
+        VALUES ('d1000000-0000-0000-0000-000000000002', 'd6000000-0000-0000-0000-000000000004', 'd6000000-0000-0000-0000-000000000005', 'PART_OF', '2026-01-01T00:00:00Z');
+        RAISE EXCEPTION 'TEST FAILURE: a relationship with organization_id mismatched against its assets'' actual organization was accepted';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLERRM LIKE 'TEST FAILURE:%' THEN RAISE; END IF;
+            IF SQLERRM NOT LIKE '%does not match the owning organization%' THEN
+                RAISE EXCEPTION 'TEST FAILURE: expected the organization_id-mismatch trigger message, got: %', SQLERRM;
+            END IF;
+            v_raised := TRUE;
+    END;
+    IF NOT v_raised THEN
+        RAISE EXCEPTION 'TEST FAILURE: expected the organization_id mismatch to be rejected, none occurred';
+    END IF;
+END;
+$$;
+
+
+-- ------------------------------------------------------------------
+-- 18. UPDATE of organization_id to a different tenant is rejected.
+--     First establish a valid same-tenant relationship (Bearing
+--     PART_OF AHU, org_1), then attempt to reassign it to org_2.
+-- ------------------------------------------------------------------
+DO $$
+DECLARE
+    v_raised BOOLEAN := FALSE;
+BEGIN
+    INSERT INTO metadata.asset_relationships (organization_id, from_asset_id, to_asset_id, relationship_type, effective_from)
+    VALUES ('d1000000-0000-0000-0000-000000000001', 'd6000000-0000-0000-0000-000000000004', 'd6000000-0000-0000-0000-000000000005', 'PART_OF', '2026-01-01T00:00:00Z');
+
+    BEGIN
+        UPDATE metadata.asset_relationships
+        SET organization_id = 'd1000000-0000-0000-0000-000000000002'
+        WHERE from_asset_id = 'd6000000-0000-0000-0000-000000000004'
+          AND to_asset_id = 'd6000000-0000-0000-0000-000000000005'
+          AND relationship_type = 'PART_OF';
+        RAISE EXCEPTION 'TEST FAILURE: UPDATE of organization_id to a different tenant was accepted';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLERRM LIKE 'TEST FAILURE:%' THEN RAISE; END IF;
+            IF SQLERRM NOT LIKE '%does not match the owning organization%' THEN
+                RAISE EXCEPTION 'TEST FAILURE: expected the organization_id-mismatch trigger message on UPDATE, got: %', SQLERRM;
+            END IF;
+            v_raised := TRUE;
+    END;
+    IF NOT v_raised THEN
+        RAISE EXCEPTION 'TEST FAILURE: expected the cross-tenant organization_id UPDATE to be rejected, none occurred';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM metadata.asset_relationships
+        WHERE from_asset_id = 'd6000000-0000-0000-0000-000000000004'
+          AND to_asset_id = 'd6000000-0000-0000-0000-000000000005'
+          AND relationship_type = 'PART_OF'
+          AND organization_id = 'd1000000-0000-0000-0000-000000000001'
+    ) THEN
+        RAISE EXCEPTION 'TEST FAILURE: the row''s organization_id was mutated despite the rejected UPDATE';
+    END IF;
+END;
+$$;
+
+
+-- ------------------------------------------------------------------
+-- 19. UPDATE of from_asset_id to a cross-tenant asset is rejected.
+--     Reuses the Bearing PART_OF AHU row from test 18.
+-- ------------------------------------------------------------------
+DO $$
+DECLARE
+    v_raised BOOLEAN := FALSE;
+BEGIN
+    BEGIN
+        UPDATE metadata.asset_relationships
+        SET from_asset_id = 'd6000000-0000-0000-0000-000000000099'
+        WHERE from_asset_id = 'd6000000-0000-0000-0000-000000000004'
+          AND to_asset_id = 'd6000000-0000-0000-0000-000000000005'
+          AND relationship_type = 'PART_OF';
+        RAISE EXCEPTION 'TEST FAILURE: UPDATE of from_asset_id to a cross-tenant asset was accepted';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLERRM LIKE 'TEST FAILURE:%' THEN RAISE; END IF;
+            IF SQLERRM NOT LIKE '%same organization%' THEN
+                RAISE EXCEPTION 'TEST FAILURE: expected the tenant-safety trigger message on from_asset_id UPDATE, got: %', SQLERRM;
+            END IF;
+            v_raised := TRUE;
+    END;
+    IF NOT v_raised THEN
+        RAISE EXCEPTION 'TEST FAILURE: expected the cross-tenant from_asset_id UPDATE to be rejected, none occurred';
+    END IF;
+END;
+$$;
+
+
+-- ------------------------------------------------------------------
+-- 20. UPDATE of to_asset_id to a cross-tenant asset is rejected.
+--     Reuses the same Bearing PART_OF AHU row (still intact, since
+--     tests 18 and 19 were both rejected and rolled back).
+-- ------------------------------------------------------------------
+DO $$
+DECLARE
+    v_raised BOOLEAN := FALSE;
+BEGIN
+    BEGIN
+        UPDATE metadata.asset_relationships
+        SET to_asset_id = 'd6000000-0000-0000-0000-000000000099'
+        WHERE from_asset_id = 'd6000000-0000-0000-0000-000000000004'
+          AND to_asset_id = 'd6000000-0000-0000-0000-000000000005'
+          AND relationship_type = 'PART_OF';
+        RAISE EXCEPTION 'TEST FAILURE: UPDATE of to_asset_id to a cross-tenant asset was accepted';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLERRM LIKE 'TEST FAILURE:%' THEN RAISE; END IF;
+            IF SQLERRM NOT LIKE '%same organization%' THEN
+                RAISE EXCEPTION 'TEST FAILURE: expected the tenant-safety trigger message on to_asset_id UPDATE, got: %', SQLERRM;
+            END IF;
+            v_raised := TRUE;
+    END;
+    IF NOT v_raised THEN
+        RAISE EXCEPTION 'TEST FAILURE: expected the cross-tenant to_asset_id UPDATE to be rejected, none occurred';
     END IF;
 END;
 $$;
