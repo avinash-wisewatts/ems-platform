@@ -185,6 +185,10 @@ echo
 echo "[semantic-foundation-parameters] Running Phase 1 semantic foundation (migration 223) parameter/qualifier assertions..."
 "${SCRIPT_DIR}/assert_semantic_foundation_parameters.sh"
 
+echo
+echo "[asset-space-point-temporal-binding] Running Phase 2 Slice 2A (migration 224) asset_points/space_points temporal binding assertions..."
+"${SCRIPT_DIR}/assert_asset_space_point_temporal_binding.sh"
+
 echo "[14/14] Verifying migration ledger..."
 ledger="$(
     docker compose \
