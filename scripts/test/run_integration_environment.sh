@@ -181,6 +181,10 @@ echo
 echo "[airsense-environmental-sensor-compatibility] Running Air Sense / Environmental Sensor telemetry-profile compatibility (migration 219) assertions..."
 "${SCRIPT_DIR}/assert_airsense_environmental_sensor_compatibility.sh"
 
+echo
+echo "[semantic-foundation-parameters] Running Phase 1 semantic foundation (migration 223) parameter/qualifier assertions..."
+"${SCRIPT_DIR}/assert_semantic_foundation_parameters.sh"
+
 echo "[14/14] Verifying migration ledger..."
 ledger="$(
     docker compose \
