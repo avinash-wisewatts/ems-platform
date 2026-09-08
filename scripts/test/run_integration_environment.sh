@@ -189,6 +189,10 @@ echo
 echo "[asset-space-point-temporal-binding] Running Phase 2 Slice 2A (migration 224) asset_points/space_points temporal binding assertions..."
 "${SCRIPT_DIR}/assert_asset_space_point_temporal_binding.sh"
 
+echo
+echo "[asset-relationship-foundation] Running Phase 2 Slice 2B (migration 225) asset relationship-foundation assertions..."
+"${SCRIPT_DIR}/assert_asset_relationship_foundation.sh"
+
 echo "[14/14] Verifying migration ledger..."
 ledger="$(
     docker compose \
