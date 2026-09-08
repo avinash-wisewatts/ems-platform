@@ -51,6 +51,12 @@ BEGIN
         ('VOLTAGE_L12', 'VOLTAGE_LINE_LINE', 'L12'),
         ('ENERGY_IMPORT_TOTAL', 'ENERGY_IMPORT', 'TOTAL'),
         ('ENERGY_EXPORT_TOTAL', 'ENERGY_EXPORT', 'TOTAL'),
+        -- Regression guard for the migration-174 naming drift (ENERGY_-prefixed
+        -- source names no longer exist for these three parameters): confirms
+        -- the post-174 canonical names are what migration 223 actually maps.
+        ('REACTIVE_POWER_L1', 'REACTIVE_POWER', 'L1'),
+        ('APPARENT_POWER_L1', 'APPARENT_POWER', 'L1'),
+        ('APPARENT_ENERGY_L1', 'APPARENT_ENERGY', 'L1'),
         ('FREQUENCY', 'FREQUENCY', NULL),
         ('ENV_TEMPERATURE', 'TEMPERATURE', NULL),
         ('ENV_RELATIVE_HUMIDITY', 'HUMIDITY', NULL),
