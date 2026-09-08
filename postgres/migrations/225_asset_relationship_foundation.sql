@@ -178,10 +178,12 @@ BEGIN
     SELECT organization_id INTO v_from_org FROM metadata.assets WHERE id = NEW.from_asset_id;
     SELECT organization_id INTO v_to_org   FROM metadata.assets WHERE id = NEW.to_asset_id;
 
+    -- Both columns already carry REFERENCES metadata.assets(id). If either
+    -- asset does not exist, defer to that FK constraint (standard
+    -- foreign_key_violation / 23503) rather than raising a custom error here
+    -- -- this BEFORE trigger would otherwise pre-empt it.
     IF v_from_org IS NULL OR v_to_org IS NULL THEN
-        RAISE EXCEPTION
-            'Both from_asset_id (%) and to_asset_id (%) must reference an existing asset.',
-            NEW.from_asset_id, NEW.to_asset_id;
+        RETURN NEW;
     END IF;
 
     IF v_from_org IS DISTINCT FROM v_to_org THEN
