@@ -174,7 +174,14 @@ DECLARE
     v_from_org UUID;
     v_to_org   UUID;
     v_cycle_exists BOOLEAN;
+    v_new_range TSTZRANGE;
 BEGIN
+    -- NEW.effective_range is a GENERATED ALWAYS ... STORED column and is not
+    -- yet computed inside a BEFORE trigger (it reads as NULL here), so it is
+    -- recomputed from the raw input columns using the same expression as the
+    -- generated column, for use in the cycle-detection overlap check below.
+    v_new_range := tstzrange(NEW.effective_from, COALESCE(NEW.effective_to, 'infinity'), '[)');
+
     SELECT organization_id INTO v_from_org FROM metadata.assets WHERE id = NEW.from_asset_id;
     SELECT organization_id INTO v_to_org   FROM metadata.assets WHERE id = NEW.to_asset_id;
 
@@ -203,7 +210,7 @@ BEGIN
         FROM metadata.asset_relationships ar
         JOIN walk w ON ar.from_asset_id = w.asset_id
         WHERE ar.relationship_type = NEW.relationship_type
-          AND ar.effective_range && NEW.effective_range
+          AND ar.effective_range && v_new_range
     )
     SELECT EXISTS (SELECT 1 FROM walk WHERE asset_id = NEW.from_asset_id)
     INTO v_cycle_exists;
