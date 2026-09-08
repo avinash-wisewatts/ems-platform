@@ -328,8 +328,11 @@ BEGIN
     SELECT id INTO point_a FROM metadata.logical_points WHERE name = 'CURRENT_L1';
 
     BEGIN
-        INSERT INTO metadata.asset_points (asset_id, logical_point_id, effective_from)
-        VALUES ('00000000-0000-0000-0000-000000000000', point_a, '2026-02-01T00:00:00Z');
+        -- Closed, historical window well before any fixture binding above,
+        -- so the temporal exclusion constraint cannot fire first and mask
+        -- the foreign-key check this contract is actually testing.
+        INSERT INTO metadata.asset_points (asset_id, logical_point_id, effective_from, effective_to)
+        VALUES ('00000000-0000-0000-0000-000000000000', point_a, '2020-01-01T00:00:00Z', '2020-01-02T00:00:00Z');
         RAISE EXCEPTION 'TEST FAILURE: asset_points accepted a non-existent asset_id';
     EXCEPTION
         WHEN foreign_key_violation THEN v_raised := TRUE;
@@ -343,8 +346,9 @@ BEGIN
 
     v_raised := FALSE;
     BEGIN
-        INSERT INTO metadata.space_points (space_id, logical_point_id, effective_from)
-        VALUES ('00000000-0000-0000-0000-000000000000', point_a, '2026-02-01T00:00:00Z');
+        -- Same reasoning as the asset_points case above.
+        INSERT INTO metadata.space_points (space_id, logical_point_id, effective_from, effective_to)
+        VALUES ('00000000-0000-0000-0000-000000000000', point_a, '2020-01-01T00:00:00Z', '2020-01-02T00:00:00Z');
         RAISE EXCEPTION 'TEST FAILURE: space_points accepted a non-existent space_id';
     EXCEPTION
         WHEN foreign_key_violation THEN v_raised := TRUE;
