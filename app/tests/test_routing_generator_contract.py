@@ -33,7 +33,20 @@ TMPL = REPO / "scripts" / "codegen" / "templates" / "load_environment_measuremen
 ARTIFACT = REPO / "scripts" / "codegen" / "generated" / "load_environment_measurements_incremental.generated.sql"
 MIG_226 = REPO / "postgres" / "migrations" / "226_environment_space_binding.sql"
 MIG_227 = REPO / "postgres" / "migrations" / "227_parameter_routing_foundation.sql"
+MIG_228 = REPO / "postgres" / "migrations" / "228_device_specific_asset_space_point_binding.sql"
 MANIFEST = REPO / "postgres" / "restructure_manifest.csv"
+
+# The Phase 2 amendment (migration 228) adds exactly one predicate to the
+# generated Space-resolution sub-select; every other token of the body is still
+# the verbatim migration-226 body.
+_MIG_228_EXTRA_TOKENS = ["AND", "sp", ".", "device_id", "=", "ranked", ".", "device_id"]
+
+
+def _find_sublist(hay: list[str], needle: list[str]) -> int:
+    for i in range(len(hay) - len(needle) + 1):
+        if hay[i:i + len(needle)] == needle:
+            return i
+    return -1
 
 
 def _load_generator():
@@ -66,6 +79,15 @@ def _tokens(s: str) -> list[str]:
     return _TOK.findall(s)
 
 
+def _strip_line_comments(sql: str) -> str:
+    # Drop whole-line "--" comments so a comparison sees behaviour, not prose.
+    # (The generated body's only comments are full-line; the migration-228
+    # amendment adds several explanatory comment lines around its one predicate.)
+    return "\n".join(
+        ln for ln in sql.splitlines() if not ln.lstrip().startswith("--")
+    )
+
+
 # --------------------------------------------------------------------------- #
 # generator output / determinism
 # --------------------------------------------------------------------------- #
@@ -90,17 +112,26 @@ def test_render_ignores_dict_key_order():
 
 
 # --------------------------------------------------------------------------- #
-# Gate A -- repo-level parity with the deployed migration-226 body
+# Gate A -- repo-level parity with the deployed migration-226 body, plus the
+# single migration-228 (Phase 2 amendment) device predicate and nothing else
 # --------------------------------------------------------------------------- #
 
-def test_generated_body_token_stream_equals_migration_226():
+def test_generated_body_is_migration_226_plus_only_the_228_device_predicate():
     body226 = "\n".join(MIG_226.read_text(encoding="utf-8").splitlines()[110:413])
     gen_full = ARTIFACT.read_text(encoding="utf-8")
     b226, _ = _split_body_comment(body226)
     bgen, _ = _split_body_comment(gen_full)
-    assert _tokens(b226) == _tokens(bgen), (
-        "Gate A: the generated procedure body diverges from migration 226 by more "
-        "than whitespace"
+    tb226 = _tokens(_strip_line_comments(b226))
+    tbgen = _tokens(_strip_line_comments(bgen))
+
+    i = _find_sublist(tbgen, _MIG_228_EXTRA_TOKENS)
+    assert i != -1, (
+        "Gate A: the migration-228 device predicate (AND sp.device_id = "
+        "ranked.device_id) is missing from the generated body"
+    )
+    assert tbgen[:i] + tbgen[i + len(_MIG_228_EXTRA_TOKENS):] == tb226, (
+        "Gate A: the generated procedure body diverges from (migration-226 body "
+        "+ the single migration-228 device predicate) by more than whitespace"
     )
 
 
@@ -264,12 +295,30 @@ def test_manifest_registers_migration_227():
     assert r["target_path"] == "postgres/migrations/227_parameter_routing_foundation.sql"
 
 
-def test_migration_227_embedded_body_equals_generated_artifact():
-    mig = MIG_227.read_text(encoding="utf-8")
+def test_migration_228_embedded_body_equals_generated_artifact():
+    # Migration 228 (the Phase 2 amendment) now owns the deployed body: it
+    # CREATE OR REPLACEs the loader with the current generated artifact.
+    mig = MIG_228.read_text(encoding="utf-8")
     art = ARTIFACT.read_text(encoding="utf-8").rstrip("\n")
     start = mig.index("CREATE OR REPLACE PROCEDURE telemetry.load_environment_measurements_incremental")
     end = mig.index("read at runtime.';") + len("read at runtime.';")
     assert mig[start:end] == art
+
+
+def test_migration_227_embedded_body_is_the_228_body_minus_the_device_predicate():
+    # Migration 227's embedded body is the pre-amendment artifact: identical to
+    # the current generated artifact except for the migration-228 device
+    # predicate + its comment block.
+    mig = MIG_227.read_text(encoding="utf-8")
+    start = mig.index("CREATE OR REPLACE PROCEDURE telemetry.load_environment_measurements_incremental")
+    end = mig.index("read at runtime.';") + len("read at runtime.';")
+    body227, _ = _split_body_comment(mig[start:end])
+    bgen, _ = _split_body_comment(ARTIFACT.read_text(encoding="utf-8"))
+    t227 = _tokens(_strip_line_comments(body227))
+    tgen = _tokens(_strip_line_comments(bgen))
+    i = _find_sublist(tgen, _MIG_228_EXTRA_TOKENS)
+    assert i != -1
+    assert tgen[:i] + tgen[i + len(_MIG_228_EXTRA_TOKENS):] == t227
 
 
 def test_migration_227_defines_no_route_view_and_no_dynamic_sql():

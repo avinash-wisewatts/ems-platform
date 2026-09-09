@@ -446,6 +446,14 @@ Three concepts, never conflated, matching the brief's own framing exactly:
   Two ways to express "this point is about the sub-component" would be a real
   ambiguity risk the first time they disagreed; there is exactly one.
 
+  **Phase 2 amendment (migration 228):** because `metadata.logical_points` is a
+  deliberately *global* vocabulary that every device of one profile shares, the
+  binding key and its GiST exclusion above are on the device-specific **Point**
+  `(device_id, logical_point_id)` — already materialised, per device, by
+  `config.device_point_configuration` — scoped `(device_id, logical_point_id,
+  effective_range)`; `metadata.asset_devices` is unchanged and still records the
+  separate Device—Asset operational association.
+
 **Qualifier guardrail**: `qualifier` (on `logical_points`, e.g. `L1`/`L2`/
 `L3`/`TOTAL`/`X`/`Y`/`Z`) exists **only** for multiple simultaneous readings
 of one physical measurement act from one point-cluster describing one subject
@@ -922,6 +930,11 @@ Frontend: Grafana dashboards (existing) + any future purpose-built UI
   today. The proposed model fixes exactly this gap, without adding any new
   device- or point-identity concept — it only finishes wiring the
   subject-binding layer that was already designed and never connected.
+
+  **Phase 2 amendment (migration 228):** "point level, not device level" means a
+  specific *enabled point of* a device — `config.device_point_configuration
+  (device_id, logical_point_id)` — so `asset_points`/`space_points` carry
+  `device_id` as a component of that existing Point identity, not as a new concept.
 
 ---
 

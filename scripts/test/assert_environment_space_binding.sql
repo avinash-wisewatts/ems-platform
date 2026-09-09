@@ -175,6 +175,11 @@ BEGIN
     INSERT INTO metadata.devices (id,organization_id,gateway_id,name,external_id,profile_id)
     VALUES (dev_1,org_1,gw_1,'PH3 AirSense Test Device','PH3-AIRSENSE-DEV-1',prof_air);
 
+    -- Migration 228: config.device_point_configuration rows for this AirSense
+    -- device's points are created automatically when the device is inserted
+    -- (profile-mapping sync), so the (device_id, logical_point_id) binding FK
+    -- targets already exist -- no explicit insert here.
+
     -- Direct insert (not config.set_site_telemetry_capture_policy, which is
     -- prospective-only) so the backdated policy covers the historical fixture
     -- events. site_id is site_1, so it does not overlap the NULL-site platform
@@ -276,9 +281,9 @@ BEGIN
     DELETE FROM telemetry.environment_measurements WHERE device_id=dev_1;
     DELETE FROM telemetry.normalized_points WHERE device_id=dev_1;
 
-    INSERT INTO metadata.space_points (space_id,logical_point_id,effective_from,effective_to)
-    VALUES (space_1,lp_temp,e2 - INTERVAL '1 day', e3),
-           (space_2,lp_temp,e3, NULL);
+    INSERT INTO metadata.space_points (space_id,logical_point_id,device_id,organization_id,effective_from,effective_to)
+    VALUES (space_1,lp_temp,dev_1,org_1,e2 - INTERVAL '1 day', e3),
+           (space_2,lp_temp,dev_1,org_1,e3, NULL);
 
     -- event at e2 -> first binding -> space_1
     INSERT INTO telemetry.normalized_points
@@ -329,23 +334,23 @@ BEGIN
 
     -- ==================================================================
     -- SCENARIO D -- cross-tenant exclusion (contract 7).
-    -- Bind ENV_ILLUMINANCE_LUX to a space owned by org_2. dev_1 is org_1.
+    -- Migration 228: a space_points binding of an org_1 device to an
+    -- org_2 Space is now rejected at write time by
+    -- trg_validate_space_point_binding (stronger than the loader's
+    -- read-time org guard, which remains as defence in depth).
     -- ==================================================================
-    INSERT INTO metadata.space_points (space_id,logical_point_id,effective_from,effective_to)
-    VALUES (space_o2,lp_lux,e5 - INTERVAL '1 day', NULL);
-    INSERT INTO telemetry.normalized_points
-        (event_time,organization_id,site_id,device_id,logical_point_id,device_uid,logical_point,numeric_value,quality_code,platform_received_at)
-    VALUES (e5,org_1,site_1,dev_1,lp_lux,'PH3-AIRSENSE-DEV-1','ENV_ILLUMINANCE_LUX',280.0,'GOOD',e5);
-    UPDATE telemetry.pipeline_state SET last_received_at = e5 - INTERVAL '10 minutes'
-    WHERE pipeline_name='environment_measurements';
-    DROP TABLE IF EXISTS tmp_environment_candidates;
-    CALL telemetry.load_environment_measurements_incremental(INTERVAL '15 minutes', NULL);
-    SELECT space_id INTO v_space FROM telemetry.environment_measurements
-    WHERE device_id=dev_1 AND source_timestamp=e5;
-    IF v_space IS NOT NULL THEN
-        RAISE EXCEPTION 'TEST 7 FAILED: a cross-tenant space binding leaked (space_id=%)', v_space;
-    END IF;
-    RAISE NOTICE 'TEST 7 passed: cross-tenant space binding excluded by the org guard.';
+    BEGIN
+        INSERT INTO metadata.space_points (space_id,logical_point_id,device_id,organization_id,effective_from,effective_to)
+        VALUES (space_o2,lp_lux,dev_1,org_1,e5 - INTERVAL '1 day', NULL);
+        RAISE EXCEPTION 'TEST 7 FAILED: a cross-tenant space binding was accepted.';
+    EXCEPTION
+        WHEN OTHERS THEN
+            IF SQLERRM LIKE 'TEST 7 FAILED:%' THEN RAISE; END IF;
+            IF SQLERRM NOT LIKE '%crosses organizations%' THEN
+                RAISE EXCEPTION 'TEST 7 FAILED: expected a cross-organization rejection, got % (%)', SQLSTATE, SQLERRM;
+            END IF;
+    END;
+    RAISE NOTICE 'TEST 7 passed: cross-tenant space binding rejected by trg_validate_space_point_binding.';
 
     DELETE FROM telemetry.environment_measurements WHERE device_id=dev_1;
     DELETE FROM telemetry.normalized_points WHERE device_id=dev_1;
@@ -356,9 +361,9 @@ BEGIN
     -- ENV_TEMPERATURE -> space_1, ENV_RELATIVE_HUMIDITY -> space_2 (both
     -- org_1, both covering e6). count(DISTINCT space_id) = 2 -> NULL.
     -- ==================================================================
-    INSERT INTO metadata.space_points (space_id,logical_point_id,effective_from,effective_to)
-    VALUES (space_1,lp_temp,e6 - INTERVAL '1 day', NULL),
-           (space_2,lp_hum ,e6 - INTERVAL '1 day', NULL);
+    INSERT INTO metadata.space_points (space_id,logical_point_id,device_id,organization_id,effective_from,effective_to)
+    VALUES (space_1,lp_temp,dev_1,org_1,e6 - INTERVAL '1 day', NULL),
+           (space_2,lp_hum ,dev_1,org_1,e6 - INTERVAL '1 day', NULL);
     INSERT INTO telemetry.normalized_points
         (event_time,organization_id,site_id,device_id,logical_point_id,device_uid,logical_point,numeric_value,quality_code,platform_received_at)
     VALUES (e6,org_1,site_1,dev_1,lp_temp,'PH3-AIRSENSE-DEV-1','ENV_TEMPERATURE',20.5,'GOOD',e6),

@@ -1,3 +1,153 @@
+-- ============================================================================
+-- Rollback for migration 228 (Phase 2 amendment -- device-specific
+-- asset_points / space_points binding).
+--
+-- Controlled, dependency-checked reversal. NOT run as part of any migration.
+-- No CASCADE. Reverses only what migration 228 created:
+--   * trg_validate_asset_point_binding / trg_validate_space_point_binding
+--     and metadata.validate_point_binding()
+--   * ex_asset_points_no_overlap / ex_space_points_no_overlap restored to the
+--     migration-224 (logical_point_id, effective_range) scope
+--   * asset_points_device_point_fkey / space_points_device_point_fkey
+--   * asset_points_organization_id_fkey / space_points_organization_id_fkey
+--   * idx_asset_points_device_point / idx_space_points_device_point
+--   * the device_id and organization_id columns
+--   * the environment loader's device predicate (by restoring the verbatim
+--     migration-227 generated body)
+--
+-- Refuses to run if any binding row exists (a rollback would then have to
+-- drop the NOT NULL device_id / organization_id columns those rows depend
+-- on) or if anything outside migration 228 has come to depend on the
+-- columns.
+--
+-- Run manually, inside a single transaction:
+--   docker compose exec -T <db> psql -X -v ON_ERROR_STOP=1 -U ems_admin -d <db> \
+--     -f postgres/maintenance/228_device_specific_asset_space_point_binding_rollback.sql
+-- ============================================================================
+
+BEGIN;
+
+-- ----------------------------------------------------------------------------
+-- 0. Safety check: refuse if any binding row exists (dropping the NOT NULL
+--    columns those rows depend on would be a destructive data migration).
+-- ----------------------------------------------------------------------------
+DO $rollback_guard$
+DECLARE
+    v_ap SMALLINT;
+    v_sp SMALLINT;
+    v_cnt BIGINT;
+    v_tbl TEXT;
+BEGIN
+    SELECT attnum INTO v_ap FROM pg_attribute
+    WHERE attrelid = 'metadata.asset_points'::regclass AND attname = 'device_id' AND NOT attisdropped;
+    SELECT attnum INTO v_sp FROM pg_attribute
+    WHERE attrelid = 'metadata.space_points'::regclass AND attname = 'device_id' AND NOT attisdropped;
+
+    IF v_ap IS NULL AND v_sp IS NULL THEN
+        RAISE NOTICE 'Rollback 228: device_id column absent on both tables -- nothing to do.';
+        RETURN;
+    END IF;
+
+    FOR v_tbl IN SELECT unnest(ARRAY['asset_points','space_points'])
+    LOOP
+        EXECUTE format('SELECT count(*) FROM metadata.%I', v_tbl) INTO v_cnt;
+        IF v_cnt <> 0 THEN
+            RAISE EXCEPTION 'Rollback 228 aborted: metadata.% has % rows; drop the bindings before rolling back the columns.', v_tbl, v_cnt;
+        END IF;
+    END LOOP;
+END;
+$rollback_guard$;
+
+
+-- ----------------------------------------------------------------------------
+-- 1. Drop the tenant-safety triggers + function. (The triggers hold a normal
+--    pg_depend edge to the device_id / organization_id columns via their
+--    UPDATE OF column list, so they must go before the dependency check and
+--    the column drops.)
+-- ----------------------------------------------------------------------------
+DROP TRIGGER IF EXISTS trg_validate_asset_point_binding ON metadata.asset_points;
+DROP TRIGGER IF EXISTS trg_validate_space_point_binding ON metadata.space_points;
+DROP FUNCTION IF EXISTS metadata.validate_point_binding();
+
+
+-- ----------------------------------------------------------------------------
+-- 1b. Dependency check: after migration-228's own triggers are gone, nothing
+--     outside migration 228 may still depend on the new columns.
+-- ----------------------------------------------------------------------------
+DO $dep_guard$
+DECLARE
+    v_refs TEXT;
+BEGIN
+    SELECT string_agg(DISTINCT
+             format('%s.%s <- classid %s objid %s (%s)',
+                    d.refobjid::regclass, a.attname, d.classid::regclass, d.objid, d.deptype), ', ')
+      INTO v_refs
+    FROM pg_depend d
+    JOIN pg_attribute a
+      ON a.attrelid = d.refobjid AND a.attnum = d.refobjsubid
+    WHERE d.refobjid IN ('metadata.asset_points'::regclass, 'metadata.space_points'::regclass)
+      AND a.attname IN ('device_id','organization_id')
+      AND d.deptype NOT IN ('a','i')
+      AND NOT (
+            d.classid = 'pg_constraint'::regclass
+        AND d.objid IN (
+            SELECT oid FROM pg_constraint
+            WHERE conname IN ('asset_points_device_point_fkey','space_points_device_point_fkey',
+                              'asset_points_organization_id_fkey','space_points_organization_id_fkey',
+                              'ex_asset_points_no_overlap','ex_space_points_no_overlap')
+        )
+      )
+      AND NOT (
+            d.classid = 'pg_class'::regclass
+        AND d.objid IN ('metadata.idx_asset_points_device_point'::regclass,
+                        'metadata.idx_space_points_device_point'::regclass)
+      );
+    IF v_refs IS NOT NULL AND v_refs <> '' THEN
+        RAISE EXCEPTION 'Rollback 228 aborted: unexpected dependencies on the 228 columns: %', v_refs;
+    END IF;
+END;
+$dep_guard$;
+
+
+-- ----------------------------------------------------------------------------
+-- 2. Restore the migration-224 (logical_point_id, effective_range) exclusion
+--    scope; drop the migration-228 FKs and index.
+-- ----------------------------------------------------------------------------
+ALTER TABLE metadata.asset_points DROP CONSTRAINT IF EXISTS ex_asset_points_no_overlap;
+ALTER TABLE metadata.space_points DROP CONSTRAINT IF EXISTS ex_space_points_no_overlap;
+
+ALTER TABLE metadata.asset_points DROP CONSTRAINT IF EXISTS asset_points_device_point_fkey;
+ALTER TABLE metadata.space_points DROP CONSTRAINT IF EXISTS space_points_device_point_fkey;
+ALTER TABLE metadata.asset_points DROP CONSTRAINT IF EXISTS asset_points_organization_id_fkey;
+ALTER TABLE metadata.space_points DROP CONSTRAINT IF EXISTS space_points_organization_id_fkey;
+
+DROP INDEX IF EXISTS metadata.idx_asset_points_device_point;
+DROP INDEX IF EXISTS metadata.idx_space_points_device_point;
+
+ALTER TABLE metadata.asset_points
+    ADD CONSTRAINT ex_asset_points_no_overlap
+    EXCLUDE USING gist (logical_point_id WITH =, effective_range WITH &&);
+ALTER TABLE metadata.space_points
+    ADD CONSTRAINT ex_space_points_no_overlap
+    EXCLUDE USING gist (logical_point_id WITH =, effective_range WITH &&);
+
+
+-- ----------------------------------------------------------------------------
+-- 3. Drop the migration-228 columns.
+-- ----------------------------------------------------------------------------
+ALTER TABLE metadata.asset_points DROP COLUMN IF EXISTS device_id;
+ALTER TABLE metadata.asset_points DROP COLUMN IF EXISTS organization_id;
+ALTER TABLE metadata.space_points DROP COLUMN IF EXISTS device_id;
+ALTER TABLE metadata.space_points DROP COLUMN IF EXISTS organization_id;
+
+
+-- ----------------------------------------------------------------------------
+-- 4. Restore the VERBATIM migration-227 environment loader body (no
+--    sp.device_id predicate). Reproduced from
+--    scripts/codegen/generated/load_environment_measurements_incremental.generated.sql
+--    at origin/staging tip 4ce0b91 (pre-migration-228).
+-- ----------------------------------------------------------------------------
+
 CREATE OR REPLACE PROCEDURE telemetry.load_environment_measurements_incremental(IN p_overlap interval DEFAULT '00:15:00'::interval, IN p_max_window interval DEFAULT NULL)
  LANGUAGE plpgsql
 AS $procedure$
@@ -224,14 +374,6 @@ GROUP BY np.event_time, np.organization_id, np.site_id, np.gateway_id, np.device
                )
                  AND sp.effective_range @> COALESCE(ranked.source_timestamp, ranked.received_at)
                  AND sps.organization_id = ranked.organization_id
-                 -- Migration 228: scope Space resolution to the Point instance of
-                 -- THIS device -- (device_id, logical_point_id) is the
-                 -- config.device_point_configuration PK. metadata.logical_points
-                 -- is a global vocabulary, so a fleet of identical devices shares
-                 -- one logical_point_id; without this predicate every same-org
-                 -- device would resolve to a single Space. asset_devices is
-                 -- unrelated / unchanged.
-                 AND sp.device_id = ranked.device_id
                HAVING count(DISTINCT sp.space_id) = 1
            ) AS space_id,
            COALESCE(ranked.capture_interval_seconds,ranked.measurement_interval_seconds) AS measurement_interval_seconds,
@@ -370,3 +512,49 @@ COMMENT ON PROCEDURE telemetry.load_environment_measurements_incremental(interva
 'Migration 207: p_max_window (default NULL) optionally caps the forward processing boundary to previous_checkpoint + p_max_window instead of always advancing to max(telemetry.normalized_points.platform_received_at). NULL preserves the exact prior behaviour. The scheduled wrapper telemetry.run_environment_routing_job passes a bounded value (default 2 hours, config.max_window-overridable) so an unattended multi-hour backlog self-drains. No intermediate COMMIT is introduced. Mirrors migration 205 / telemetry.load_energy_measurements_incremental(). '
 'Migration 226: additionally resolves telemetry.environment_measurements.space_id at routing time from metadata.space_points (point-in-time via effective_range, restricted to the row''s organization), writing NULL when there is no effective binding or when applicable bindings are ambiguous. All bounded-catch-up / watermark / overlap / correction-deadline / idempotency / advisory-lock behaviour is unchanged; quality_code is still written NULL. '
 'Phase 4 (migration 227): this body is emitted by the offline generator scripts/codegen/generate_routing_procedure.py from config.parameter_routing (declarative spec scripts/codegen/routing/environment_measurements.routing.json), not hand-typed. It is behaviourally identical to the migration-226 body -- the same 12 routed logical points map to the same 12 destination columns with the same casts, the same legacy BATTERY_VOLTAGE compatibility alias feeds battery_voltage_v, and Space resolution, the watermark, bounded catch-up and the EXCEPTION contract are unchanged; only list/line formatting differs. No config.parameter_routing row is read at runtime.';
+
+
+-- ----------------------------------------------------------------------------
+-- 5. Postconditions.
+-- ----------------------------------------------------------------------------
+DO $rollback_post$
+DECLARE
+    v_env_body TEXT;
+    v_tbl TEXT;
+    v_def TEXT;
+BEGIN
+    FOR v_tbl IN SELECT unnest(ARRAY['asset_points','space_points'])
+    LOOP
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema='metadata' AND table_name=v_tbl AND column_name IN ('device_id','organization_id')
+        ) THEN
+            RAISE EXCEPTION 'Rollback 228 postcondition failed: metadata.% still has device_id/organization_id.', v_tbl;
+        END IF;
+
+        SELECT pg_get_constraintdef(c.oid) INTO v_def
+        FROM pg_constraint c
+        JOIN pg_class rel ON rel.oid=c.conrelid
+        JOIN pg_namespace n ON n.oid=rel.relnamespace
+        WHERE c.conname='ex_'||v_tbl||'_no_overlap' AND n.nspname='metadata' AND rel.relname=v_tbl;
+        IF v_def IS NULL OR position('device_id' IN v_def) <> 0 THEN
+            RAISE EXCEPTION 'Rollback 228 postcondition failed: ex_%_no_overlap not restored to the logical_point_id-only scope: %', v_tbl, v_def;
+        END IF;
+    END LOOP;
+
+    IF EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+               WHERE n.nspname='metadata' AND p.proname='validate_point_binding') THEN
+        RAISE EXCEPTION 'Rollback 228 postcondition failed: metadata.validate_point_binding() still exists.';
+    END IF;
+
+    v_env_body := pg_get_functiondef('telemetry.load_environment_measurements_incremental(interval,interval)'::regprocedure);
+    IF position('sp.device_id = ranked.device_id' IN v_env_body) <> 0 THEN
+        RAISE EXCEPTION 'Rollback 228 postcondition failed: the environment loader still scopes Space resolution by device.';
+    END IF;
+    IF position('metadata.space_points' IN v_env_body) = 0 THEN
+        RAISE EXCEPTION 'Rollback 228 postcondition failed: the restored environment loader lost its Space sub-select.';
+    END IF;
+END;
+$rollback_post$;
+
+COMMIT;
