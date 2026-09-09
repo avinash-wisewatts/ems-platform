@@ -95,6 +95,9 @@ BEGIN
         RAISE EXCEPTION 'p_overlap must be zero or positive';
     END IF;
 
+    -- Migration 207: reject a non-positive explicit bound. NULL (the
+    -- default, and what a direct/manual invocation passes) means "no
+    -- bound" -- byte-for-byte the pre-207 behaviour.
     IF p_max_window IS NOT NULL AND p_max_window <= INTERVAL '0 seconds' THEN
         RAISE EXCEPTION 'p_max_window must be positive when supplied; received %', p_max_window;
     END IF;
@@ -128,10 +131,22 @@ BEGIN
         RETURN;
     END IF;
 
+    -- Migration 207: cap the forward processing boundary to the previous
+    -- checkpoint plus p_max_window when a caller supplies one and a
+    -- previous checkpoint already exists. NULL (the default) leaves
+    -- v_window_end exactly as computed above -- byte-for-byte the
+    -- pre-207 behaviour. See telemetry.load_energy_measurements_incremental
+    -- for the full rationale; this is the identical bound applied to the
+    -- environment routing loader. Advisory lock, checkpoint keying,
+    -- overlap semantics, the routing/calculation SQL below, and the
+    -- EXCEPTION-rolls-back-the-watermark contract are all unchanged.
     IF p_max_window IS NOT NULL AND v_previous_checkpoint IS NOT NULL THEN
         v_window_end := LEAST(v_window_end, v_previous_checkpoint + p_max_window);
     END IF;
 
+    -- Route from newly received normalized rows. Late source timestamps are
+    -- discovered by their new platform receipt timestamp, so the historical
+    -- correction tolerance does not need to be rescanned every minute.
     p_overlap := LEAST(p_overlap, INTERVAL '1 minute');
 
     v_window_start := CASE WHEN v_previous_checkpoint IS NULL
