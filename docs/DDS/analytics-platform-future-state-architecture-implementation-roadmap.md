@@ -35,12 +35,15 @@ authorizes work to begin.
 3. **Energy stability is non-negotiable.** Any phase touching energy routing
    or semantics requires a numerical-parity and performance gate before any
    cutover — see Phase 4's energy sub-phase and Phase 10/17.
-4. **One real domain proves the model before automation is built.** Phase 3
-   hand-wires one real domain (motor condition monitoring, via the
-   already-schema-complete `asset_health` table) before Phase 4 builds any
-   routing automation, and Phase 5 proves calculations by hand before Phase 6
-   persists them — automation is built *from* a proven manual path, never
-   speculatively ahead of one.
+4. **One qualifying real domain proves the model before automation is built.**
+   Phase 3 proves the reusable domain-measurement foundation using the first
+   qualifying real domain, by hand (not the future codegen mechanism), before
+   Phase 4 builds any routing automation, and Phase 5 proves calculations by
+   hand before Phase 6 persists them — automation is built *from* a proven
+   manual path, never speculatively ahead of one. AirSense / environmental
+   telemetry is the current qualifying real domain; motor / asset-health
+   remains a future qualifying domain/deployment rather than a prerequisite
+   for the Phase 3 architectural proof.
 5. **No premature tooling.** The routing code generator (Phase 4), the
    derived-parameter persisted tier (Phase 6), and the frontend application
    (Phase 8+) are each deliberately sequenced after their underlying model
@@ -177,9 +180,20 @@ graph, still without touching ingestion.
 
 ## Phase 3 — Domain Measurement Foundation
 
-**Objective**: wire the two dormant domain tables and stand up the generic
-landing table, using hand-written routing (not the future codegen
-mechanism) — this is the roadmap's "one real domain" acceptance test.
+> **Scope clarification (wording only, not a change to architecture or
+> sequencing):** Phase 3 proves the reusable domain-measurement foundation
+> using the first qualifying real domain. AirSense / environmental telemetry
+> is the current qualifying real domain. Motor / asset-health via
+> `telemetry.asset_health` remains a future qualifying domain/deployment
+> rather than a prerequisite for the Phase 3 architectural proof; the
+> `asset_health` / `generic_point_measurements` / `water_measurements` items
+> below are that later, still-additive scope.
+
+**Objective**: take the first qualifying real domain end-to-end using
+hand-written routing (not the future codegen mechanism), and — as later,
+additive scope — wire the remaining dormant domain tables and stand up the
+generic landing table. This is the roadmap's "one qualifying real domain"
+acceptance test.
 
 - **Backend**: `telemetry.environment_measurements.space_id` (nullable,
   populated going forward at routing time; historical backfill only where
@@ -222,9 +236,9 @@ mechanism) — this is the roadmap's "one real domain" acceptance test.
   the 2026-08-30 incident, never auto-enabled by the migration itself.
 - **Rollback**: `alter_job(..., scheduled=>false)`; tables have no
   downstream consumer to break.
-- **Exit criteria**: one real device's telemetry flows end-to-end into
-  `asset_health` with correct quality classification, verified live, to the
-  same rigor the platform manual holds energy to.
+- **Exit criteria**: one real device's telemetry flows end-to-end into the
+  qualifying real domain's measurement table, verified live, to the same
+  rigor the platform manual holds energy to.
 
 ---
 
@@ -723,7 +737,7 @@ Phase 1        Phase 2        ← can run in parallel (disjoint tables);
    │              │              end-to-end identity-chain acceptance test
    └──────┬───────┘
           ▼
-      Phase 3 (domain measurement — the "one real domain" acceptance test)
+      Phase 3 (domain measurement — the "one qualifying real domain" acceptance test)
           │
           ▼
       Phase 4 (routing architecture, incl. the separately-gated energy sub-phase)
@@ -988,7 +1002,7 @@ insight schema.
 ### 2. Implementation sequence
 
 Phase 0 (inventory) → Phase 1 + Phase 2 (semantic + subject/relationship
-foundations, parallel) → Phase 3 (domain measurement, one real domain proven
+foundations, parallel) → Phase 3 (domain measurement, one qualifying real domain proven
 by hand) → Phase 4 (routing architecture, energy migration separately gated)
 → Phase 5 (calculations, view-based) → Phase 6 (persisted derived analytics)
 → Phase 7 (API boundary) → Phase 8 (frontend foundation) → Phase 9 (core
@@ -1001,11 +1015,11 @@ Grafana ops/engineering retention).
 
 ### 3. Critical dependencies (the handful that can actually block the program)
 
-- **Phase 3's one-real-domain proof** — every later automation phase (4, 5,
-  6) is sequenced *after* it specifically so nothing is built ahead of a
-  proven manual example; if Phase 3 stalls (e.g., no real motor/condition
-  deployment exists to test against), the whole automation track stalls
-  with it.
+- **Phase 3's one-qualifying-real-domain proof** — every later automation
+  phase (4, 5, 6) is sequenced *after* it specifically so nothing is built
+  ahead of a proven manual example; if Phase 3 stalls (e.g., no qualifying
+  real domain deployment exists to test against), the whole automation track
+  stalls with it.
 - **Phase 4's energy parity gate** — the one point in this roadmap where a
   mistake could regress the platform's most mature, customer-facing
   subsystem; it is the single highest-scrutiny gate in the program.
