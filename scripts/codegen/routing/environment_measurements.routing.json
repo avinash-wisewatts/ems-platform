@@ -1,0 +1,59 @@
+{
+  "$comment": [
+    "Phase 4 (roadmap 'Phase 4 -- Routing Architecture') declarative routing spec.",
+    "Single source of truth for:",
+    "  (1) the config.parameter_routing seed rows in",
+    "      postgres/migrations/227_parameter_routing_foundation.sql (the 12 'pivot' entries), and",
+    "  (2) the deterministic offline generator scripts/codegen/generate_routing_procedure.py,",
+    "      which renders telemetry.load_environment_measurements_incremental from this file",
+    "      plus scripts/codegen/templates/load_environment_measurements_incremental.sql.tmpl.",
+    "This file contains NO executable SQL. It is data only. The generator emits a fixed",
+    "template with a small number of column/name lists filled in -- never runtime-dynamic SQL.",
+    "Legacy compatibility aliases (see prefilter_logical_points / payload_columns[].legacy_source_aliases)",
+    "are pre-rename source names the deployed loader still accepts defensively. They are NOT",
+    "semantic identities: they have no metadata.logical_points row and no config.parameters row,",
+    "and they are NOT config.parameter_routing rows."
+  ],
+
+  "profile_code": "ENVIRONMENT_SENSOR_AIRSENSE_V1",
+  "procedure": "telemetry.load_environment_measurements_incremental",
+  "procedure_signature": "telemetry.load_environment_measurements_incremental(interval, interval)",
+  "destination_table": "telemetry.environment_measurements",
+  "pipeline_name": "environment_measurements",
+
+  "prefilter_logical_points": [
+    "ENV_TEMPERATURE",
+    "ENV_RELATIVE_HUMIDITY",
+    "ENV_ILLUMINANCE_LUX",
+    "OCCUPANCY_ACTIVITY",
+    "OCCUPANCY_SECONDS_SINCE_LAST_PIR_EVENT",
+    "PULSE_INPUT_1_RAW",
+    "EXTERNAL_SENSOR_INPUT_1_RAW",
+    "EXTERNAL_SENSOR_INPUT_2_RAW",
+    "EXTERNAL_SENSOR_INPUT_3_RAW",
+    "EXTERNAL_SENSOR_INPUT_4_RAW",
+    "DEVICE_BATTERY_VOLTAGE",
+    "BATTERY_VOLTAGE",
+    "DEVICE_STATUS_CODE"
+  ],
+
+  "payload_columns": [
+    { "destination_column": "temperature_c",                "kind": "pivot", "logical_point": "ENV_TEMPERATURE",                        "parameter_code": "TEMPERATURE",                     "value_transform": "DOUBLE_PRECISION" },
+    { "destination_column": "humidity_percent",             "kind": "pivot", "logical_point": "ENV_RELATIVE_HUMIDITY",                  "parameter_code": "HUMIDITY",                        "value_transform": "DOUBLE_PRECISION" },
+    { "destination_column": "pressure_hpa",                 "kind": "null",  "null_type": "DOUBLE PRECISION" },
+    { "destination_column": "co2_ppm",                      "kind": "null",  "null_type": "DOUBLE PRECISION" },
+    { "destination_column": "voc_ppb",                      "kind": "null",  "null_type": "DOUBLE PRECISION" },
+    { "destination_column": "battery_voltage_v",            "kind": "pivot", "logical_point": "DEVICE_BATTERY_VOLTAGE",                 "parameter_code": "BATTERY_VOLTAGE",                 "value_transform": "DOUBLE_PRECISION", "legacy_source_aliases": ["BATTERY_VOLTAGE"] },
+    { "destination_column": "signal_strength_dbm",          "kind": "null",  "null_type": "DOUBLE PRECISION" },
+    { "destination_column": "illuminance_lux",              "kind": "pivot", "logical_point": "ENV_ILLUMINANCE_LUX",                    "parameter_code": "ILLUMINANCE",                     "value_transform": "DOUBLE_PRECISION" },
+    { "destination_column": "occupancy_activity",           "kind": "pivot", "logical_point": "OCCUPANCY_ACTIVITY",                     "parameter_code": "OCCUPANCY_ACTIVITY",             "value_transform": "DOUBLE_PRECISION" },
+    { "destination_column": "raw_archive_id",               "kind": "null",  "null_type": "BIGINT" },
+    { "destination_column": "seconds_since_last_pir_event", "kind": "pivot", "logical_point": "OCCUPANCY_SECONDS_SINCE_LAST_PIR_EVENT", "parameter_code": "OCCUPANCY_TIME_SINCE_LAST_EVENT", "value_transform": "ROUND_INTEGER" },
+    { "destination_column": "pulse_input_1_raw",            "kind": "pivot", "logical_point": "PULSE_INPUT_1_RAW",                      "parameter_code": null,                             "value_transform": "DOUBLE_PRECISION" },
+    { "destination_column": "external_input_1_raw",         "kind": "pivot", "logical_point": "EXTERNAL_SENSOR_INPUT_1_RAW",            "parameter_code": null,                             "value_transform": "DOUBLE_PRECISION" },
+    { "destination_column": "external_input_2_raw",         "kind": "pivot", "logical_point": "EXTERNAL_SENSOR_INPUT_2_RAW",            "parameter_code": null,                             "value_transform": "DOUBLE_PRECISION" },
+    { "destination_column": "external_input_3_raw",         "kind": "pivot", "logical_point": "EXTERNAL_SENSOR_INPUT_3_RAW",            "parameter_code": null,                             "value_transform": "DOUBLE_PRECISION" },
+    { "destination_column": "external_input_4_raw",         "kind": "pivot", "logical_point": "EXTERNAL_SENSOR_INPUT_4_RAW",            "parameter_code": null,                             "value_transform": "DOUBLE_PRECISION" },
+    { "destination_column": "device_status_code",           "kind": "pivot", "logical_point": "DEVICE_STATUS_CODE",                     "parameter_code": null,                             "value_transform": "ROUND_INTEGER" }
+  ]
+}

@@ -197,6 +197,10 @@ echo
 echo "[environment-space-binding] Running Phase 3 (migration 226) environment_measurements.space_id + Space-resolution assertions..."
 "${SCRIPT_DIR}/assert_environment_space_binding.sh"
 
+echo
+echo "[parameter-routing-foundation] Running Phase 4 (migration 227) declarative parameter routing foundation assertions..."
+"${SCRIPT_DIR}/assert_parameter_routing_foundation.sh"
+
 echo "[14/14] Verifying migration ledger..."
 ledger="$(
     docker compose \
