@@ -172,6 +172,14 @@ GROUP BY np.event_time, np.organization_id, np.site_id, np.gateway_id, np.device
                )
                  AND sp.effective_range @> COALESCE(ranked.source_timestamp, ranked.received_at)
                  AND sps.organization_id = ranked.organization_id
+                 -- Migration 228: scope Space resolution to the Point instance of
+                 -- THIS device -- (device_id, logical_point_id) is the
+                 -- config.device_point_configuration PK. metadata.logical_points
+                 -- is a global vocabulary, so a fleet of identical devices shares
+                 -- one logical_point_id; without this predicate every same-org
+                 -- device would resolve to a single Space. asset_devices is
+                 -- unrelated / unchanged.
+                 AND sp.device_id = ranked.device_id
                HAVING count(DISTINCT sp.space_id) = 1
            ) AS space_id,
            COALESCE(ranked.capture_interval_seconds,ranked.measurement_interval_seconds) AS measurement_interval_seconds,

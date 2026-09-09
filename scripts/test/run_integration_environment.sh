@@ -201,6 +201,10 @@ echo
 echo "[parameter-routing-foundation] Running Phase 4 (migration 227) declarative parameter routing foundation assertions..."
 "${SCRIPT_DIR}/assert_parameter_routing_foundation.sh"
 
+echo
+echo "[device-specific-point-binding] Running Phase 2 amendment (migration 228) device-specific asset_points/space_points binding assertions..."
+bash "${SCRIPT_DIR}/assert_device_specific_point_binding.sh"
+
 echo "[14/14] Verifying migration ledger..."
 ledger="$(
     docker compose \
