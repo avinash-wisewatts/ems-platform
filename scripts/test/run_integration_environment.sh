@@ -193,6 +193,10 @@ echo
 echo "[asset-relationship-foundation] Running Phase 2 Slice 2B (migration 225) asset relationship-foundation assertions..."
 "${SCRIPT_DIR}/assert_asset_relationship_foundation.sh"
 
+echo
+echo "[environment-space-binding] Running Phase 3 (migration 226) environment_measurements.space_id + Space-resolution assertions..."
+"${SCRIPT_DIR}/assert_environment_space_binding.sh"
+
 echo "[14/14] Verifying migration ledger..."
 ledger="$(
     docker compose \
