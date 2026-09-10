@@ -190,8 +190,12 @@ $t$;
 
 -- ======================================================================
 -- D. the 7 calculation objects are UNCHANGED (still never write pipeline_state);
---    the complete set of last_received_at writers is exactly the 7 forward
---    wrappers + 5 telemetry loaders (12) -- reconciliation added none.
+--    the complete set of last_received_at writers is exactly the 8 forward
+--    wrappers + 5 telemetry loaders (13) -- reconciliation added none.
+--    (Migration 230 / Phase 6 added telemetry.run_derived_space_dew_point_1min_job,
+--    a watermark-driven FORWARD wrapper on the migration-211
+--    run_environment_daily_job pattern; advancing last_received_at is its
+--    designed behaviour. The migration-213 reconcile procs still write none.)
 -- ======================================================================
 DO $t$
 DECLARE v_writers text[]; v_expected text[];
@@ -208,13 +212,14 @@ BEGIN
         'analytics.run_energy_consumption_daily_job','analytics.run_energy_consumption_hourly_job',
         'telemetry.capture_raw_message_failures_incremental','telemetry.load_device_raw_receipt_state_incremental',
         'telemetry.load_energy_measurements_incremental','telemetry.load_environment_measurements_incremental',
-        'telemetry.load_normalized_points_incremental','telemetry.run_environment_daily_job']) x;
+        'telemetry.load_normalized_points_incremental','telemetry.run_derived_space_dew_point_1min_job',
+        'telemetry.run_environment_daily_job']) x;
     IF v_writers IS DISTINCT FROM v_expected THEN
         RAISE EXCEPTION 'D FAILED: the last_received_at writer set changed: %', v_writers;
     END IF;
 END;
 $t$;
-\echo 'PASS: D  last_received_at is written by exactly the 7 forward wrappers + 5 loaders -- reconciliation added no writer'
+\echo 'PASS: D  last_received_at is written by exactly the 8 forward wrappers + 5 loaders -- reconciliation added no writer'
 
 -- ======================================================================
 -- E. the 7 reconcile jobs: registered once, correct schedule/runtime/retry/

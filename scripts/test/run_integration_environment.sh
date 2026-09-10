@@ -209,6 +209,10 @@ echo
 echo "[derived-calculation-foundation] Running Phase 5 (migration 229) SPACE_DEW_POINT SELF-slice assertions..."
 bash "${SCRIPT_DIR}/assert_derived_calculation_foundation.sh"
 
+echo
+echo "[persisted-space-dew-point] Running Phase 6 (migration 230) persisted SPACE_DEW_POINT tier assertions..."
+bash "${SCRIPT_DIR}/assert_persisted_space_dew_point.sh"
+
 echo "[14/14] Verifying migration ledger..."
 ledger="$(
     docker compose \
