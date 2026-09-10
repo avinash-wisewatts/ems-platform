@@ -1,0 +1,8 @@
+# The web frontend is built and run on Linux (CI, container). Keep LF in the
+# repo and in every checkout regardless of the host's core.autocrlf setting.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff binary
+*.woff2 binary

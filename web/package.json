@@ -1,0 +1,44 @@
+{
+  "name": "ems-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "WiseWatts EMS web application shell (Phase 8 frontend foundation). Consumes the Phase 7 /api/v1 semantic API only.",
+  "engines": {
+    "node": ">=20 <25"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "e2e": "playwright test"
+  },
+  "dependencies": {
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-router-dom": "6.30.1",
+    "recharts": "2.15.4"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1",
+    "@testing-library/jest-dom": "6.6.4",
+    "@testing-library/react": "16.1.0",
+    "@testing-library/user-event": "14.5.2",
+    "@types/react": "18.3.18",
+    "@types/react-dom": "18.3.5",
+    "@typescript-eslint/eslint-plugin": "8.18.2",
+    "@typescript-eslint/parser": "8.18.2",
+    "@vitejs/plugin-react": "5.0.4",
+    "eslint": "8.57.1",
+    "eslint-plugin-react-hooks": "4.6.2",
+    "eslint-plugin-react-refresh": "0.4.16",
+    "jsdom": "25.0.1",
+    "typescript": "5.7.2",
+    "vite": "7.3.6",
+    "vitest": "3.2.4"
+  }
+}
