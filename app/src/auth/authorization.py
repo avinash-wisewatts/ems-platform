@@ -89,6 +89,13 @@ def required_permission_for_request(
 
     normalized_method = method.upper()
 
+    # The /api/v1 JSON surface is a single enumerated set of GET endpoints.
+    # Any authenticated portal identity may read it (DASHBOARD_VIEW); an
+    # undefined method on a defined path then resolves to a clean 405 from
+    # the framework rather than a deny-by-default 403.
+    if path.startswith("/api/v1/"):
+        return PortalPermission.DASHBOARD_VIEW
+
     if normalized_method == "POST" and path.rstrip("/") == "/logout":
         return PortalPermission.DASHBOARD_VIEW
 

@@ -213,6 +213,10 @@ echo
 echo "[persisted-space-dew-point] Running Phase 6 (migration 230) persisted SPACE_DEW_POINT tier assertions..."
 bash "${SCRIPT_DIR}/assert_persisted_space_dew_point.sh"
 
+echo
+echo "[analytics-api-query-boundary] Running Phase 7 (migration 231) /api/v1 query-boundary assertions..."
+bash "${SCRIPT_DIR}/assert_analytics_api_query_boundary.sh"
+
 echo "[14/14] Verifying migration ledger..."
 ledger="$(
     docker compose \

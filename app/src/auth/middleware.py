@@ -1,3 +1,4 @@
+import json
 from urllib.parse import quote
 
 from starlette.datastructures import MutableHeaders
@@ -30,6 +31,13 @@ class PortalAuthenticationMiddleware:
         "/static/",
     )
 
+    # Paths under the machine-facing JSON API. Still fully authenticated and
+    # authorized here, but a rejection is a JSON status response, not a
+    # browser redirect to the HTML login / forbidden page.
+    JSON_API_PATH_PREFIXES = (
+        "/api/v1/",
+    )
+
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
 
@@ -43,6 +51,47 @@ class PortalAuthenticationMiddleware:
                 path.startswith(prefix)
                 for prefix in cls.PUBLIC_PATH_PREFIXES
             )
+        )
+
+    @classmethod
+    def is_json_api_path(cls, path: str) -> bool:
+        """Return True for the machine-facing JSON API surface."""
+
+        return any(
+            path.startswith(prefix)
+            for prefix in cls.JSON_API_PATH_PREFIXES
+        )
+
+    async def json_error(
+        self,
+        send: Send,
+        *,
+        status_code: int,
+        code: str,
+        detail: str,
+    ) -> None:
+        """Send a minimal no-store JSON error response."""
+
+        body = json.dumps({"error": code, "detail": detail}).encode("utf-8")
+
+        headers = MutableHeaders()
+        headers["content-type"] = "application/json"
+        headers["cache-control"] = "no-store"
+        headers["content-length"] = str(len(body))
+
+        await send(
+            {
+                "type": "http.response.start",
+                "status": status_code,
+                "headers": headers.raw,
+            }
+        )
+
+        await send(
+            {
+                "type": "http.response.body",
+                "body": body,
+            }
         )
 
     async def redirect(
@@ -100,6 +149,15 @@ class PortalAuthenticationMiddleware:
             )
 
         if identity is None:
+            if self.is_json_api_path(path):
+                await self.json_error(
+                    send,
+                    status_code=401,
+                    code="unauthenticated",
+                    detail="Authentication is required.",
+                )
+                return
+
             query_string = scope.get(
                 "query_string",
                 b"",
@@ -137,6 +195,15 @@ class PortalAuthenticationMiddleware:
                 required_permission,
             )
         ):
+            if self.is_json_api_path(path):
+                await self.json_error(
+                    send,
+                    status_code=403,
+                    code="forbidden",
+                    detail="You do not have permission to access this resource.",
+                )
+                return
+
             await self.redirect(
                 send,
                 location="/forbidden",

@@ -41,6 +41,7 @@ from src.context.service import (
     set_active_site,
 )
 from src.routers.context import router as context_router
+from src.routers.analytics_api import router as analytics_api_router
 from src.auth.security import hash_portal_password
 from src.auth.service import authenticate_portal_user
 from src.admin_navigation import administration_navigation
@@ -387,6 +388,7 @@ app.mount(
 )
 
 app.include_router(context_router)
+app.include_router(analytics_api_router)
 
 
 @app.exception_handler(AdministrationContextError)
