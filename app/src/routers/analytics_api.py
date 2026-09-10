@@ -1,7 +1,8 @@
 """Phase 7 -- the /api/v1 semantic read API (first slice).
 
-Three read-only endpoints consumed by the future EMS web application:
+Read-only endpoints consumed by the EMS web application:
 
+    GET /api/v1/me                                      (Phase 8: session echo)
     GET /api/v1/sites
     GET /api/v1/sites/{site_id}/energy/consumption
     GET /api/v1/spaces/{space_id}/measurements
@@ -11,6 +12,11 @@ site / space access is enforced server-side inside the database boundary
 functions (migration 231), keyed on the authenticated portal_user_id --
 identifiers supplied by the browser are never trusted. An inaccessible or
 unknown site/space is indistinguishable from a missing one (both HTTP 404).
+
+GET /api/v1/me (added in Phase 8) is an additive session echo -- it reflects
+only the already-safe fields of the authenticated session so a browser SPA
+can bootstrap identity/role/scope without a second auth system. It changes
+none of the three frozen Phase 7 data contracts.
 """
 
 from __future__ import annotations
@@ -19,12 +25,14 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
 
+from src.auth.authorization import ROLE_PERMISSIONS, portal_role
 from src.auth.dependencies import get_authenticated_portal_user
 from src.auth.models import AuthenticatedPortalUser
 from src.analytics_api_service import (
     ENERGY_RESOLUTION_MAX_WINDOW,
     MEASUREMENT_RESOLUTION_MAX_WINDOW,
     ApiContractError,
+    CurrentUserResponse,
     EnergyConsumptionResponse,
     MeasurementSeriesResponse,
     SitesResponse,
@@ -93,6 +101,42 @@ def _not_found(kind: str) -> HTTPException:
             "error": "not_found",
             "detail": f"{kind} not found or not accessible.",
         },
+    )
+
+
+@router.get(
+    "/me",
+    response_model=CurrentUserResponse,
+    summary="Echo the authenticated portal session (frontend bootstrap)",
+    operation_id="getCurrentUser",
+    tags=["session"],
+    responses=_AUTH_RESPONSES,
+)
+async def get_current_user(request: Request) -> CurrentUserResponse:
+    """Return the current session identity + derived permission codes.
+
+    Additive session echo (Phase 8). No database access, no secrets: it
+    serialises the same safe fields the signed session already holds so the
+    SPA can render tenant context and permission-gated navigation. Frontend
+    permission checks are UX only -- server-side enforcement is unchanged.
+    """
+
+    user = _require_portal_user(request)
+
+    role = portal_role(user)
+    permissions = sorted(
+        p.value for p in (ROLE_PERMISSIONS.get(role, frozenset()) if role else frozenset())
+    )
+
+    return CurrentUserResponse(
+        portal_user_id=user.portal_user_id,
+        username=user.username,
+        display_name=user.display_name,
+        role_code=user.role_code,
+        access_scope_mode=user.access_scope_mode or "",
+        organization_id=user.organization_id,
+        site_ids=list(user.site_ids),
+        permissions=permissions,
     )
 
 

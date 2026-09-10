@@ -72,6 +72,25 @@ class SitesResponse(BaseModel):
     sites: list[SiteSummary]
 
 
+class CurrentUserResponse(BaseModel):
+    """Session echo for the frontend shell (GET /api/v1/me).
+
+    Reflects only the already-safe fields of the authenticated portal
+    session -- no password material, no session token, no secret. Tenant
+    isolation is NOT derived from this payload: every data endpoint
+    re-derives scope server-side from the session's portal_user_id.
+    """
+
+    portal_user_id: int
+    username: str
+    display_name: str
+    role_code: str
+    access_scope_mode: str
+    organization_id: UUID | None = None
+    site_ids: list[UUID]
+    permissions: list[str]
+
+
 class MeasurementPoint(BaseModel):
     bucket_start: datetime
     value: float

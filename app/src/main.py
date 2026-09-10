@@ -12,6 +12,7 @@ from fastapi.exception_handlers import (
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.responses import (
+    FileResponse,
     HTMLResponse,
     JSONResponse,
     RedirectResponse,
@@ -395,6 +396,65 @@ app.mount(
 
 app.include_router(context_router)
 app.include_router(analytics_api_router)
+
+
+# ---------------------------------------------------------------------------
+# Phase 8 -- same-origin serving of the React foundation shell under /app.
+#
+# The built SPA bundle is delivered as an INDEPENDENT artifact (see
+# docs/operations/PHASE8_FRONTEND_DEPLOYMENT.md); it is not part of this
+# Python image. This block is a complete NO-OP whenever app/src/spa/index.html
+# is absent -- which is the case in the application image as built today, in
+# every test, and in every environment that has not deployed the frontend.
+# It therefore adds no route and changes no behaviour for the existing admin
+# portal, Grafana, or the Phase 7 API until a frontend bundle is present.
+#
+# When present: static hashed assets are served from /app/assets/*, and every
+# other /app/* path returns the SPA entry document so the client-side router
+# can take over. /app/* is a normal protected path -- PortalAuthentication
+# Middleware redirects an unauthenticated visitor to the existing /login flow
+# and the SPA reuses the resulting session cookie. No second auth system, no
+# CORS, no new cookie.
+# ---------------------------------------------------------------------------
+_spa_directory = base_directory / "spa"
+
+if (_spa_directory / "index.html").is_file():
+    _spa_assets_directory = _spa_directory / "assets"
+
+    if _spa_assets_directory.is_dir():
+        app.mount(
+            "/app/assets",
+            StaticFiles(directory=str(_spa_assets_directory)),
+            name="spa_assets",
+        )
+
+    _spa_index = _spa_directory / "index.html"
+    _spa_root_resolved = _spa_directory.resolve()
+
+    @app.get("/app", include_in_schema=False)
+    @app.get("/app/{spa_path:path}", include_in_schema=False)
+    async def serve_frontend_shell(
+        request: Request,
+        spa_path: str = "",
+    ) -> Response:
+        """Serve the Phase 8 SPA entry (and its few root files) under /app.
+
+        Client-side routes (e.g. /app/home) have no matching file and fall
+        through to index.html. Hashed bundle assets are handled by the
+        /app/assets mount above. Authentication is already enforced by
+        PortalAuthenticationMiddleware before this handler runs.
+        """
+
+        if spa_path and not spa_path.startswith("assets/"):
+            candidate = (_spa_directory / spa_path).resolve()
+
+            if (
+                _spa_root_resolved in candidate.parents
+                and candidate.is_file()
+            ):
+                return FileResponse(candidate)
+
+        return FileResponse(_spa_index)
 
 
 @app.exception_handler(AdministrationContextError)
