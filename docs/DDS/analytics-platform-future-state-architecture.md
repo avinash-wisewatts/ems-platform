@@ -1003,6 +1003,48 @@ choice rather than an accident: **the frontend (whichever surface renders it)
 should consume domain-shaped read views/functions, never raw tables** — exactly
 the discipline `v_grafana_*` already enforces, extended to the new entities.
 
+### F.0 Application surfaces — Administration App and the EMS Web Application
+
+> Amendment (2026-09-10): this subsection makes an already-implied boundary
+> explicit. It is an application/deployment clarification, not a change to the
+> frozen conceptual model (§"Architecture Status", §"Conceptual architecture
+> vs. implementation architecture") — no core entity, relationship, rule, or
+> the Phase 7 API contract changes.
+
+The future state has **two distinct application surfaces with different
+purposes** — not one application replacing another:
+
+- **Administration App** — the existing administrative/operational interface
+  (today's `admin-portal`, `app/`), used by authorised users to manage
+  organisations, sites, users, devices, configuration and onboarding. It is
+  left operationally intact; this roadmap extends it in place (new `admin.*`
+  write functions) and never rewrites it.
+- **EMS Web Application** — the customer-facing analytical product for the
+  site, space, asset, energy, environmental, performance, data-quality and
+  other customer EMS workflows the roadmap defines. It is a new, additive
+  surface.
+
+Rules governing the two surfaces:
+
+- The **EMS Web Application consumes the Analytics API** (the Phase 7 query
+  boundary). It must **not** directly access raw telemetry, internal database
+  structures, implementation-specific tables, or Grafana queries — the same
+  discipline `v_grafana_*` already enforces, restated here as an application
+  boundary.
+- The two surfaces **may share authentication, authorisation, and
+  backend/API services**. Sharing those services does not make the EMS Web
+  Application a redesign or replacement of the Administration App; each keeps
+  its own purpose and lifecycle.
+- **Grafana remains an OPS/engineering surface.** Its customer-facing
+  workflows are retired only workflow-by-workflow through this roadmap's
+  existing parity process (Phase 17) — nothing here shortcuts that.
+
+**On the `/app` route.** `/app` is the **current staging route used to expose
+the EMS Web Application**. It is a routing/deployment detail, **not** the
+architectural identity or the application boundary — the boundary is the EMS
+Web Application itself. Nothing here commits the EMS Web Application to living
+permanently at `/app`.
+
 ### Site view
 Energy (existing `v_grafana_sites`/consumption rollups), plus: a
 **Spaces panel** (list of spaces with current environmental snapshot, once

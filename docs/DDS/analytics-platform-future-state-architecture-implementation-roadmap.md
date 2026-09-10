@@ -402,12 +402,21 @@ Phase 5, on the existing watermark/reconciliation pattern.
 
 ## Phase 8 — Frontend Foundation
 
-**Objective**: the React/TypeScript application shell — no feature
-dashboards yet.
+**Objective**: the **EMS Web Application** shell — the customer-facing
+React/TypeScript application, a separate surface from the existing
+**Administration App** — with no feature dashboards yet. See §F.0 of the
+frozen architecture for the Administration App / EMS Web Application boundary.
 
+- **Two surfaces, not a replacement**:
+  - **Administration App** — the existing `admin-portal`, left operationally
+    intact (organisation, site, user, device and configuration management,
+    onboarding). Untouched by this phase.
+  - **EMS Web Application** — the new, customer-facing analytical application
+    introduced here. Additive; it is **not** a redesign or replacement of the
+    Administration App.
 - **Backend**: none new — consumes Phase 7.
-- **Frontend**: project scaffold; authentication (reuse/extend admin-
-  portal's existing session mechanism, no parallel auth system);
+- **Frontend**: project scaffold; authentication (reuse the existing session
+  mechanism shared with the Administration App, no parallel auth system);
   tenant/organization context; site navigation shell; permission-gated
   routing (surfacing `admin.portal_user_has_permission`-equivalent checks);
   a shared time-range/resolution-selection component (mirroring Grafana's
@@ -416,12 +425,24 @@ dashboards yet.
   history reads as "no data yet," never an error, per `24-troubleshooting.
   md`'s guidance); quality-indicator components rendering `GOOD`/`GAP`/
   `ESTIMATED`/`INVALID`/`PARTIAL` consistently everywhere.
+- **API boundary**: the EMS Web Application consumes only the Phase 7
+  Analytics API — never raw telemetry, internal database structures,
+  implementation-specific tables, or Grafana queries.
 - **Dependencies**: Phase 7 — a stable contract to build against; building
   ahead of it is the single most common source of rework.
-- **Migration strategy**: N/A — new application; admin-portal's Jinja2
-  templates and Grafana are both untouched.
-- **Backwards compatibility**: admin-portal and Grafana continue exactly as
-  today; the new frontend is additive.
+- **Deployment**: the EMS Web Application is built and released as an
+  **independently deployable frontend artifact**, so it can be deployed and
+  rolled back independently of the Administration App. The preferred
+  containerised deployment is a separate EMS Web Application image/container;
+  that is an implementation/deployment principle, **not** a frozen
+  conceptual-architecture requirement. `/app` is the current staging route
+  exposing the EMS Web Application — a routing/deployment detail, not the
+  application's architectural identity, and not a commitment that it lives
+  there permanently.
+- **Migration strategy**: N/A — new application; the Administration App's
+  Jinja2 templates and Grafana are both untouched.
+- **Backwards compatibility**: the Administration App and Grafana continue
+  exactly as today; the EMS Web Application is additive.
 - **Testing**: component tests for shared primitives; an auth/permission
   integration test against a real staging tenant.
 - **Staging validation**: deploy the shell behind an access-gated URL
@@ -429,11 +450,13 @@ dashboards yet.
   orgs.
 - **Production rollout**: behind a feature flag or internal-only route — no
   customer exposure until Phase 9+ exists behind it.
-- **Rollback**: a separate deployable; rollback has zero effect on
-  admin-portal/Grafana.
+- **Rollback**: the EMS Web Application is a separate deployable; rolling it
+  back has **no effect** on the Administration App, Grafana, the database,
+  Phase 6 pipelines, or the energy subsystem.
 - **Exit criteria**: an internal user logs in, selects an organization/site,
-  and sees a correctly-scaffolded, empty shell against real staging data —
-  every foundation piece proven once, reused everywhere after.
+  and sees a correctly-scaffolded, empty EMS Web Application shell against
+  real staging data — every foundation piece proven once, reused everywhere
+  after.
 
 ---
 
@@ -802,7 +825,8 @@ sequentiality, but none is required to run early either.
 | `metadata.asset_points`/`device_field_mapping`/`point_categories` | Dormant, schema-only | Live, effective-dated, wired | **Extended in place** (add columns/constraints), not replaced — these were designed for this purpose and were simply never finished |
 | `telemetry.asset_health`/`water_measurements` | Schema-only, unpopulated | Wired to real loaders | **Extended in place** — no rename, no new table |
 | `metadata.grafana_organization_map`/Grafana provisioning | Live | Unchanged | **Untouched** — the new frontend's own auth/tenancy (Phase 8) is a parallel mechanism, not a replacement of Grafana's org-mapping model |
-| `admin-portal` (Jinja2 onboarding) | Live, sole write path for metadata | Extended with new `admin.*` functions for the new relationship tables | **Extended in place** — new functions follow the exact existing pattern (permission check, audit log); the portal itself is not rewritten by this roadmap |
+| `admin-portal` / **Administration App** (Jinja2 onboarding) | Live, sole write path for metadata | Extended with new `admin.*` functions for the new relationship tables | **Extended in place** — new functions follow the exact existing pattern (permission check, audit log); the portal itself is not rewritten by this roadmap |
+| **EMS Web Application** (customer-facing analytics UI) | Does not exist | New, independently deployable frontend artifact consuming the Phase 7 Analytics API (Phases 8–15) | **New, additive surface** — separate from the Administration App; may share authentication/authorisation/backend services with it but is never a redesign or replacement of it; deployed and rolled back independently. `/app` is its current staging route — a deployment detail, not the application boundary |
 | `config.energy_register_semantics` | Electrical-only | Broadened `flow_interpretation` for fuel/thermal | **Extended in place**, additive `flow_interpretation` values only — no existing row's meaning changes |
 
 **What gets dual-written**: nothing, by design — every new table/column is
@@ -948,6 +972,10 @@ requirement changes the decision:
   intelligence foundation.
 - Wholesale replacement of the mature energy architecture at any point in
   this roadmap.
+- Redesign or replacement of the existing Administration App — the EMS Web
+  Application (Phase 8+) is a new, additive customer-facing surface that may
+  share authentication/authorisation/backend services with it, not a rewrite
+  of the `admin-portal`.
 
 ---
 
