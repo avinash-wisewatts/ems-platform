@@ -161,7 +161,7 @@ def test_measurements_invalid_parameter(portal_client, monkeypatch, bad) -> None
     _login_global_admin(portal_client, monkeypatch)
     response = _measurements(portal_client, parameter=bad)
     assert response.status_code == 422
-    assert response.json()["detail"]["error"] == "invalid_parameter"
+    assert response.json()["error"] == "invalid_parameter"
 
 
 @pytest.mark.parametrize("bad", ["5m", "15m", "1d", "native", "RAW"])
@@ -169,7 +169,7 @@ def test_measurements_invalid_resolution(portal_client, monkeypatch, bad) -> Non
     _login_global_admin(portal_client, monkeypatch)
     response = _measurements(portal_client, resolution=bad)
     assert response.status_code == 422
-    assert response.json()["detail"]["error"] == "invalid_resolution"
+    assert response.json()["error"] == "invalid_resolution"
 
 
 def test_measurements_from_after_to(portal_client, monkeypatch) -> None:
@@ -179,7 +179,7 @@ def test_measurements_from_after_to(portal_client, monkeypatch) -> None:
         **{"from": "2026-09-02T00:00:00Z", "to": "2026-09-01T00:00:00Z"},
     )
     assert response.status_code == 422
-    assert response.json()["detail"]["error"] == "invalid_time_range"
+    assert response.json()["error"] == "invalid_time_range"
 
 
 def test_measurements_raw_window_too_large(portal_client, monkeypatch) -> None:
@@ -189,7 +189,7 @@ def test_measurements_raw_window_too_large(portal_client, monkeypatch) -> None:
         **{"from": "2026-09-01T00:00:00Z", "to": "2026-09-03T01:00:00Z"},
     )
     assert response.status_code == 422
-    assert response.json()["detail"]["error"] == "time_range_too_large"
+    assert response.json()["error"] == "time_range_too_large"
 
 
 def test_measurements_1h_allows_wider_window(portal_client, monkeypatch) -> None:
@@ -220,7 +220,7 @@ def test_measurements_unparseable_timestamp(portal_client, monkeypatch) -> None:
     _login_global_admin(portal_client, monkeypatch)
     response = _measurements(portal_client, **{"from": "not-a-date"})
     assert response.status_code == 422
-    assert response.json()["detail"]["error"] == "invalid_time_range"
+    assert response.json()["error"] == "invalid_time_range"
 
 
 # ---------------------------------------------------------------------------
@@ -248,7 +248,7 @@ def test_measurements_inaccessible_space_is_404(portal_client, monkeypatch) -> N
 
     response = _measurements(portal_client)
     assert response.status_code == 404
-    assert response.json()["detail"]["error"] == "not_found"
+    assert response.json()["error"] == "not_found"
     # The series function must not run for an inaccessible/unknown space.
     assert called["series"] is False
 
@@ -381,7 +381,7 @@ def test_energy_invalid_resolution(portal_client, monkeypatch, bad) -> None:
     _login_global_admin(portal_client, monkeypatch)
     response = _energy(portal_client, resolution=bad)
     assert response.status_code == 422
-    assert response.json()["detail"]["error"] == "invalid_resolution"
+    assert response.json()["error"] == "invalid_resolution"
 
 
 def test_energy_1d_window_too_large(portal_client, monkeypatch) -> None:
@@ -392,7 +392,7 @@ def test_energy_1d_window_too_large(portal_client, monkeypatch) -> None:
         **{"from": "2024-01-01T00:00:00Z", "to": "2026-01-02T00:00:00Z"},
     )
     assert response.status_code == 422
-    assert response.json()["detail"]["error"] == "time_range_too_large"
+    assert response.json()["error"] == "time_range_too_large"
 
 
 def test_energy_inaccessible_site_is_404(portal_client, monkeypatch) -> None:
@@ -416,7 +416,7 @@ def test_energy_inaccessible_site_is_404(portal_client, monkeypatch) -> None:
 
     response = _energy(portal_client)
     assert response.status_code == 404
-    assert response.json()["detail"]["error"] == "not_found"
+    assert response.json()["error"] == "not_found"
     assert called["series"] is False
 
 

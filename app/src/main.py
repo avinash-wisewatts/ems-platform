@@ -5,6 +5,12 @@ from typing import Annotated, AsyncIterator
 from uuid import UUID
 
 from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi.exception_handlers import (
+    http_exception_handler as default_http_exception_handler,
+    request_validation_exception_handler as default_request_validation_handler,
+)
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
@@ -403,6 +409,50 @@ async def handle_administration_context_error(
     AdministrationContext fields."""
 
     return RedirectResponse(url="/forbidden", status_code=303)
+
+
+# The /api/v1 JSON surface uses a flat top-level error contract
+# ({"error": "<code>", "detail": "<message>"}) consistent with the
+# PortalAuthenticationMiddleware 401. FastAPI's default HTTPException /
+# RequestValidationError handlers wrap the payload as {"detail": ...}; these
+# two handlers render the flat shape for /api/v1 paths only and delegate to
+# the framework defaults everywhere else, so no legacy/application route's
+# error contract changes.
+_API_V1_ERROR_PREFIX = "/api/v1/"
+
+
+@app.exception_handler(StarletteHTTPException)
+async def handle_http_exception(
+    request: Request,
+    exc: StarletteHTTPException,
+) -> Response:
+    if (
+        request.url.path.startswith(_API_V1_ERROR_PREFIX)
+        and isinstance(exc.detail, dict)
+        and "error" in exc.detail
+    ):
+        return JSONResponse(
+            exc.detail,
+            status_code=exc.status_code,
+            headers=getattr(exc, "headers", None),
+        )
+    return await default_http_exception_handler(request, exc)
+
+
+@app.exception_handler(RequestValidationError)
+async def handle_request_validation_error(
+    request: Request,
+    exc: RequestValidationError,
+) -> Response:
+    if request.url.path.startswith(_API_V1_ERROR_PREFIX):
+        return JSONResponse(
+            {
+                "error": "invalid_request",
+                "detail": "One or more request parameters are missing or malformed.",
+            },
+            status_code=422,
+        )
+    return await default_request_validation_handler(request, exc)
 
 
 async def list_sites_for_request(
