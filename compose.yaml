@@ -217,6 +217,25 @@ services:
     volumes:
       - ./grafana/dashboards:/app/grafana-dashboards:ro
 
+      # Phase 8 frontend shell -- delivered as an INDEPENDENT, immutably
+      # git-SHA-tagged artifact (ghcr.io/<owner>/<repo>-web:<sha>), NOT part
+      # of this image.
+      #
+      # app/src is baked into the admin-portal image (app/Dockerfile:
+      # `COPY src /app/src`) and is not otherwise a bind mount, so this is the
+      # ONLY path by which the separately-built, separately-rolled-back React
+      # bundle reaches the running container. app/src/main.py serves it
+      # same-origin under /app (reusing the existing session cookie -- no
+      # CORS, no second auth) only when `<mount>/index.html` exists.
+      #
+      # scripts/release/deploy_web_bundle.sh populates the host directory from
+      # the -web image before the container is (re)created. When the directory
+      # is absent compose creates it empty, the /app hook stays inert, and the
+      # admin portal is unchanged -- this is the safe default on any host
+      # (including production) that has not deployed the frontend. Read-only:
+      # the application process never writes here.
+      - ${EMS_WEB_SPA_PATH:-./web-spa}:/app/src/spa:ro
+
     healthcheck:
       test:
         [
