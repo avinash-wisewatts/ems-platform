@@ -119,6 +119,44 @@ jobs:
         if: always()
         run: ./scripts/test/test_database.sh destroy
 
+  web-frontend:
+    # Phase 8 frontend foundation. Independent of the Python application: this
+    # job never touches the database, a remote host, or Grafana. It type-checks,
+    # lints, unit-tests and production-builds the web/ shell. The Playwright
+    # auth/permission E2E is deliberately NOT run here -- it needs a deployed
+    # staging shell and a real portal session (see web/e2e/auth.spec.ts).
+    name: Web frontend (typecheck / lint / test / build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: web/.nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies (exact lockfile)
+        run: npm ci --no-audit --no-fund
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit / component tests
+        run: npm run test
+
+      - name: Production build
+        run: npm run build
+
+      - name: Dependency audit (report only -- does not fail the build)
+        run: npm audit --omit=dev || true
+
   summary:
     name: CI summary
     runs-on: ubuntu-latest
@@ -127,6 +165,7 @@ jobs:
       - docker-build-validate
       - app-tests
       - database-integration-tests
+      - web-frontend
     outputs:
       passed: ${{ steps.result.outputs.passed }}
     steps:

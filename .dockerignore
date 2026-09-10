@@ -26,3 +26,10 @@ logs
 *.zip
 
 app/tests/.pytest_cache
+
+# Phase 8 web frontend -- never part of the Python application image context.
+web/node_modules
+web/dist
+web/coverage
+web/playwright-report
+web/test-results
