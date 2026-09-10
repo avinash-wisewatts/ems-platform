@@ -117,18 +117,17 @@ implementation (which must not modify production/staging deployment config).
 
 ## Security residuals (`npm audit`)
 
-`npm audit` on the dev/build toolchain reports findings that are **not shipped**
-in the production bundle:
-- **vite / esbuild dev-server** advisories — apply only to `vite dev` on a
-  developer's machine, never to the static `dist/` served in staging;
-- **vitest / @vitest/mocker** — test-runner only; the "UI server" critical
-  requires `vitest --ui`, which is never invoked;
-- **react-router (@remix-run/router)** open-redirect / SSR-hydration advisories
-  — the shell is client-only (no SSR), every navigation target is a hardcoded
-  literal, and the one URL-derived value (`next_path`) is consumed by the
-  existing server `/login`, which already sanitises redirect paths
-  (`safe_login_redirect_path`, `test_portal_redirects.py`). A React Router v7
-  migration is the tracked follow-up.
+`react-router-dom` is pinned to the patched **6.30.6**, which clears the
+`@remix-run/router` high-severity advisory within the 6.x line (no breaking
+bump). `npm audit` then reports:
+
+| Package | Severity | Ships? | Assessment |
+|---|---|---|---|
+| `vitest` | critical | no | Test runner only. The critical (`@vitest/mocker` UI-server arbitrary file read/exec) requires `vitest --ui`, which is never invoked here or in CI. |
+| `@vitest/mocker` | moderate | no | Test runner only (path traversal in the redirect-mock helper). |
+| `react-router` / `react-router-dom` | moderate | yes | Residual RR6 open-redirect class ("backslash in `<Link>`", "same-origin `//` redirect"). **No reachable exploit path in this shell:** client-only (no SSR), every navigation target is a hardcoded literal, and the one URL-derived value (`next_path`) is consumed by the existing server `/login`, which already sanitises redirect paths (`safe_login_redirect_path`, `test_portal_redirects.py`). The only fix is a **React Router v7** major upgrade — a tracked follow-up, not a foundation blocker. |
+| `vite` / `esbuild` (earlier) | — | no | Cleared by pinning `vite@7.3.6`. Any residual is the dev-server only (`vite dev` on a developer machine), never the static `dist/` served in staging. |
+
 The shipped bundle depends only on `react`, `react-dom`, `react-router-dom`,
 `recharts`. The CI `web-frontend` job runs `npm audit --omit=dev` for report
 (non-blocking).
