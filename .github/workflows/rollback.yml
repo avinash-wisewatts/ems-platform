@@ -40,6 +40,10 @@ on:
       release_git_sha:
         description: "Git commit SHA matching image_tag"
         required: true
+      web_image_tag:
+        description: "Optional: previously-built frontend (-web) image reference to roll the SPA back to. Leave blank to leave the deployed frontend bundle untouched."
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -56,18 +60,32 @@ jobs:
           host: ${{ inputs.target_environment == 'production' && secrets.PRODUCTION_HOST || secrets.STAGING_HOST }}
           username: ${{ inputs.target_environment == 'production' && secrets.PRODUCTION_USER || secrets.STAGING_USER }}
           key: ${{ inputs.target_environment == 'production' && secrets.PRODUCTION_SSH_KEY || secrets.STAGING_SSH_KEY }}
-          envs: RELEASE_SHA,APP_IMAGE,REGISTRY_USERNAME,REGISTRY_PASSWORD,PROJECT_PATH_VALUE,ENV_NAME_VALUE
+          envs: RELEASE_SHA,APP_IMAGE,WEB_IMAGE,REGISTRY_USERNAME,REGISTRY_PASSWORD,PROJECT_PATH_VALUE,ENV_NAME_VALUE
           script: |
             set -euo pipefail
             export PROJECT_PATH="${PROJECT_PATH_VALUE}"
             export APP_IMAGE="${APP_IMAGE}"
             export RELEASE_GIT_SHA="${RELEASE_SHA}"
             export ENVIRONMENT_NAME="${ENV_NAME_VALUE}"
+
+            # Optional, independent frontend rollback: only runs when a -web
+            # image tag was supplied. Placed BEFORE deploy_release.sh so the
+            # admin-portal recreate binds the restored bundle. Names no
+            # compose service; never touches the database or migrations.
+            if [ -n "${WEB_IMAGE}" ]; then
+              cd "${PROJECT_PATH}"
+              git fetch --quiet origin "${RELEASE_GIT_SHA}"
+              git checkout --quiet "${RELEASE_GIT_SHA}"
+              WEB_SPA_IMAGE="${WEB_IMAGE}" \
+                "${PROJECT_PATH}/scripts/release/deploy_web_bundle.sh"
+            fi
+
             "${PROJECT_PATH}/scripts/release/deploy_release.sh"
             "${PROJECT_PATH}/scripts/release/post_deploy_verify.sh"
         env:
           RELEASE_SHA: ${{ inputs.release_git_sha }}
           APP_IMAGE: ${{ inputs.image_tag }}
+          WEB_IMAGE: ${{ inputs.web_image_tag }}
           ENV_NAME_VALUE: ${{ inputs.target_environment }}
           PROJECT_PATH_VALUE: ${{ inputs.target_environment == 'production' && secrets.PRODUCTION_PROJECT_PATH || secrets.STAGING_PROJECT_PATH }}
           REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}

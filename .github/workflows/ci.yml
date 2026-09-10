@@ -76,6 +76,19 @@ jobs:
             --tag ems-app:ci-build-validate \
             ./app
 
+  web-docker-build-validate:
+    name: Docker build validation (frontend image)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build frontend image (validation only -- not pushed)
+        run: |
+          docker build \
+            --file web/Dockerfile \
+            --tag ems-web:ci-build-validate \
+            ./web
+
   app-tests:
     name: Application test suite (pytest)
     runs-on: ubuntu-latest
@@ -163,6 +176,7 @@ jobs:
     needs:
       - config-validation
       - docker-build-validate
+      - web-docker-build-validate
       - app-tests
       - database-integration-tests
       - web-frontend

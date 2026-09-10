@@ -26,6 +26,10 @@ permissions:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}-app
+  # Phase 8 frontend shell -- an independent, immutably git-SHA-tagged
+  # artifact built from web/Dockerfile, deployed and rolled back separately
+  # from the -app image. Same registry, same tag scheme, same GHCR token.
+  WEB_IMAGE_NAME: ${{ github.repository }}-web
 
 jobs:
   ci:
@@ -57,9 +61,33 @@ jobs:
           docker push "${IMAGE}"
           echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
 
+  build-and-push-web:
+    name: Build and push immutable frontend artifact
+    needs: ci
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push frontend image
+        id: image
+        run: |
+          IMAGE="${REGISTRY}/${WEB_IMAGE_NAME}:${{ github.sha }}"
+          docker build --file web/Dockerfile --tag "${IMAGE}" ./web
+          docker push "${IMAGE}"
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+
   deploy-staging:
     name: Deploy exact artifact to staging
-    needs: build-and-push
+    needs: [build-and-push, build-and-push-web]
     runs-on: ubuntu-latest
     environment: staging
     steps:
@@ -69,17 +97,32 @@ jobs:
           host: ${{ secrets.STAGING_HOST }}
           username: ${{ secrets.STAGING_USER }}
           key: ${{ secrets.STAGING_SSH_KEY }}
-          envs: RELEASE_SHA,APP_IMAGE,REGISTRY_USERNAME,REGISTRY_PASSWORD
+          envs: RELEASE_SHA,APP_IMAGE,WEB_IMAGE,REGISTRY_USERNAME,REGISTRY_PASSWORD
           script: |
             set -euo pipefail
             export PROJECT_PATH="${{ secrets.STAGING_PROJECT_PATH }}"
             export APP_IMAGE="${APP_IMAGE}"
             export RELEASE_GIT_SHA="${RELEASE_SHA}"
             export ENVIRONMENT_NAME="staging"
+
+            # Place the independent frontend bundle BEFORE deploy_release.sh
+            # (re)creates admin-portal, so app/src/main.py registers the /app
+            # routes on activation. deploy_web_bundle.sh names no compose
+            # service and never touches the database. The explicit fetch/
+            # checkout mirrors deploy_release.sh step 1 and only exists so the
+            # just-added script is present on the host on the first Phase 8
+            # deploy; deploy_release.sh repeats it harmlessly.
+            cd "${PROJECT_PATH}"
+            git fetch --quiet origin "${RELEASE_GIT_SHA}"
+            git checkout --quiet "${RELEASE_GIT_SHA}"
+            WEB_SPA_IMAGE="${WEB_IMAGE}" \
+              "${PROJECT_PATH}/scripts/release/deploy_web_bundle.sh"
+
             "${PROJECT_PATH}/scripts/release/deploy_release.sh"
         env:
           RELEASE_SHA: ${{ github.sha }}
           APP_IMAGE: ${{ needs.build-and-push.outputs.image }}
+          WEB_IMAGE: ${{ needs.build-and-push-web.outputs.image }}
           # Default: GHCR pull using the workflow's own token, scoped to
           # this run only. Set repository secrets REGISTRY_USERNAME /
           # REGISTRY_PASSWORD (e.g. a long-lived PAT with read:packages) to
