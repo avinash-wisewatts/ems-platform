@@ -26,7 +26,9 @@
 --         type_id IS NULL; the asset-type gate still rejects a SPACE row that
 --         carries an asset type.
 --     11. Energy safety: energy loader / parameter_routing / energy tables
---         unchanged; no persisted derived tier; no derived job.
+--         unchanged. Persisted derived tier: absent until Phase 6
+--         (migration 230); once present, its jobs stay disabled and this
+--         view remains the cross-check.
 --
 --   All fixtures live inside one transaction and are rolled back. ON_ERROR_
 --   STOP=1 in the .sh wrapper fails the runner on any assertion.
@@ -92,8 +94,12 @@ BEGIN
         RAISE EXCEPTION 'TEST 1 FAILED: expected exactly one config.parameter_calculations row, found %.', (SELECT count(*) FROM config.parameter_calculations);
     END IF;
     SELECT * INTO r FROM config.parameter_calculations pc JOIN config.parameters op ON op.id=pc.output_parameter_id WHERE op.code='DEW_POINT';
+    -- materialization_strategy is 'VIEW' as seeded by Phase 5 (migration 229);
+    -- Phase 6 (migration 230) promotes this row to 'PERSISTED'. Both are valid
+    -- depending on which migrations are applied.
     IF r.applicable_subject_type <> 'SPACE' OR r.applicable_asset_type_id IS NOT NULL
-       OR r.null_handling <> 'NULL_IF_REQUIRED_MISSING' OR r.materialization_strategy <> 'VIEW'
+       OR r.null_handling <> 'NULL_IF_REQUIRED_MISSING'
+       OR r.materialization_strategy NOT IN ('VIEW', 'PERSISTED')
        OR (r.formula_definition->>'engine') <> 'SQL_EXPR' OR jsonb_array_length(r.input_parameter_refs) <> 2 THEN
         RAISE EXCEPTION 'TEST 1 FAILED: SPACE_DEW_POINT attributes incorrect.';
     END IF;
@@ -285,13 +291,26 @@ BEGIN
     IF (SELECT count(*) FROM config.parameter_routing WHERE is_active AND destination_table='telemetry.environment_measurements') <> 12 THEN
         RAISE EXCEPTION 'TEST 11 FAILED: config.parameter_routing active AirSense rows != 12.';
     END IF;
-    IF to_regclass('analytics.derived_parameter_values') IS NOT NULL THEN
-        RAISE EXCEPTION 'TEST 11 FAILED: analytics.derived_parameter_values exists (Phase 5 is view-only).';
+    -- Phase 6 (migration 230) persists this calculation. Once that migration is
+    -- in the chain the persisted tier + its jobs legitimately exist; the Phase 5
+    -- guarantee that survives is: the jobs stay DISABLED and this view remains
+    -- the independent cross-check (migration 230 has its own contract test for
+    -- the tier's shape and energy safety).
+    IF to_regclass('analytics.derived_parameter_values') IS NULL THEN
+        -- Phase 6 not yet applied: strictly no persisted tier and no derived job.
+        IF EXISTS (SELECT 1 FROM timescaledb_information.jobs WHERE proc_name ~* 'dew_point|derived_parameter') THEN
+            RAISE EXCEPTION 'TEST 11 FAILED: a derived-parameter job exists without the persisted tier.';
+        END IF;
+    ELSE
+        IF EXISTS (SELECT 1 FROM timescaledb_information.jobs
+                   WHERE proc_name ~* 'derived_space_dew_point' AND scheduled) THEN
+            RAISE EXCEPTION 'TEST 11 FAILED: a Phase 6 derived-parameter job is scheduled=true.';
+        END IF;
+        IF to_regclass('analytics.v_space_dew_point_1min') IS NULL THEN
+            RAISE EXCEPTION 'TEST 11 FAILED: the Phase 5 cross-check view was removed by Phase 6.';
+        END IF;
     END IF;
-    IF EXISTS (SELECT 1 FROM timescaledb_information.jobs WHERE proc_name ~* 'dew_point|derived_parameter') THEN
-        RAISE EXCEPTION 'TEST 11 FAILED: a derived-parameter job exists.';
-    END IF;
-    RAISE NOTICE 'TEST 11 passed: energy subsystem / routing / persisted tier / jobs untouched.';
+    RAISE NOTICE 'TEST 11 passed: energy subsystem / routing untouched; any Phase 6 tier keeps its jobs disabled + the Phase 5 view intact.';
 END;
 $test$;
 
