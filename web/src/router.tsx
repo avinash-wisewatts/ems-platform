@@ -16,6 +16,8 @@ import { SpaceDetail } from "./routes/spaces/SpaceDetail";
 import { AssetsList } from "./routes/assets/AssetsList";
 import { AssetDetail } from "./routes/assets/AssetDetail";
 import { EnergyOverview } from "./routes/energy/EnergyOverview";
+import { DemandOverview } from "./routes/demand/DemandOverview";
+import { PowerQualityOverview } from "./routes/power-quality/PowerQualityOverview";
 
 /**
  * Foundation routes:
@@ -25,14 +27,16 @@ import { EnergyOverview } from "./routes/energy/EnergyOverview";
  *   /features/*  honest placeholder namespace for later-phase features
  *   *            not found
  *
- * Real feature routes (Slice 0 / Slice A), added under /features/* per the
- * foundation's own convention, without touching auth, tenant context,
- * routing shape, or layout:
+ * Real feature routes (Slice 0 / Slice A / Slice B), added under
+ * /features/* per the foundation's own convention, without touching auth,
+ * tenant context, routing shape, or layout:
  *   /features/spaces               Spaces list (Slice 0)
  *   /features/spaces/:spaceId      Space detail (Slice 0)
  *   /features/assets               Assets list (Slice 0)
  *   /features/assets/:assetId      Asset detail (Slice 0)
  *   /features/energy               Energy Overview (Slice A)
+ *   /features/demand               Demand Overview (Slice B)
+ *   /features/power-quality        Power Quality Overview (Slice B)
  * Specific routes are matched before the /features/* catch-all regardless
  * of declaration order (React Router v6 ranking); everything else under
  * /features/* still falls through to PlaceholderArea, honestly.
@@ -105,6 +109,22 @@ export function AppRoutes() {
         element={
           <ShellGate>
             <EnergyOverview />
+          </ShellGate>
+        }
+      />
+      <Route
+        path="/features/demand"
+        element={
+          <ShellGate>
+            <DemandOverview />
+          </ShellGate>
+        }
+      />
+      <Route
+        path="/features/power-quality"
+        element={
+          <ShellGate>
+            <PowerQualityOverview />
           </ShellGate>
         }
       />

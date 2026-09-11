@@ -8,6 +8,9 @@ Read-only endpoints consumed by the EMS web application:
     GET /api/v1/spaces/{space_id}/measurements
     GET /api/v1/sites/{site_id}/spaces                  (Slice 0: hierarchy)
     GET /api/v1/sites/{site_id}/assets                  (Slice 0: hierarchy)
+    GET /api/v1/sites/{site_id}/demand                  (Slice B: demand)
+    GET /api/v1/sites/{site_id}/demand/current           (Slice B: demand)
+    GET /api/v1/sites/{site_id}/power-quality            (Slice B: PQ)
 
 Every endpoint requires the existing authenticated portal session. Tenant /
 site / space access is enforced server-side inside the database boundary
@@ -24,6 +27,18 @@ GET /api/v1/sites/{site_id}/spaces and .../assets (Slice 0, migration 232)
 are additive, site-scoped hierarchy listings -- identity and placement only.
 Neither reads metadata.asset_relationships; asset component-tree / "spaces
 served by an asset" are explicitly out of scope for this increment.
+
+GET /api/v1/sites/{site_id}/demand and .../demand/current (Slice B,
+migration 233) read analytics.demand_intervals / analytics.demand_state
+only -- both already meter-role-resolved upstream; neither this router nor
+migration 233 re-derives that resolution or reads the older
+v_energy_demand_15min / v_energy_site_demand_kpis view family.
+
+GET /api/v1/sites/{site_id}/power-quality (Slice B, migration 234) resolves
+the site's SITE_CONSUMPTION-role meter directly against
+config.site_energy_meter_roles (independent of the demand-specific
+config.site_demand_policies) and reads telemetry.ca_energy_15min/hourly/
+daily. No PF/THD threshold is exposed -- none exists in the schema.
 """
 
 from __future__ import annotations
@@ -36,23 +51,34 @@ from src.auth.authorization import ROLE_PERMISSIONS, portal_role
 from src.auth.dependencies import get_authenticated_portal_user
 from src.auth.models import AuthenticatedPortalUser
 from src.analytics_api_service import (
+    DEMAND_MAX_WINDOW,
     ENERGY_RESOLUTION_MAX_WINDOW,
     MEASUREMENT_RESOLUTION_MAX_WINDOW,
+    POWER_QUALITY_RESOLUTION_MAX_WINDOW,
     ApiContractError,
     AssetsResponse,
+    CurrentDemandResponse,
     CurrentUserResponse,
+    DemandSeriesResponse,
     EnergyConsumptionResponse,
     MeasurementSeriesResponse,
+    PowerQualityResponse,
     SitesResponse,
     SpacesResponse,
     build_assets_response,
+    build_current_demand_response,
+    build_demand_series_response,
     build_energy_consumption_response,
     build_measurement_series_response,
+    build_power_quality_response,
     build_sites_response,
     build_spaces_response,
     fetch_accessible_sites,
     fetch_site_assets,
+    fetch_site_current_demand,
+    fetch_site_demand_series,
     fetch_site_energy_consumption,
+    fetch_site_power_quality_series,
     fetch_site_spaces,
     fetch_space_measurement_series,
     parse_time_range,
@@ -330,3 +356,142 @@ async def list_site_assets(request: Request, site_id: UUID) -> AssetsResponse:
 
     rows = await fetch_site_assets(user.portal_user_id, site_id)
     return build_assets_response(site_id=site_id, rows=rows)
+
+
+@router.get(
+    "/sites/{site_id}/demand",
+    response_model=DemandSeriesResponse,
+    summary="Site maximum-demand interval series (Slice B)",
+    operation_id="getSiteDemandSeries",
+    responses=_RESOURCE_RESPONSES,
+)
+async def get_site_demand_series(
+    request: Request,
+    site_id: UUID,
+    range_from: str = Query(
+        ...,
+        alias="from",
+        description="Inclusive ISO-8601 start of the window (UTC).",
+    ),
+    range_to: str = Query(
+        ...,
+        alias="to",
+        description="Exclusive ISO-8601 end of the window (UTC).",
+    ),
+) -> DemandSeriesResponse:
+    """Reads analytics.demand_intervals only -- native interval grain
+    (900s/1800s per the site's own config.site_demand_policies), so there
+    is no resolution query parameter to select. No re-derivation of
+    meter-role resolution here; that already happened upstream."""
+
+    user = _require_portal_user(request)
+
+    try:
+        dt_from, dt_to = parse_time_range(
+            range_from,
+            range_to,
+            resolution="native",
+            max_window_by_resolution={"native": DEMAND_MAX_WINDOW},
+        )
+    except ApiContractError as exc:
+        raise _contract_error(exc)
+
+    if not await portal_user_can_access_site(user.portal_user_id, site_id):
+        raise _not_found("Site")
+
+    rows = await fetch_site_demand_series(
+        portal_user_id=user.portal_user_id,
+        site_id=site_id,
+        dt_from=dt_from,
+        dt_to=dt_to,
+    )
+    return build_demand_series_response(
+        site_id=site_id, dt_from=dt_from, dt_to=dt_to, rows=rows
+    )
+
+
+@router.get(
+    "/sites/{site_id}/demand/current",
+    response_model=CurrentDemandResponse,
+    summary="Site's most recent live demand reading (Slice B)",
+    operation_id="getSiteCurrentDemand",
+    responses=_RESOURCE_RESPONSES,
+)
+async def get_site_current_demand(
+    request: Request, site_id: UUID
+) -> CurrentDemandResponse:
+    """Reads analytics.demand_state only -- the live/current-interval
+    table, distinct from the finalized historical series above."""
+
+    user = _require_portal_user(request)
+
+    if not await portal_user_can_access_site(user.portal_user_id, site_id):
+        raise _not_found("Site")
+
+    row = await fetch_site_current_demand(user.portal_user_id, site_id)
+    return build_current_demand_response(site_id=site_id, row=row)
+
+
+@router.get(
+    "/sites/{site_id}/power-quality",
+    response_model=PowerQualityResponse,
+    summary="Site power factor / current THD series (Slice B)",
+    operation_id="getSitePowerQuality",
+    responses=_RESOURCE_RESPONSES,
+)
+async def get_site_power_quality(
+    request: Request,
+    site_id: UUID,
+    resolution: str = Query(
+        ...,
+        description="Time resolution. One of: 15min, 1h, 1d.",
+    ),
+    range_from: str = Query(
+        ...,
+        alias="from",
+        description="Inclusive ISO-8601 start of the window (UTC).",
+    ),
+    range_to: str = Query(
+        ...,
+        alias="to",
+        description="Exclusive ISO-8601 end of the window (UTC).",
+    ),
+) -> PowerQualityResponse:
+    """Resolves the site's SITE_CONSUMPTION-role meter directly against
+    config.site_energy_meter_roles (independent of the demand-specific
+    config.site_demand_policies) and reads
+    telemetry.ca_energy_15min/hourly/daily for that device. No threshold
+    or deviation classification -- none exists in the schema."""
+
+    user = _require_portal_user(request)
+
+    try:
+        resolved_resolution = validate_resolution(
+            resolution, tuple(POWER_QUALITY_RESOLUTION_MAX_WINDOW.keys())
+        )
+        dt_from, dt_to = parse_time_range(
+            range_from,
+            range_to,
+            resolution=resolved_resolution,
+            max_window_by_resolution=POWER_QUALITY_RESOLUTION_MAX_WINDOW,
+        )
+    except ApiContractError as exc:
+        raise _contract_error(exc)
+
+    if not await portal_user_can_access_site(user.portal_user_id, site_id):
+        raise _not_found("Site")
+
+    rows = await fetch_site_power_quality_series(
+        portal_user_id=user.portal_user_id,
+        site_id=site_id,
+        resolution=resolved_resolution,
+        dt_from=dt_from,
+        dt_to=dt_to,
+    )
+    return build_power_quality_response(
+        site_id=site_id,
+        resolution=resolved_resolution,
+        dt_from=dt_from,
+        dt_to=dt_to,
+        rows=rows,
+    )

@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   isPresetSupported,
+  planDemandRequest,
   planEnergyComparisonRequest,
   planEnergyRequest,
   planMeasurementRequest,
+  planPowerQualityRequest,
   resolveRange,
   shiftRangeForComparison,
 } from "./ranges";
@@ -41,10 +43,32 @@ describe("time-range presets -> Phase 7 requests", () => {
     expect(planEnergyRequest("1Y", NOW)).toMatchObject({ supported: true, resolution: "1d" });
   });
 
-  it("isPresetSupported reflects the per-kind capability", () => {
+  it("demand: no resolution field; TODAY/7D/30D serviceable, 3M/1Y not (31-day cap, no coarser tier)", () => {
+    expect(planDemandRequest("TODAY", NOW)).toEqual({ supported: true, range: resolveRange("TODAY", NOW) });
+    expect(planDemandRequest("7D", NOW).supported).toBe(true);
+    expect(planDemandRequest("30D", NOW).supported).toBe(true);
+
+    const threeMonths = planDemandRequest("3M", NOW);
+    expect(threeMonths.supported).toBe(false);
+    const oneYear = planDemandRequest("1Y", NOW);
+    expect(oneYear.supported).toBe(false);
+  });
+
+  it("power quality: TODAY/7D -> 15min, 30D -> 1h, 3M/1Y -> 1d; every preset is serviceable", () => {
+    expect(planPowerQualityRequest("TODAY", NOW)).toMatchObject({ supported: true, resolution: "15min" });
+    expect(planPowerQualityRequest("7D", NOW)).toMatchObject({ supported: true, resolution: "15min" });
+    expect(planPowerQualityRequest("30D", NOW)).toMatchObject({ supported: true, resolution: "1h" });
+    expect(planPowerQualityRequest("3M", NOW)).toMatchObject({ supported: true, resolution: "1d" });
+    expect(planPowerQualityRequest("1Y", NOW)).toMatchObject({ supported: true, resolution: "1d" });
+  });
+
+  it("isPresetSupported reflects the per-kind capability, including demand and power-quality", () => {
     expect(isPresetSupported("1Y", "energy", NOW)).toBe(true);
     expect(isPresetSupported("1Y", "measurement", NOW)).toBe(false);
     expect(isPresetSupported("30D", "measurement", NOW)).toBe(true);
+    expect(isPresetSupported("30D", "demand", NOW)).toBe(true);
+    expect(isPresetSupported("1Y", "demand", NOW)).toBe(false);
+    expect(isPresetSupported("1Y", "power-quality", NOW)).toBe(true);
   });
 });
 
