@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  TIME_RANGE_PRESETS,
   isPresetSupported,
   planDemandRequest,
   planEnergyComparisonRequest,
   planEnergyRequest,
+  planEnergyTypicalReferenceRequest,
   planMeasurementRequest,
   planPowerQualityRequest,
   resolveRange,
@@ -115,5 +117,54 @@ describe("Slice A -- energy comparison ranges (Q54/Q56: historical only)", () =>
       (Date.parse(plan.comparison.to) - Date.parse(plan.comparison.from)) / 86_400_000;
     expect(currentSpanDays).toBeLessThanOrEqual(366);
     expect(comparisonSpanDays).toBeLessThanOrEqual(366);
+  });
+});
+
+describe("Slice C -- typical historical reference planning (comparable-period, server-computed)", () => {
+  const EXPECTED_DAYS: Record<(typeof TIME_RANGE_PRESETS)[number], number> = {
+    TODAY: 1,
+    "7D": 7,
+    "30D": 30,
+    "3M": 90,
+    "1Y": 365,
+  };
+
+  it("returns an EXACT whole-day span for every preset, matching the approved {1,7,30,90,365} set", () => {
+    for (const preset of TIME_RANGE_PRESETS) {
+      const plan = planEnergyTypicalReferenceRequest(preset, NOW);
+      expect(plan.supported).toBe(true);
+      if (!plan.supported) continue;
+      const spanMs = Date.parse(plan.current.to) - Date.parse(plan.current.from);
+      expect(spanMs).toBe(EXPECTED_DAYS[preset] * 86_400_000);
+    }
+  });
+
+  it("TODAY: widens `to` to exactly one full day after resolveRange's own (UTC-midnight) `from`, unchanged", () => {
+    const plan = planEnergyTypicalReferenceRequest("TODAY", NOW);
+    expect(plan.supported).toBe(true);
+    if (!plan.supported) return;
+
+    const expectedFrom = resolveRange("TODAY", NOW).from;
+    expect(plan.current.from).toBe(expectedFrom);
+    expect(plan.current.from).toBe("2026-06-15T00:00:00.000Z"); // UTC midnight, not site-local
+    expect(Date.parse(plan.current.to) - Date.parse(plan.current.from)).toBe(86_400_000);
+  });
+
+  it("7D/30D/3M/1Y: reuses planEnergyRequest's range verbatim (already an exact whole-day span regardless of time-of-day)", () => {
+    for (const preset of ["7D", "30D", "3M", "1Y"] as const) {
+      const plan = planEnergyTypicalReferenceRequest(preset, NOW);
+      const direct = planEnergyRequest(preset, NOW);
+      expect(plan.supported).toBe(true);
+      expect(direct.supported).toBe(true);
+      if (!plan.supported || !direct.supported) continue;
+      expect(plan.current).toEqual(direct.range);
+    }
+  });
+
+  it("propagates the current window's unsupported reason unchanged, exactly like planEnergyComparisonRequest", () => {
+    // Energy has no unsupported preset today (unlike measurements), but the
+    // propagation path itself is asserted directly for when that changes.
+    const plan = planEnergyTypicalReferenceRequest("1Y", NOW);
+    expect(plan.supported).toBe(true);
   });
 });

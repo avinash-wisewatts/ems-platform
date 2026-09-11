@@ -11,6 +11,8 @@ Read-only endpoints consumed by the EMS web application:
     GET /api/v1/sites/{site_id}/demand                  (Slice B: demand)
     GET /api/v1/sites/{site_id}/demand/current           (Slice B: demand)
     GET /api/v1/sites/{site_id}/power-quality            (Slice B: PQ)
+    GET /api/v1/sites/{site_id}/energy/consumption/evidence (Slice C: C2)
+    GET /api/v1/sites/{site_id}/energy/consumption/typical-reference (Slice C)
 
 Every endpoint requires the existing authenticated portal session. Tenant /
 site / space access is enforced server-side inside the database boundary
@@ -39,6 +41,23 @@ the site's SITE_CONSUMPTION-role meter directly against
 config.site_energy_meter_roles (independent of the demand-specific
 config.site_demand_policies) and reads telemetry.ca_energy_15min/hourly/
 daily. No PF/THD threshold is exposed -- none exists in the schema.
+
+GET /api/v1/sites/{site_id}/energy/consumption/evidence (Slice C, migration
+235) is an additive parallel read of the SAME two historians
+GET /energy/consumption reads -- it does not call, modify, or change the
+contract of that endpoint. Exposes coverage/gap/reset/rollover counters
+already present on those historian rows; invents no new quality
+classification.
+
+GET /api/v1/sites/{site_id}/energy/consumption/typical-reference (Slice C,
+migration 236) is the comparable-period historical reference (median of up
+to 8 coverage-eligible comparable periods; see the approved Slice C
+Historical Comparison decision pack). Additive alongside -- never a
+replacement for -- GET /energy/consumption; reads ONLY
+analytics.energy_consumption_daily (not the hourly table, which lacks a
+trustworthy site-local calendar date) and has NO dependency on migration
+235. One bounded request returns the complete reference; the frontend never
+issues N follow-up calls for this feature.
 """
 
 from __future__ import annotations
@@ -60,7 +79,9 @@ from src.analytics_api_service import (
     CurrentDemandResponse,
     CurrentUserResponse,
     DemandSeriesResponse,
+    EnergyConsumptionEvidenceResponse,
     EnergyConsumptionResponse,
+    EnergyTypicalReferenceResponse,
     MeasurementSeriesResponse,
     PowerQualityResponse,
     SitesResponse,
@@ -68,7 +89,9 @@ from src.analytics_api_service import (
     build_assets_response,
     build_current_demand_response,
     build_demand_series_response,
+    build_energy_consumption_evidence_response,
     build_energy_consumption_response,
+    build_energy_typical_reference_response,
     build_measurement_series_response,
     build_power_quality_response,
     build_sites_response,
@@ -78,10 +101,13 @@ from src.analytics_api_service import (
     fetch_site_current_demand,
     fetch_site_demand_series,
     fetch_site_energy_consumption,
+    fetch_site_energy_consumption_evidence,
+    fetch_site_energy_typical_reference,
     fetch_site_power_quality_series,
     fetch_site_spaces,
     fetch_space_measurement_series,
     parse_time_range,
+    parse_typical_reference_range,
     portal_user_can_access_space,
     portal_user_can_access_site,
     validate_measurement_parameter,
@@ -245,6 +271,128 @@ async def get_site_energy_consumption(
     return build_energy_consumption_response(
         site_id=site_id,
         resolution=resolved,
+        dt_from=dt_from,
+        dt_to=dt_to,
+        rows=rows,
+    )
+
+
+@router.get(
+    "/sites/{site_id}/energy/consumption/evidence",
+    response_model=EnergyConsumptionEvidenceResponse,
+    summary="Site energy consumption evidence/coverage counters (Slice C, C2)",
+    operation_id="getSiteEnergyConsumptionEvidence",
+    responses=_RESOURCE_RESPONSES,
+)
+async def get_site_energy_consumption_evidence(
+    request: Request,
+    site_id: UUID,
+    resolution: str = Query(
+        ...,
+        description="Time resolution. One of: 1h, 1d.",
+    ),
+    range_from: str = Query(
+        ...,
+        alias="from",
+        description="Inclusive ISO-8601 start of the window (UTC).",
+    ),
+    range_to: str = Query(
+        ...,
+        alias="to",
+        description="Exclusive ISO-8601 end of the window (UTC).",
+    ),
+) -> EnergyConsumptionEvidenceResponse:
+    """Slice C (C2). Additive parallel read of the SAME two historians
+    GET /energy/consumption reads (migration 235) -- does not call, modify,
+    or change the contract of get_site_energy_consumption above. Exposes
+    coverage/gap/reset/rollover counters that already exist on those
+    historian rows. No new quality classification is invented."""
+
+    user = _require_portal_user(request)
+
+    try:
+        resolved = validate_resolution(
+            resolution, tuple(ENERGY_RESOLUTION_MAX_WINDOW.keys())
+        )
+        dt_from, dt_to = parse_time_range(
+            range_from,
+            range_to,
+            resolution=resolved,
+            max_window_by_resolution=ENERGY_RESOLUTION_MAX_WINDOW,
+        )
+    except ApiContractError as exc:
+        raise _contract_error(exc)
+
+    if not await portal_user_can_access_site(user.portal_user_id, site_id):
+        raise _not_found("Site")
+
+    rows = await fetch_site_energy_consumption_evidence(
+        portal_user_id=user.portal_user_id,
+        site_id=site_id,
+        dt_from=dt_from,
+        dt_to=dt_to,
+        resolution=resolved,
+    )
+    return build_energy_consumption_evidence_response(
+        site_id=site_id,
+        resolution=resolved,
+        dt_from=dt_from,
+        dt_to=dt_to,
+        rows=rows,
+    )
+
+
+@router.get(
+    "/sites/{site_id}/energy/consumption/typical-reference",
+    response_model=EnergyTypicalReferenceResponse,
+    summary="Site typical historical consumption -- comparable-period reference (Slice C)",
+    operation_id="getSiteEnergyTypicalReference",
+    responses=_RESOURCE_RESPONSES,
+)
+async def get_site_energy_typical_reference(
+    request: Request,
+    site_id: UUID,
+    range_from: str = Query(
+        ...,
+        alias="from",
+        description="Inclusive ISO-8601 start of the CURRENT window (UTC).",
+    ),
+    range_to: str = Query(
+        ...,
+        alias="to",
+        description=(
+            "Exclusive ISO-8601 end of the current window (UTC). "
+            "(to - from) must be exactly 1, 7, 30, 90, or 365 whole days."
+        ),
+    ),
+) -> EnergyTypicalReferenceResponse:
+    """Slice C. Comparable-period historical reference (migration 236) --
+    always 8 requested comparable periods, median of the coverage-eligible
+    ones (minimum 5). One bounded request; no frontend N+1. Additive
+    alongside GET /energy/consumption -- does not call, modify, or change
+    its contract, and has no dependency on migration 235."""
+
+    user = _require_portal_user(request)
+
+    try:
+        dt_from, dt_to, period_length_days = parse_typical_reference_range(
+            range_from, range_to
+        )
+    except ApiContractError as exc:
+        raise _contract_error(exc)
+
+    if not await portal_user_can_access_site(user.portal_user_id, site_id):
+        raise _not_found("Site")
+
+    rows = await fetch_site_energy_typical_reference(
+        portal_user_id=user.portal_user_id,
+        site_id=site_id,
+        dt_from=dt_from,
+        dt_to=dt_to,
+    )
+    return build_energy_typical_reference_response(
+        site_id=site_id,
+        period_length_days=period_length_days,
         dt_from=dt_from,
         dt_to=dt_to,
         rows=rows,

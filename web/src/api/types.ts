@@ -118,6 +118,86 @@ export type EnergyConsumptionResponse = {
   series: EnergyConsumptionPoint[];
 };
 
+// ---- GET /api/v1/sites/{site_id}/energy/consumption/evidence (Slice C) ---
+// Additive parallel read of the SAME two historians /energy/consumption
+// reads -- exposes coverage/gap/reset/rollover counters that already exist
+// there but were never returned by that endpoint. Does NOT change
+// /energy/consumption's own response shape.
+//
+// valid_import_intervals/invalid_import_intervals (and export counterparts)
+// are a genuine complementary pair. gap_interval_count/reset_interval_count/
+// rollover_interval_count/invalid_interval_count are INDEPENDENT evidence
+// counters (traced to analytics.v_energy_semantic_rollup_15min, postgres/
+// ddl/147_combined_energy_quality_counters.sql -- NOT the register-delta
+// classifier's single quality_code column) -- NOT a mutually-exclusive
+// classification, NOT guaranteed to sum to source_interval_count, and
+// deliberately NOT the unrelated five-value measurement lattice
+// (web/src/components/QualityIndicator.tsx: GOOD/GAP/ESTIMATED/INVALID/
+// PARTIAL). See web/src/energy/evidence.ts.
+
+export type EnergyConsumptionEvidencePoint = {
+  bucket_start: string;
+  source_interval_count: number;
+  valid_import_intervals: number;
+  invalid_import_intervals: number;
+  valid_export_intervals: number;
+  invalid_export_intervals: number;
+  gap_interval_count: number;
+  reset_interval_count: number;
+  rollover_interval_count: number;
+  invalid_interval_count: number;
+  first_source_bucket: string | null;
+  last_source_bucket: string | null;
+};
+
+export type EnergyConsumptionEvidenceResponse = {
+  site_id: string;
+  resolution: EnergyResolution;
+  from: string;
+  to: string;
+  no_data: boolean;
+  series: EnergyConsumptionEvidencePoint[];
+};
+
+// ---- GET /api/v1/sites/{site_id}/energy/consumption/typical-reference ---
+// (Slice C -- comparable-period historical reference, per the approved
+// Slice C Historical Comparison decision pack.) Additive alongside, NEVER
+// a replacement for, /energy/consumption. Always exactly 8 windows,
+// regardless of whether each has data. typical_kwh is the median of the
+// eligible windows' totals and is null whenever sufficient is false --
+// insufficient history is never manufactured into a value. No dependency
+// on the evidence endpoint above; reads analytics.energy_consumption_daily
+// only (migration 236).
+
+export type EnergyTypicalReferenceWindow = {
+  window_index: number;
+  from: string;
+  to: string;
+  has_data: boolean;
+  total_kwh: number | null;
+  source_interval_count: number;
+  valid_import_intervals: number;
+  coverage_percent: number | null;
+  eligible: boolean;
+  gap_interval_count: number;
+  reset_interval_count: number;
+  rollover_interval_count: number;
+  invalid_interval_count: number;
+};
+
+export type EnergyTypicalReferenceResponse = {
+  site_id: string;
+  period_length_days: number;
+  from: string;
+  to: string;
+  typical_kwh: number | null;
+  requested_period_count: number;
+  windows_with_data_count: number;
+  eligible_period_count: number;
+  sufficient: boolean;
+  windows: EnergyTypicalReferenceWindow[];
+};
+
 // ---- GET /api/v1/sites/{site_id}/demand (Slice B) --------------------------
 // Reads analytics.demand_intervals only -- native interval grain, no
 // resolution parameter (there is no coarser persisted demand tier to pick

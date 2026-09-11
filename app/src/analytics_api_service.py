@@ -10,6 +10,7 @@ the database, keyed on the authenticated portal_user_id.
 
 from __future__ import annotations
 
+import statistics
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
@@ -60,6 +61,24 @@ POWER_QUALITY_RESOLUTION_MAX_WINDOW: dict[str, timedelta] = {
     "1h": timedelta(days=31),
     "1d": timedelta(days=366),
 }
+
+# Slice C -- Energy typical historical reference. Locked product rules from
+# the approved "Slice C Historical Comparison Final Implementation
+# Specification" -- not provisional, not engineering-chosen defaults.
+# period_length_days must be one of these five values (matching the
+# TODAY/7D/30D/3M/1Y presets); the comparable-period step and the 8/5/70%
+# constants below are enforced identically in migration 236's SQL body.
+TYPICAL_REFERENCE_PERIOD_LENGTHS_DAYS: tuple[int, ...] = (1, 7, 30, 90, 365)
+
+# The typical-reference function always requests exactly 8 comparable
+# periods (migration 236 hard-codes this via generate_series(1, 8)); this
+# constant exists so the response can echo it without a second source of
+# truth drifting out of sync.
+TYPICAL_REFERENCE_REQUESTED_PERIOD_COUNT: int = 8
+
+# Minimum number of the 8 requested periods that must be eligible (see
+# migration 236's eligible column) before a median is reported at all.
+TYPICAL_REFERENCE_MIN_ELIGIBLE_PERIODS: int = 5
 
 
 class ApiContractError(Exception):
@@ -144,6 +163,105 @@ class EnergyConsumptionResponse(BaseModel):
     range_to: datetime = Field(alias="to")
     no_data: bool
     series: list[EnergyConsumptionPoint]
+
+
+class EnergyConsumptionEvidencePoint(BaseModel):
+    """Slice C (C2). One bucket's evidence counters, read from the SAME
+    analytics.energy_consumption_hourly/daily rows migration 231's
+    EnergyConsumptionPoint already reads -- these columns exist there today
+    and were simply never selected. No new classification is invented here.
+
+    valid_import_intervals/invalid_import_intervals (and their export
+    counterparts) are a genuine complementary pair -- each interval is
+    exactly one or the other.
+
+    gap_interval_count/reset_interval_count/rollover_interval_count/
+    invalid_interval_count are INDEPENDENT evidence counters, traced (by
+    static reading of the migration/ddl files, not a live-catalog query) to
+    analytics.v_energy_semantic_rollup_15min (postgres/ddl/
+    147_combined_energy_quality_counters.sql), where each is an
+    independent COUNT(*) FILTER over its own boolean flag. They are NOT a
+    mutually-exclusive classification and are NOT guaranteed to sum to
+    source_interval_count -- a single interval can satisfy more than one
+    flag at once. No priority-resolved single status is derived here."""
+
+    bucket_start: datetime
+    source_interval_count: int
+    valid_import_intervals: int
+    invalid_import_intervals: int
+    valid_export_intervals: int
+    invalid_export_intervals: int
+    gap_interval_count: int
+    reset_interval_count: int
+    rollover_interval_count: int
+    invalid_interval_count: int
+    first_source_bucket: datetime | None
+    last_source_bucket: datetime | None
+
+
+class EnergyConsumptionEvidenceResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    site_id: UUID
+    resolution: str
+    range_from: datetime = Field(alias="from")
+    range_to: datetime = Field(alias="to")
+    no_data: bool
+    series: list[EnergyConsumptionEvidencePoint]
+
+
+class EnergyTypicalReferenceWindow(BaseModel):
+    """Slice C. One of the (always exactly 8) requested comparable
+    historical periods, as returned by migration 236's
+    get_portal_site_energy_typical_reference -- one row per window_index,
+    whether or not that window has data.
+
+    total_kwh is the window's own measured total (never a fabricated or
+    zero-filled value -- null whenever the window has no data at all).
+    eligible is true only when has_data AND coverage_percent >= 70.0 (the
+    locked product rule); gap/reset/rollover/invalid counts are independent
+    evidence and never determine eligible themselves (see the module-level
+    comment on TYPICAL_REFERENCE_MIN_ELIGIBLE_PERIODS)."""
+
+    window_index: int
+    range_from: datetime = Field(alias="from")
+    range_to: datetime = Field(alias="to")
+    has_data: bool
+    total_kwh: float | None
+    source_interval_count: int
+    valid_import_intervals: int
+    coverage_percent: float | None
+    eligible: bool
+    gap_interval_count: int
+    reset_interval_count: int
+    rollover_interval_count: int
+    invalid_interval_count: int
+
+
+class EnergyTypicalReferenceResponse(BaseModel):
+    """Slice C. Comparable-period historical reference for the CURRENT
+    window described by [from, to). Does not carry the current period's
+    own total -- that remains exclusively the existing, unmodified
+    EnergyConsumptionResponse from GET /energy/consumption; this response
+    is additive alongside it, never a replacement.
+
+    typical_kwh is the median of the eligible windows' totals, and is null
+    whenever eligible_period_count < TYPICAL_REFERENCE_MIN_ELIGIBLE_PERIODS
+    -- insufficient history NEVER produces a manufactured or partial
+    value."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    site_id: UUID
+    period_length_days: int
+    range_from: datetime = Field(alias="from")
+    range_to: datetime = Field(alias="to")
+    typical_kwh: float | None
+    requested_period_count: int
+    windows_with_data_count: int
+    eligible_period_count: int
+    sufficient: bool
+    windows: list[EnergyTypicalReferenceWindow]
 
 
 class SpaceSummary(BaseModel):
@@ -322,6 +440,45 @@ def parse_time_range(
     return dt_from, dt_to
 
 
+def parse_typical_reference_range(
+    from_raw: str, to_raw: str
+) -> tuple[datetime, datetime, int]:
+    """Parse a [from, to) window for the Slice C typical-reference
+    endpoint and derive period_length_days from it. Unlike
+    parse_time_range, there is no resolution parameter -- the "resolution"
+    here is entirely implied by the span, which must be a whole number of
+    days matching one of TYPICAL_REFERENCE_PERIOD_LENGTHS_DAYS (the same
+    five values migration 236's SQL body validates independently)."""
+
+    dt_from = _parse_instant(from_raw, "from")
+    dt_to = _parse_instant(to_raw, "to")
+
+    if dt_from >= dt_to:
+        raise ApiContractError(
+            "invalid_time_range", "from must be strictly before to"
+        )
+
+    span_seconds = (dt_to - dt_from).total_seconds()
+    if span_seconds % 86400 != 0:
+        raise ApiContractError(
+            "invalid_time_range",
+            "the requested window must be a whole number of days",
+        )
+
+    period_length_days = int(span_seconds // 86400)
+    if period_length_days not in TYPICAL_REFERENCE_PERIOD_LENGTHS_DAYS:
+        raise ApiContractError(
+            "invalid_period_length",
+            "period length must be one of: "
+            + ", ".join(
+                f"{d} day{'s' if d != 1 else ''}"
+                for d in TYPICAL_REFERENCE_PERIOD_LENGTHS_DAYS
+            ),
+        )
+
+    return dt_from, dt_to, period_length_days
+
+
 # ---------------------------------------------------------------------------
 # Data access -- scoped SECURITY DEFINER functions only. Read-only.
 # ---------------------------------------------------------------------------
@@ -436,6 +593,87 @@ async def fetch_site_energy_consumption(
             dt_to,
             resolution,
         ),
+    )
+
+
+async def fetch_site_energy_consumption_evidence(
+    *,
+    portal_user_id: int,
+    site_id: UUID,
+    dt_from: datetime,
+    dt_to: datetime,
+    resolution: str,
+) -> list[dict[str, Any]]:
+    """Slice C (C2). Reads analytics.get_portal_site_energy_consumption_evidence
+    (migration 235) -- an additive parallel read of the same two historians
+    migration 231's fetch_site_energy_consumption reads. Does not call or
+    modify that function."""
+
+    return await _read_rows(
+        """
+        SELECT
+            bucket_start,
+            source_interval_count,
+            valid_import_intervals,
+            invalid_import_intervals,
+            valid_export_intervals,
+            invalid_export_intervals,
+            gap_interval_count,
+            reset_interval_count,
+            rollover_interval_count,
+            invalid_interval_count,
+            first_source_bucket,
+            last_source_bucket
+        FROM analytics.get_portal_site_energy_consumption_evidence(
+            %s, %s, %s, %s, %s
+        )
+        ORDER BY bucket_start
+        """,
+        (
+            portal_user_id,
+            str(site_id),
+            dt_from,
+            dt_to,
+            resolution,
+        ),
+    )
+
+
+async def fetch_site_energy_typical_reference(
+    *,
+    portal_user_id: int,
+    site_id: UUID,
+    dt_from: datetime,
+    dt_to: datetime,
+) -> list[dict[str, Any]]:
+    """Slice C. Reads analytics.get_portal_site_energy_typical_reference
+    (migration 236) -- an additive read of analytics.energy_consumption_daily
+    only. Does not call, modify, or depend on migration 231's
+    fetch_site_energy_consumption or migration 235's
+    fetch_site_energy_consumption_evidence in any way."""
+
+    return await _read_rows(
+        """
+        SELECT
+            window_index,
+            window_from,
+            window_to,
+            has_data,
+            total_import_kwh,
+            source_interval_count,
+            valid_import_intervals,
+            coverage_percent,
+            eligible,
+            gap_interval_count,
+            reset_interval_count,
+            rollover_interval_count,
+            invalid_interval_count
+        FROM analytics.get_portal_site_energy_typical_reference(
+            %s, %s, %s, %s
+        )
+        ORDER BY window_index
+        """,
+        (portal_user_id, str(site_id), dt_from, dt_to),
     )
 
 
@@ -603,6 +841,112 @@ def build_energy_consumption_response(
         **{"from": dt_from, "to": dt_to},
         no_data=len(points) == 0,
         series=points,
+    )
+
+
+def build_energy_consumption_evidence_response(
+    *,
+    site_id: UUID,
+    resolution: str,
+    dt_from: datetime,
+    dt_to: datetime,
+    rows: list[dict[str, Any]],
+) -> EnergyConsumptionEvidenceResponse:
+    points = [
+        EnergyConsumptionEvidencePoint(
+            bucket_start=row["bucket_start"],
+            source_interval_count=int(row["source_interval_count"] or 0),
+            valid_import_intervals=int(row["valid_import_intervals"] or 0),
+            invalid_import_intervals=int(row["invalid_import_intervals"] or 0),
+            valid_export_intervals=int(row["valid_export_intervals"] or 0),
+            invalid_export_intervals=int(row["invalid_export_intervals"] or 0),
+            gap_interval_count=int(row["gap_interval_count"] or 0),
+            reset_interval_count=int(row["reset_interval_count"] or 0),
+            rollover_interval_count=int(row["rollover_interval_count"] or 0),
+            invalid_interval_count=int(row["invalid_interval_count"] or 0),
+            first_source_bucket=row["first_source_bucket"],
+            last_source_bucket=row["last_source_bucket"],
+        )
+        for row in rows
+    ]
+    return EnergyConsumptionEvidenceResponse(
+        site_id=site_id,
+        resolution=resolution,
+        **{"from": dt_from, "to": dt_to},
+        no_data=len(points) == 0,
+        series=points,
+    )
+
+
+def build_energy_typical_reference_response(
+    *,
+    site_id: UUID,
+    period_length_days: int,
+    dt_from: datetime,
+    dt_to: datetime,
+    rows: list[dict[str, Any]],
+) -> EnergyTypicalReferenceResponse:
+    """Slice C. All eligibility (per-window `eligible`) and evidence
+    counters come from migration 236's SQL verbatim -- this function's
+    only computed value is the median itself (statistics.median implements
+    exactly the approved specification's even/odd-count definition: the
+    middle value for an odd count, the mean of the two middle values for
+    an even count)."""
+
+    windows = [
+        EnergyTypicalReferenceWindow(
+            window_index=int(row["window_index"]),
+            **{"from": row["window_from"], "to": row["window_to"]},
+            has_data=bool(row["has_data"]),
+            total_kwh=(
+                float(row["total_import_kwh"])
+                if row["total_import_kwh"] is not None
+                else None
+            ),
+            source_interval_count=int(row["source_interval_count"] or 0),
+            valid_import_intervals=int(row["valid_import_intervals"] or 0),
+            coverage_percent=(
+                float(row["coverage_percent"])
+                if row["coverage_percent"] is not None
+                else None
+            ),
+            eligible=bool(row["eligible"]),
+            gap_interval_count=int(row["gap_interval_count"] or 0),
+            reset_interval_count=int(row["reset_interval_count"] or 0),
+            rollover_interval_count=int(row["rollover_interval_count"] or 0),
+            invalid_interval_count=int(row["invalid_interval_count"] or 0),
+        )
+        for row in rows
+    ]
+
+    windows_with_data_count = sum(1 for w in windows if w.has_data)
+    # eligible_period_count reflects migration 236's own `eligible` column
+    # verbatim -- the "5 of 8" the customer sees is always this count, even
+    # in the structurally-unreachable edge case where an eligible window's
+    # total_kwh is somehow null (see the defensive filter below, which only
+    # affects the median's OWN input list, never this reported count).
+    eligible_period_count = sum(1 for w in windows if w.eligible)
+    sufficient = eligible_period_count >= TYPICAL_REFERENCE_MIN_ELIGIBLE_PERIODS
+
+    eligible_totals = [
+        w.total_kwh for w in windows if w.eligible and w.total_kwh is not None
+    ]
+    typical_kwh = (
+        float(statistics.median(eligible_totals))
+        if sufficient and eligible_totals
+        else None
+    )
+
+    return EnergyTypicalReferenceResponse(
+        site_id=site_id,
+        period_length_days=period_length_days,
+        **{"from": dt_from, "to": dt_to},
+        typical_kwh=typical_kwh,
+        requested_period_count=TYPICAL_REFERENCE_REQUESTED_PERIOD_COUNT,
+        windows_with_data_count=windows_with_data_count,
+        eligible_period_count=eligible_period_count,
+        sufficient=sufficient,
+        windows=windows,
     )
 
 

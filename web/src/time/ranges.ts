@@ -210,15 +210,33 @@ export function isPresetSupported(preset: TimeRangePreset, kind: DataKind, now: 
 // Per the approved MVP comparison model (Q54/Q56), this increment implements
 // PREVIOUS_PERIOD and SAME_PERIOD_PREVIOUSLY only. Both are derived entirely
 // client-side from the already-resolved current range -- NO new API
-// endpoint, NO change to ENERGY_MAX_WINDOW_S. Rolling historical average and
-// configured expectation are explicitly out of scope for this increment.
+// endpoint, NO change to ENERGY_MAX_WINDOW_S.
+//
+// Slice C adds TYPICAL_HISTORICAL_REFERENCE below -- the approved
+// comparable-period historical reference (median of up to 8 coverage-
+// eligible comparable periods), computed server-side by migration 236 /
+// GET .../energy/consumption/typical-reference. This REPLACES the earlier,
+// provisional client-side "ROLLING_AVERAGE" (N=4 trailing mean) -- that
+// code was never applied/shipped and is removed outright, not deprecated
+// alongside the new implementation. Configured expectation (Q54-B) remains
+// out of scope: no schema, no defined shape/owner exists for it.
 // ---------------------------------------------------------------------------
 
-export type ComparisonBasis = "PREVIOUS_PERIOD" | "SAME_PERIOD_PREVIOUSLY";
+export type ComparisonBasis = "PREVIOUS_PERIOD" | "SAME_PERIOD_PREVIOUSLY" | "TYPICAL_HISTORICAL_REFERENCE";
+
+/**
+ * The subset of ComparisonBasis that shiftRangeForComparison /
+ * planEnergyComparisonRequest understand -- a single before/after shift.
+ * TYPICAL_HISTORICAL_REFERENCE is deliberately excluded: its comparable
+ * periods are selected server-side (migration 236), not by a client-side
+ * shift, and must never be passed to these two functions.
+ */
+export type HistoricalShiftBasis = Extract<ComparisonBasis, "PREVIOUS_PERIOD" | "SAME_PERIOD_PREVIOUSLY">;
 
 export const COMPARISON_BASIS_LABELS: Record<ComparisonBasis, string> = {
   PREVIOUS_PERIOD: "Previous period",
   SAME_PERIOD_PREVIOUSLY: "Same period, one year earlier",
+  TYPICAL_HISTORICAL_REFERENCE: "Typical historical consumption",
 };
 
 /**
@@ -227,7 +245,7 @@ export const COMPARISON_BASIS_LABELS: Record<ComparisonBasis, string> = {
  * (UTC calendar fields -- not merely a fixed millisecond shift, so month/day
  * boundaries stay meaningful).
  */
-export function shiftRangeForComparison(range: AbsoluteRange, basis: ComparisonBasis): AbsoluteRange {
+export function shiftRangeForComparison(range: AbsoluteRange, basis: HistoricalShiftBasis): AbsoluteRange {
   if (basis === "PREVIOUS_PERIOD") {
     const spanMs = Date.parse(range.to) - Date.parse(range.from);
     return {
@@ -268,7 +286,7 @@ export type EnergyComparisonPlan = {
  */
 export function planEnergyComparisonRequest(
   preset: TimeRangePreset,
-  basis: ComparisonBasis,
+  basis: HistoricalShiftBasis,
   now: Date = new Date(),
 ): EnergyComparisonPlan | UnsupportedPlan {
   const currentPlan = planEnergyRequest(preset, now);
@@ -279,4 +297,59 @@ export function planEnergyComparisonRequest(
     current: currentPlan.range,
     comparison: shiftRangeForComparison(currentPlan.range, basis),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Slice C -- Typical historical reference (comparable-period) planning.
+//
+// A THIRD comparison basis, not a replacement for PREVIOUS_PERIOD/
+// SAME_PERIOD_PREVIOUSLY above. Unlike those two, the 8 comparable periods
+// are selected and aggregated entirely SERVER-SIDE (migration 236) -- this
+// function's only job is to compute the CURRENT window to send as [from,
+// to) to GET .../energy/consumption/typical-reference, which the server
+// then uses to derive up to 8 comparable historical windows itself.
+//
+// The typical-reference endpoint requires (to - from) to be an EXACT whole
+// number of days (1/7/30/90/365). planEnergyRequest's range already
+// satisfies this for 7D/30D/3M/1Y (a pure "now minus N days" duration
+// subtraction is always exactly N*86400000ms, regardless of what
+// time-of-day "now" is). TODAY is the one exception: resolveRange's TODAY
+// window is UTC-midnight-to-now (a PARTIAL day, since "now" is rarely
+// exactly midnight) -- so here, and ONLY here, `to` is widened to exactly
+// one full day after `from`, reusing resolveRange's own (UTC-midnight-
+// aligned) `from` UNCHANGED.
+//
+// This intentionally inherits the same pre-existing UTC-vs-site-local
+// TODAY imprecision already documented in the approved Slice C Historical
+// Comparison specification (resolveRange's TODAY is not site-timezone-
+// aware) -- NOT fixed and NOT expanded here, per that specification's
+// explicit instruction to leave resolveRange/TODAY's existing behaviour
+// alone and treat it as a separate, already-reported issue. The CURRENT
+// VALUE the customer sees is entirely unaffected: it still comes from the
+// separate, unmodified GET /energy/consumption call using its own
+// unmodified midnight-to-now window; this plan's `current` is used ONLY
+// as the typical-reference request's own [from, to) parameter.
+// ---------------------------------------------------------------------------
+
+export type EnergyTypicalReferencePlan = {
+  supported: true;
+  /** [from, to) sent to GET .../energy/consumption/typical-reference.
+   *  Always an exact whole-day span (1/7/30/90/365 days). */
+  current: AbsoluteRange;
+};
+
+export function planEnergyTypicalReferenceRequest(
+  preset: TimeRangePreset,
+  now: Date = new Date(),
+): EnergyTypicalReferencePlan | UnsupportedPlan {
+  const currentPlan = planEnergyRequest(preset, now);
+  if (!currentPlan.supported) return currentPlan;
+
+  if (preset === "TODAY") {
+    const from = currentPlan.range.from;
+    const to = new Date(Date.parse(from) + DAY_MS).toISOString();
+    return { supported: true, current: { from, to } };
+  }
+
+  return { supported: true, current: currentPlan.range };
 }
