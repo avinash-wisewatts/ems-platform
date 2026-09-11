@@ -18,7 +18,10 @@ export type NavItem = {
 
 export const PRIMARY_NAV: readonly NavItem[] = [
   { key: "home", label: "Home", to: "/home", requiresAnyOf: ["dashboard.view"] },
-  { key: "features", label: "Feature areas (later phases)", to: "/features", requiresAnyOf: ["dashboard.view"] },
+  { key: "energy", label: "Energy", to: "/features/energy", requiresAnyOf: ["dashboard.view"] },
+  { key: "spaces", label: "Spaces", to: "/features/spaces", requiresAnyOf: ["dashboard.view"] },
+  { key: "assets", label: "Assets", to: "/features/assets", requiresAnyOf: ["dashboard.view"] },
+  { key: "features", label: "Other feature areas (later phases)", to: "/features", requiresAnyOf: ["dashboard.view"] },
 ];
 
 /** Admin-only shell affordances (still placeholders in Phase 8). */
@@ -33,8 +36,6 @@ export const SECONDARY_NAV: readonly NavItem[] = [
 
 export const PLANNED_FEATURE_AREAS: readonly { key: string; label: string }[] = [
   { key: "site-overview", label: "Site overview" },
-  { key: "space-environment", label: "Space environment (temperature / humidity / dew point)" },
-  { key: "energy", label: "Energy consumption" },
 ];
 
 export function visibleNav(items: readonly NavItem[], permissions: readonly string[]): NavItem[] {

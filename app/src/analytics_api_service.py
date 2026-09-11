@@ -129,6 +129,42 @@ class EnergyConsumptionResponse(BaseModel):
     series: list[EnergyConsumptionPoint]
 
 
+class SpaceSummary(BaseModel):
+    """Slice 0 (Hierarchy Foundation). Identity + placement only -- no
+    environmental snapshot, no comfort-target metadata (both out of scope
+    for this increment)."""
+
+    space_id: UUID
+    site_id: UUID
+    space_code: str
+    space_name: str
+
+
+class SpacesResponse(BaseModel):
+    site_id: UUID
+    spaces: list[SpaceSummary]
+
+
+class AssetSummary(BaseModel):
+    """Slice 0 (Hierarchy Foundation). Identity + placement only -- NO
+    relationship/component-tree data (explicitly deferred; see migration
+    232's header). space_id / parent_asset_id are passed through as-is and
+    may be null."""
+
+    asset_id: UUID
+    site_id: UUID
+    space_id: UUID | None = None
+    parent_asset_id: UUID | None = None
+    external_id: str
+    asset_name: str
+    lifecycle_status: str
+
+
+class AssetsResponse(BaseModel):
+    site_id: UUID
+    assets: list[AssetSummary]
+
+
 # ---------------------------------------------------------------------------
 # Request validation -- deterministic, closed-set, explicit windows.
 # ---------------------------------------------------------------------------
@@ -319,6 +355,32 @@ async def fetch_site_energy_consumption(
     )
 
 
+async def fetch_site_spaces(
+    portal_user_id: int, site_id: UUID
+) -> list[dict[str, Any]]:
+    return await _read_rows(
+        """
+        SELECT space_id, site_id, space_code, space_name
+        FROM analytics.list_portal_site_spaces(%s, %s)
+        """,
+        (portal_user_id, str(site_id)),
+    )
+
+
+async def fetch_site_assets(
+    portal_user_id: int, site_id: UUID
+) -> list[dict[str, Any]]:
+    return await _read_rows(
+        """
+        SELECT
+            asset_id, site_id, space_id, parent_asset_id,
+            external_id, asset_name, lifecycle_status
+        FROM analytics.list_portal_site_assets(%s, %s)
+        """,
+        (portal_user_id, str(site_id)),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Row -> response-model mapping.
 # ---------------------------------------------------------------------------
@@ -403,4 +465,41 @@ def build_energy_consumption_response(
         **{"from": dt_from, "to": dt_to},
         no_data=len(points) == 0,
         series=points,
+    )
+
+
+def build_spaces_response(
+    *, site_id: UUID, rows: list[dict[str, Any]]
+) -> SpacesResponse:
+    return SpacesResponse(
+        site_id=site_id,
+        spaces=[
+            SpaceSummary(
+                space_id=row["space_id"],
+                site_id=row["site_id"],
+                space_code=row["space_code"],
+                space_name=row["space_name"],
+            )
+            for row in rows
+        ],
+    )
+
+
+def build_assets_response(
+    *, site_id: UUID, rows: list[dict[str, Any]]
+) -> AssetsResponse:
+    return AssetsResponse(
+        site_id=site_id,
+        assets=[
+            AssetSummary(
+                asset_id=row["asset_id"],
+                site_id=row["site_id"],
+                space_id=row.get("space_id"),
+                parent_asset_id=row.get("parent_asset_id"),
+                external_id=row["external_id"],
+                asset_name=row["asset_name"],
+                lifecycle_status=row["lifecycle_status"],
+            )
+            for row in rows
+        ],
     )
