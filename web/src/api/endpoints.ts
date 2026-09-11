@@ -11,6 +11,8 @@
  *   GET /api/v1/sites/{site_id}/demand                  (Slice B)
  *   GET /api/v1/sites/{site_id}/demand/current           (Slice B)
  *   GET /api/v1/sites/{site_id}/power-quality            (Slice B)
+ *   GET /api/v1/sites/{site_id}/energy/consumption/evidence (Slice C)
+ *   GET /api/v1/sites/{site_id}/energy/consumption/typical-reference (Slice C)
  *
  * No other paths, no arbitrary parameters, no generic query mechanism.
  *
@@ -31,8 +33,10 @@ import type {
   CurrentDemandResponse,
   CurrentUser,
   DemandSeriesResponse,
+  EnergyConsumptionEvidenceResponse,
   EnergyConsumptionResponse,
   EnergyResolution,
+  EnergyTypicalReferenceResponse,
   MeasurementParameter,
   MeasurementResolution,
   MeasurementSeriesResponse,
@@ -83,6 +87,40 @@ export function getSiteEnergyConsumption(
   return apiGet<EnergyConsumptionResponse>(
     `/sites/${encodeURIComponent(siteId)}/energy/consumption`,
     { resolution: query.resolution, from: query.from, to: query.to },
+    init,
+  );
+}
+
+/** Slice C (C2). Additive parallel read of the SAME two historians
+ *  getSiteEnergyConsumption reads -- does not call or replace it. */
+export function getSiteEnergyConsumptionEvidence(
+  siteId: string,
+  query: EnergyQuery,
+  init?: RequestInit,
+): Promise<EnergyConsumptionEvidenceResponse> {
+  return apiGet<EnergyConsumptionEvidenceResponse>(
+    `/sites/${encodeURIComponent(siteId)}/energy/consumption/evidence`,
+    { resolution: query.resolution, from: query.from, to: query.to },
+    init,
+  );
+}
+
+export type TypicalReferenceQuery = {
+  from: string; // ISO-8601 UTC -- must span exactly 1, 7, 30, 90, or 365 whole days
+  to: string; // ISO-8601 UTC (exclusive)
+};
+
+/** Slice C. Comparable-period historical reference (migration 236). One
+ *  bounded call -- never N follow-up requests. Additive alongside, and has
+ *  no dependency on, getSiteEnergyConsumptionEvidence above. */
+export function getSiteEnergyTypicalReference(
+  siteId: string,
+  query: TypicalReferenceQuery,
+  init?: RequestInit,
+): Promise<EnergyTypicalReferenceResponse> {
+  return apiGet<EnergyTypicalReferenceResponse>(
+    `/sites/${encodeURIComponent(siteId)}/energy/consumption/typical-reference`,
+    { from: query.from, to: query.to },
     init,
   );
 }
