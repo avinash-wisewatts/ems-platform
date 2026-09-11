@@ -6,6 +6,8 @@ Read-only endpoints consumed by the EMS web application:
     GET /api/v1/sites
     GET /api/v1/sites/{site_id}/energy/consumption
     GET /api/v1/spaces/{space_id}/measurements
+    GET /api/v1/sites/{site_id}/spaces                  (Slice 0: hierarchy)
+    GET /api/v1/sites/{site_id}/assets                  (Slice 0: hierarchy)
 
 Every endpoint requires the existing authenticated portal session. Tenant /
 site / space access is enforced server-side inside the database boundary
@@ -17,6 +19,11 @@ GET /api/v1/me (added in Phase 8) is an additive session echo -- it reflects
 only the already-safe fields of the authenticated session so a browser SPA
 can bootstrap identity/role/scope without a second auth system. It changes
 none of the three frozen Phase 7 data contracts.
+
+GET /api/v1/sites/{site_id}/spaces and .../assets (Slice 0, migration 232)
+are additive, site-scoped hierarchy listings -- identity and placement only.
+Neither reads metadata.asset_relationships; asset component-tree / "spaces
+served by an asset" are explicitly out of scope for this increment.
 """
 
 from __future__ import annotations
@@ -32,15 +39,21 @@ from src.analytics_api_service import (
     ENERGY_RESOLUTION_MAX_WINDOW,
     MEASUREMENT_RESOLUTION_MAX_WINDOW,
     ApiContractError,
+    AssetsResponse,
     CurrentUserResponse,
     EnergyConsumptionResponse,
     MeasurementSeriesResponse,
     SitesResponse,
+    SpacesResponse,
+    build_assets_response,
     build_energy_consumption_response,
     build_measurement_series_response,
     build_sites_response,
+    build_spaces_response,
     fetch_accessible_sites,
+    fetch_site_assets,
     fetch_site_energy_consumption,
+    fetch_site_spaces,
     fetch_space_measurement_series,
     parse_time_range,
     portal_user_can_access_space,
@@ -276,3 +289,44 @@ async def get_space_measurements(
         dt_to=dt_to,
         rows=rows,
     )
+
+
+@router.get(
+    "/sites/{site_id}/spaces",
+    response_model=SpacesResponse,
+    summary="List a site's spaces (Slice 0: Hierarchy Foundation)",
+    operation_id="listSiteSpaces",
+    responses=_RESOURCE_RESPONSES,
+)
+async def list_site_spaces(request: Request, site_id: UUID) -> SpacesResponse:
+    """Identity + placement only. No environmental snapshot, no comfort
+    targets -- both out of scope for this increment; see
+    GET /spaces/{space_id}/measurements for a space's live readings."""
+
+    user = _require_portal_user(request)
+
+    if not await portal_user_can_access_site(user.portal_user_id, site_id):
+        raise _not_found("Site")
+
+    rows = await fetch_site_spaces(user.portal_user_id, site_id)
+    return build_spaces_response(site_id=site_id, rows=rows)
+
+
+@router.get(
+    "/sites/{site_id}/assets",
+    response_model=AssetsResponse,
+    summary="List a site's assets (Slice 0: Hierarchy Foundation)",
+    operation_id="listSiteAssets",
+    responses=_RESOURCE_RESPONSES,
+)
+async def list_site_assets(request: Request, site_id: UUID) -> AssetsResponse:
+    """Identity + placement only. NO component-tree / relationship data --
+    explicitly deferred (see migration 232's header)."""
+
+    user = _require_portal_user(request)
+
+    if not await portal_user_can_access_site(user.portal_user_id, site_id):
+        raise _not_found("Site")
+
+    rows = await fetch_site_assets(user.portal_user_id, site_id)
+    return build_assets_response(site_id=site_id, rows=rows)

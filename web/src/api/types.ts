@@ -64,6 +64,39 @@ export type MeasurementSeriesResponse = {
   series: MeasurementPoint[];
 };
 
+// ---- GET /api/v1/sites/{site_id}/spaces (Slice 0: Hierarchy Foundation) --
+
+export type SpaceSummary = {
+  space_id: string;
+  site_id: string;
+  space_code: string;
+  space_name: string;
+};
+
+export type SpacesResponse = {
+  site_id: string;
+  spaces: SpaceSummary[];
+};
+
+// ---- GET /api/v1/sites/{site_id}/assets (Slice 0: Hierarchy Foundation) --
+// Identity + placement only. NO relationship/component-tree fields --
+// explicitly deferred; see docs in endpoints.ts.
+
+export type AssetSummary = {
+  asset_id: string;
+  site_id: string;
+  space_id: string | null;
+  parent_asset_id: string | null;
+  external_id: string;
+  asset_name: string;
+  lifecycle_status: string;
+};
+
+export type AssetsResponse = {
+  site_id: string;
+  assets: AssetSummary[];
+};
+
 // ---- GET /api/v1/sites/{site_id}/energy/consumption --------------------
 
 export const ENERGY_RESOLUTIONS = ["1h", "1d"] as const;
