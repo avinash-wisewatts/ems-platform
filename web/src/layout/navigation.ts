@@ -19,6 +19,8 @@ export type NavItem = {
 export const PRIMARY_NAV: readonly NavItem[] = [
   { key: "home", label: "Home", to: "/home", requiresAnyOf: ["dashboard.view"] },
   { key: "energy", label: "Energy", to: "/features/energy", requiresAnyOf: ["dashboard.view"] },
+  { key: "demand", label: "Demand", to: "/features/demand", requiresAnyOf: ["dashboard.view"] },
+  { key: "power-quality", label: "Power Quality", to: "/features/power-quality", requiresAnyOf: ["dashboard.view"] },
   { key: "spaces", label: "Spaces", to: "/features/spaces", requiresAnyOf: ["dashboard.view"] },
   { key: "assets", label: "Assets", to: "/features/assets", requiresAnyOf: ["dashboard.view"] },
   { key: "features", label: "Other feature areas (later phases)", to: "/features", requiresAnyOf: ["dashboard.view"] },

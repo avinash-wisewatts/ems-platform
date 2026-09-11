@@ -12,7 +12,7 @@
  * the API is NOT expanded to satisfy the frontend.
  */
 
-import type { EnergyResolution, MeasurementResolution } from "../api/types";
+import type { EnergyResolution, MeasurementResolution, PowerQualityResolution } from "../api/types";
 
 export const TIME_RANGE_PRESETS = ["TODAY", "7D", "30D", "3M", "1Y"] as const;
 export type TimeRangePreset = (typeof TIME_RANGE_PRESETS)[number];
@@ -25,7 +25,15 @@ export const PRESET_LABELS: Record<TimeRangePreset, string> = {
   "1Y": "1 Year",
 };
 
-export type DataKind = "measurement" | "energy";
+/**
+ * Slice B (A1): widened to reserve "demand" and "power-quality" for the
+ * Demand and Power Quality screens. Deliberately minimal for this increment
+ * -- the corresponding planDemandRequest/planPowerQualityRequest functions
+ * (and isPresetSupported's dispatch for them) are added in Phase 2/3 once
+ * the real resolution caps are known from the actual backend functions
+ * (B1/D1), not guessed here.
+ */
+export type DataKind = "measurement" | "energy" | "demand" | "power-quality";
 
 export type AbsoluteRange = { from: string; to: string };
 
@@ -66,6 +74,15 @@ const ENERGY_MAX_WINDOW_S: Record<EnergyResolution, number> = {
   "1d": 366 * 86400,
 };
 
+// Slice B caps -- kept in sync with analytics_api_service.py's
+// DEMAND_MAX_WINDOW / POWER_QUALITY_RESOLUTION_MAX_WINDOW.
+const DEMAND_MAX_WINDOW_S = 31 * 86400;
+const POWER_QUALITY_MAX_WINDOW_S: Record<PowerQualityResolution, number> = {
+  "15min": 7 * 86400,
+  "1h": 31 * 86400,
+  "1d": 366 * 86400,
+};
+
 export type MeasurementPlan = {
   supported: true;
   resolution: MeasurementResolution;
@@ -74,6 +91,17 @@ export type MeasurementPlan = {
 export type EnergyPlan = {
   supported: true;
   resolution: EnergyResolution;
+  range: AbsoluteRange;
+};
+/** No `resolution` field -- analytics.demand_intervals has no coarser
+ *  persisted tier to select between (see analytics_api_service.py). */
+export type DemandPlan = {
+  supported: true;
+  range: AbsoluteRange;
+};
+export type PowerQualityPlan = {
+  supported: true;
+  resolution: PowerQualityResolution;
   range: AbsoluteRange;
 };
 export type UnsupportedPlan = {
@@ -119,9 +147,61 @@ export function planEnergyRequest(
   return { supported: true, resolution, range };
 }
 
+/** How to request site demand for a preset, or why it can't be. No
+ *  resolution to choose -- see DemandPlan. */
+export function planDemandRequest(
+  preset: TimeRangePreset,
+  now: Date = new Date(),
+): DemandPlan | UnsupportedPlan {
+  const range = resolveRange(preset, now);
+  const span = windowSeconds(range);
+  if (span > DEMAND_MAX_WINDOW_S) {
+    return {
+      supported: false,
+      reason: `The "${PRESET_LABELS[preset]}" range is longer than the analytics API currently serves for demand.`,
+    };
+  }
+  return { supported: true, range };
+}
+
+/** How to request site power quality for a preset, or why it can't be. */
+export function planPowerQualityRequest(
+  preset: TimeRangePreset,
+  now: Date = new Date(),
+): PowerQualityPlan | UnsupportedPlan {
+  const range = resolveRange(preset, now);
+  const span = windowSeconds(range);
+  const resolution: PowerQualityResolution =
+    span <= POWER_QUALITY_MAX_WINDOW_S["15min"]
+      ? "15min"
+      : span <= POWER_QUALITY_MAX_WINDOW_S["1h"]
+        ? "1h"
+        : "1d";
+  if (span > POWER_QUALITY_MAX_WINDOW_S[resolution]) {
+    return {
+      supported: false,
+      reason: `The "${PRESET_LABELS[preset]}" range is longer than the analytics API currently serves for power quality.`,
+    };
+  }
+  return { supported: true, resolution, range };
+}
+
+function planForKind(kind: DataKind, preset: TimeRangePreset, now: Date) {
+  switch (kind) {
+    case "measurement":
+      return planMeasurementRequest(preset, now);
+    case "demand":
+      return planDemandRequest(preset, now);
+    case "power-quality":
+      return planPowerQualityRequest(preset, now);
+    case "energy":
+    default:
+      return planEnergyRequest(preset, now);
+  }
+}
+
 export function isPresetSupported(preset: TimeRangePreset, kind: DataKind, now: Date = new Date()): boolean {
-  const plan = kind === "measurement" ? planMeasurementRequest(preset, now) : planEnergyRequest(preset, now);
-  return plan.supported;
+  return planForKind(kind, preset, now).supported;
 }
 
 // ---------------------------------------------------------------------------

@@ -44,6 +44,23 @@ ENERGY_RESOLUTION_MAX_WINDOW: dict[str, timedelta] = {
     "1d": timedelta(days=366),
 }
 
+# Slice B -- Demand. analytics.demand_intervals carries no coarser
+# persisted tier (native interval grain only, 900s or 1800s per the site's
+# config.site_demand_policies), so there is a single flat window cap rather
+# than a per-resolution table -- reusing the same 31-day bound already
+# established for energy's 1h tier, not an invented new number.
+DEMAND_MAX_WINDOW: timedelta = timedelta(days=31)
+
+# Slice B -- Power Quality. telemetry.ca_energy_15min/hourly/daily are the
+# three confirmed-live tiers (migrations 51/52/53). 1h and 1d reuse the
+# exact energy caps above; 15min gets a conservative, shorter bound in the
+# same spirit as the measurement "raw" tier's 24h cap.
+POWER_QUALITY_RESOLUTION_MAX_WINDOW: dict[str, timedelta] = {
+    "15min": timedelta(days=7),
+    "1h": timedelta(days=31),
+    "1d": timedelta(days=366),
+}
+
 
 class ApiContractError(Exception):
     """A request violated the fixed /api/v1 contract (maps to HTTP 422)."""
@@ -163,6 +180,73 @@ class AssetSummary(BaseModel):
 class AssetsResponse(BaseModel):
     site_id: UUID
     assets: list[AssetSummary]
+
+
+class DemandIntervalPoint(BaseModel):
+    """One finalized interval from analytics.demand_intervals -- already
+    meter-role-resolved and quality-tagged upstream; passed through as-is."""
+
+    interval_start: datetime
+    interval_end: datetime
+    demand_kw: float | None
+    peak_power_kw: float | None
+    quality_status: str
+    coverage_percent: float | None
+
+
+class DemandSeriesResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    site_id: UUID
+    range_from: datetime = Field(alias="from")
+    range_to: datetime = Field(alias="to")
+    no_data: bool
+    series: list[DemandIntervalPoint]
+
+
+class CurrentDemandResponse(BaseModel):
+    """The single most recent analytics.demand_state row for the site, if
+    any. has_data distinguishes "no demand_state row yet" from a genuine
+    reading -- there is no [from, to) window for a single current-state
+    read, so no_data would be misleading here."""
+
+    site_id: UUID
+    has_data: bool
+    interval_start: datetime | None = None
+    interval_end: datetime | None = None
+    current_demand_kw: float | None = None
+    current_demand_kva: float | None = None
+    quality_status: str | None = None
+    coverage_percent: float | None = None
+
+
+class PowerQualityPoint(BaseModel):
+    """One bucket from telemetry.ca_energy_15min/hourly/daily for the
+    site's resolved SITE_CONSUMPTION meter. current_thd is returned per
+    phase (L1/L2/L3) -- no total-THD column exists in these continuous
+    aggregates; see migration 234's header."""
+
+    bucket_start: datetime
+    power_factor_avg: float | None
+    power_factor_min: float | None
+    power_factor_max: float | None
+    current_thd_l1_avg: float | None
+    current_thd_l1_max: float | None
+    current_thd_l2_avg: float | None
+    current_thd_l2_max: float | None
+    current_thd_l3_avg: float | None
+    current_thd_l3_max: float | None
+
+
+class PowerQualityResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    site_id: UUID
+    resolution: str
+    range_from: datetime = Field(alias="from")
+    range_to: datetime = Field(alias="to")
+    no_data: bool
+    series: list[PowerQualityPoint]
 
 
 # ---------------------------------------------------------------------------
@@ -381,6 +465,60 @@ async def fetch_site_assets(
     )
 
 
+async def fetch_site_demand_series(
+    *,
+    portal_user_id: int,
+    site_id: UUID,
+    dt_from: datetime,
+    dt_to: datetime,
+) -> list[dict[str, Any]]:
+    return await _read_rows(
+        """
+        SELECT interval_start, interval_end, demand_kw, peak_power_kw,
+               quality_status, coverage_percent
+        FROM analytics.get_portal_site_demand_series(%s, %s, %s, %s)
+        ORDER BY interval_start
+        """,
+        (portal_user_id, str(site_id), dt_from, dt_to),
+    )
+
+
+async def fetch_site_current_demand(
+    portal_user_id: int, site_id: UUID
+) -> dict[str, Any] | None:
+    rows = await _read_rows(
+        """
+        SELECT interval_start, interval_end, current_demand_kw,
+               current_demand_kva, quality_status, coverage_percent
+        FROM analytics.get_portal_site_current_demand(%s, %s)
+        """,
+        (portal_user_id, str(site_id)),
+    )
+    return rows[0] if rows else None
+
+
+async def fetch_site_power_quality_series(
+    *,
+    portal_user_id: int,
+    site_id: UUID,
+    resolution: str,
+    dt_from: datetime,
+    dt_to: datetime,
+) -> list[dict[str, Any]]:
+    return await _read_rows(
+        """
+        SELECT bucket_start,
+               power_factor_avg, power_factor_min, power_factor_max,
+               current_thd_l1_avg, current_thd_l1_max,
+               current_thd_l2_avg, current_thd_l2_max,
+               current_thd_l3_avg, current_thd_l3_max
+        FROM analytics.get_portal_site_power_quality_series(%s, %s, %s, %s, %s)
+        ORDER BY bucket_start
+        """,
+        (portal_user_id, str(site_id), resolution, dt_from, dt_to),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Row -> response-model mapping.
 # ---------------------------------------------------------------------------
@@ -502,4 +640,104 @@ def build_assets_response(
             )
             for row in rows
         ],
+    )
+
+
+def build_demand_series_response(
+    *,
+    site_id: UUID,
+    dt_from: datetime,
+    dt_to: datetime,
+    rows: list[dict[str, Any]],
+) -> DemandSeriesResponse:
+    points = [
+        DemandIntervalPoint(
+            interval_start=row["interval_start"],
+            interval_end=row["interval_end"],
+            demand_kw=(
+                float(row["demand_kw"]) if row["demand_kw"] is not None else None
+            ),
+            peak_power_kw=(
+                float(row["peak_power_kw"])
+                if row["peak_power_kw"] is not None
+                else None
+            ),
+            quality_status=row["quality_status"],
+            coverage_percent=(
+                float(row["coverage_percent"])
+                if row["coverage_percent"] is not None
+                else None
+            ),
+        )
+        for row in rows
+    ]
+    return DemandSeriesResponse(
+        site_id=site_id,
+        **{"from": dt_from, "to": dt_to},
+        no_data=len(points) == 0,
+        series=points,
+    )
+
+
+def build_current_demand_response(
+    *, site_id: UUID, row: dict[str, Any] | None
+) -> CurrentDemandResponse:
+    if row is None:
+        return CurrentDemandResponse(site_id=site_id, has_data=False)
+    return CurrentDemandResponse(
+        site_id=site_id,
+        has_data=True,
+        interval_start=row["interval_start"],
+        interval_end=row["interval_end"],
+        current_demand_kw=(
+            float(row["current_demand_kw"])
+            if row["current_demand_kw"] is not None
+            else None
+        ),
+        current_demand_kva=(
+            float(row["current_demand_kva"])
+            if row["current_demand_kva"] is not None
+            else None
+        ),
+        quality_status=row["quality_status"],
+        coverage_percent=(
+            float(row["coverage_percent"])
+            if row["coverage_percent"] is not None
+            else None
+        ),
+    )
+
+
+def build_power_quality_response(
+    *,
+    site_id: UUID,
+    resolution: str,
+    dt_from: datetime,
+    dt_to: datetime,
+    rows: list[dict[str, Any]],
+) -> PowerQualityResponse:
+    def _f(row: dict[str, Any], key: str) -> float | None:
+        return float(row[key]) if row[key] is not None else None
+
+    points = [
+        PowerQualityPoint(
+            bucket_start=row["bucket_start"],
+            power_factor_avg=_f(row, "power_factor_avg"),
+            power_factor_min=_f(row, "power_factor_min"),
+            power_factor_max=_f(row, "power_factor_max"),
+            current_thd_l1_avg=_f(row, "current_thd_l1_avg"),
+            current_thd_l1_max=_f(row, "current_thd_l1_max"),
+            current_thd_l2_avg=_f(row, "current_thd_l2_avg"),
+            current_thd_l2_max=_f(row, "current_thd_l2_max"),
+            current_thd_l3_avg=_f(row, "current_thd_l3_avg"),
+            current_thd_l3_max=_f(row, "current_thd_l3_max"),
+        )
+        for row in rows
+    ]
+    return PowerQualityResponse(
+        site_id=site_id,
+        resolution=resolution,
+        **{"from": dt_from, "to": dt_to},
+        no_data=len(points) == 0,
+        series=points,
     )

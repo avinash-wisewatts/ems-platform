@@ -117,3 +117,72 @@ export type EnergyConsumptionResponse = {
   no_data: boolean;
   series: EnergyConsumptionPoint[];
 };
+
+// ---- GET /api/v1/sites/{site_id}/demand (Slice B) --------------------------
+// Reads analytics.demand_intervals only -- native interval grain, no
+// resolution parameter (there is no coarser persisted demand tier to pick
+// between). quality_status/coverage_percent are real, already-computed
+// fields, not invented for the frontend.
+
+export type DemandIntervalPoint = {
+  interval_start: string;
+  interval_end: string;
+  demand_kw: number | null;
+  peak_power_kw: number | null;
+  quality_status: string;
+  coverage_percent: number | null;
+};
+
+export type DemandSeriesResponse = {
+  site_id: string;
+  from: string;
+  to: string;
+  no_data: boolean;
+  series: DemandIntervalPoint[];
+};
+
+// ---- GET /api/v1/sites/{site_id}/demand/current (Slice B) ------------------
+// Reads analytics.demand_state only -- the live/current-interval table,
+// distinct from the finalized historical series above.
+
+export type CurrentDemandResponse = {
+  site_id: string;
+  has_data: boolean;
+  interval_start: string | null;
+  interval_end: string | null;
+  current_demand_kw: number | null;
+  current_demand_kva: number | null;
+  quality_status: string | null;
+  coverage_percent: number | null;
+};
+
+// ---- GET /api/v1/sites/{site_id}/power-quality (Slice B) -------------------
+// Resolves the site's SITE_CONSUMPTION-role meter via
+// config.site_energy_meter_roles and reads telemetry.ca_energy_15min/
+// hourly/daily. THD is per-phase (L1/L2/L3) only -- no total-THD column
+// exists in the source aggregates, so none is fabricated here.
+
+export const POWER_QUALITY_RESOLUTIONS = ["15min", "1h", "1d"] as const;
+export type PowerQualityResolution = (typeof POWER_QUALITY_RESOLUTIONS)[number];
+
+export type PowerQualityPoint = {
+  bucket_start: string;
+  power_factor_avg: number | null;
+  power_factor_min: number | null;
+  power_factor_max: number | null;
+  current_thd_l1_avg: number | null;
+  current_thd_l1_max: number | null;
+  current_thd_l2_avg: number | null;
+  current_thd_l2_max: number | null;
+  current_thd_l3_avg: number | null;
+  current_thd_l3_max: number | null;
+};
+
+export type PowerQualityResponse = {
+  site_id: string;
+  resolution: PowerQualityResolution;
+  from: string;
+  to: string;
+  no_data: boolean;
+  series: PowerQualityPoint[];
+};
