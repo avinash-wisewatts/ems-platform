@@ -13,6 +13,7 @@ Read-only endpoints consumed by the EMS web application:
     GET /api/v1/sites/{site_id}/power-quality            (Slice B: PQ)
     GET /api/v1/sites/{site_id}/energy/consumption/evidence (Slice C: C2)
     GET /api/v1/sites/{site_id}/energy/consumption/typical-reference (Slice C)
+    GET /api/v1/sites/{site_id}/telemetry-freshness      (MVP-4: Data Quality & Freshness)
 
 Every endpoint requires the existing authenticated portal session. Tenant /
 site / space access is enforced server-side inside the database boundary
@@ -58,6 +59,20 @@ analytics.energy_consumption_daily (not the hourly table, which lacks a
 trustworthy site-local calendar date) and has NO dependency on migration
 235. One bounded request returns the complete reference; the frontend never
 issues N follow-up calls for this feature.
+
+GET /api/v1/sites/{site_id}/telemetry-freshness (MVP-4, migration 237) is a
+device connectivity/freshness signal, deliberately separate from and never
+merged into the measurement-quality lattice (GOOD/GAP/ESTIMATED/INVALID/
+PARTIAL) or into Demand's quality_status/coverage_percent -- see
+docs/00-governance/decision-packs/mvp-4-data-quality-and-freshness-decision-pack.md
+Sec 5/5a. Returns one FRESH/STALE/NO_DATA/UNKNOWN state per domain (energy,
+demand, power_quality) -- deliberately no blended site-wide verdict. Energy
+and Power Quality resolve the same SITE_CONSUMPTION-role meter
+get_site_power_quality already resolves; Demand resolves only the
+currently-effective SITE-scope demand policy's device (the customer-facing
+site Demand figure is always scope_type='SITE' -- see migration 233).
+Informational only: does not read, write, or otherwise influence Site
+Health, Energy Attention, or any existing Energy/Demand/PQ calculation.
 """
 
 from __future__ import annotations
@@ -85,6 +100,7 @@ from src.analytics_api_service import (
     MeasurementSeriesResponse,
     PowerQualityResponse,
     SitesResponse,
+    SiteTelemetryFreshnessResponse,
     SpacesResponse,
     build_assets_response,
     build_current_demand_response,
@@ -94,6 +110,7 @@ from src.analytics_api_service import (
     build_energy_typical_reference_response,
     build_measurement_series_response,
     build_power_quality_response,
+    build_site_telemetry_freshness_response,
     build_sites_response,
     build_spaces_response,
     fetch_accessible_sites,
@@ -105,6 +122,7 @@ from src.analytics_api_service import (
     fetch_site_energy_typical_reference,
     fetch_site_power_quality_series,
     fetch_site_spaces,
+    fetch_site_telemetry_freshness,
     fetch_space_measurement_series,
     parse_time_range,
     parse_typical_reference_range,
@@ -643,3 +661,28 @@ async def get_site_power_quality(
         dt_to=dt_to,
         rows=rows,
     )
+
+
+@router.get(
+    "/sites/{site_id}/telemetry-freshness",
+    response_model=SiteTelemetryFreshnessResponse,
+    summary="Site device telemetry freshness, per domain (MVP-4)",
+    operation_id="getSiteTelemetryFreshness",
+    responses=_RESOURCE_RESPONSES,
+)
+async def get_site_telemetry_freshness(
+    request: Request, site_id: UUID
+) -> SiteTelemetryFreshnessResponse:
+    """Device connectivity/freshness only -- a signal separate from, and
+    independent of, measurement quality and Demand's calculation-status
+    vocabulary. Informational: never influences Site Health, Energy
+    Attention, or any existing calculation. No device_id, gateway_id, or
+    internal telemetry-state name is returned."""
+
+    user = _require_portal_user(request)
+
+    if not await portal_user_can_access_site(user.portal_user_id, site_id):
+        raise _not_found("Site")
+
+    row = await fetch_site_telemetry_freshness(user.portal_user_id, site_id)
+    return build_site_telemetry_freshness_response(site_id=site_id, row=row)
