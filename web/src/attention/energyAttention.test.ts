@@ -192,3 +192,60 @@ describe("evaluateEnergyAttention -- MVP-3 approved 15% rule", () => {
     expect(item!.trigger).toContain("15%");
   });
 });
+
+describe("evaluateEnergyAttention -- floating-point boundary regression (PR #50 review finding)", () => {
+  // Round test totals (115 vs 100) happen to land on EXACTLY 15/-15 in
+  // IEEE-754 arithmetic, which is why the tests above never exposed this.
+  // Real measured kWh totals are essentially never round numbers -- these
+  // fixtures use non-round totals whose TRUE mathematical deviation is
+  // exactly +/-15%, but whose FLOATING-POINT computation lands a hair off
+  // it (verified via `node -e`, not hand-picked to merely "look realistic"):
+  //   (158.01 - 137.4) / 137.4 * 100  === 14.999999999999988  (not 15)
+  //   (75.905 - 89.3)  / 89.3  * 100  === -14.999999999999996 (not -15)
+  // Before the fix, both of these failed to trigger under a raw `>=`/`<=`
+  // comparison -- a false negative at the exact boundary the product rule
+  // requires to trigger.
+
+  it("a mathematically exact +15% deviation triggers HIGH, even though it computes to 14.999999999999988", () => {
+    const result = referenceResult({ currentTotalKwh: 158.01, comparisonTotalKwh: 137.4 });
+    expect(result.deltaPercent).toBeCloseTo(15, 9);
+    expect(result.deltaPercent).not.toBe(15); // proves this is the float-noise case, not a round number
+
+    const item = evaluate(result);
+    expect(item).not.toBeNull();
+    expect(item!.direction).toBe("HIGH");
+  });
+
+  it("a mathematically exact -15% deviation triggers LOW, even though it computes to -14.999999999999996", () => {
+    const result = referenceResult({ currentTotalKwh: 75.905, comparisonTotalKwh: 89.3 });
+    expect(result.deltaPercent).toBeCloseTo(-15, 9);
+    expect(result.deltaPercent).not.toBe(-15); // proves this is the float-noise case, not a round number
+
+    const item = evaluate(result);
+    expect(item).not.toBeNull();
+    expect(item!.direction).toBe("LOW");
+  });
+
+  it("a genuine +14.9% deviation (100x larger than the float-noise margin) still does not trigger", () => {
+    // 137.4 * 1.149 -- a REAL difference from +15%, not floating-point noise.
+    const item = evaluate(referenceResult({ currentTotalKwh: 137.4 * 1.149, comparisonTotalKwh: 137.4 }));
+    expect(item).toBeNull();
+  });
+
+  it("a genuine -14.9% deviation still does not trigger", () => {
+    const item = evaluate(referenceResult({ currentTotalKwh: 89.3 * 0.851, comparisonTotalKwh: 89.3 }));
+    expect(item).toBeNull();
+  });
+
+  it("a genuine +16% deviation (clearly outside the threshold) still triggers HIGH", () => {
+    const item = evaluate(referenceResult({ currentTotalKwh: 137.4 * 1.16, comparisonTotalKwh: 137.4 }));
+    expect(item).not.toBeNull();
+    expect(item!.direction).toBe("HIGH");
+  });
+
+  it("a genuine -16% deviation still triggers LOW", () => {
+    const item = evaluate(referenceResult({ currentTotalKwh: 89.3 * 0.84, comparisonTotalKwh: 89.3 }));
+    expect(item).not.toBeNull();
+    expect(item!.direction).toBe("LOW");
+  });
+});

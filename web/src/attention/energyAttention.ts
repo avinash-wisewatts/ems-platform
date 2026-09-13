@@ -18,6 +18,15 @@
  *   - Strictly between -threshold and +threshold -> no Attention.
  *   - Exactly +/-threshold triggers (>=/<=, per the approved wording).
  *
+ * Floating-point note: `deltaPercent` is `(currentTotalKwh -
+ * comparisonTotalKwh) / comparisonTotalKwh * 100` over real (non-round)
+ * measured kWh totals, so a mathematically exact +/-15% deviation can
+ * compute to e.g. 14.999999999999988 rather than exactly 15 -- an IEEE-754
+ * representation artifact, not a different real-world value. THRESHOLD_EPSILON
+ * absorbs only that representation noise (~1e-13 in practice); it is far too
+ * small to move the boundary by anything a customer could perceive as a
+ * different percentage, so the approved 15% semantics are unchanged.
+ *
  * Gap/reset/rollover/invalid counters on the CURRENT period never suppress
  * or alter this calculation -- they are attached to the item's dataQuality
  * field only, mirroring how Slice C's own comparable-window evidence is
@@ -44,6 +53,12 @@ export type EnergyAttentionInput = {
   investigatePath: string;
 };
 
+/** Absorbs IEEE-754 division noise (observed ~1e-13) at the threshold
+ *  boundary without loosening the 15% product rule itself -- ten orders of
+ *  magnitude smaller than any percentage difference a customer could ever
+ *  perceive as materially different from the configured threshold. */
+const THRESHOLD_EPSILON = 1e-9;
+
 function formatDeltaPercent(deltaPercent: number): string {
   const sign = deltaPercent >= 0 ? "+" : "";
   return `${sign}${deltaPercent.toFixed(1)}%`;
@@ -65,9 +80,9 @@ export function evaluateEnergyAttention({
   const threshold = policy.thresholdPercent;
 
   let direction: "HIGH" | "LOW";
-  if (deltaPercent >= threshold) {
+  if (deltaPercent >= threshold - THRESHOLD_EPSILON) {
     direction = "HIGH";
-  } else if (deltaPercent <= -threshold) {
+  } else if (deltaPercent <= -threshold + THRESHOLD_EPSILON) {
     direction = "LOW";
   } else {
     return null;
