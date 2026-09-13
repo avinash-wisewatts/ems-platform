@@ -1,0 +1,268 @@
+EMS Analytics Platform — Phase 1B Implementation Report
+Energy Consumption Semantic Consolidation — Persisted Refresh/Aggregation Path Contract Test
+
+Status: IMPLEMENTED, LOCALLY VALIDATED, COMMITTED, AND PUSHED TO origin/staging.
+NOT MANUALLY DEPLOYED (any deployment occurs only via the existing automatic
+CI/CD staging workflow, if and when triggered by this push).
+
+Commit: 55102002e0b412c3b8eb298d21d5dd0ab413c206
+Subject: test: add Phase 1B energy consumption semantic contract
+Branch: staging, pushed to origin/staging (0 ahead / 0 behind after push)
+
+===============================================================================
+1. SUMMARY
+===============================================================================
+
+Phase 1B adds a disposable-database behavioral contract test that proves the
+canonical persisted energy-consumption pipeline behaves as designed:
+
+    analytics.energy_consumption_{1min,5min}  ->  15min  ->  hourly / daily
+
+The test exercises the REAL repository functions
+(analytics.refresh_energy_consumption_15min, _hourly, _daily) and the REAL
+canonical classifier (analytics.classify_energy_register_delta) — it does not
+reimplement or re-derive their logic. Per the Phase 1B plan, this phase does
+NOT migrate any consumer (the canonical energy-consumption objects currently
+have zero real consumers, unlike Phase 1A's connectivity function).
+
+No production SQL, migrations, views, functions, Grafana dashboards, staging,
+or production infrastructure were modified. Implementation is confined to
+exactly three files (Section 6).
+
+===============================================================================
+2. DISCREPANCIES DISCOVERED DURING SOURCE INSPECTION (REPORTED BEFORE PROCEEDING)
+===============================================================================
+
+Per the standing instruction to investigate and report any discrepancy between
+the approved plan and actual repository behavior before changing anything
+outside the three-file scope, two discrepancies were found and reported to the
+user prior to writing fixture SQL:
+
+2.1 GAP does not exclude consumption (plan wording vs. verified behavior)
+
+    The Phase 1B plan's literal wording stated that a GAP interval "must not
+    contribute to consumption and must be represented in the appropriate
+    invalid/gap count." Direct inspection of
+    postgres/ddl/81_energy_register_delta_classifier.sql shows this is NOT
+    what the canonical classifier does:
+
+        analytics.classify_energy_register_delta(...) sets, for GAP:
+            quality_code = 'GAP'
+            is_valid     = TRUE
+            delta_wh     = the computed candidate delta (preserved, not NULL)
+
+    Because analytics.v_energy_semantic_rollup_15min sums consumption via
+    `sum(import_consumption_kwh) FILTER (WHERE import_is_valid)`, a GAP
+    interval's delta DOES contribute to the summed consumption. Only the
+    separate `gap_interval_count` counter flags it — GAP is informational,
+    not exclusionary. Only plain RESET (register decreased, resolved via
+    reset_behavior = REJECT_DELTA or FLAG_ONLY; not RESET_FROM_ZERO) has
+    is_valid = FALSE among the four requested scenarios and is the only one
+    actually excluded from the sum.
+
+    Resolution: this is not a production defect. It is a wording mismatch in
+    the plan's description of a working, deliberate behavior (a `GAP` is a
+    long-elapsed-but-otherwise-normal interval; its energy still happened and
+    is legitimately counted, while ROLLOVER/RESET/etc. represent genuine
+    register discontinuities that must be handled specially). The test was
+    built to assert the VERIFIED, ACTUAL behavior, not the plan's original
+    assumption. Scenario 1 (Section 4.1) explicitly asserts GAP's delta is
+    included in the consumption sum.
+
+2.2 Native tier (1min/5min) cannot be refreshed inside a transaction
+
+    analytics.refresh_energy_consumption_1min and _5min read from
+    telemetry.ca_energy_1min / ca_energy_5min — TimescaleDB continuous
+    aggregates with materialized_only = TRUE. TimescaleDB cannot refresh a
+    continuous aggregate inside an explicit transaction block
+    (BEGIN ... COMMIT/ROLLBACK), which conflicts with this test's hard
+    requirement to run entirely inside one BEGIN/ROLLBACK transaction.
+
+    Resolution (approved): the native tier is seeded by inserting directly
+    into analytics.energy_consumption_1min, using the REAL canonical
+    classifier function via `CROSS JOIN LATERAL
+    analytics.classify_energy_register_delta(...)` for every row — the
+    classifier itself computes every quality_code / is_valid / delta_wh /
+    reset_detected / rollover_detected value used; none are hand-asserted
+    fictitious values. The real, unmodified refresh_energy_consumption_15min,
+    _hourly, and _daily functions are then called against that seeded data.
+    This is fully transaction-safe because all three of those functions read
+    only from plain persisted tables/views (confirmed from source — none
+    depend on a continuous aggregate), so the full persisted rollup chain
+    (15min -> hourly, and 15min -> daily) is exercised for real.
+
+    Scope boundary: the raw-telemetry -> continuous-aggregate -> native
+    classification hop (the CAGG refresh itself) is not exercised by this
+    disposable-transaction test and is explicitly out of scope for Phase 1B
+    per this constraint.
+
+===============================================================================
+3. TEST STRATEGY
+===============================================================================
+
+One organization and one site (timezone Asia/Kolkata, UTC+05:30 — a
+non-whole-hour offset, required to discriminate site-local-day rollup from a
+naive UTC-hour-first rollup) are shared across three independent device
+scenarios. energy_consumption_{1min,5min,15min,hourly,daily} carry no foreign
+key to metadata.devices/gateways/assets (confirmed from their DDL — only a
+composite PRIMARY KEY), so no device/gateway/asset/asset_devices fixtures were
+needed; only organization_id/site_id needed to exist for real, since the daily
+refresh function inner-joins metadata.sites for the timezone.
+
+===============================================================================
+4. TEST SCENARIOS AND RESULTS (ALL PASSED)
+===============================================================================
+
+4.1 Scenario 1 — GOOD / GAP / RESET / ROLLOVER classification and 15-minute
+    additive rollup
+
+    Device A, one 15-minute bucket [09:00,09:15) UTC 2026-01-01, four native
+    one-minute import-side intervals, each independently classified via a
+    real call to analytics.classify_energy_register_delta with distinct
+    register-semantics parameters (GOOD, GAP via elapsed_minutes exceeding
+    gap_threshold, RESET via rollover_behavior=NONE + reset_behavior=
+    REJECT_DELTA on a decreasing register, ROLLOVER via rollover_behavior=
+    FIXED_MODULUS on a decreasing register). Export held at a constant GOOD
+    classification throughout as a control.
+
+    Verified classifier outputs: GOOD delta=10Wh, GAP delta=20Wh (is_valid=
+    TRUE), RESET delta=NULL (is_valid=FALSE), ROLLOVER delta=60Wh (is_valid=
+    TRUE, rollover_detected=TRUE).
+
+    After calling the real refresh_energy_consumption_15min, asserted:
+        import_consumption_kwh = 0.090  (10+20+60 Wh; RESET's NULL excluded)
+        export_consumption_kwh = 0.020  (4 x 5 Wh GOOD)
+        source_interval_count  = 4
+        valid_import_intervals = 3, invalid_import_intervals = 1
+        valid_export_intervals = 4, invalid_export_intervals = 0
+        gap_interval_count      = 1
+        reset_interval_count    = 1
+        rollover_interval_count = 1
+        invalid_interval_count  = 1 (RESET only; export always valid)
+
+    Result: PASSED. Confirms additive-sum-of-valid-intervals semantics and
+    the corrected GAP-contributes-to-consumption understanding (2.1).
+
+4.2 Scenario 2 — Hourly derived from 15-minute only
+
+    Device B, two 15-minute buckets in the same hour [10:00,11:00) UTC, one
+    simple GOOD native interval per bucket (0.015 kWh and 0.025 kWh import).
+    After the real refresh_energy_consumption_15min (two rows) and the real
+    refresh_energy_consumption_hourly, asserted the single hourly row:
+        import_consumption_kwh = 0.040 (additive sum of the two 15-min rows)
+        source_interval_count  = 2
+
+    Result: PASSED. Consistent with the hourly function's own source (reads
+    exclusively from analytics.energy_consumption_15min; its own comment
+    states it "must never recalculate energy from coarse cumulative register
+    MIN/MAX values").
+
+4.3 Scenario 3 — Daily derived from 15-minute only, site-local-timezone
+    correctness (discriminating fixture)
+
+    Device C. Two 15-minute rows seeded directly into
+    analytics.energy_consumption_15min at 18:00 UTC and 18:30 UTC on
+    2025-12-31 — both inside the SAME UTC hour [18:00,19:00). In Asia/Kolkata
+    (UTC+05:30), local midnight falls at 18:30 UTC, so the 18:00 bucket is
+    still 2025-12-31 locally while the 18:30 bucket is already 2026-01-01
+    locally. This scenario tests the daily function's own source/timezone
+    logic specifically (15-minute rollup arithmetic is already proven in 4.1),
+    so the 15-minute rows were seeded directly rather than re-derived from
+    native data.
+
+    After the real refresh_energy_consumption_daily, asserted:
+        Two distinct daily rows exist for device C (would collapse to one row
+        if daily were incorrectly derived from an hourly-first rollup, since
+        both source buckets share one UTC hour).
+        consumption_date=2025-12-31: import_consumption_kwh=0.050,
+            site_timezone='Asia/Kolkata',
+            bucket_start=2025-12-30 18:30:00+00 (local midnight for that day)
+        consumption_date=2026-01-01: import_consumption_kwh=0.070,
+            bucket_start=2025-12-31 18:30:00+00 (local midnight for that day)
+
+    Result: PASSED. Directly disproves the failure mode of hourly-first daily
+    derivation and confirms the daily function's actual FROM clause
+    (analytics.energy_consumption_15min only, never hourly).
+
+===============================================================================
+5. FULL INTEGRATION-SUITE RESULT
+===============================================================================
+
+scripts/test/run_integration_environment.sh — full clean disposable-database
+reset and re-run (steps 1-13, the Phase 1A connectivity step, the new
+Phase 1B energy-consumption step, and step 14 migration-ledger verification):
+
+    Exit code: 0
+    ERROR lines: none
+    New step output:
+        "Energy consumption semantic contract assertions passed."
+    Final banner: "Canonical integration-test database is ready."
+
+No fixture-bug iterations were required (unlike Phase 1A, which needed three
+corrections) — the test passed on the first full run.
+
+===============================================================================
+6. EXACT IMPLEMENTATION SCOPE — THREE FILES ONLY
+===============================================================================
+
+    1. scripts/test/assert_energy_consumption_semantic_contract.sql  (new)
+    2. scripts/test/assert_energy_consumption_semantic_contract.sh   (new)
+    3. scripts/test/run_integration_environment.sh                   (modified,
+       +4 lines: one new invocation of the new .sh wrapper, in the same style
+       as the existing Phase 1A connectivity-semantics step)
+
+No other file was created or modified for Phase 1B. In particular, none of
+the following were touched: analytics.v_energy_consumption_15min,
+analytics.get_grafana_asset_energy_intervals(), analytics.v_grafana_energy_
+samples, analytics.v_grafana_asset_electrical_samples,
+analytics.classify_energy_register_delta(), any Grafana dashboard, any
+migration file, any production DDL, the demand engine, load profile, energy
+balance, connectivity objects, Telegraf, live-telemetry, the CI workflow
+YAML, .gitignore, AnalyticalPlatformArchitecture.txt, or the Audit/ folder's
+prior contents.
+
+===============================================================================
+7. EXECUTABLE-BIT VERIFICATION (LESSON CARRIED FORWARD FROM PHASE 1A)
+===============================================================================
+
+This repository has core.filemode = false, so `chmod +x` on the working-tree
+file alone is NOT sufficient — git ignores the working-tree executable bit
+when staging under this setting, which is the exact root cause of the Phase 1A
+CI failure (a script committed as mode 100644, causing "Permission denied",
+exit 126, in the CI/CD database-integration-tests job).
+
+Learning from that incident, the executable bit was forced directly in the
+git index BEFORE staging for commit, using:
+
+    git update-index --chmod=+x scripts/test/assert_energy_consumption_semantic_contract.sh
+
+Verified via `git ls-files --stage` and `git diff --cached --summary`:
+
+    100755 75a0c614c7c49d27703c6efecfb03261392bd456 0  scripts/test/assert_energy_consumption_semantic_contract.sh
+    create mode 100755  scripts/test/assert_energy_consumption_semantic_contract.sh
+
+The blob content is a normal LF-terminated bash script (confirmed via `file`
+and byte inspection); the mode was set with zero content change.
+
+===============================================================================
+8. PRODUCTION / STAGING / GRAFANA / MIGRATION IMPACT
+===============================================================================
+
+Explicit confirmation: no production SQL, no migration file, no Grafana
+dashboard or datasource, no staging infrastructure, and no production
+infrastructure were modified, queried in a mutating way, or deployed to as
+part of Phase 1B. All work occurred in the local disposable Docker Compose
+test database (compose.test.yaml, container timescaledb-test) and local
+repository files only. SSH was not used. No remote commands were executed.
+
+===============================================================================
+9. COMMIT / PUSH STATUS
+===============================================================================
+
+Commit 55102002e0b412c3b8eb298d21d5dd0ab413c206 was created containing exactly
+the three files in Section 6 (399 insertions, 0 deletions), then pushed to
+origin/staging (a8cce58..5510200). origin/staging now points at
+55102002e0b412c3b8eb298d21d5dd0ab413c206; local staging is 0 ahead / 0 behind.
+No manual deployment or SSH access to staging/production occurred as part of
+this push. Any deployment beyond this point occurs only via the repository's
+existing automatic CI/CD staging workflow, if and when triggered.

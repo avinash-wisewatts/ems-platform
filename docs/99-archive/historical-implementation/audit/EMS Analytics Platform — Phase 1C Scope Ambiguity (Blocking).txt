@@ -1,0 +1,142 @@
+EMS Analytics Platform — Phase 1C Scope Ambiguity (Blocking)
+
+Status: INVESTIGATION ONLY. No files modified, no commits, no staging/production
+access. This document explains why "Phase 1C" cannot be started yet without a
+scope decision from the user, per their own explicit instruction: "If the
+source documents do not clearly define Phase 1C, stop and tell me exactly
+what is ambiguous rather than inventing requirements."
+
+===============================================================================
+1. THE CORE PROBLEM: TWO UNRECONCILED PHASE-LETTERING SCHEMES, AND ACTUAL
+   EXECUTION ALREADY DIVERGED FROM BOTH
+===============================================================================
+
+Two source documents each propose a phase sequence, and they do not use the
+same lettering for the same content:
+
+Architecture Gap Analysis (Phase 0 -> Phase 1 Transition), §B:
+    Phase A - operational hygiene (job-schedule drift, one tenant-safety grant)
+    Phase B - semantic consolidation (reconcile the energy/demand/connectivity
+              duplicate implementations to their proven-correct originals)
+    Phase C - resolution-routing consistency across all Grafana-facing energy
+              readers
+    Phase D - environment quality classification
+    Phase E - dashboard SQL review
+    Phase F - staging commissioning
+    Phase G - Analytics API design
+
+Phase 1 Canonical Semantic Model — Final Reconciliation, §F:
+    Phase 1A - semantic decisions
+    Phase 1B - job-schedule correction (independent)
+    Phase 1C - energy-consumption consolidation
+    Phase 1D - resolution routing
+    Phase 1E - quality model completion
+    Phase 1F - Grafana migration to canonical objects
+    Phase 1G - staging commissioning
+    Phase 2  - Analytics API
+
+Neither document's sequence is what was actually executed:
+    Actual Phase 1A = connectivity semantic consolidation only (one slice of
+        Gap Analysis's Phase B / Reconciliation's "semantic decisions" bucket)
+    Actual Phase 1B = an energy-consumption CONTRACT TEST proving the
+        canonical calculation correct — explicitly NOT the full "energy-
+        consumption consolidation" the Reconciliation's own "1C" describes,
+        and explicitly NOT the job-schedule correction the Reconciliation's
+        own "1B" describes.
+
+The job-schedule correction that both documents place early (Gap Analysis
+Phase A; Reconciliation 1B) has still not been done — re-confirmed this
+session in the Phase 1B CI/CD staging verification log (FAIL: normalization
+job schedule/overlap drift, energy/environment routing job overlap drift, all
+still present on staging as of commit 5510200).
+
+The Phase 1B Implementation Plan itself (the most recent, most authoritative
+statement of sequencing intent) explicitly states energy-consumption CONSUMER
+MIGRATION — the remainder of the Reconciliation's literal "1C" bucket — is
+"deliberately deferred to a later phase, once resolution-routing (a separate,
+already-identified gap) is also addressed." That is a direct, first-party
+statement that resolution-routing (Reconciliation's 1D / Gap Analysis's Phase
+C) is a PREREQUISITE for finishing what the Reconciliation called 1C — which
+means treating "Phase 1C" as "finish energy-consumption consolidation now"
+would contradict the project's own most recent stated dependency ordering.
+
+===============================================================================
+2. VERIFIED CURRENT STATE OF EACH CANDIDATE (READ-ONLY, THIS SESSION)
+===============================================================================
+
+Candidate 1 — Job-schedule drift correction (Gap Analysis Phase A / Recon 1B)
+    Still open. Confirmed via this session's Phase 1B CI/CD staging log:
+    "Normalization job does not have the expected 1-minute schedule",
+    "Normalization/Energy/Environment routing job does not use the expected
+    15-minute overlap." Canonical values confirmed in
+    postgres/jobs/42_normalization_background_job.sql (schedule_interval =>
+    INTERVAL '1 minute'). Gap Analysis calls this explicitly "the first
+    implementation task recommended... lowest-risk, zero-ambiguity,
+    already-fully-diagnosed."
+
+Candidate 2 — Resolution-routing consistency (Gap Analysis Phase C / Recon 1D)
+    Still open and re-confirmed this session:
+    - analytics.get_grafana_asset_energy_intervals (current definition,
+      postgres/ddl/141_asset_energy_persisted_read_path.sql, migration 029)
+      reads directly from analytics.energy_consumption_1min with NO
+      resolution parameter and NO call to any router at all — confirmed by
+      direct read of its current SQL body.
+    - analytics.get_canonical_energy_read (migrations 042/191/192) DOES
+      accept p_requested_resolution/p_fallback_policy, but no live SQL caller
+      of it was found anywhere in postgres/ (grep found zero invocations,
+      only comments referencing it in migration 046) — it appears to be
+      orphaned/superseded, not "forced native" as the Gap Analysis
+      originally described; the actual current state is arguably worse
+      (unused) or at least different from what was documented, and would
+      need re-verification as part of scoping this phase properly.
+    - A separate, correctly-tiered router exists for a different concern
+      (migration 046, electrical-trend samples: <=24h native, <=14d 15m,
+      >14d 1h) — proving the tiering pattern is known-good elsewhere in the
+      codebase but not applied to the consumption-figure readers.
+    This is a HIGH-severity, well-diagnosed, but NOT fully re-audited-this-
+    session gap — the exact current caller graph would need a fresh,
+    dedicated read-only pass before scoping, since one of the two objects the
+    Gap Analysis described (get_canonical_energy_read) may no longer be
+    called at all.
+
+Candidate 3 — Complete energy-consumption consolidation (Recon's literal 1C:
+    retire the 4 non-canonical implementations, migrate real consumers)
+    The canonical calculation itself is now proven (Phase 1B). Consumer
+    migration is explicitly, first-party deferred pending Candidate 2 (see
+    §1). Proceeding with this now would reopen a dependency the project's
+    own most recent planning document established — not a "concrete
+    contradiction" in the sense of a defect, but a direct conflict with
+    stated sequencing intent that the user should decide whether to
+    override.
+
+Candidate 4 — Demand consolidation (Gap Analysis Phase B, energy's sibling
+    duplication: 3 implementations, 2 orphaned/informal, still
+    Grafana-connected in places)
+    Not investigated this session beyond the existing Phase 0 audit record
+    (Metric Lineage Catalogue §3, Grafana Audit). No fresh verification
+    performed. Never attempted in any phase so far. Structurally similar in
+    shape to what Phase 1A did for connectivity, but a different metric
+    family entirely — the source documents do not explicitly sequence it
+    ahead of or behind resolution-routing.
+
+===============================================================================
+3. WHY THIS BLOCKS PRODUCING THE REQUESTED ASSESSMENT
+===============================================================================
+
+The requested "Phase 1C Implementation Readiness Assessment" (sections A-K)
+and the follow-up concrete implementation plan both presuppose one resolved
+objective. Given four textually-supported, non-equivalent candidates — and
+given the two source documents' own lettering schemes already diverged from
+what was actually built in 1A/1B — selecting one silently would be inventing
+the requirement rather than retrieving it, which the user explicitly
+prohibited. This is reported as a stop, not a guess.
+
+===============================================================================
+4. WHAT IS NEEDED TO PROCEED
+===============================================================================
+
+A decision on which of the four candidates above (or a different one) the
+user intends "Phase 1C" to mean. Once specified, the full Readiness
+Assessment (A-K) and a concrete, execution-ready implementation plan can be
+produced for that objective specifically, following the same evidence
+discipline used in Phase 1A/1B.

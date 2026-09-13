@@ -1,0 +1,93 @@
+EMS Analytics Platform — Architecture Gap Analysis (Phase 0 → Phase 1 Transition)
+
+Method note: this document is a reconciliation of the nine Phase 0 audits already produced in this investigation, reframed against the Development Bible (AnalyticalPlatformArchitecture.txt) and the architectural direction restated in this request. No new broad discovery was performed. One targeted source check was made this turn (confirming pg_notify('ems_live_device_update', ...) in postgres/ddl/139_live_telemetry_state.sql:213, called from telemetry.ingest_live_rtdata()) to verify the live-path NOTIFY claim before treating it as fact — it is VERIFIED, correcting my own earlier uncertainty about that mechanism.
+
+---
+
+1. Executive Summary
+
+The repository already implements the shape of the target architecture — a raw→normalized→domain→aggregate→analytics→Grafana pipeline with analytics.* as the sole Grafana-facing boundary, a real (if incomplete) validated-energy lineage separate from general telemetry aggregation, and a genuinely coherent tenant-isolation mechanism at the database layer. The major gaps are not in ingestion. They are downstream: (1) the same metric is calculated in multiple independent, non-reconciled places (energy consumption 5×, demand 3×, device-connectivity 3×), (2) the resolution-routing logic that is supposed to pick the right physical table for a given time range exists in some paths and is entirely absent or hardcoded-wrong in others, (3) two documented job-schedule drifts from canonical configuration persist unresolved on staging, and (4) staging currently has zero commissioned devices, so most of this cannot be runtime-validated under load. Ingestion itself (Telegraf → mqtt_staging → raw_messages, broad MQTT subscription, identity resolution at normalization rather than at the broker) is compatible with the target architecture as documented and shows no evidence requiring redesign.
+
+---
+
+2. Current Architecture
+
+Historical path (VERIFIED)
+
+HiveMQ → Telegraf → public.mqtt_staging (INSTEAD OF INSERT adapter, returns 0 rows on SELECT by design) → telemetry.raw_messages (durable, no tenant/device columns) → telemetry.v_rtdata (Eniscope payload parser) → telemetry.v_normalized_points (identity + profile resolution, INNER JOINs — unmatched devices produce zero rows) → telemetry.normalized_points (canonical hypertable) → telemetry.v_energy_measurements_route / v_environment_measurements_route → telemetry.energy_measurements / environment_measurements / water_measurements / asset_health / device_status → two aggregation lineages → analytics.* → Grafana. Source: docs/operations/TELEMETRY_PIPELINE.md, postgres/ddl/{07_telemetry_archive,23_views,37_telemetry_normalization_view,38_normalized_points_hypertable,43,46,66,79}.sql.
+
+Live path (VERIFIED, corrected from my own earlier uncertainty)
+
+HiveMQ → live-telemetry service (its own independent MQTT client, LiveTelemetryBroker, host/port/creds from live_config — NOT Telegraf) → telemetry.ingest_live_rtdata() upserts telemetry.device_live_point_state → pg_notify('ems_live_device_update', device_id) (ddl/139_live_telemetry_state.sql:213) → live-telemetry's listener → publish_device_update() (live_main.py:121) queries admin.get_portal_asset_live_state / analytics.get_grafana_asset_live_state / analytics.get_grafana_asset_connectivity_context → pushes over three independently-isolated WebSocket hubs (portal-user hub, Grafana-adapter hub, Grafana-adapter status hub) → asset-overview.json's 6 live-datasource canvas panels + 1 status stat panel via the custom wisewatts-live-datasource plugin. Historical and live are two independent MQTT consumers of HiveMQ — confirmed architecturally distinct, not a shared subscription.
+
+Semantic layer (VERIFIED — see full detail in the Semantic Layer Audit)
+
+No single unifying object. Four layers each hold part of the semantic model: metadata (structural registry — logical_points, device_field_mapping, asset_points), config (calculation rules — energy_register_semantics, interval_quality_rules, demand_register_semantics, telemetry_capture_policies), analytics (actual calculation — classifier functions, v_grafana_* presentation views), and Grafana panel SQL itself (a fourth layer with its own ad hoc logic that sometimes duplicates and sometimes bypasses the layers below it, though never by querying telemetry.*/metadata.* directly — zero such bypasses were found in any of the 7 dashboards).
+
+Aggregation (VERIFIED — two parallel, deliberately separate lineages, per the Bible's own distinction)
+
+- General telemetry CAGGs: telemetry.ca_energy_{1min,5min,15min,hourly,daily} + supplemental ca_energy_electrical_ext_* / ca_energy_phase_power_* + ca_environment_{15min,hourly}. MAX/MIN of cumulative registers, AVG/MIN/MAX of instantaneous values, no quality classification.
+- Validated/reporting-grade energy consumption: native analytics.energy_consumption_{1min,5min} (register-delta, classified once via classify_energy_register_delta()) → persisted rollups energy_consumption_{15min,hourly,daily}. This is exactly the Bible's "clear distinction between general telemetry aggregation and validated/reporting-grade energy consumption" — it already exists, and the gap is not its absence but its incomplete wiring to Grafana (see §5, §6).
+
+---
+
+3. Target Architecture (from AnalyticalPlatformArchitecture.txt and this request's restated direction only)
+
+Standard role-aware EMS workflows (Executive/Facility Manager/Site Operator/Service Engineer), not customer-built dashboards; a semantic layer defining Metric/Dimension/Entity/Unit/Time/Resolution/Quality/Calculation/Aggregation/Scope as one addressable model; an analytics API speaking in EMS concepts (/sites/{id}/energy/consumption) rather than table names; the analytics engine — not the user — choosing physical resolution for a requested time range; analytics.* as the only Grafana-facing boundary; Grafana repositioned to ops/engineering once the application-layer analytics UX exists; historical/live paths kept distinct absent explicit justification to merge them; multi-tenant scoping enforced database-side; CI/CD, environment separation, and production isolation unchanged. The Bible explicitly frames this as evolution, not rebuild: "We should evolve the current system rather than blindly preserve it... We do not need to redesign everything in one migration," and Gate 2 requires this current-state inventory before any table redesign — which this Phase 0 work satisfies.
+
+---
+
+4. Gap Analysis
+
+Area: Raw ingestion boundary
+Current State: Telegraf broad-subscribe → mqtt_staging → raw_messages, no tenant/device column
+Target State: Same boundary is architecturally acceptable per Bible (evolve, don't rebuild)
+Gap: None found
+Severity: —
+Evidence: TELEMETRY_PIPELINE.md; ingestion audit facts restated in this request, uncontradicted
+────────────────────────────────────────
+Area: Device identity resolution
+Current State: rtdata[].uid → device_identifiers → devices, INNER JOIN (unknown devices silently excluded)
+Target State: Registration-gated normalization
+Gap: None found — matches target
+Severity: —
+Evidence: telemetry.v_normalized_points (VERIFIED, ddl/37)
+────────────────────────────────────────
+Area: Energy consumption calculation
+Current State: 5 independent implementations (classifier view, semantic-reporting pipeline, get_grafana_asset_energy_intervals's own inline copy, raw register snapshot mislabeled as consumption, Explorer's
+naive MAX-LAG delta)
+Target State: One semantic definition, one calculation path per the Bible's semantic-layer principle
+Gap: Major — duplication, not absence
+Severity: HIGH
+Evidence: Metric Lineage Catalogue §1
+────────────────────────────────────────
+Area: Demand calculation
+Current State: Dedicated 3-method engine (correct) + 2 orphaned/informal parallel implementations still present and Grafana-connected in places
+Target State: One semantic definition
+Gap: Major — duplication
+Severity: HIGH
+Evidence: Metric Lineage Catalogue §3; Grafana Audit
+────────────────────────────────────────
+Area: Resolution auto-routing
+Current State: Exists correctly only for the Analytics Explorer path (get_grafana_explorer_intervals); get_canonical_energy_read's only caller always forces 'native'; get_grafana_asset_energy_intervals has no
+tiering at all; the one real auto-router never selects '1d' for any range
+Target State: Engine picks resolution for a UX time range, not the user
+Gap: Major
+Severity: HIGH
+Evidence: Query-Performance Audit §B4, B5
+────────────────────────────────────────
+Area: Device/asset connectivity state
+3. Resolution-routing is inconsistent: correct in one path (get_grafana_explorer_intervals), forced-native in another (get_canonical_energy_read's only caller), absent in a third (get_grafana_asset_energy_intervals).
+4. Org/site/area "demand" dashboard panels read raw energy_measurements directly at any time range, with no resolution coarsening and no supporting index for org-wide filtering.
+5. Three non-unified device/asset connectivity classifiers, plus a possible fourth in the admin portal, never diffed against each other.
+6. Two documented job-schedule drifts from canonical configuration, confirmed still present at runtime.
+7. Two unintegrated tenant/authorization systems (Grafana org-mapping vs. admin-portal PortalAccessScope).
+8. One confirmed tenant-safety gap (generic_telemetry_15m/1h grant).
+9. Environment domain has no quality-classification mechanism at all.
+10. No Analytics API exists yet (expected at this phase, not a defect, but the largest remaining piece of the target architecture).
+
+B. Exact recommended implementation phases
+Phase A — operational hygiene (job schedules, the one tenant-safety grant). Phase B — semantic consolidation (reconcile the 5/3/2 duplicate implementations to their proven-correct originals). Phase C — resolution-routing consistency across all Grafana-facing energy readers. Phase D — environment quality classification. Phase E — dashboard SQL review against the now-consistent semantic objects. Phase F — staging commissioning (real devices) to convert every current UNKNOWN into VERIFIED. Phase G — Analytics API design (Bible Phase 4), only after A–D.
+
+C. The first implementation task recommended
+Resolve the two documented job-schedule drifts (run_normalization_job, run_energy_routing_job/run_environment_routing_job) back to their canonical postgres/jobs/*.sql configuration on staging. It is the lowest-risk, zero-ambiguity, already-fully-diagnosed item in this entire analysis (root-caused and quantified in docs/operations/CICD_PIPELINE.md, re-confirmed by this session's runtime check), it touches no application or Grafana logic, and every later measurement in this program (aggregation lag, freshness, performance) is more trustworthy once it's done.

@@ -1,0 +1,340 @@
+EMS Analytics Platform — Production Read-Only Access Path
+Architecture Investigation and Design (NOT IMPLEMENTED)
+
+Status: DESIGN ONLY. No Linux user, SSH config, PostgreSQL role, grant,
+firewall rule, or security group was created or modified. No production
+connection was attempted. Existing staging access (Bash(ssh ems-staging *))
+is completely unchanged and untouched by this document.
+
+===============================================================================
+A. CURRENT PRODUCTION ACCESS ARCHITECTURE
+===============================================================================
+
+Confirmed from this machine's own ~/.ssh/config (read-only, no secret
+values printed): a Host alias "ems-production" already exists —
+    HostName ec2-18-61-149-175.ap-south-2.compute.amazonaws.com
+    User emsadmin
+    IdentityFile <a dedicated .pem, separate from staging's>
+Production is a single AWS EC2 instance, reached directly (no separate
+jump-box/bastion host in front of it — the EC2 host is its own boundary),
+using the same "emsadmin" account pattern as staging but with its OWN,
+separate keypair. This means there is currently NO existing narrower or
+restricted account on production — "emsadmin" is presumed to be the full
+deployment account (same role staging's emsadmin plays: running docker
+compose, applying migrations, etc.), confirmed by architectural symmetry
+with staging, not by directly testing production. No forced-command or
+restricted-shell pattern currently exists for either host's SSH config, as
+far as the local ~/.ssh/config records show.
+
+===============================================================================
+B. CURRENT POSTGRESQL ACCESS ARCHITECTURE
+===============================================================================
+
+compose.yaml (name: ems-platform-prod — the shared production/staging
+compose file) binds TimescaleDB as:
+    ports:
+      - "127.0.0.1:5432:5432"
+PostgreSQL is NOT exposed to the network at all — only reachable from
+processes running ON the host itself (via the loopback interface), which
+matches exactly how every read-only staging query this session has used
+`docker exec ems-timescaledb psql ...` (executing psql inside the
+container over its internal socket) rather than any external connection.
+This confirms the private/containerized boundary is real and must be
+preserved, not worked around by exposing the port.
+
+pg_hba.conf (inspected on staging, read-only, as an architectural proxy —
+the two environments share the same compose/image, so this pattern very
+likely mirrors production, though not directly confirmed there):
+    local/127.0.0.1/::1  -> trust (no password required for local/loopback
+                            connections, for ANY role)
+    all other hosts      -> scram-sha-256
+This is an important, concrete finding: because local (including docker
+exec, which connects via localhost/socket inside the container) is
+"trust", a new read-only role would need NO password to connect locally —
+the ENTIRE access boundary for a docker-exec-based path rests on (1) which
+Linux/sudo command is allowed to reach that docker exec at all, and (2)
+that role's own SQL-level privilege grants. This directly shapes the
+recommended SSH design in C/D below: the forced-command script's exact,
+non-parameterized invocation of the role name is a critical control, not
+a formality.
+
+Existing roles (queried live): ems_admin (superuser, full privileges —
+the deploy/migration account), ems_app, ems_readonly, grafana_reader,
+telegraf_writer (all NOLOGIN-safe attributes: not superuser, not
+createdb/createrole/replication/bypassrls). ems_readonly ALREADY EXISTS
+but is NOT a general read-only role — it holds a narrow, pre-existing set
+of specific grants (14 analytics objects, 2 config, 6 telemetry, plus 6
+internal TimescaleDB objects) that do NOT include metadata.device_models,
+config.device_profiles, config.device_profile_categories, or any admin.v_*
+view (confirmed: 0 grants recorded for the metadata and admin schemas).
+Expanding ems_readonly to also cover the needed objects would widen an
+EXISTING role used by some other, unrelated consumer — a broader, less
+auditable change than introducing a brand-new, single-purpose role. This
+is why a new role (ems_metadata_reader) is the right choice, not a
+reason invented to match the task's own preference — the evidence
+independently supports it.
+
+===============================================================================
+C. RECOMMENDED RESTRICTED SSH ARCHITECTURE
+===============================================================================
+
+Chosen: A — forced-command SSH account, NOT B (port-forward-only).
+Reasoning: with local/loopback trust auth (B above), a port-forward-only
+account would let a raw TCP tunnel reach PostgreSQL, after which ANY
+Postgres-speaking client could authenticate as ANY role permitted by
+pg_hba's "all -> scram-sha-256" branch for non-local connections — this
+reintroduces a password/credential-distribution problem (the client would
+need ems_metadata_reader's actual database password) and widens the
+capability of the tunnel beyond "run read-only SQL" to "reach the
+database port with whatever tool". A forced-command account instead
+NEVER lets the client choose the connecting role, database, or network
+target — the server-side wrapper always executes the exact same
+command, and the server never has to hand a database password back to
+the client at all (the docker-exec + local-trust path needs none).
+
+Design:
+    1. A brand-new, dedicated Linux user (e.g. ems_readonly_investigator)
+       — NOT emsadmin, NOT a member of the docker group. Docker-group
+       membership is root-equivalent on the host (a member can trivially
+       mount the host filesystem via `docker run -v /:/host ...`), so
+       adding this new user to the docker group would NOT actually be a
+       meaningful restriction despite looking narrow — this is flagged
+       explicitly as a design trap to avoid. Instead:
+    2. A single, exact sudoers rule (visudo, NOPASSWD, no wildcards):
+           ems_readonly_investigator ALL=(root) NOPASSWD: /usr/bin/docker exec -i ems-timescaledb psql -X -U ems_metadata_reader -d ems
+       This is the ONLY command this account can ever invoke via sudo —
+       no other docker subcommand, no other container, no other role.
+    3. A dedicated SSH keypair, generated specifically for this purpose
+       (never reused from emsadmin's or staging's keys).
+    4. authorized_keys entry for this new user only:
+           command="sudo /usr/bin/docker exec -i ems-timescaledb psql -X -U ems_metadata_reader -d ems",no-pty,no-agent-forwarding,no-X11-forwarding,no-port-forwarding,no-user-rc ssh-ed25519 AAAA... ems-metadata-reader-key
+       The forced command is HARDCODED here — the wrapper never reads or
+       evaluates $SSH_ORIGINAL_COMMAND as a command; whatever text the
+       client sends is only ever received as psql's STDIN (i.e., as SQL
+       text to execute AS ems_metadata_reader), never as a shell command.
+       no-pty/no-agent-forwarding/no-X11-forwarding/no-port-forwarding
+       close every other SSH capability (no interactive shell, no tunnel,
+       no agent/X11 relay).
+    5. This account has no sudo beyond the one line above, no deployment
+       privileges, cannot modify application files, and is fully
+       independent of and revocable separately from emsadmin.
+
+===============================================================================
+D. RECOMMENDED POSTGRESQL ROLE AND EXACT PERMISSION BOUNDARY
+===============================================================================
+
+CREATE ROLE ems_metadata_reader WITH LOGIN NOSUPERUSER NOCREATEDB
+    NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+-- No password needed given the local/loopback trust auth (B); if this
+-- role is ever reachable over a non-local path (it should not be, per
+-- the network boundary in E), a strong scram-sha-256 password must be
+-- set at that time, not before.
+
+GRANT USAGE ON SCHEMA admin TO ems_metadata_reader;
+GRANT SELECT ON
+    admin.v_device_models,
+    admin.v_active_device_profiles,
+    admin.v_device_categories,
+    admin.v_gateway_models
+TO ems_metadata_reader;
+
+Investigated and confirmed (not assumed) whether direct table grants on
+metadata.device_models / config.device_profiles / config.device_profile_
+categories are also required: NO. All four target views are relkind='v',
+owned by ems_admin, with reloptions={security_barrier=true} and no
+security_invoker option set — meaning they default to definer-rights
+behavior: the OWNER's (ems_admin's) privileges are used to read the
+underlying tables, and the querying role only needs SELECT on the view
+itself. This was verified directly via pg_class/reloptions inspection,
+not assumed from documentation. Consequently NO grant is proposed on any
+of the three underlying tables — SELECT on exactly the four views is the
+complete, narrower boundary, and is sufficient for the stated
+investigation use case (the views already project vendor/model/category
+comparison data; they do not expose the tables' internal UUIDs anyway
+for device_models/device_profiles, which is arguably preferable for
+cross-environment comparison).
+
+This role cannot INSERT/UPDATE/DELETE/TRUNCATE/CREATE/ALTER/DROP anything
+— it has no grant of any kind beyond SELECT on those four views, and lacks
+every elevated attribute (SUPERUSER/CREATEDB/CREATEROLE/REPLICATION/
+BYPASSRLS) by construction.
+
+===============================================================================
+E. REQUIRED NETWORK PATH
+===============================================================================
+
+    Claude -> dedicated SSH keypair -> production EC2 host (SSH, forced
+    command only) -> sudo (one exact rule) -> docker exec into the
+    ems-timescaledb container -> psql -U ems_metadata_reader, connecting
+    over the container's internal loopback/socket (127.0.0.1:5432:5432
+    remains bound to localhost only; not touched, not exposed further).
+No firewall rule, security group, or port mapping changes are proposed or
+needed — the entire path travels through the existing SSH port and the
+existing container-local database connection, exactly preserving the
+current private/containerized network boundary.
+
+===============================================================================
+F. SECURITY RISKS AND MITIGATIONS
+===============================================================================
+
+Risk: docker-group membership looks like a natural way to let the new
+user run docker exec, but is root-equivalent. Mitigation: use a single
+exact sudoers rule instead (C.2), never add the user to the docker group.
+Risk: a carelessly-written forced-command wrapper that evals $SSH_
+ORIGINAL_COMMAND would reintroduce arbitrary command execution.
+Mitigation: the authorized_keys command= string IS the executed command;
+the wrapper must never read or exec $SSH_ORIGINAL_COMMAND — only STDIN
+is ever passed through, as SQL text to a role that cannot write anything.
+Risk: local/loopback trust auth means no password separates ems_metadata_
+reader from any other role reachable the same way. Mitigation: the
+sudoers rule + authorized_keys command hardcode -U ems_metadata_reader
+with no way for the caller to override it; the role's own zero-write
+grant set is the second, independent layer if that were ever bypassed.
+Risk: credential/key compromise. Mitigation: dedicated key used for
+nothing else, independently revocable (G/K), auditable (below).
+Risk: this document itself. Mitigation: no secret values were read or
+recorded anywhere in this investigation or this report.
+
+===============================================================================
+G. EXACT FILES/CONFIGURATION THAT WOULD NEED MODIFICATION (not yet done)
+===============================================================================
+
+On the production host (NOT the repository — this is host/OS
+configuration, out of the repository's version control by nature, same
+as the existing emsadmin account):
+    /etc/passwd, /etc/shadow (new Linux user, no password login, nologin
+        shell or a minimal restricted shell)
+    /etc/sudoers.d/ems_metadata_reader (new file, the single exact rule
+        in C.2 — a dedicated drop-in file, not editing /etc/sudoers
+        directly, so it is independently addable/removable)
+    /home/ems_metadata_reader/.ssh/authorized_keys (new file, the single
+        forced-command entry in C.4)
+In the database (via a normal, reviewed migration — NOT a manual staging/
+production INSERT, consistent with every prior phase's discipline):
+    A migration creating the ems_metadata_reader role and its four SELECT
+    grants (D) — this IS a repository-controlled, reviewable change,
+    unlike the OS-level account, and should go through the same plan ->
+    approve -> implement -> test -> stage -> commit -> push -> CI/CD ->
+    verify sequence used throughout Phases 1A-1E-B.
+Locally: a new SSH keypair generated for this purpose, and a new Host
+alias in ~/.ssh/config (e.g. "ems-production-readonly"), plus a scoped
+Claude Code permission rule such as Bash(ssh ems-production-readonly *)
+— added the same way ems-staging's was, and explicitly NOT broadening the
+existing Bash(ssh ems-staging *) rule to cover production.
+
+===============================================================================
+H. EXACT COMMANDS THAT WOULD EVENTUALLY BE RUN (NOT RUN NOW)
+===============================================================================
+
+    # On the production host, as an existing administrator (not Claude):
+    sudo useradd --system --no-create-home --shell /usr/sbin/nologin ems_metadata_reader
+    sudo mkdir -p /home/ems_metadata_reader/.ssh
+    echo 'command="sudo /usr/bin/docker exec -i ems-timescaledb psql -X -U ems_metadata_reader -d ems",no-pty,no-agent-forwarding,no-X11-forwarding,no-port-forwarding,no-user-rc ssh-ed25519 AAAA... ems-metadata-reader-key' \
+        | sudo tee /home/ems_metadata_reader/.ssh/authorized_keys
+    sudo chmod 700 /home/ems_metadata_reader/.ssh
+    sudo chmod 600 /home/ems_metadata_reader/.ssh/authorized_keys
+    sudo chown -R ems_metadata_reader:ems_metadata_reader /home/ems_metadata_reader/.ssh
+    echo 'ems_metadata_reader ALL=(root) NOPASSWD: /usr/bin/docker exec -i ems-timescaledb psql -X -U ems_metadata_reader -d ems' \
+        | sudo tee /etc/sudoers.d/ems_metadata_reader
+    sudo chmod 440 /etc/sudoers.d/ems_metadata_reader
+    sudo visudo -c   # validate syntax before it takes effect
+
+    -- In the database, via a repository migration (not run ad hoc):
+    CREATE ROLE ems_metadata_reader WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+    GRANT USAGE ON SCHEMA admin TO ems_metadata_reader;
+    GRANT SELECT ON admin.v_device_models, admin.v_active_device_profiles, admin.v_device_categories, admin.v_gateway_models TO ems_metadata_reader;
+    ALTER ROLE ems_metadata_reader SET log_statement = 'all';
+
+None of the above has been run. No file has been created or modified on
+any host.
+
+===============================================================================
+I. VERIFICATION PROCEDURE — PROVING READ ACCESS WORKS
+===============================================================================
+
+    ssh ems-production-readonly "SELECT * FROM admin.v_device_models;"
+    ssh ems-production-readonly "SELECT * FROM admin.v_active_device_profiles;"
+    (etc. for the other two views)
+Expected: each returns rows (or an empty result set) without error.
+
+===============================================================================
+J. VERIFICATION PROCEDURE — PROVING WRITE ACCESS IS IMPOSSIBLE
+===============================================================================
+
+Each of the following, attempted via the same restricted connection,
+MUST fail with a permission-denied error (42501) — this is the actual
+proof, not merely "the docs say so":
+    ssh ems-production-readonly "INSERT INTO metadata.device_models (vendor, model, device_category_id) VALUES ('x','x', gen_random_uuid());"
+    ssh ems-production-readonly "UPDATE config.device_profiles SET is_active=false;"
+    ssh ems-production-readonly "DELETE FROM config.device_profile_categories;"
+    ssh ems-production-readonly "CREATE TABLE metadata.test_table(id int);"
+    ssh ems-production-readonly "DROP TABLE metadata.device_models;"
+Additionally confirm the SSH boundary itself, separately from the SQL
+boundary:
+    ssh ems-production-readonly "whoami; ls /"   -- must be ignored/refused;
+        only the forced command ever executes, regardless of what is sent.
+    ssh -L 9999:127.0.0.1:5432 ems-production-readonly   -- port forwarding
+        must be refused (no-port-forwarding).
+
+===============================================================================
+K. ROLLBACK/REMOVAL PROCEDURE
+===============================================================================
+
+Independent, either one alone fully revokes access:
+    Database:  DROP ROLE ems_metadata_reader; (or ALTER ROLE ... NOLOGIN;
+               as an instant, reversible kill-switch)
+    Host:      remove /home/ems_metadata_reader/.ssh/authorized_keys and
+               /etc/sudoers.d/ems_metadata_reader (or userdel the account
+               entirely)
+    Local:     remove the ~/.ssh/config Host block and the Claude Code
+               permission rule.
+None of these steps affect emsadmin, the existing ems-staging access, or
+any other role/account.
+
+===============================================================================
+L. ANY ADDITIONAL PERMISSION OUTSIDE THE PRODUCTION HOST/DATABASE REQUIRED?
+===============================================================================
+
+One: a new Claude Code permission rule scoped exactly to the new SSH host
+alias (Bash(ssh ems-production-readonly *)), added the same way ems-
+staging's was, explicitly separate from and not modifying the existing
+staging rule. No other tool permission, GitHub access, or infrastructure
+change is required.
+
+===============================================================================
+CREDENTIAL LIFECYCLE (per your item 8)
+===============================================================================
+
+Dedicated credential: a new SSH keypair, used for nothing else. Separate
+from production application credentials (MQTT, GHCR, TLS, the .env file)
+entirely — this path never touches any of those. Explicit owner: you
+(or whoever holds the production emsadmin credential today), since only
+an existing production administrator can perform the host-side steps in
+H — Claude cannot create this account itself even once approved, unless
+you explicitly authorize running those commands through the existing
+emsadmin SSH access, which is a separate decision from approving this
+design. Revocation: K, either layer, at any time, no coordination needed.
+Rotation: generate a new keypair, replace the authorized_keys line,
+delete the old one — no database change needed for key rotation.
+Emergency disable: ALTER ROLE ems_metadata_reader NOLOGIN; (single
+statement, instant, reversible) or delete the authorized_keys line
+(equally instant) — two independent kill switches, either sufficient
+alone.
+
+===============================================================================
+SUMMARY
+===============================================================================
+
+Nothing has been implemented. This is a complete design, grounded in
+verified facts about the current architecture: production's existing SSH
+pattern (A), PostgreSQL's private network binding and existing role/auth
+posture (B), a forced-command SSH design chosen over port-forwarding with
+an explicit reason tied to the discovered local-trust auth (C), a new
+role scoped to exactly four security_barrier views with no underlying
+table grants (verified sufficient, D), the unchanged network boundary
+(E), named risks and their mitigations (F), the exact file/command
+changes this would require (G/H) — none executed — verification
+procedures for both the positive (I) and negative (J) claims, a two-layer
+independent rollback (K), and the one additional Claude Code permission
+this would need (L). Awaiting your explicit approval before any of this
+is implemented.

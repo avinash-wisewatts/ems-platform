@@ -1,0 +1,65 @@
+EMS Analytics Platform — Phase 0: Semantic Layer Audit
+
+Method: traced from metadata/config schema DDL (read directly this session: 04_metadata.sql, 03_01_reference_schema.sql, 06_device_profiles.sql [empty — see below], 27_device_profiles.sql) plus everything already established in the four prior audits (analytics inventory, metric lineage, Grafana consumption, query performance). No redesign — facts only.
+
+---
+
+Headline finding: there is no single semantic layer — semantics are distributed across four layers that don't fully agree with each other
+
+1. metadata schema — the structural/hierarchy registry (organization→site→building→floor→space, asset hierarchy, device/gateway identity, logical_points/asset_points/device_field_mapping). This is a genuine metadata layer, but it is thin on semantics: metadata.logical_points (the closest thing to a "Metric" registry) has only name, description, unit_id, data_type — no calculation formula, no aggregation method, no resolution, no quality rule.
+2. config schema — where actual calculation semantics live, but scattered across several independent, domain-specific tables rather than one unified model: config.engineering_units (unit vocabulary only, no conversion), config.energy_register_semantics (energy-specific delta/rollover/reset rules), config.interval_quality_rules (energy-specific gap thresholds), config.demand_register_semantics (demand-specific), config.telemetry_capture_policies (resolution/capture-eligibility), config.device_profiles/profile_field_mapping/metadata.device_field_mapping (unit conversion, in a different table from unit vocabulary).
+3. analytics schema — where metric calculation actually happens (classifier functions, routing views, Grafana-facing wrappers) — this is where "energy consumption" etc. gets its real definition, not in metadata/config.
+4. Grafana panel SQL itself — a fourth layer with its own semantics that don't route through 1-3 at all in several cases (regex-based unit assignment in Analytics Explorer, ad hoc "demand" = sum-of-instantaneous-power in three dashboards, inline CASE-based status humanization) — confirmed extensively in the prior Grafana audit.
+
+No object in the codebase ties these four layers into one coherent "semantic layer" in the Development Bible's sense (Metric+Dimension+Entity+Unit+Time+Resolution+Quality+Calculation+Aggregation+Scope as one addressable concept). Each concept below has to be assembled by hand from 2-4 different tables/functions.
+
+---
+
+Per-concept trace
+
+Organization
+
+- Authoritative source: metadata.organizations (id, name, code — CHECK-constrained ^[A-Z0-9_]+$, timezone default 'Asia/Kolkata', lifecycle_status CHECK DRAFT/ACTIVE/SUSPENDED/DECOMMISSIONED).
+- Grafana-facing re-projection: metadata.grafana_organization_map (organization_id → grafana_org_id, is_active) — a second identity for the same entity, used as the tenant boundary in every analytics.v_grafana_* object. Not a competing definition, but a parallel identity space every Grafana object must join through.
+- No competing definition found.
+
+Site
+
+- Authoritative source: metadata.sites (organization_id FK, code, timezone default 'Asia/Kolkata', address JSONB, lifecycle_status CHECK DRAFT/ACTIVE/INACTIVE/DECOMMISSIONED — note: a different vocabulary from organizations' lifecycle CHECK, which has SUSPENDED instead of INACTIVE).
+- Sector classification: two competing definitions found, already documented in the earlier inventory: config.site_sectors (flat, now explicitly deprecated by migration 188) vs. metadata.sectors/sub_sectors (current, migration 187) — a confirmed, resolved (not live) competing-definition case.
+
+Area
+
+- No first-class "area" table exists. "Area" (as used by area-overview.json) is not a distinct entity — it is any metadata.assets row with child_count > 0, i.e. a derived, structural convention (a non-leaf node in the asset self-referencing hierarchy), not a semantic concept with its own definition. Confirmed: area-overview.json's $area_id variable query filters analytics.v_grafana_assets ... AND child_count>0 — "area" is purely "asset that happens to have children."
+
+Asset
+
+- Authoritative source: metadata.assets (organization_id, site_id, optional space_id, asset_type_id, parent_asset_id self-FK for hierarchy, external_id, lifecycle_status CHECK DRAFT/COMMISSIONING/ACTIVE/INACTIVE/DECOMMISSIONED — a third distinct lifecycle vocabulary, different again from organizations' and sites'), metering_requirement CHECK DIRECT_METER_REQUIRED/DESCENDANT_COVERAGE_ALLOWED/NOT_REQUIRED (no default — deliberate, per its own comment).
+- Hierarchy integrity: enforced by metadata.validate_asset_hierarchy() trigger (prevents cross-org/cross-site parenting and cycles) — a single authoritative mechanism, no competing definition.
+- Grafana projection: analytics.v_grafana_assets recomputes the full hierarchy path/depth/root via a WITH RECURSIVE walk on every query (no materialized closure table used here) — while a separate object, analytics.v_asset_hierarchy_closure (traced in the first audit), exists as a persisted closure table for the same hierarchy. Two different hierarchy-traversal implementations for the same asset tree coexist — v_grafana_assets's live recursive CTE (re-derived 6+ times per area-overview.json alone, per the Grafana audit) vs. v_asset_hierarchy_closure's persisted table — not proven to disagree in output, but structurally independent, unreconciled implementations of the same relationship.
+
+Device
+
+- Authoritative source: metadata.devices (organization_id, gateway_id FK, device_model_id, external_id, lifecycle_status, profile_id).
+- Identity resolution (MQTT UID → device): metadata.device_identifiers (identifier_type/identifier_value), indexed, used throughout ingestion — a single authoritative mechanism.
+- No competing definition found for device identity itself; competing definitions arise one layer up, in device state (see Quality/Aggregation below).                                                                                            
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+─────────────────────────────────────────────────────
+Source data: raw energy_measurements directly
+Calculation: independently-written LAG() + classify_energy_register_delta() call
+Same as canonical classifier?: Yes in logic called, but a structurally separate implementation (duplicated LAG/classify
+wiring, not a call into Path A/B)
+────────────────────────────────────────
+Implementation: v_grafana_energy_samples.import_energy_register_kwh
+Source data: raw register value ÷1000
+Calculation: no delta, no classification at all
+Same as canonical classifier?: No — a different metric (register snapshot) wearing the same name pattern
+────────────────────────────────────────
+Implementation: Analytics Explorer's MAX(value)-LAG(MAX(value))
+Source data: generic point CAGG
+Calculation: naive delta, no register semantics, no rollover/reset/gap handling
+Same as canonical classifier?: No — the one place this "same" metric is computed without the canonical classifier
+
+Conclusion for the worked example, stated as fact: three of five implementations are functionally consistent (all route through classify_energy_register_delta(), even if via independently-coded call sites); two are not the same definition at all despite being labeled with the word "energy" — one is a raw register reading, one is an unclassified naive delta. This same pattern — a shared core calculation reused faithfully in some places, and quietly reinvented or substituted with something structurally different in others — recurs for Unit, Timezone, Resolution routing, Quality/connectivity state, and recommended aggregation as detailed above.

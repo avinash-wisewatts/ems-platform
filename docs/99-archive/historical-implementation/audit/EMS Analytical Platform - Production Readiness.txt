@@ -1,0 +1,260 @@
+What I inspected (read-only)
+
+Git state, commit ancestry, all four CI/CD workflows, deploy_release.sh / post_deploy_verify.sh / health_check.sh / apply_migrations.sh, compose.yaml, telegraf/config/telegraf.conf, every *.env.example, verify_database.sh, the migration manifest, and docs/operations/CICD_PIPELINE.md + FIRST_PRODUCTION_DEPLOYMENT_ROLLBACK_RUNBOOK.md + docs/platform-manual/25-change-history.md.
+
+I have no production access in this session and did not attempt any. Every "production" finding below is derived from repository evidence; the live read-only preflight (Sections C–F of your brief) still has to be run by an authorized operator over SSH and is marked accordingly.
+
+---
+
+1. PROMOTION READINESS
+
+NOT READY — resolves to READY WITH CONDITIONS only after the production read-only preflight (runbook steps 3.x) is executed and Blockers B1–B5 are cleared.
+
+Reason: promoting staging HEAD 49df53f is the first-ever production deployment through the new immutable CI/CD pipeline. deploy-production.yml has never run; .deploy-history/production.log does not exist; production is still on locally-built pre-pipeline :latest images (FIRST_PRODUCTION_DEPLOYMENT_ROLLBACK_RUNBOOK.md §3). This is not a 3-PR delta — it carries the entire v1.0.0-production-baseline → 49df53f range, including 22 forward migrations (194–215) that will be applied transactionally to the live production database during the deploy.
+
+---
+
+2. EXACT ELIGIBLE CHANGES
+
+Promotable SHA: 49df53f0a6d2c7ca3520dabfd50897e0b6f2e1a9 (current origin/staging HEAD — confirmed; matches the value in your brief).
+Immutable artifact: ghcr.io/avinash-wisewatts/ems-platform-app:49df53f0a6d2c7ca3520dabfd50897e0b6f2e1a9, digest-pinned at deploy time by deploy-production.yml. One image runs both admin-portal and live-telemetry.
+Local working-tree HEAD 3819fc1 is content-identical to origin/staging (git diff origin/staging..HEAD = empty); 3819fc1 is the pre-squash tip of PR #23.
+
+Your three named PRs are all ancestors of 49df53f (verified via git merge-base --is-ancestor) and contain no migrations:
+
+┌────────────────┬─────────┬─────────────────┬──────────────────────────────────────────────────────────────┐
+│       PR       │ Merge   │     Nature      │                            Files                             │
+│                │   SHA   │                 │                                                              │
+├────────────────┼─────────┼─────────────────┼──────────────────────────────────────────────────────────────┤
+│                │         │                 │ compose.yaml (postgres -c max_connections=50 -c              │
+│ #21 connection │ 17c869d │ config + verify │ superuser_reserved_connections=3),                           │
+│  capacity      │         │  only           │ scripts/verify/verify_database.sh,                           │
+│                │         │                 │ docs/operations/CICD_PIPELINE.md                             │
+├────────────────┼─────────┼─────────────────┼──────────────────────────────────────────────────────────────┤
+│ #22            │         │ app image +     │ app/src/live_config.py, live_main.py,                        │
+│ dual-broker    │ d792fd3 │ bind-mounted    │ telegraf/config/telegraf.conf (2nd                           │
+│ ingestion      │         │ config          │ [[inputs.mqtt_consumer]]), *.env.example,                    │
+│                │         │                 │ scripts/bootstrap/02_validate_env.sh, tests                  │
+├────────────────┼─────────┼─────────────────┼──────────────────────────────────────────────────────────────┤
+│ #23 separate   │         │                 │ splits MQTT2_TELEGRAF_* vs MQTT2_LIVE_*, telegraf.conf,      │
+│ Broker #2      │ 49df53f │ same surfaces   │ live_config.py, tests                                        │
+│ creds          │         │                 │                                                              │
+└────────────────┴─────────┴─────────────────┴──────────────────────────────────────────────────────────────┘
+
+Also inside the same eligible range (cannot be cherry-picked out — the pipeline promotes the whole SHA):
+- Migrations 194–215 (22 files): job-schedule drift fix (194), Grafana energy-routing daily tier (195), per-flow energy quality persist+backfill (196–197), reference-data + commissioning completeness gates (198–199), canonical energy pre-policy read (200), recovery hardening (201–206), Phase-2 analytics foundation (207–214: bounded catch-up, watermark-driven jobs, analytical reconciliation layer + 7 new reconcile jobs, v_pipeline_health), energy-routing resolve-by-name (215).
+- compose.yaml: timescaledb image changed from floating latest-pg16 → digest pin sha256:289d5570… (PG 16.15 / TSDB ext 2.29.2 — the staging image), plus ${TIMESCALEDB_DATA_PATH} / bind-host parameterization and image: ${APP_IMAGE} on the app services.
+- All Grafana provisioning / dashboard / live-datasource-plugin changes, the CI/CD workflow files themselves, deploy_release.sh / post_deploy_verify.sh / bootstrap scripts.
+
+Generated / local-only / must NOT be promoted: nothing extra rides along — the entire working-tree WIP is uncommitted and absent from origin/staging:
+- postgres/migrations/216_*.sql (+ its restructure_manifest.csv line, scripts/test/assert_energy_consumption_calculated_at_value_aware.sh, edits to assert_analytical_reconciliation.sh / run_integration_environment.sh) — migration-216 WIP, untouched, not registered in the manifest at origin/staging.
+- .gitignore edit, Audit/, docs/platform-manual/** — untracked.
+
+Confirmed: promoting 49df53f does not carry migration 216 or any WIP.
+
+---
+
+3. PRODUCTION PRE-FLIGHT FINDINGS
+
+From repository evidence (not live-verified)
+
+- F-repo-1 — First pipeline deploy. deploy-production.yml never executed; production runs pre-pipeline local images ems-platform-prod-admin-portal:latest (120b75297b75) and ems-platform-prod-live-telemetry:latest (dd8ab063ac1f); no .deploy-history/production.log. (FIRST_PRODUCTION…RUNBOOK.md §3)
+- F-repo-2 — Migration gap = 194–215. git diff --name-status v1.0.0-production-baseline..origin/staging -- postgres/migrations adds exactly 194→215. Baseline tag (77a6e1d, 2026-08-20) predates all of them. deploy_release.sh step [4/6] runs apply_migrations.sh (forward-only, checksum-verified, one txn per migration, docker compose exec into the running timescaledb — never restarts it) before the new app image starts. Actual production ledger (admin.schema_migrations) state is unverified.
+- F-repo-3 — TimescaleDB image/version risk. Eligible compose.yaml pins timescaledb to a specific digest = PG 16.15 / TSDB 2.29.2 (staging's image). Production's TimescaleDB predates this pipeline; its current image tag / PG / TSDB version is unknown. A deliberate timescaledb recreate on production with this pin could change the running PostgreSQL/TimescaleDB version against a live data directory.
+- F-repo-4 — TIMESCALEDB_DATA_PATH footgun. compose.yaml volume is ${TIMESCALEDB_DATA_PATH:-./postgres/data/pgdata}. Production's real data is at ./postgres/data (per CICD_PIPELINE.md "Compose design changes" + .env.example). If production's root .env does not set TIMESCALEDB_DATA_PATH=./postgres/data, any timescaledb recreate binds an empty ./postgres/data/pgdata → database starts on empty PGDATA.
+- F-repo-5 — PR #21 needs a manual step the pipeline does not perform. deploy_release.sh only ever names admin-portal live-telemetry. max_connections is a postmaster setting; it applies only on timescaledb container (re)creation. Effective bump to 50/47 requires a separate deliberate docker compose up -d --no-deps timescaledb. verify_database.sh will FAIL its capacity assertion until that is done.
+- F-repo-6 — PR #22/#23 (Telegraf side) needs a manual step the pipeline does not perform. New telegraf.conf (2nd consumer) and new MQTT2_TELEGRAF_* vars are bind-mounted / env-file; deploy_release.sh checks out the SHA (updating telegraf.conf on disk) but never restarts telegraf. Broker #2 historical ingestion starts only after a deliberate docker compose up -d --no-deps telegraf.
+- F-repo-7 — Live-telemetry side flows through the normal deploy. deploy_release.sh does recreate live-telemetry with the new image; it reads app/.env + app/live-telemetry.env. live_config.py fails fast on a partial MQTT2_LIVE_* set — so those vars must be complete on the host before deploy or the service won't start.
+- F-repo-8 — post_deploy_verify.sh advisory noise is expected. Required gates = verify_database.sh, verify_metadata.sh, verify_energy_routing_identity.sh. Advisory (non-blocking) = verify_pipeline.sh, verify_jobs.sh. Your known staging-only conditions (no commissioned environment source, hourly/daily cadence heuristics, run_failed_message_recovery_job pre-existing failures) map onto the advisory bucket and must not be treated as promotion blockers — but on production, which is commissioned, some advisory checks may legitimately behave differently and should be read, not ignored.
+- F-repo-9 — Grafana live-datasource plugin. The eligible range provisions a second (live) Grafana datasource and expects the wisewatts-live-datasource plugin present; on staging this required a manual plugin build + docker compose restart grafana. deploy_release.sh never touches Grafana. Out of scope for the capacity+dual-broker objective, but the live-stream datasource will not function on production until that plugin step is done there too (separate, separately-authorized).
+- F-repo-10 — Secrets/vars for deploy-production.yml were never set as of CICD_PIPELINE.md ("Production access still required"): PRODUCTION_HOST/USER/SSH_KEY/PROJECT_PATH, optionally REGISTRY_USERNAME/PASSWORD, and the production environment variable PRODUCTION_APPROVED_OPERATORS (gate fails closed if unset). The dispatching GitHub actor must be in that list.
+
+Live production preflight — NOT PERFORMED (must be run read-only by an authorized operator)
+
+Per-area, the exact read-only checks to run are in Runbook step 3 below (all REQUIRES EXPLICIT AUTHORIZATION — they need production SSH which I do not have):
+- C (data/metadata): whether the 15 Phase-6 devices / Eniscope_2_Plumbing / Eniscope_3_AHU exist in production, with which UIDs, and whether production was commissioned correctly. Do not reproduce the staging deletion. No repository evidence that production has the mis-commissioning; change-history.md line 88 hints production's floor layout already differed from staging.
+- D (capacity): production SHOW max_connections; / SHOW superuser_reserved_connections;, their source (pg_settings.source / sourcefile), the timescaledb container command, image ref & digest, PG + TSDB versions.
+- E (MQTT): current Broker #1 config in telegraf/.env + app/live-telemetry.env, Telegraf image (should already be telegraf:1.36), live-telemetry image, whether any MQTT2_* already present, Broker #2 host reachability, ACLs for the production MQTT2 identities, and whether production publishers emit valid rtdata[].ts.
+- F (schema): production SELECT … FROM admin.schema_migrations ORDER BY 1; vs staging; confirm 194–215 are the only gap and that no out-of-band migration was applied to production.
+
+---
+
+4. HOST-LOCAL PRODUCTION INPUTS REQUIRED
+
+Variable names and file locations only — do not print, guess, copy from staging, or invent values. Populate from production's own HiveMQ/Broker-#2 account and credentials.
+
+<PRODUCTION_PROJECT_PATH>/.env (root; consumed by compose.yaml)
+- TIMESCALEDB_DATA_PATH — must be ./postgres/data (path, not a secret; verify it is present before any timescaledb recreate — F-repo-4)
+- POSTGRES_USER, POSTGRES_DB — must already exist; confirm unchanged
+- ADMIN_PORTAL_BIND_HOST, GRAFANA_BIND_HOST — keep production's existing values (default 127.0.0.1)
+
+<PRODUCTION_PROJECT_PATH>/telegraf/.env (Telegraf historical path — Broker #2)
+- MQTT2_HOST
+- MQTT2_PORT
+- MQTT2_TELEGRAF_USERNAME
+- MQTT2_TELEGRAF_PASSWORD
+- (Broker #1 MQTT_* and POSTGRES_* already present — leave as-is)
+
+<PRODUCTION_PROJECT_PATH>/app/live-telemetry.env (live path — Broker #2; supply the FULL set or none)
+- MQTT2_HOST
+- MQTT2_PORT
+- MQTT2_LIVE_USERNAME
+- MQTT2_LIVE_PASSWORD
+- MQTT2_LIVE_CLIENT_ID — must differ from MQTT_LIVE_CLIENT_ID
+- MQTT2_TLS — only if production's Broker #2 TLS differs from inherited MQTT_TLS (optional; defaults to MQTT_TLS)
+
+Credential rule: MQTT2_TELEGRAF_* and MQTT2_LIVE_* must be distinct identities (mirrors the Broker #1 split), and MQTT2_HOST/MQTT2_PORT are shared between the two files.
+
+GitHub production environment (Settings → Environments → production): secrets PRODUCTION_HOST, PRODUCTION_USER, PRODUCTION_SSH_KEY, PRODUCTION_PROJECT_PATH (+ optional REGISTRY_USERNAME/REGISTRY_PASSWORD); variable PRODUCTION_APPROVED_OPERATORS (comma-separated GitHub usernames, must include the dispatcher).
+
+---
+
+5. BLOCKERS
+
+Must be resolved / consciously accepted before dispatching deploy-production.yml:
+
+- B1 — Production migration-ledger state unverified. Confirm read-only that production's admin.schema_migrations is exactly at "≤193" and that 194–215 is the complete, ordered gap with no out-of-band entries. 22 migrations will run against the live prod DB in one deploy; several are large procedure rewrites (207/210/211/213) and 213 registers 7 new background jobs. Review each migration's stated blast radius; take the fresh pg_dump -Fc backup immediately before (Runbook 4).
+- B2 — TimescaleDB image/version delta (F-repo-3). Determine production's current timescaledb image + PG/TSDB versions. If they are not already PG 16.15 / TSDB 2.29.2 on a compatible data dir, the PR #21 "deliberate one-service recreate" from compose.yaml's pinned digest is not safe to copy from staging and needs its own migration/version-compat analysis (or a production-specific pin to production's actual known-good digest). Do not recreate production timescaledb until this is settled.
+- B3 — TIMESCALEDB_DATA_PATH must be set to ./postgres/data in production's root .env and verified, before any timescaledb recreate (F-repo-4). This is the single highest-consequence footgun in the sequence.
+- B4 — Production deploy-production.yml secrets + PRODUCTION_APPROVED_OPERATORS not confirmed set (F-repo-10). The gate fails closed; validate-promotion also requires a prior successful deploy-staging.yml run whose headSha == 49df53f… — confirm that run exists and was green.
+- B5 — Broker #2 production credentials/ACLs not confirmed to exist (Section 4). Partial MQTT2_LIVE_* makes live-telemetry fail to start (F-repo-7). Distinct Telegraf vs live identities with correct topic ACLs on the production Broker #2 must be provisioned first.
+
+Explicitly NOT blockers (known, separately-tracked; do not "fix" as part of promotion): environment pipeline has no commissioned environment source; verify_pipeline.sh hourly/daily cadence heuristic warnings; run_failed_message_recovery_job pre-existing failures; staging job-schedule drift reported by verify_jobs.sh. These are advisory-bucket in post_deploy_verify.sh.
+
+Explicitly NOT in scope (do not perform as part of this promotion): the Phase-6 15-device deletion (staging commissioning correction — production may not have the defect at all; if it does, that is a separate explicitly-authorized destructive op); any Grafana live-datasource plugin work; migration 216.
+
+---
+
+6. EXECUTION RUNBOOK
+
+Legend: READ-ONLY · AUTHORIZED CHANGE (safe local/CI prep authorized by your brief) · REQUIRES EXPLICIT AUTHORIZATION (you must approve this specific action) · DO NOT EXECUTE (present for completeness only).
+
+Step 1 — Final staging verification snapshot — REQUIRES EXPLICIT AUTHORIZATION (staging SSH, read-only)
+
+ssh <staging>  'cd <STAGING_PROJECT_PATH> \
+  && git rev-parse HEAD \
+  && tail -n 3 .deploy-history/staging.log \
+  && ./scripts/apply_migrations.sh --status \
+  && ./scripts/release/post_deploy_verify.sh'
+Confirm HEAD = 49df53f…, last staging deploy entry matches, migration ledger through 215, required gates PASS.
+
+Step 2 — Confirm exact commit/artifact — READ-ONLY (local, done)
+
+- SHA: 49df53f0a6d2c7ca3520dabfd50897e0b6f2e1a9
+- Image: ghcr.io/avinash-wisewatts/ems-platform-app:49df53f0a6d2c7ca3520dabfd50897e0b6f2e1a9
+- Verify a green deploy-staging.yml run exists for this exact headSha (gh run list --workflow=deploy-staging.yml --json headSha,conclusion). — READ-ONLY
+
+Step 3 — Production read-only preflight — REQUIRES EXPLICIT AUTHORIZATION (production SSH, strictly read-only)
+
+Run and capture output; change nothing.
+# 3a capacity (Blocker B2/B3)
+docker inspect ems-timescaledb --format '{{.Config.Image}} {{.Image}}'
+docker exec ems-timescaledb psql -U <POSTGRES_USER> -d <POSTGRES_DB> -c \
+  "SHOW server_version; SELECT extversion FROM pg_extension WHERE extname='timescaledb';
+   SHOW max_connections; SHOW superuser_reserved_connections;
+   SELECT name,setting,source,sourcefile FROM pg_settings
+     WHERE name IN ('max_connections','superuser_reserved_connections');"
+grep -n TIMESCALEDB_DATA_PATH <PRODUCTION_PROJECT_PATH>/.env || echo 'NOT SET  <-- B3'
+docker inspect ems-timescaledb --format '{{json .Mounts}}'
+
+# 3b schema/migration state (Blocker B1)
+docker exec ems-timescaledb psql -U <POSTGRES_USER> -d <POSTGRES_DB> -c \
+  "SELECT migration_id, application_mode, applied_at FROM admin.schema_migrations ORDER BY 1;"
+
+# 3c MQTT readiness (Section E)
+docker inspect ems-telegraf ems-live-telemetry --format '{{.Name}} {{.Config.Image}}'
+grep -E '^MQTT(2)?_' <PRODUCTION_PROJECT_PATH>/telegraf/.env <PRODUCTION_PROJECT_PATH>/app/live-telemetry.env | sed 's/=.*/=<redacted>/'
+#   -> only variable NAMES, never values. Do NOT publish MQTT. A passive
+#      subscribe against production Broker #2 is REQUIRES EXPLICIT AUTHORIZATION.
+
+# 3d data/metadata (Section C) — determine, do not delete
+docker exec ems-timescaledb psql -U <POSTGRES_USER> -d <POSTGRES_DB> -c \
+  "SELECT g.name gateway, count(d.*) devices
+     FROM metadata.gateways g LEFT JOIN metadata.devices d ON d.gateway_id=g.id
+    WHERE g.name IN ('Eniscope_2_Plumbing','Eniscope_3_AHU') GROUP BY 1;"
+Decision gate: if 3a shows PG/TSDB ≠ 16.15 / 2.29.2 or a divergent data mount → stop; B2 unresolved. If 3b shows anything other than a clean ≤193 ledger → stop; B1 unresolved.
+
+Step 4 — Production DB backup — REQUIRES EXPLICIT AUTHORIZATION
+
+docker exec ems-timescaledb pg_dump -U <POSTGRES_USER> -Fc <POSTGRES_DB> \
+  -f /var/lib/postgresql/data/prod_snapshot_$(date +%F).dump
+# copy off-container; verify: pg_restore --list <file> | head
+Record path + size + pg_restore --list exit 0. This is the DB rollback anchor (there is no reverse migration).
+
+Step 5 — Host-local secret/config preparation — REQUIRES EXPLICIT AUTHORIZATION
+
+On the production host, edit the untracked env files to add the Section-4 variables (Broker #2 for Telegraf and live-telemetry; ensure TIMESCALEDB_DATA_PATH=./postgres/data). In GitHub: set the PRODUCTION_* secrets and PRODUCTION_APPROVED_OPERATORS. Do not commit anything. Do not restart any container yet.
+
+Step 6 — Promote via CI/CD — REQUIRES EXPLICIT AUTHORIZATION (this is the production deployment)
+
+Human-watched, per FIRST_PRODUCTION_DEPLOYMENT_ROLLBACK_RUNBOOK.md §7. Dispatch deploy-production.yml:
+gh workflow run deploy-production.yml \
+  -f release_git_sha=49df53f0a6d2c7ca3520dabfd50897e0b6f2e1a9 \
+  -f confirm_release_git_sha=49df53f0a6d2c7ca3520dabfd50897e0b6f2e1a9
+This runs, in order: approved-operator check → double-entry SHA → SHA == staging HEAD → green staging run exists → GHCR image+digest → SSH deploy_release.sh (checkout 49df53f, compose config -q, docker pull, apply_migrations.sh 194→215 against live prod DB, compose up -d --no-build --no-deps admin-portal live-telemetry, health poll) → SSH post_deploy_verify.sh. It does not touch timescaledb, telegraf, or grafana.
+
+Step 7 — Deliberate timescaledb recreate for PR #21 — REQUIRES EXPLICIT AUTHORIZATION (only if B2 + B3 cleared)
+
+cd <PRODUCTION_PROJECT_PATH>
+docker inspect ems-timescaledb --format 'ID={{.Id}} Started={{.State.StartedAt}}'   # before
+docker compose -f compose.yaml up -d --no-deps timescaledb
+docker inspect ems-timescaledb --format 'ID={{.Id}} Started={{.State.StartedAt}}'   # after (expected to change)
+./scripts/verify/verify_database.sh
+Expect: effective max_connections 50, usable slots 47, PG/TSDB version unchanged from Step 3a, data mount unchanged. If version or data path is not as expected → this is the B2 failure mode → go to Rollback R3.
+
+Step 8 — Deliberate telegraf recreate for PR #22/#23 historical path — REQUIRES EXPLICIT AUTHORIZATION
+
+docker inspect ems-timescaledb ems-grafana --format '{{.Name}} {{.Id}}'   # record: must NOT change
+docker compose -f compose.yaml up -d --no-deps telegraf
+docker logs --tail 100 ems-telegraf     # expect BOTH mqtt_consumer instances connecting; broker="2" tag on the 2nd
+
+Step 9 — Live-telemetry Broker #2 — already covered by Step 6
+
+live-telemetry was recreated with the new image in Step 6 and reads the Step-5 MQTT2_LIVE_*. Verify: docker logs --tail 100 ems-live-telemetry shows two LiveTelemetryBroker instances connected with distinct client IDs. If it failed to start → partial MQTT2_LIVE_* (B5) → fix env, docker compose up -d --no-deps live-telemetry.
+
+Steps 10–15 — Production post-deploy verification — REQUIRES EXPLICIT AUTHORIZATION (read-only checks)
+
+10  ./scripts/release/post_deploy_verify.sh        # required gates must PASS; read advisory output, don't act on it
+11  docker logs --since 10m ems-telegraf | grep -Ei 'connect|broker|error'   # dual-broker historical: both connected
+12  docker exec ems-timescaledb psql -U <u> -d <db> -c \
+      "SELECT tags->>'broker' b, count(*) FROM telemetry.raw_messages
+         WHERE received_at > now()-interval '15 min' GROUP BY 1;"            # rows from broker NULL and '2'
+13  docker exec ems-timescaledb psql -U <u> -d <db> -c \
+      "SELECT count(*) total, count(*) FILTER (WHERE ts IS NOT NULL) with_ts
+         FROM telemetry.v_rtdata WHERE received_at > now()-interval '15 min';"   # rtdata[].ts present
+14  # normalized_points dedupe: index validity (matches verify's index-based check, not a full scan)
+    docker exec ems-timescaledb psql -U <u> -d <db> -c \
+      "SELECT indexrelid::regclass, indisvalid FROM pg_index
+         WHERE indrelid='telemetry.normalized_points'::regclass AND indisvalid IS FALSE;"   # expect 0 rows
+15  # energy pipeline advancing
+    docker exec ems-timescaledb psql -U <u> -d <db> -c \
+      "SELECT domain, last_received_at, updated_at FROM telemetry.pipeline_state ORDER BY 1;"
+    docker exec ems-timescaledb psql -U <u> -d <db> -c "SELECT * FROM analytics.v_pipeline_health;"
+16  # TimescaleDB capacity (post Step 7)
+    ./scripts/verify/verify_database.sh    # "Effective max_connections is 50", "usable slots 47"
+Also reconfirm ems-timescaledb / ems-grafana container IDs + StartedAt are unchanged except where Step 7 deliberately recreated timescaledb (FIRST_PRODUCTION…RUNBOOK.md §8).
+
+DO NOT EXECUTE (listed only so nobody improvises them)
+
+- Any Phase-6 device deletion / identifier / config / normalized / energy row removal on production.
+- refresh_continuous_aggregate, reconciliation jobs, or run_failed_message_recovery_job "to clean things up".
+- Publishing MQTT test messages to production brokers.
+- docker compose up -d without --no-deps <service> (would sweep protected services).
+- Editing the migration-216 WIP, or git stash/reset/clean in the local tree.
+- Applying migration 216 to any environment.
+
+---
+
+7. ROLLBACK
+
+Application rollback ≠ database rollback. Migrations are forward-only; there is no reverse migration.
+
+- R1 — App containers unhealthy after Step 6, migrations NOT yet applied / rolled back with their txn. Redeploy the prior known-good app state. There is no prior GHCR SHA tag for production (first deploy), so rollback.yml cannot target one. Use FIRST_PRODUCTION_DEPLOYMENT_ROLLBACK_RUNBOOK.md §5: temporarily point admin-portal → ems-platform-prod-admin-portal:latest and live-telemetry → ems-platform-prod-live-telemetry:latest in compose.yaml, docker compose up -d --no-build admin-portal live-telemetry, then revert compose.yaml. (Single APP_IMAGE can't restore both — two different image names.) — REQUIRES EXPLICIT AUTHORIZATION
+- R2 — App unhealthy but migrations 194–215 already committed. Old :latest images were built against the ≤193 schema; assess additive vs destructive. 194–215 are predominantly additive (new columns/tables/functions/jobs) — old binaries may tolerate them, but 210/211/213 drop-and-recreate procedure signatures and 213 adds jobs. If in doubt, restore the Step-4 pg_dump into ems-timescaledb (exec-based, never recreate the container) — last resort, data-loss window = since backup. — REQUIRES EXPLICIT AUTHORIZATION
+- R3 — Step 7 timescaledb recreate went wrong (version drift / empty PGDATA). docker compose stop timescaledb; restore production's previous compose.yaml timescaledb block (original image tag, original command, correct data mount) from git (git show v1.0.0-production-baseline:compose.yaml) or from the Step-3 docker inspect capture; docker compose up -d --no-deps timescaledb on the correct data path; verify_database.sh. If PGDATA was written empty, restore the Step-4 dump. This is why B2/B3 must be cleared before Step 7. — REQUIRES EXPLICIT AUTHORIZATION
+- R4 — Broker #2 misbehaving (Step 8/9). Remove/blank the MQTT2_* vars in telegraf/.env and/or app/live-telemetry.env; docker compose up -d --no-deps telegraf live-telemetry. Both services fall back to Broker #1 only (telegraf.conf: unset MQTT2 → 2nd consumer just fails to connect, Broker #1 unaffected; live_config.py: no MQTT2_* → single broker). No DB impact. — AUTHORIZED CHANGE on the production host once you authorize the deploy window.
+- R5 — After the first successful production deploy, .deploy-history/production.log exists and rollback.yml (workflow_dispatch, same production gating) becomes the normal path for any subsequent app rollback to a prior GHCR SHA tag.
+
+---
+
+STOP — no production-changing action taken. Nothing was pushed, merged, deployed, or restarted; the migration-216 WIP and working tree are untouched. Next action is yours: authorize the Step 1 / Step 3 read-only preflight, or tell me which blocker to drill into.

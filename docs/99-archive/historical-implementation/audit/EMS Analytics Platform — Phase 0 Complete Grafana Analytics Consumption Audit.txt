@@ -1,0 +1,133 @@
+EMS Analytics Platform — Phase 0: Complete Grafana Analytics Consumption Audit
+
+Method: all 7 dashboard JSON files were read in full (6,123 lines total — every panel, every query, every variable, every transformation/threshold/annotation field was inspected directly, not sampled). Facts only; no redesign recommendations.
+
+---
+
+Dashboard 1 — alarms.json ("EMS | Alarms", uid ems-alarms)
+
+Purpose: live view of currently-active alarm-equivalent conditions, org-wide, filterable by severity. Workflow: operator/facility-manager triage. Time range: now-24h/now, refresh 1m. Variables: severity (multi-select, query: SELECT DISTINCT severity ... FROM analytics.v_grafana_active_alarms WHERE grafana_org_id=${__org.id}). No annotations, no repeats, no library panels.
+
+┌────────────────────────────┬───────┬─────────────────────────────────┬─────────────────────────────────────────────────┐
+│           Panel            │ Type  │         Query object(s)         │                 What it answers                 │
+├────────────────────────────┼───────┼─────────────────────────────────┼─────────────────────────────────────────────────┤
+│ EMS Navigation             │ text  │ none                            │ static nav links (hardcoded dashboard UIDs)     │
+├────────────────────────────┼───────┼─────────────────────────────────┼─────────────────────────────────────────────────┤
+│ Critical/High/Medium/Low   │ stat  │ v_grafana_active_alarms         │ count of alarms at one hardcoded severity (not  │
+│ (×4)                       │       │                                 │ the $severity variable)                         │
+├────────────────────────────┼───────┼─────────────────────────────────┼─────────────────────────────────────────────────┤
+│ Active alarms by site      │ table │ v_grafana_active_alarms +       │ alarm counts per site×severity, respecting      │
+│                            │       │ v_grafana_sites                 │ $severity                                       │
+├────────────────────────────┼───────┼─────────────────────────────────┼─────────────────────────────────────────────────┤
+│ Alarm detail               │ table │ v_grafana_active_alarms         │ full alarm list, respecting $severity,          │
+│                            │       │                                 │ hardcoded severity-rank CASE ordering           │
+├────────────────────────────┼───────┼─────────────────────────────────┼─────────────────────────────────────────────────┤
+│ MVP alarm lifecycle        │ text  │ none                            │ self-declared scope: no ack/escalation/history  │
+│ boundary                   │       │                                 │                                                 │
+└────────────────────────────┴───────┴─────────────────────────────────┴─────────────────────────────────────────────────┘
+
+Key fact: the four severity stat tiles are hardcoded and structurally disconnected from the dashboard's own $severity filter — selecting "HIGH only" in the picker does not change what the 4 tiles show.
+
+---
+
+Dashboard 2 — organization-overview.json ("EMS | Organization Overview", uid ems-org-overview)
+
+Purpose: portfolio landing page. Workflow: executive/portfolio scan. No template variables (org scope only via ${__org.id}). Time range now-24h/now, refresh 1m.
+
+┌───────────────────────┬────────────┬─────────────────────────────────────────┬────────────────────────────────────────┐
+│         Panel         │    Type    │             Query object(s)             │            What it answers             │
+├───────────────────────┼────────────┼─────────────────────────────────────────┼────────────────────────────────────────┤
+│ EMS Navigation        │ text       │ none                                    │ (identical markdown to alarms.json)    │
+├───────────────────────┼────────────┼─────────────────────────────────────────┼────────────────────────────────────────┤
+│ Sites/Assets/Devices  │ stat       │ v_grafana_sites/assets/devices          │ org-wide counts                        │
+│ (×3)                  │            │                                         │                                        │
+├───────────────────────┼────────────┼─────────────────────────────────────────┼────────────────────────────────────────┤
+│ Active alarms         │ stat       │ v_grafana_active_alarms                 │ total org alarm count, no severity     │
+│                       │            │                                         │ split                                  │
+├───────────────────────┼────────────┼─────────────────────────────────────────┼────────────────────────────────────────┤
+│ Portfolio demand      │ timeseries │ v_grafana_energy_samples                │ SUM(active_power_kw) bucketed 15m — a  │
+│                       │            │                                         │ raw power sum labeled "demand"         │
+├───────────────────────┼────────────┼─────────────────────────────────────────┼────────────────────────────────────────┤
+│ Sites requiring       │ table      │ v_grafana_sites +                       │ sites ranked by current alarm count    │
+│ attention             │            │ v_grafana_active_alarms (LEFT JOIN)     │                                        │
+├───────────────────────┼────────────┼─────────────────────────────────────────┼────────────────────────────────────────┤
+│ Site inventory and    │ table      │ v_grafana_sites                         │ inventory listing                      │
+│ status                │            │                                         │                                        │
+└───────────────────────┴────────────┴─────────────────────────────────────────┴────────────────────────────────────────┘
+
+---
+
+Dashboard 3 — site-overview.json ("EMS | Site Overview", uid ems-site-overview)
+
+Purpose: single-site drill-down. Variable: site_id (single-select). Time range/refresh as above.
+
+┌───────────────────┬────────────┬────────────────────────────────────────────────┬─────────────────────────────────────┐
+│       Panel       │    Type    │                Query object(s)                 │           What it answers           │
+├───────────────────┼────────────┼────────────────────────────────────────────────┼─────────────────────────────────────┤
+│ EMS Navigation    │ text       │ none                                           │ (3rd identical copy)                │
+├───────────────────┼────────────┼────────────────────────────────────────────────┼─────────────────────────────────────┤
+│ Assets/Devices    │ stat       │ v_grafana_assets/devices, site-filtered        │ site counts                         │
+│ (×2)              │            │                                                │                                     │
+├───────────────────┼────────────┼────────────────────────────────────────────────┼─────────────────────────────────────┤
+│ Current demand kW │ stat       │ v_grafana_energy_samples (DISTINCT ON          │ sum of each device's latest         │
+│                   │            │ latest-per-device, summed)                     │ instantaneous power                 │
+├───────────────────┼────────────┼────────────────────────────────────────────────┼─────────────────────────────────────┤
+│ Active alarms     │ stat       │ v_grafana_active_alarms                        │ site alarm count                    │
+├───────────────────┼────────────┼────────────────────────────────────────────────┼─────────────────────────────────────┤
+│ Site demand       │ timeseries │ v_grafana_energy_samples, 15m-bucketed sum     │ same pattern as org-overview's      │
+│ profile           │            │                                                │ Portfolio demand, + site filter     │
+├───────────────────┼────────────┼────────────────────────────────────────────────┼─────────────────────────────────────┤
+│ Device telemetry  │ table      │ v_grafana_devices.telemetry_state              │ device count by connectivity state  │
+│ health            │            │                                                │ (classifier #1)                     │
+├───────────────────┼────────────┼────────────────────────────────────────────────┼─────────────────────────────────────┤
+│ Hierarchy entry   │ table      │ v_grafana_assets (root/branch filter)          │ navigable asset branches            │
+│ points            │            │                                                │                                     │
+├───────────────────┼────────────┼────────────────────────────────────────────────┼─────────────────────────────────────┤
+│ Current alarms    │ table      │ v_grafana_active_alarms                        │ site alarm detail (correctly omits  │
+│                   │            │                                                │ redundant site_id column)           │
+└───────────────────┴────────────┴────────────────────────────────────────────────┴─────────────────────────────────────┘
+
+Key fact: "Current demand kW" (latest-sample-per-device sum) and "Site demand profile" (15-min time-bucketed sum) are two different aggregation semantics on the same panel-adjacent concept, both called "demand," neither the dedicated demand engine.
+
+---
+
+Dashboard 4 — area-overview.json ("EMS | Area Overview", uid ems-area-overview)
+
+Purpose: one hierarchy-branch ("area") drill-down within a site. Variables: site_id → area_id (cascaded, filtered to child_count>0 branch nodes, with an all-zero-UUID sentinel fallback row when a site has no areas).
+
+┌─────────────────┬────────────┬────────────────────────────────────────────────────────┬───────────────────────────────┐
+│      Panel      │    Type    │                    Query object(s)                     │        What it answers        │
+├─────────────────┼────────────┼────────────────────────────────────────────────────────┼───────────────────────────────┤
+│ EMS Navigation  │ text       │ none                                                   │ (4th identical copy)          │
+├─────────────────┼────────────┼────────────────────────────────────────────────────────┼───────────────────────────────┤
+│ Descendant      │ stat       │ v_grafana_assets (WITH RECURSIVE walk)                 │ count of all assets under     │
+│ assets          │            │                                                        │ this area                     │
+├─────────────────┼────────────┼────────────────────────────────────────────────────────┼───────────────────────────────┤
+│ Assigned        │ stat       │ same recursion + v_grafana_asset_devices               │ device count across           │
+│ devices         │            │                                                        │ descendants                   │
+├─────────────────┼────────────┼────────────────────────────────────────────────────────┼───────────────────────────────┤
+│ Current demand  │ stat       │ same recursion + v_grafana_energy_samples              │ instantaneous power sum,      │
+│ kW              │            │ (latest-per-descendant-asset sum)                      │ labeled demand                │
+├─────────────────┼────────────┼────────────────────────────────────────────────────────┼───────────────────────────────┤
+│ Active alarms   │ stat       │ same recursion + v_grafana_active_alarms               │ descendant alarm count        │
+├─────────────────┼────────────┼───────────────────────────┼───────────────────────────────┤
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ check progress
+Analytics object: analytics.v_grafana_telemetry_capture_policies
+Type: view
+Consumed by (dashboard : panel): asset-overview: same 5 electrical-trend panels (lateral join for gap detection)
+────────────────────────────────────────
+Analytics object: analytics.get_grafana_asset_demand_summary()
+Type: function
+Consumed by (dashboard : panel): asset-overview: Latest Demand, Demand Status/Current Interval, Demand Context
+────────────────────────────────────────
+Analytics object: analytics.v_grafana_asset_demand_intervals
+Type: view
+Consumed by (dashboard : panel): asset-overview: Peak Demand, Demand Profile, Demand Quality History
+────────────────────────────────────────
+Analytics object: analytics.get_canonical_energy_read()
+Type: function
+Consumed by (dashboard : panel): asset-overview: Energy Consumption Trend (its only call site anywhere in Grafana)
+
+Objects fully defined in the codebase but with no confirmed consumer in any of the 7 dashboards (per this and the prior audit): analytics.v_energy_demand_15min, v_energy_peak_demand_daily/_monthly, v_asset_peak_demand_*, v_energy_site_demand_kpis, v_site_energy_balance_daily, all environment analytics views (v_environment_15min/hourly, environment_daily, v_environment_latest, v_environment_sensor_kpis), and the entire "semantic reporting" lineage (v_energy_reporting_5min/15min/hourly/daily) except v_energy_consumption_daily (not confirmed consumed by any of the 7 either).

@@ -1,0 +1,109 @@
+EMS Analytics Platform — Phase 0: Static Analytical Query-Performance Audit
+
+Method: static analysis only — SQL bodies, index DDL, compression/retention policies, and documented incidents were traced directly from source; nothing was executed. Every classification below cites the exact repository evidence it rests on.
+
+---
+
+Part A — Indexing inventory (the foundation for every classification below)
+
+Object: telemetry.energy_measurements
+Indexes actually defined: PK (received_at, id) only, plus energy_measurements_device_bucket_start_idx (device_id, bucket_start
+ DESC) added later
+Source: postgres/ddl/08_energy_measurements.sql (PK); postgres/ddl/138_asset_dashboard_consolidated_read_path_fix.sql:63-64
+(secondary index, added specifically "for fast, parameterized asset-energy reads")
+────────────────────────────────────────
+Object: telemetry.environment_measurements, water_measurements, asset_health, device_status
+Indexes actually defined: PK only — no secondary index of any kind
+Source: postgres/ddl/09-12_*.sql; confirmed absent from postgres/ddl/20_indexes.sql (internally titled 08_indexes.sql), which
+contains only metadata.* foreign-key indexes
+────────────────────────────────────────
+Object: telemetry.normalized_points
+Indexes actually defined: (device_id, event_time DESC), (logical_point_id, event_time DESC), (organization_id, event_time
+DESC), normalized_points_raw_lineage_idx (platform_received_at, raw_message_id) WHERE raw_message_id  IS NOT NULL
+Source: postgres/ddl/38_normalized_points_hypertable.sql, postgres/ddl/122_telemetry_pipeline_performance_state.sql
+────────────────────────────────────────
+Object: telemetry.ca_energy_1min/5min/15min/hourly/daily, ca_energy_electrical_ext_*, ca_energy_phase_power_*
+Indexes actually defined: No explicit CREATE INDEX found in any of 121_energy_1min_5min_analytics.sql,
+51/52/53_energy_*_continuous_aggregate.sql, 046_expand_electrical_caggs_and_routing.sql,
+178_energy_phase_power_aggregates.sql — relies solely on whatever TimescaleDB creates automatically for a
+continuous-aggregate materialized hypertable (the bucket-time column)
+Source: grep confirms zero CREATE INDEX statements in these 4+ files
+────────────────────────────────────────
+Object: telemetry.ca_environment_15min/hourly
+Indexes actually defined: Explicit (organization_id, site_id, bucket_start DESC) and (device_id, bucket_start DESC)
+Source: postgres/ddl/71_environment_15min_continuous_aggregate.sql, 72_...hourly...sql
+────────────────────────────────────────
+Object: analytics.energy_consumption_1min/5min (persisted, validated)
+Indexes actually defined: (organization_id, site_id, bucket_start DESC), (device_id, bucket_start DESC), partial WHERE
+import_quality_code='GOOD'
+Source: postgres/ddl/140, 143
+────────────────────────────────────────
+Object: analytics.energy_consumption_15min/hourly/daily (persisted rollups)
+Indexes actually defined: Same two-index pattern
+Source: postgres/migrations/179, 181, 183
+────────────────────────────────────────
+Object: analytics.demand_intervals
+Indexes actually defined: Partial index ix_demand_intervals_valid_peak WHERE quality_status='VALID' (plus presumed scope/asset
+index, not fully re-verified this session)
+Source: postgres/ddl/130_site_demand_policy_contract.sql
+────────────────────────────────────────
+Object: Compression (all raw domain hypertables and CAGGs)
+Indexes actually defined: segmentby (organization_id, site_id, device_id), orderby bucket_start DESC/received_at DESC
+Source: traced per-object in prior audits
+
+Fact, not inference: the raw electrical CAGG family (ca_energy_*) and the raw domain hypertables (environment_measurements, water_measurements, asset_health, device_status) have no dedicated index support for filtering by organization/site/device on uncompressed (recent, <7-day) data — the only thing that prunes a query there is hypertable chunk exclusion by time, plus (for energy_measurements only) the one device-scoped index added by migration 138. Once a chunk is compressed (after 7 days per every domain table's lifecycle job), the compression segmentby columns act as a coarse index-equivalent for org/site/device pruning at the segment level — but this benefit applies only to data older than the compression threshold, not to the most recent week.
+
+---
+
+Part B — Per-query trace and classification
+
+B1. analytics.v_grafana_energy_samples → org/site/area "demand" panels (organization-overview "Portfolio demand", site-overview "Current demand kW"/"Site demand profile", area-overview "Current demand kW"/"Area demand profile")
+
+- Tier queried: raw telemetry.energy_measurements directly — never routes to any CAGG or persisted rollup regardless of the dashboard's selected time range. Confirmed: v_grafana_energy_samples is defined as FROM telemetry.energy_measurements em JOIN metadata.grafana_organization_map ... LEFT JOIN LATERAL (SELECT ad.asset_id FROM metadata.asset_devices ad WHERE ad.device_id=em.device_id ORDER BY ... LIMIT 1) ad ON TRUE (postgres/migrations/001_ems_platform_baseline_20260807.sql:36930-36950).
+- Repeated computation: the LEFT JOIN LATERAL resolving asset_id is a correlated subquery executed once per matched row of energy_measurements — for org-wide, multi-week queries this is N per-row index probes against metadata.asset_devices(device_id) (indexed via idx_asset_devices_device, so each probe is cheap, but the count of probes scales with raw row volume, not with device count).
+- Aggregation vs. join order: aggregation (SUM/DISTINCT ON) happens in the Grafana panel SQL, after the view's own join/lateral resolution — so the lateral join runs against every raw row before any reduction.
+- Time filtering: the panels add $__timeFilter(sample_time) (org/site/area "profile" panels) — this filters on received_at, the hypertable partition column, so chunk exclusion works. But within surviving chunks there is no org/site index (Part A) on uncompressed data, and the active_power_kw SUM/latest-value logic still runs over every raw row in range, not a pre-aggregated bucket.
+- Tenant filtering: WHERE gom.is_active=TRUE at the view level, ${__org.id} at the panel level — correctly scoped, but scoping is a JOIN, not an indexed predicate directly on energy_measurements.
+- Physical resolution used: raw/native, always — for every time range the dashboard supports, including 30-day/3-month/1-year selections a user could pick (the dashboard default is 24h but nothing in the panel SQL or view enforces a ceiling).
+- Classification: POTENTIALLY EXPENSIVE, worsening with range length. Evidence: no CAGG/rollup routing exists in this view at all (unlike get_canonical_energy_read's explicit resolution router, §B4); no org/site/device index exists on uncompressed energy_measurements chunks (Part A). For "today" this is likely fine (small row count); for "7 days" borderline; for "30 days/3 months/1 year" this reads a materially larger raw row count than any equivalent aggregate object would require, with no supporting index on the filtered columns for the most recent (uncompressed) week of that range.
+
+B2. analytics.v_grafana_devices (org/site-overview counts, device-diagnostics, and the base of v_grafana_active_alarms's "telemetry_alarms" branch)
+
+- Exact query body (from postgres/migrations/001_ems_platform_baseline_20260807.sql:36792-36823):
+telemetry_rollup AS (
+    SELECT np.device_id,
+           max(np.event_time) AS latest_source_timestamp,
+           max(np.created_at) AS latest_received_timestamp,
+           max(np.event_time) FILTER (WHERE ...) AS latest_valid_source_timestamp,
+           max(np.created_at) FILTER (WHERE ...) AS latest_valid_received_timestamp
+    FROM telemetry.normalized_points np
+    GROUP BY np.device_id
+)
+- This has no WHERE time filter at all — it aggregates the entire history of telemetry.normalized_points (a hypertable with no retention policy located in this audit — see the prior schemas/tables report's UNKNOWN flag) every single time this view is queried, i.e. every time any of organization-overview (Devices count), site-overview (Devices count, Device telemetry health), or device-diagnostics (Telemetry state, Data age, Mapped points, Device identity) loads, and every time v_grafana_active_alarms is queried (it depends on v_grafana_devices.telemetry_state) — which is every one of the 7 dashboards except analytics-explorer.
+- This is the exact pattern a dedicated production fix already eliminated elsewhere. docs/operations/telemetry-pipeline-performance-fix-20260808.md documents, as one of three named production performance defects: "Device telemetry availability, gateway connectivity, and device commissioning readiness use compact persistent state tables instead of aggregating the historical telemetry.normalized_points hypertable on admin page loads." — and introduces exactly the mechanism (telemetry.device_telemetry_state, a compact one-row-per-device cache) that would eliminate this same aggregation. analytics.v_grafana_devices was defined in the pre-existing 169_universal_grafana_mvp.sql (archived, predates the Aug-8 fix) and was never migrated to read telemetry.device_telemetry_state instead — confirmed by direct comparison: v_grafana_devices still reads telemetry.normalized_points with a GROUP BY device_id aggregate in the version present in the current baseline (001_ems_platform_baseline_20260807.sql, dated after the Aug-8 fix was merged), while analytics.get_grafana_asset_telemetry_context() (postgres/ddl/138_asset_dashboard_consolidated_read_path_fix.sql) and get_grafana_asset_connectivity_context() correctly use the compact state tables instead.
+- Classification: KNOWN PROBLEMATIC FROM EXISTING ISSUES. This is not a hypothetical risk — it is the identical query shape a named, dated incident (2026-08-08) already fixed in one code path (admin portal) while a parallel, still-live code path (this Grafana view, used by 6 of 7 dashboards) retains the original unfixed pattern. Evidence: the fix doc's own problem statement, plus direct comparison of v_grafana_devices's current SQL against the compact-state alternative that exists in the same codebase.
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+───────────────────────────────────────────────────
+Primary evidence: Small, indexed, pre-aggregated persisted table at every range
+────────────────────────────────────────
+Query/object: Analytics Explorer (get_grafana_explorer_intervals)
+Classification: KNOWN EFFICIENT relative to other paths
+Primary evidence: Only path confirmed to auto-coarsen resolution by range; underlying CAGG index support UNKNOWN — REQUIRES
+verification of migration 185
+────────────────────────────────────────
+Query/object: Area-overview recursive descendant CTEs (6 panels)
+Classification: KNOWN EFFICIENT for typical hierarchy sizes
+Primary evidence: Indexed recursive join (idx_assets_parent); UNKNOWN — REQUIRES EXPLAIN ANALYZE only for atypically large
+hierarchies
+────────────────────────────────────────
+Query/object: Persisted validated rollups (energy_consumption_15min/hourly/daily) as objects in themselves
+Classification: KNOWN EFFICIENT
+Primary evidence: Explicit dual indexes (Part A); simply not the object any audited Grafana panel actually calls for longer
+ranges
+────────────────────────────────────────
+Query/object: Raw ca_energy_* CAGGs when queried by device/site (not via the demand engine)
+Classification: UNKNOWN — REQUIRES EXPLAIN ANALYZE/RUNTIME TEST
+Primary evidence: No explicit index found; relies entirely on compression-segment pruning for data older than 7 days,
+unverified for uncompressed recent data at runtime

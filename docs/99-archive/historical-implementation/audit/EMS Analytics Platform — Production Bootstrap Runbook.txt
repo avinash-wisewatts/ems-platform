@@ -1,0 +1,273 @@
+EMS Analytics Platform — Production Read-Only Reference-Data Access
+ADMINISTRATOR BOOTSTRAP RUNBOOK
+
+Status: NOT EXECUTED. No SSH connection to production has been made.
+No production object has been created or modified. This document is for
+an administrator with existing emsadmin access to production to execute
+manually, and to return output from, for verification.
+
+Source of truth: "Audit/EMS Analytics Platform — Production Read-Only
+Access — Final Hardened Design.txt". Every command below is cross-checked
+against that document. Section 0 below lists every place this runbook
+had to add something the design document did not fully specify, and why.
+
+===============================================================================
+0. DISCREPANCIES / GAPS FOUND IN THE HARDENED DESIGN — FLAGGED, NOT INVENTED
+===============================================================================
+
+(1) SUDO IS MISSING FROM THE FORCED COMMAND (internal inconsistency, not a
+    scope change). Design §A's authorized_keys line forces
+    command="/usr/local/sbin/ems_metadata_reader_query.sh" with no sudo.
+    OpenSSH runs a forced command as the AUTHENTICATING user
+    (ems_metadata_reader), not as root. Design §B then grants
+    ems_metadata_reader passwordless sudo to run that exact script as
+    root. If the forced command never invokes sudo, §B's sudoers rule is
+    never reached, and the wrapper's `docker exec` call fails anyway
+    (ems_metadata_reader has no docker-group membership, per §A, and is
+    not root). CORRECTION APPLIED (Stage 1 below): the authorized_keys
+    forced command is `sudo /usr/local/sbin/ems_metadata_reader_query.sh`,
+    which is the only way §B's own sudoers rule does anything at all.
+    The wrapper script's contents remain byte-for-byte identical to §C —
+    nothing in the fixed four-keyword logic changes.
+
+(2) NO-PTY + SUDO REQUIRES A TTY-FREE SUDOERS POLICY. Design §A mandates
+    no-pty (correct, load-bearing for "no interactive shell"). Combined
+    with fix (1), `sudo` now runs without a tty. Most modern sudo builds
+    default to not requiring one, but some distro baselines set `Defaults
+    requiretty` globally, which would silently break this path. ADDED
+    (not in source doc): `Defaults:ems_metadata_reader !requiretty` in the
+    same sudoers drop-in file, scoped only to this one account — does not
+    touch the global sudoers policy or any other account.
+
+(3) HOME DIRECTORY vs `--no-create-home`. Design §A specifies `useradd
+    --no-create-home` but also says "no home directory contents beyond
+    .ssh," and §H's rollback references
+    /home/ems_metadata_reader/.ssh/authorized_keys — i.e. a home directory
+    path must exist for sshd's default AuthorizedKeysFile lookup to find
+    anything (sshd is explicitly NOT reconfigured per §A, so no custom
+    AuthorizedKeysFile path is available). System-account defaults for the
+    home-directory field in /etc/passwd vary by distro (some set
+    /nonexistent). RESOLVED: keep `--no-create-home` (nothing is
+    auto-populated) but add an explicit `-d /home/ems_metadata_reader` to
+    useradd so the passwd entry points somewhere concrete, then manually
+    create only /home/ems_metadata_reader/.ssh (nothing else) in Stage 1.
+    This matches "no home directory contents beyond .ssh" literally.
+
+(4) THREE ASSUMPTIONS CARRIED OVER FROM STAGING, NEVER VERIFIED ON
+    PRODUCTION (no production access exists in any prior investigation):
+    (a) the TimescaleDB container's runtime name is `ems-timescaledb`
+        (used in §C's wrapper and confirmed only on staging);
+    (b) the database name is `ems` (used in §C, confirmed only on
+        staging);
+    (c) local/loopback PostgreSQL auth is `trust` in production's
+        pg_hba.conf, matching staging (this is why §I says no password is
+        needed for ems_metadata_reader). compose.yaml is shared between
+        prod/staging and both are meant to run the same CI/CD artifact
+        (CLAUDE.md §15), so this is a reasonable inference, not a guess —
+        but it is still unverified on the actual production host. Stage 0
+        below has the administrator confirm all three, read-only, before
+        Stage 1 touches anything. If any differs, STOP and report back
+        rather than adjusting the wrapper on the fly.
+    (d) the four views (admin.v_device_models, admin.v_active_device_
+        profiles, admin.v_device_categories, admin.v_gateway_models) exist
+        in production with the same names — same reasoning/same caveat,
+        also checked in Stage 0.
+
+No other departure from the hardened design was made. Grant list, view
+list, four-keyword allowlist, sudoers command target, rollback triggers,
+and the wrapper script's SQL are all verbatim from the source document.
+
+===============================================================================
+STAGE 0 — READ-ONLY DISCOVERY (uses existing emsadmin access; confirms
+the assumptions in 0(4) before anything is created; changes nothing)
+===============================================================================
+
+Run as emsadmin on the production host:
+
+    docker ps --format '{{.Names}}' | grep -i timescale
+    docker exec ems-timescaledb psql -U ems_admin -l
+    docker exec ems-timescaledb psql -U ems_admin -d ems -c \
+      "SELECT usename, useconfig FROM pg_shadow WHERE usename='ems_admin';"
+      -- sanity check only; do not paste password hashes back if any
+      -- unexpected column appears — report container/db names only.
+    docker exec ems-timescaledb cat /var/lib/postgresql/data/pg_hba.conf \
+      | grep -E '^(local|host)\s'
+    docker exec ems-timescaledb psql -U ems_admin -d ems -c \
+      "SELECT viewname FROM pg_views WHERE schemaname='admin' AND viewname IN
+       ('v_device_models','v_active_device_profiles','v_device_categories','v_gateway_models');"
+
+Expected: container name `ems-timescaledb`, database `ems` present, at
+least one `local`/`host ... 127.0.0.1/32` (or similar) line reading
+`trust`, and all four view names returned. If any of these differ, STOP
+— do not adjust Stage 1 commands yourself; report the actual values back
+first.
+
+===============================================================================
+STAGE 1 — ONE-TIME ADMINISTRATOR BOOTSTRAP (run as emsadmin, with sudo)
+===============================================================================
+
+1a. Linux account (design §A, corrected per gap (3)):
+    sudo useradd --system --no-create-home -d /home/ems_metadata_reader \
+      --shell /usr/sbin/nologin ems_metadata_reader
+    sudo mkdir -p /home/ems_metadata_reader/.ssh
+    sudo chown ems_metadata_reader:ems_metadata_reader \
+      /home/ems_metadata_reader /home/ems_metadata_reader/.ssh
+    sudo chmod 700 /home/ems_metadata_reader /home/ems_metadata_reader/.ssh
+
+1b. Root-owned wrapper script (design §C, byte-for-byte):
+    sudo tee /usr/local/sbin/ems_metadata_reader_query.sh > /dev/null <<'EOF'
+    #!/bin/bash
+    set -Eeuo pipefail
+    case "${SSH_ORIGINAL_COMMAND:-}" in
+        device_models)
+            QUERY='SELECT vendor, model, device_category_id, device_category_name FROM admin.v_device_models ORDER BY vendor, model;'
+            ;;
+        device_profiles)
+            QUERY='SELECT profile_code, manufacturer, model, device_category_ids, device_category_names FROM admin.v_active_device_profiles ORDER BY profile_code;'
+            ;;
+        device_categories)
+            QUERY='SELECT id, name, description FROM admin.v_device_categories ORDER BY name;'
+            ;;
+        gateway_models)
+            QUERY='SELECT id, vendor, model, protocol FROM admin.v_gateway_models ORDER BY vendor, model;'
+            ;;
+        *)
+            echo "Usage: ssh ems-production-readonly {device_models|device_profiles|device_categories|gateway_models}" >&2
+            exit 1
+            ;;
+    esac
+    exec docker exec -i ems-timescaledb psql -X --no-psqlrc -v ON_ERROR_STOP=1 -U ems_metadata_reader -d ems -c "$QUERY"
+    EOF
+    sudo chown root:root /usr/local/sbin/ems_metadata_reader_query.sh
+    sudo chmod 755 /usr/local/sbin/ems_metadata_reader_query.sh
+
+1c. Sudoers drop-in (design §B, plus gap (2)'s !requiretty addition):
+    sudo tee /etc/sudoers.d/ems_metadata_reader > /dev/null <<'EOF'
+    Defaults:ems_metadata_reader !requiretty
+    ems_metadata_reader ALL=(root) NOPASSWD: /usr/local/sbin/ems_metadata_reader_query.sh
+    EOF
+    sudo chmod 440 /etc/sudoers.d/ems_metadata_reader
+    sudo visudo -cf /etc/sudoers.d/ems_metadata_reader
+
+1d. SSH key (design §I):
+    - Generate the ed25519 keypair on the ADMINISTRATOR'S OWN machine (the
+      same machine that already holds the ems-staging/ems-production
+      IdentityFiles), NOT on the production host and NOT by Claude:
+          ssh-keygen -t ed25519 -f ems-metadata-reader-key -C ems-metadata-reader-key -N ""
+      (or with a passphrase, administrator's choice — the design does not
+      require one since login is key-only, not interactive).
+    - The private key file stays only on that local machine, in the same
+      protected local folder pattern as the existing staging/production
+      keys; it is never copied to production, never committed to the
+      repository, never pasted into chat.
+    - Only the PUBLIC key (ems-metadata-reader-key.pub) is installed on
+      production:
+          sudo tee /home/ems_metadata_reader/.ssh/authorized_keys > /dev/null <<'EOF'
+          command="sudo /usr/local/sbin/ems_metadata_reader_query.sh",no-pty,no-agent-forwarding,no-X11-forwarding,no-port-forwarding,no-user-rc,restrict ssh-ed25519 AAAA...REPLACE-WITH-ACTUAL-PUBLIC-KEY... ems-metadata-reader-key
+          EOF
+          sudo chown ems_metadata_reader:ems_metadata_reader /home/ems_metadata_reader/.ssh/authorized_keys
+          sudo chmod 600 /home/ems_metadata_reader/.ssh/authorized_keys
+      (see gap (1): `sudo` prefix added inside command= versus the literal
+      design text.)
+    - No sshd_config change and no service restart is required.
+
+1e. PostgreSQL role and grants (design §"C (DATABASE)", verbatim):
+    docker exec -i ems-timescaledb psql -U ems_admin -d ems <<'EOF'
+    CREATE ROLE ems_metadata_reader WITH LOGIN NOSUPERUSER NOCREATEDB
+        NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+    GRANT CONNECT ON DATABASE ems TO ems_metadata_reader;
+    GRANT USAGE ON SCHEMA admin TO ems_metadata_reader;
+    GRANT SELECT ON
+        admin.v_device_models,
+        admin.v_active_device_profiles,
+        admin.v_device_categories,
+        admin.v_gateway_models
+    TO ems_metadata_reader;
+    ALTER ROLE ems_metadata_reader SET log_statement = 'all';
+    EOF
+    (Run as emsadmin/ems_admin, the existing superuser — no new DB
+    credential or password is set, consistent with Stage 0's trust-auth
+    confirmation.)
+
+===============================================================================
+STAGE 2 — RESTRICTED READ-ONLY VERIFICATION
+===============================================================================
+
+Add a local SSH alias (on whichever machine holds the new private key —
+this is separate from, and does not modify, the existing Claude Code
+`ems-staging` permission):
+
+    Host ems-production-readonly
+      HostName <production host>
+      User ems_metadata_reader
+      IdentityFile <path to ems-metadata-reader-key>
+
+POSITIVE TESTS (each must return rows/empty result set, exit 0):
+    ssh ems-production-readonly device_models
+    ssh ems-production-readonly device_profiles
+    ssh ems-production-readonly device_categories
+    ssh ems-production-readonly gateway_models
+
+NEGATIVE TESTS (each must fail — usage message + exit 1, or SSH-level
+rejection — and must NOT reach psql/the container in any other way):
+    ssh ems-production-readonly                                        # no argument
+    ssh ems-production-readonly 'anything else'                        # unrecognized keyword
+    ssh ems-production-readonly '\! whoami'                            # meta-command attempt
+    ssh ems-production-readonly '\copy (select 1) to program '"'"'id'"'"''  # \copy TO PROGRAM
+    ssh ems-production-readonly "COPY (select 1) TO PROGRAM 'id'"      # COPY ... PROGRAM
+    ssh ems-production-readonly 'device_models; DROP TABLE metadata.device_models;'  # SQL injection
+    ssh ems-production-readonly 'device_models`id`'                    # command substitution
+    ssh ems-production-readonly '../../etc/passwd'                     # path traversal
+    ssh ems-production-readonly 'device_models extra_arg'              # malformed/extra args
+    ssh ems-production-readonly $'device_models\ngetshell'             # embedded newline
+    ssh -o "ForwardAgent=yes" ems-production-readonly device_models    # agent forwarding
+    ssh -L 9999:127.0.0.1:5432 ems-production-readonly device_models   # port forwarding
+    ssh ems-production-readonly                                        # then Ctrl+... / no -t: confirm no pty/shell obtainable
+    ssh -t ems-production-readonly                                     # explicit pty request must still be refused (no-pty)
+
+Also confirm, purely as read evidence (no attempt to actually run a
+mutating statement is needed beyond observing the role's grants —
+Stage 1e's own GRANT list is the proof these fail; do not test
+DROP/INSERT/GRANT against production even expecting a permission-denied
+error, since that still issues a real DDL/DML attempt against a live
+system):
+    docker exec -i ems-timescaledb psql -U ems_admin -d ems -c \
+      "SELECT rolname, rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls FROM pg_roles WHERE rolname='ems_metadata_reader';"
+    docker exec -i ems-timescaledb psql -U ems_admin -d ems -c \
+      "SELECT grantee, table_schema, table_name, privilege_type FROM information_schema.role_table_grants WHERE grantee='ems_metadata_reader';"
+    ls -l /usr/local/sbin/ems_metadata_reader_query.sh   # must show root:root, -rwxr-xr-x
+    sudo -l -U ems_metadata_reader                        # must show exactly the one NOPASSWD entry
+    cat /home/ems_metadata_reader/.ssh/authorized_keys    # confirm the single forced-command line, permissions 600
+
+===============================================================================
+EXPECTED VERIFICATION CHECKLIST
+===============================================================================
+
+[ ] Stage 0: container name, db name, trust auth, four views all confirmed present on production
+[ ] ems_metadata_reader Linux account exists, shell = /usr/sbin/nologin, no docker-group membership
+[ ] /usr/local/sbin/ems_metadata_reader_query.sh is root:root, mode 755, not writable by ems_metadata_reader
+[ ] /etc/sudoers.d/ems_metadata_reader passes visudo -c and contains exactly the one NOPASSWD command + the !requiretty line
+[ ] authorized_keys contains exactly one forced-command line with the six restriction flags, mode 600, owned by ems_metadata_reader
+[ ] ems_metadata_reader Postgres role: rolsuper=f, rolcreatedb=f, rolcreaterole=f, rolreplication=f, rolbypassrls=f
+[ ] role_table_grants shows SELECT only, only on the four named views, nothing else
+[ ] all 4 positive tests return data with exit 0
+[ ] all negative tests (arbitrary SQL, injection, extra keyword, \!, \copy, COPY PROGRAM, command substitution, path traversal, malformed args, SSH_ORIGINAL_COMMAND manipulation, agent-forwarding, port-forwarding, -t pty request) are rejected
+[ ] no production application, Grafana, telemetry, or config file was touched
+
+===============================================================================
+ROLLBACK (unchanged from design §H)
+===============================================================================
+    ALTER ROLE ems_metadata_reader NOLOGIN;   -- or DROP ROLE ems_metadata_reader;
+    sudo rm /home/ems_metadata_reader/.ssh/authorized_keys
+    sudo rm /etc/sudoers.d/ems_metadata_reader
+    sudo userdel ems_metadata_reader
+Any one step alone fully revokes access. None touch emsadmin or ems-staging.
+
+===============================================================================
+NEXT STEP AFTER ADMINISTRATOR EXECUTION
+===============================================================================
+Return the Stage 0 and Stage 2 command outputs here. Once verified, the
+four catalog outputs will be reported as retrieved data only — no
+production-to-staging insertion happens as part of, or immediately after,
+this runbook; that remains a separate, explicit, human-reviewed step per
+design §J.

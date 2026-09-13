@@ -1,0 +1,214 @@
+EMS Analytics Platform — Phase 1C Implementation Report
+Job-Schedule Drift Correction
+
+Status: IMPLEMENTED, LOCALLY VALIDATED, COMMITTED, AND PUSHED TO
+origin/staging. NOT MANUALLY DEPLOYED (any deployment occurs only via the
+existing automatic CI/CD staging workflow). NO SSH ACCESS PERFORMED.
+
+Commit: 4289b3919738d901c91dfc07975020fe141abcdb
+Subject: fix: correct canonical job schedules
+Branch: staging, pushed to origin/staging (5510200..4289b39; 0 ahead / 0 behind)
+
+===============================================================================
+1. SCOPE DECISION
+===============================================================================
+
+Following user direction, Phase 1C is explicitly scoped as JOB-SCHEDULE DRIFT
+CORRECTION ONLY — the item both the Architecture Gap Analysis (Phase A) and
+the Phase 1 Canonical Semantic Model Final Reconciliation (1B, though not
+executed under that name) identify as the lowest-risk, zero-ambiguity,
+already-fully-diagnosed item. Resolution-routing consistency, complete
+energy-consumption consolidation, and demand consolidation are explicitly
+NOT this phase's scope (see the separate, still-standing "Phase 1C Scope
+Ambiguity" note for why those were live candidates before this direction was
+given).
+
+===============================================================================
+2. RE-CONFIRMED DIAGNOSIS (SOURCE: docs/operations/CICD_PIPELINE.md)
+===============================================================================
+
+The canonical job-registration files — postgres/jobs/42_normalization_
+background_job.sql, 48_energy_background_job.sql, 69_environment_routing_
+job.sql — were each read in full this session and confirmed to ALREADY
+register/alter their job with the canonical values below. These files are
+CORRECT AS-IS and were NOT modified.
+
+    Job                          | Canonical            | Drifted (documented, staging)
+    run_normalization_job        | 1 min / 15 min overlap | 5 min / 20 min overlap
+    run_energy_routing_job       | 1 min / 15 min overlap | 1 min / 1 min overlap
+    run_environment_routing_job  | 1 min / 15 min overlap | 1 min / 1 min overlap
+
+    (Canonical values in full: schedule_interval = 1 minute, max_runtime =
+    5 minutes, max_retries = 3, retry_period = 1 minute, config.overlap =
+    15 minutes, scheduled = TRUE.)
+
+The drift re-confirmed still present on staging this session via the Phase
+1B CI/CD post-deployment verification log (commit 5510200, run 32653922951):
+"Normalization job does not have the expected 1-minute schedule",
+"Normalization/Energy/Environment routing job does not use the expected
+15-minute overlap."
+
+===============================================================================
+3. DISCREPANCY REPORTED BEFORE PROCEEDING (per instruction)
+===============================================================================
+
+The repository's job-registration files are already canonical — there is no
+buggy repository code to fix. The defect is entirely in the LIVE RUNNING job
+configuration on staging, which fell out of sync with those already-correct
+files (they execute once at initial deploy and are not automatically
+re-applied). CICD_PIPELINE.md itself states the remediation is "likely by
+re-running the relevant alter_job calls from the three postgres/jobs/*.sql
+files against staging, under its own change control."
+
+Given the constraint "do not touch staging directly," the correct minimal
+production change — consistent with this project's only existing mechanism
+for correcting staging state through code (a forward migration applied by
+the established CI/CD pipeline) — is a NEW migration that reasserts the
+canonical alter_job values on the three already-registered jobs. This is not
+an improvisation: it is the literal remediation the source document
+describes, expressed as a migration rather than a direct staging command, so
+that it goes through the same review/approval/CI path as every other change
+in this project. No other interpretation of "smallest production change"
+was found to fit both constraints (fix the drift; never touch staging
+directly) without this migration mechanism.
+
+===============================================================================
+4. IMPLEMENTATION — EXACT FILES CHANGED
+===============================================================================
+
+    New:      postgres/migrations/194_fix_job_schedule_drift.sql
+    Modified: postgres/restructure_manifest.csv (+1 row registering migration 194
+              — required for scripts/apply_migrations.sh to pick it up at all)
+    New:      scripts/test/assert_job_schedule_canonical.sql
+    New:      scripts/test/assert_job_schedule_canonical.sh
+    Modified: scripts/test/run_integration_environment.sh (+4 lines, one new
+              invocation, same style as the Phase 1A/1B steps)
+
+No other file touched. In particular: no Grafana dashboard, no migration
+other than the one new file, no Phase 1A connectivity object, no Phase 1B
+energy-consumption object/table/function, no resolution-routing object, no
+demand object, no CI workflow YAML, no unrelated job schedule (compression/
+retention/continuous-aggregate-refresh policies were left untouched — only
+the three named telemetry routing jobs were targeted).
+
+===============================================================================
+5. PRODUCTION/CONFIGURATION OBJECT CHANGED
+===============================================================================
+
+Migration 194 performs three idempotent, targeted DO blocks — one per job —
+each locating the job by (proc_schema='telemetry', proc_name=<job>) and
+calling alter_job(...) with the canonical values. It does not create or
+replace any procedure, and does not call add_job — if a named job is found
+missing, the migration deliberately raises an exception rather than silently
+creating one (a missing job would be a different defect than the one
+diagnosed here).
+
+Before/after (documented drift -> corrected value, all three jobs):
+    schedule_interval: (5 min | 1 min) -> 1 minute
+    overlap (config):  (20 min | 1 min) -> 15 minutes
+    max_runtime:       unspecified/unknown drift value -> 5 minutes
+    max_retries:       unspecified/unknown drift value -> 3
+    retry_period:      unspecified/unknown drift value -> 1 minute
+    scheduled:         reasserted TRUE
+
+(max_runtime/max_retries/retry_period were not individually itemized in the
+documented drift table, which only tracked schedule/overlap — but the
+migration reasserts all five parameters together, matching exactly what the
+canonical postgres/jobs/*.sql files already assert on a clean install.)
+
+===============================================================================
+6. TEST COVERAGE ADDED
+===============================================================================
+
+scripts/test/assert_job_schedule_canonical.sql — new. Queries the actual
+runtime TimescaleDB job catalog (timescaledb_information.jobs) for all three
+jobs and asserts schedule_interval, max_runtime, max_retries, retry_period,
+config.overlap, and scheduled match the canonical values, plus a duplicate-
+registration check. Expected values are hardcoded as the canonical
+architectural constants (independently documented in CICD_PIPELINE.md,
+scripts/verify/verify_jobs.sh, and the three job-registration files'
+comments) — not re-derived from migration 194's own source text — so the
+test cannot drift in lockstep with a regression in the migration.
+
+No existing local disposable-database test previously checked job
+schedules at all (confirmed via repository-wide search of scripts/test/ for
+timescaledb_information.jobs — zero prior matches). This is a genuine,
+previously-uncovered gap in local test coverage, and is part of why this
+drift was never caught by CI before reaching staging.
+
+===============================================================================
+7. FULL INTEGRATION-SUITE RESULT
+===============================================================================
+
+scripts/test/run_integration_environment.sh — full clean disposable-database
+reset and re-run:
+
+    Exit code: 0
+    ERROR lines: none
+    Migration 194 applied cleanly inside its transaction (BEGIN/DO/DO/DO/
+    COMMIT — confirming alter_job has no CAGG-style transaction restriction,
+    unlike Phase 1B's continuous-aggregate refresh functions)
+    New step output: "Job-schedule canonical contract assertions passed."
+    Phase 1A connectivity contract: "Connectivity semantic contract
+        assertions passed." — unchanged, still passing
+    Phase 1B energy-consumption contract: "Energy consumption semantic
+        contract assertions passed." — unchanged, still passing
+    Final banner: "Canonical integration-test database is ready."
+
+No fixture-bug iterations were required — passed on the first full run.
+
+===============================================================================
+8. GIT DIFF SUMMARY
+===============================================================================
+
+    postgres/restructure_manifest.csv             | 1 +
+    scripts/test/assert_job_schedule_canonical.sh | 15 +++++++++++++++ (new, 100755)
+    scripts/test/run_integration_environment.sh   | 4 ++++
+    postgres/migrations/194_fix_job_schedule_drift.sql (new, untracked, not yet diffed against HEAD)
+    scripts/test/assert_job_schedule_canonical.sql     (new, untracked)
+
+.gitignore shows an unrelated pre-existing modification from earlier,
+unrelated SSH-access work; Audit/ is untracked as always. Neither is part
+of Phase 1C and neither will be staged/committed as part of it.
+
+Executable bit verified via git ls-files --stage:
+    100755 76831435f8f1ae6ba45e497a568c162f527b56a6 0  scripts/test/assert_job_schedule_canonical.sh
+
+===============================================================================
+9. CONFIRMATIONS
+===============================================================================
+
+- Grafana: untouched (no dashboard, datasource, or panel file modified).
+- Migrations: exactly one new migration added (194); no existing migration
+  file modified or replaced.
+- Semantic functions/contracts (Phase 1A connectivity, Phase 1B energy
+  consumption): untouched; both contract tests re-ran and passed unchanged.
+- Dashboards: untouched.
+- Unrelated job schedules (compression/retention/continuous-aggregate-
+  refresh policies): untouched — migration 194 targets only the three named
+  telemetry routing jobs.
+- Staging/production: no direct access performed. All verification was
+  against the local disposable Docker Compose test database only.
+
+===============================================================================
+10. COMMIT / PUSH STATUS
+===============================================================================
+
+Final pre-commit verification performed and passed: migration 194 re-read in
+full and confirmed to contain exactly three DO blocks (one per named job),
+each only calling alter_job with the five canonical parameters, each
+preserving the RAISE EXCEPTION-if-missing behavior; no unrelated object
+created/dropped/replaced. Exactly the five approved files staged (git diff
+--cached --name-status: A migrations/194, M restructure_manifest.csv, A
+assert_job_schedule_canonical.sh [100755], A assert_job_schedule_canonical.sql,
+M run_integration_environment.sh). git diff --cached --check reported no
+whitespace errors. .gitignore, Audit/, and AnalyticalPlatformArchitecture.txt
+(now residing inside Audit/) confirmed not staged.
+
+Commit 4289b3919738d901c91dfc07975020fe141abcdb was created containing
+exactly the five approved files (268 insertions, 0 deletions), then pushed
+to origin/staging (5510200..4289b39). origin/staging now points at
+4289b3919738d901c91dfc07975020fe141abcdb; local staging is 0 ahead / 0
+behind. No manual deployment or SSH access to staging/production occurred
+as part of this push. Any deployment beyond this point occurs only via the
+repository's existing automatic CI/CD staging workflow.

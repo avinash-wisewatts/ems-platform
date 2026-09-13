@@ -1,0 +1,233 @@
+EMS Analytics Platform — Staging Reference-Data Decision Report
+
+Status: INVESTIGATION ONLY. No files modified. No staging/production
+mutation performed.
+
+===============================================================================
+1. PRODUCTION ACCESS STATUS — NO ACCESS. STOPPED PER YOUR OWN INSTRUCTION.
+===============================================================================
+
+Checked the actual, current permission grant for this session (read
+.claude/settings.local.json directly rather than attempting a connection
+and inferring from the result):
+
+    { "permissions": { "allow": [ "Bash(ssh ems-staging *)" ] } }
+
+Only ems-staging is authorized. No production host alias, credential, or
+permission rule exists in this session. Per your explicit instruction
+("If you do NOT have production access, STOP and report exactly what
+access is missing. Do not improvise or infer production values") and per
+this repository's own standing production-safety rules (CLAUDE.md §3:
+Claude must not SSH into production autonomously; never infer permission
+from the existence of credentials), I did not attempt any connection to a
+production host and have not inferred, guessed, or fabricated any
+production value anywhere in this report.
+
+What is missing: an explicit, approved read-only SSH (or equivalent
+database) access path to production, added the same way ems-staging's
+access was — a scoped permission rule you authorize — or, alternatively,
+you directly supply the canonical Eniscope vendor/model values from
+whatever source you consider authoritative (production or otherwise).
+Sections 2, 6, and part of 10 below are consequently NOT AVAILABLE and are
+marked as such rather than guessed. Everything else — the dependency
+chain, staging's current state, the empty-dropdown cause, and the
+repository seed-location recommendation — is delivered in full below,
+since none of it requires production access.
+
+===============================================================================
+2. PRODUCTION REFERENCE DATA DISCOVERED
+===============================================================================
+
+NOT AVAILABLE — no production access (§1).
+
+===============================================================================
+3. APPLICATION/DATABASE DEPENDENCY CHAIN FOR DEVICE CREATION
+===============================================================================
+
+Traced through the real application code and live database definitions
+(re-confirmed this session, not assumed from prior turns):
+
+    UI dropdown           -> app function (app/src/onboarding/repository.py) -> DB view              -> underlying table(s)
+    Device Category        -> list_device_categories()                        -> admin.v_device_categories -> config.device_categories (10 rows, populated)
+    Gateway Model           -> list_gateway_models()                          -> admin.v_gateway_models    -> metadata.gateway_models (3 rows on staging; not repo-seeded — see §7/§9)
+    Device Model            -> list_device_models()                          -> admin.v_device_models     -> metadata.device_models (0 rows — empty dropdown)
+    Compatible Telemetry
+    Profile                -> list_device_profiles()                         -> admin.v_active_device_profiles -> config.device_profiles JOIN config.device_profile_categories (join table 0 rows — every profile shows zero compatible categories, confirmed for BOTH active profiles, not Eniscope-specific)
+
+admin.create_device(...)'s own body (read live, unchanged) enforces two
+hard blockers directly:
+    1. metadata.device_models row must exist with id=p_device_model_id AND
+       device_category_id=p_device_category_id.
+    2. config.device_profiles JOIN config.device_profile_categories must
+       produce a row for p_profile_id AND p_device_category_id.
+The real "Create Device" action calls admin.create_device(...) directly
+(app/src/device_management_service.py) — confirmed again this session,
+not the wizard-style admin.onboard_energy_asset(...).
+
+config.sync_device_points_after_profile_change() fires automatically
+(AFTER INSERT/UPDATE OF profile_id trigger on metadata.devices, confirmed
+live) — no separate action needed for profile point enablement once a
+device is created.
+
+No other object beyond these five tables/views and the one trigger is
+demonstrably in this dependency chain.
+
+===============================================================================
+4. STAGING CURRENT STATE (re-confirmed live, this session)
+===============================================================================
+
+    metadata.device_models             0 rows
+    config.device_profile_categories   0 rows
+    config.device_profiles             2 rows:
+        ENVIRONMENT_SENSOR_AIRSENSE_V1  (manufacturer 'Generic', model 'Environment Sensor')
+        ENERGY_METER_ENISCOPE_V1        (manufacturer 'Eniscope', model 'Virtual Gateway Energy Meter', is_active=true)
+    admin.v_device_models               0 rows (queried the view directly — confirmed empty, not just the table)
+    admin.v_active_device_profiles      2 rows, BOTH with device_category_ids={} and
+                                         device_category_names={} — confirming the
+                                         compatibility gap affects every profile on
+                                         staging today, not only the Eniscope one.
+    admin.v_gateway_models              3 rows (Best Energy/Eniscope 8 Hybrid;
+                                         ENISCOPE/Eniscope 8 Hybrid; ENISCOPE/Eniscope
+                                         Gateway) — present on staging, but not
+                                         reproducible from any repository seed (§7/§9).
+    config.device_categories            10 rows via admin.v_device_categories,
+                                         including 'Energy Meter' (34b8f2e4-b2f7-4072-
+                                         ab5a-3e4e531bc2be) and, notably, 'Gateway'
+                                         (ac1f3ad9-68f7-4820-9850-566405de2795) as its
+                                         own distinct category.
+
+Topology re-confirmed unchanged and correct per your explicit instruction:
+three existing gateways (Eniscope_1/2/3_Meenaxy_Unit2) retained, not
+touched, not merged. Live MQTT mapping from the prior investigation stands
+(Eniscope_1: 8 onboard UIDs, Eniscope_2: 8, Eniscope_3: 6).
+
+===============================================================================
+5. EXACT CAUSE OF EMPTY DROPDOWNS
+===============================================================================
+
+"Device Model" dropdown is empty because metadata.device_models has zero
+rows anywhere reproducible from the repository (confirmed no seed file
+populates it; the 0 rows on staging match a clean deployment exactly — no
+staging-specific misconfiguration, a genuine repository gap).
+"Compatible Telemetry Profile" shows profiles with no compatible category
+because config.device_profile_categories has zero rows anywhere
+reproducible from the repository (postgres/ddl/80_device_profile_
+categories.sql defines the table's structure only, by design meant to
+hold reference data, but no seed file was ever written for it — same
+genuine repository gap, re-confirmed this session).
+
+===============================================================================
+6. PRODUCTION -> STAGING METADATA COMPARISON
+===============================================================================
+
+NOT AVAILABLE — no production access (§1). Cannot compare what is not
+observable.
+
+===============================================================================
+7. MINIMUM REFERENCE DATA STAGING LEGITIMATELY NEEDS
+===============================================================================
+
+Exactly two categories of rows, nothing more, to unblock admin.create_
+device for the Eniscope onboard-meter use case:
+    a. One metadata.device_models row: device_category_id = 'Energy
+       Meter' (resolved by name, not hardcoded UUID). Vendor/model string
+       still unresolved — see §11; this is the one genuinely open
+       question this report cannot close without either production access
+       or your direct input.
+    b. One config.device_profile_categories row: profile_id =
+       ENERGY_METER_ENISCOPE_V1 (resolved by profile_code), device_
+       category_id = 'Energy Meter'.
+metadata.gateway_models is NOT strictly required for this specific
+commissioning step (the three gateways already exist with a valid model
+assigned) but is flagged as a separate, equally genuine reproducibility
+gap worth closing in the same change for repository completeness — your
+call whether to include it now or defer it (§11).
+
+===============================================================================
+8. RECOMMENDED REPOSITORY SEED/MIGRATION LOCATION
+===============================================================================
+
+A new file following the exact existing idempotent pattern of postgres/
+seeds/reference/28_01_eniscope_energy_profile.sql (SELECT-then-insert-if-
+missing, guarded by existence checks, resolving foreign keys by natural
+name/code rather than hardcoded UUIDs) — e.g. postgres/seeds/reference/
+28_02_eniscope_device_model_and_category.sql, applied via the same
+reference-seed mechanism (fresh installs and forward migrations both
+already run this seed directory; a genuinely new file needs a manifest
+row exactly like every prior phase's migrations, OR — since this is
+reference/seed data rather than a schema change — it may belong in the
+seed pipeline directly rather than as a numbered forward migration;
+this is a repository-convention judgment call to confirm before writing
+it, not decided here).
+
+===============================================================================
+9. EXACT ROWS THAT SHOULD EVENTUALLY BE INSERTED
+===============================================================================
+
+| Object | Source | Vendor | Model/name | ID/relationship | Why required |
+|---|---|---|---|---|---|
+| metadata.device_models | NEW seed row (RESOLVED) | 'Eniscope' (matches config.device_profiles.manufacturer already seeded for ENERGY_METER_ENISCOPE_V1) | 'Eniscope Energy Meter' (per user direction) | device_category_id resolved by name = 'Energy Meter' | admin.create_device requires a device_models row matching the selected category; currently 0 rows exist anywhere reproducible |
+| config.device_profile_categories | NEW seed row | n/a | n/a | profile_id resolved by profile_code = 'ENERGY_METER_ENISCOPE_V1'; device_category_id resolved by name = 'Energy Meter' | admin.create_device requires this exact compatibility row; admin.v_active_device_profiles also depends on it for correct dropdown display |
+| metadata.gateway_models (optional, deferred candidate) | NEW seed row, if you choose to include it | 'ENISCOPE' or similar | an Eniscope gateway model name | none required for THIS commissioning step (existing gateways already have a model) | closes a separate, currently-masked reproducibility gap (0 rows on any clean install); not a blocker today |
+
+No row has been inserted anywhere. This table describes the proposed
+future change only.
+
+===============================================================================
+10. DOES ONE ENISCOPE MODEL/PROFILE COVER ALL OBSERVED ONBOARD METERS?
+===============================================================================
+
+From the repository and staging evidence alone (production comparison
+unavailable, §1): nothing in the MQTT payload, the existing device_
+profiles row, or any schema constraint distinguishes onboard meters by
+channel or type — profile_field_mapping's 62 rows apply uniformly to
+whatever device carries the ENERGY_METER_ENISCOPE_V1 profile, regardless
+of which channel number a given uid reports. Based on this evidence alone,
+ONE device model and ONE profile (ENERGY_METER_ENISCOPE_V1) appear
+sufficient for all observed onboard meters across all three gateways. This
+cannot be stated with full confidence without either production's
+canonical answer or your direct confirmation, since a real Eniscope
+product line could legitimately have channel-specific sub-models that
+simply aren't visible in the wire payload or the current schema.
+
+===============================================================================
+11. REMAINING AMBIGUITY
+===============================================================================
+
+    a. RESOLVED by user direction: device model name = "Eniscope Energy
+       Meter". The proposed row is now: vendor = 'Eniscope' (matching
+       config.device_profiles.manufacturer already seeded for ENERGY_
+       METER_ENISCOPE_V1), model = 'Eniscope Energy Meter', device_
+       category_id resolved by name = 'Energy Meter'. No production
+       access was used to obtain this value — it was supplied directly.
+    b. Whether one device model suffices for all onboard meters, or
+       channel-specific sub-models are the real intended design (§10).
+    c. Whether to also seed metadata.gateway_models as part of the same
+       change, or defer it (§7/§9).
+    d. Whether the new seed belongs in a numbered forward migration or is
+       applied purely through the existing seed-file pipeline — a
+       repository-convention decision, not a technical blocker.
+    e. Eniscope_3's 6-vs-8 observed onboard meters (carried over from the
+       prior investigation, still unresolved, still not blocking this
+       specific reference-data question).
+
+===============================================================================
+12. PROPOSED NEXT IMPLEMENTATION STEP
+===============================================================================
+
+Do not implement yet. Two parallel paths forward, either resolves §11(a):
+    1. Grant this session an explicit, scoped, read-only production SSH
+       permission (mirroring exactly how ems-staging's was added) so
+       production's canonical device-model value can be read directly and
+       compared, per your original request; or
+    2. You directly confirm the correct vendor/model string (and answer
+       §11(b)-(d)) so the seed file in §8/§9 can be written without
+       production access at all.
+Once either path resolves the vendor/model question, the concrete next
+step is: write the single new idempotent seed file (§8), register it if
+a manifest entry is required, run the full local disposable-DB
+integration suite to confirm no regression, and only then — under your
+separate explicit approval — commission the actual observed Eniscope
+device UIDs under the three existing, retained gateways via admin.create_
+device, exactly as scoped in the prior investigation's commissioning
+table.

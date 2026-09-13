@@ -1,0 +1,430 @@
+EMS Analytics Platform — Phase 1D Implementation Plan
+Resolution-Routing Consistency (corrected scope: extend the Grafana energy
+router to the daily tier)
+
+Status: PLAN ONLY. No implementation, staging, commit, push, or deployment
+performed. Supersedes the original Phase 1D framing per the discrepancy
+documented in "Phase 1D Investigation (STOP — Discrepancy Found).txt" and
+the user's selected resolution: scope Phase 1D as extending the router to
+reach the daily tier for very long ranges.
+
+===============================================================================
+1. EXECUTIVE SUMMARY
+===============================================================================
+
+Investigation (prior document) established that resolution-routing
+consistency is already substantially implemented: analytics.get_grafana_
+asset_energy_intervals already delegates to analytics.get_canonical_energy_
+read via analytics.resolve_grafana_energy_routing_resolution, and get_
+canonical_energy_read is not orphaned — it is the live, correctly-tiered
+(native/5m/15m/1h/1d) implementation with a real grafana_reader grant. The
+one concretely remaining gap, confirmed against the current repository and
+independently corroborated by the pre-existing Phase 0 Current-State
+Inventory ("The router's ELSE branch never returns '1d'"), is that
+resolve_grafana_energy_routing_resolution's current (migration 045)
+definition only ever returns native/15m/1h — very long ranges (>14 days)
+are permanently served at hourly resolution. Migration 044's original
+version DID include a '1d' branch (<=24h->15m, <=14d->1h, >14d->1d); it was
+dropped when migration 045 shifted every bracket one tier finer, apparently
+as an oversight rather than a deliberate removal.
+
+Phase 1D, as now scoped, is a single-function correction: add a fourth
+bracket so very long ranges route to '1d' instead of falling through
+indefinitely to '1h'. Every downstream object (get_canonical_energy_read's
+'1d' branch, analytics.v_energy_reporting_daily, analytics.energy_
+consumption_daily) already exists, is already correct (proven in Phase 1B),
+and already reachable through get_canonical_energy_read — this phase only
+has to make the router actually choose that path for long ranges.
+
+===============================================================================
+2. SOURCE-DERIVED PHASE 1D OBJECTIVE (AS CORRECTED)
+===============================================================================
+
+Extend analytics.resolve_grafana_energy_routing_resolution so that ranges
+beyond a defined long-range threshold resolve to '1d' rather than '1h',
+completing the tier progression the function's own name and migration 044's
+original intent describe (native -> 15m -> 1h -> 1d), without altering any
+other object, signature, grant, or Grafana dashboard.
+
+===============================================================================
+3. CURRENT-STATE ARCHITECTURE (confirmed empirically this session)
+===============================================================================
+
+    analytics.resolve_grafana_energy_routing_resolution(p_from, p_to)
+        LANGUAGE SQL, IMMUTABLE, no table dependency
+        CASE
+            WHEN p_to - p_from <= INTERVAL '24 hours' THEN 'native'
+            WHEN p_to - p_from <= INTERVAL '14 days'  THEN '15m'
+            ELSE '1h'
+        END
+        Not directly grantable to Grafana/app roles (internal helper only,
+        invoked from within SECURITY DEFINER callers); REVOKE ALL FROM
+        PUBLIC only, no compensating GRANT — callers reach it only because
+        they run as its owner (ems_admin) under SECURITY DEFINER.
+
+    analytics.get_grafana_asset_energy_intervals(org_id, asset_id, from, to)
+        Unchanged signature since before migration 044. Calls the router,
+        then CROSS JOIN LATERAL analytics.get_canonical_energy_read(...,
+        <tier>, 'native'). Sole Grafana consumer: grafana/dashboards/core/
+        asset-overview.json, "Total Energy vs previous period" panel.
+
+    analytics.get_canonical_energy_read(org_id, asset_id, from, to,
+    requested_resolution, fallback_policy)
+        Already dispatches all five tiers correctly, including '1d' via
+        analytics.v_energy_reporting_daily (site-local, 15-minute-derived
+        only — Phase 1B invariant preserved). Grants: ems_admin,
+        grafana_reader (migration 043).
+
+===============================================================================
+4. CALL / DEPENDENCY GRAPH
+===============================================================================
+
+    asset-overview.json ("Total Energy vs previous period")
+        -> get_grafana_asset_energy_intervals(org_id, asset_id, from, to)
+            -> resolve_grafana_energy_routing_resolution(from, to)   [THIS PHASE'S ONLY CHANGE]
+            -> get_canonical_energy_read(org_id, asset_id, from, to, <tier>, 'native')
+                -> tenant/PRIMARY_METER/site resolution (unchanged)
+                -> capture-policy boundary check (unchanged)
+                -> native  : analytics.v_energy_consumption_native
+                -> 5m/15m  : analytics.v_energy_reporting_5min / _15min
+                -> 1h      : analytics.v_energy_reporting_hourly
+                -> 1d      : analytics.v_energy_reporting_daily   [newly reachable via auto-routing after this phase]
+
+    get_grafana_assets_energy_intervals (plural fan-out, migration 044)
+        -> per-asset call into get_grafana_asset_energy_intervals
+        No dashboard consumer found; automatically inherits the same fix
+        with zero changes of its own, since it only wraps the singular
+        function.
+
+No other caller of resolve_grafana_energy_routing_resolution or get_
+canonical_energy_read exists (confirmed by repository-wide search this
+session and in the prior investigation).
+
+===============================================================================
+5. RESOLUTION-ROUTING MATRIX (target state after this phase)
+===============================================================================
+
+    Tier | Canonical source              | Site-tz | Query path via router                  | Change in this phase
+    1m   | energy_consumption_1min       | n/a     | 'native' request, <=24h, 1-min sites   | none
+    5m   | energy_consumption_5min       | n/a     | 'native' request, <=24h, 5-min sites   | none
+    15m  | energy_consumption_15min      | n/a     | <=14 days                               | none
+    1h   | energy_consumption_hourly     | n/a     | >14 days AND <= new threshold           | upper bound added (was unbounded)
+    1d   | energy_consumption_daily      | YES     | > new threshold                         | newly reachable (was never reachable)
+
+Threshold value: no source document specifies one. Proposed default: 90
+days — long enough that hourly resolution remains practical for typical
+"quarter to date" / 90-day dashboard views, short enough that a multi-month
+or multi-year view (the case this gap actually affects) gets daily
+resolution instead of thousands of hourly points. This is a judgment call,
+not a documented requirement; state explicitly if a different threshold
+(e.g. 60 or 180 days) is preferred before implementation.
+
+===============================================================================
+6. get_grafana_asset_energy_intervals ANALYSIS
+===============================================================================
+
+No change required to this function's own body, signature, grants, or
+comment. It already calls the router by reference; once the router is
+corrected, this function's behavior updates automatically for long ranges,
+exactly as migration 044's own design intended ("shared by both functions
+below, so the three [now four] thresholds exist in exactly one place").
+
+===============================================================================
+7. get_canonical_energy_read ANALYSIS
+===============================================================================
+
+No change required. Its '1d' branch is already implemented, already tested
+indirectly by nothing today (no test currently exercises it, since nothing
+has ever routed to it automatically) but already structurally correct per
+Phase 1B's proof that analytics.energy_consumption_daily is 15-minute-
+derived and site-local-timezone-correct. This phase's test plan (Section 12)
+is the first test to actually exercise this branch through the live
+Grafana-facing entry point.
+
+===============================================================================
+8. CANONICAL-VS-DUPLICATE IMPLEMENTATION MAP
+===============================================================================
+
+    Canonical, correct, unchanged this phase: analytics.get_canonical_
+        energy_read; analytics.v_energy_reporting_{5min,15min,hourly,daily};
+        analytics.energy_consumption_{1min,5min,15min,hourly,daily} and
+        their refresh functions (Phase 1B).
+    Adapter/boundary, unchanged this phase: analytics.get_grafana_asset_
+        energy_intervals; analytics.get_grafana_assets_energy_intervals.
+    Corrected this phase: analytics.resolve_grafana_energy_routing_
+        resolution only.
+    Still duplicated, explicitly NOT touched this phase (deferred to the
+        later energy-consumption consolidation): analytics.v_energy_
+        consumption_15min (Path A); the raw register-snapshot naming-
+        collision object; the Analytics Explorer's naive delta.
+    Separate, lower-severity, NOT touched this phase (advisory only, per
+        the user's selected scope): postgres/ddl/141_asset_energy_
+        persisted_read_path.sql's stale pre-migration-044 function-body
+        snapshot.
+
+===============================================================================
+9. PROPOSED TARGET ARCHITECTURE
+===============================================================================
+
+Identical to the current architecture (Section 3/4), with one function body
+changed:
+
+    resolve_grafana_energy_routing_resolution(p_from, p_to):
+        <=24h        -> 'native'
+        <=14 days    -> '15m'
+        <=90 days    -> '1h'
+        > 90 days    -> '1d'
+
+No new object, no new grant, no new index, no dashboard change.
+
+===============================================================================
+10. EXACT IMPLEMENTATION STEPS (not yet performed)
+===============================================================================
+
+1. Create postgres/migrations/195_grafana_energy_routing_daily_tier.sql:
+   CREATE OR REPLACE FUNCTION analytics.resolve_grafana_energy_routing_
+   resolution(p_from TIMESTAMPTZ, p_to TIMESTAMPTZ) RETURNS TEXT LANGUAGE
+   SQL IMMUTABLE AS the four-branch CASE above; re-assert COMMENT, ALTER
+   FUNCTION OWNER TO ems_admin, REVOKE ALL FROM PUBLIC (matching migration
+   044/045's own defensive pattern; no compensating GRANT, matching the
+   function's existing internal-helper-only posture).
+2. Add one row to postgres/restructure_manifest.csv registering migration
+   195 (required for apply_migrations.sh to pick it up, same as Phase 1C).
+3. Write scripts/test/assert_grafana_energy_routing_daily_tier.sql (new)
+   proving: (a) the router's pure return value at all four brackets and
+   both new boundary points; (b) end-to-end that get_grafana_asset_energy_
+   intervals for a >90-day range returns daily-granularity rows sourced
+   from analytics.energy_consumption_daily; (c) that a <=90-day long range
+   (e.g. 30 days) still returns hourly-granularity rows (regression guard
+   for the unchanged bracket); (d) tenant isolation still holds for the new
+   path. See Section 12 for full design.
+4. Write scripts/test/assert_grafana_energy_routing_daily_tier.sh (new
+   wrapper, identical pattern to every existing *.sh in scripts/test/).
+   chmod +x and verify git index mode 100755 via git update-index --chmod=+x
+   and git ls-files --stage BEFORE any commit is proposed — this repository
+   has core.filemode=false, the exact lesson from the Phase 1A CI failure.
+5. Add one new invocation line to scripts/test/run_integration_environment.sh,
+   same style as the Phase 1A/1B/1C steps.
+6. Run the full clean-reset local integration suite; confirm the new test
+   passes and Phase 1A/1B/1C contracts remain passing.
+7. Produce the pre-commit audit (git status, diff --stat, diff, diff
+   --cached --summary, ls-files --stage) and stop for approval before any
+   commit, matching the established process for every prior phase.
+
+===============================================================================
+11. DATABASE / MIGRATION PLAN
+===============================================================================
+
+Files to add: postgres/migrations/195_grafana_energy_routing_daily_tier.sql.
+Files to modify: postgres/restructure_manifest.csv (+1 row).
+Database objects changed: analytics.resolve_grafana_energy_routing_
+resolution (CREATE OR REPLACE, same signature, LANGUAGE SQL, IMMUTABLE —
+transactional by nature of being a single DDL statement; apply_migrations.sh
+already wraps every migration in BEGIN/COMMIT, and a pure function
+replacement has no special transaction constraint, unlike a continuous-
+aggregate refresh). No index, no grant change (existing REVOKE ALL FROM
+PUBLIC reasserted defensively; no new GRANT, since the function remains
+internal-helper-only exactly as before). SECURITY DEFINER semantics: this
+function itself is LANGUAGE SQL (not SECURITY DEFINER — confirmed from its
+migration 044 definition, which has no SECURITY DEFINER clause); it inherits
+caller privileges by nature of being a plain SQL function called from within
+already-SECURITY-DEFINER wrappers, so nothing changes here. No ddl/* file
+requires a matching update, since this function has never been baked into
+any ddl/ baseline snapshot (confirmed: it exists only in postgres/migrations/
+044/045, never in postgres/ddl/).
+
+===============================================================================
+12. SEMANTIC CONTRACT TEST PLAN
+===============================================================================
+
+Fixture (one organization, one site with a distinct, deterministic
+timezone e.g. Asia/Kolkata for consistency with Phase 1B, one gateway, one
+device, one asset with a PRIMARY_METER asset_devices relationship — the
+same minimal chain get_canonical_energy_read's tenant-resolution CTE
+requires; no device_models/lifecycle complexity needed since this path
+does not touch metadata.device_models or lifecycle triggers the way Phase
+1A's connectivity fixture did).
+
+A site-specific config.telemetry_capture_policies row is required (not the
+platform default, whose effective_from is wall-clock "now" at whatever
+instant the disposable DB was deployed and is therefore non-deterministic
+for a test needing a >90-day-old range) — capture_interval_seconds=60,
+effective_from set far before the fixture's fixed reference instant, so
+telemetry.resolve_site_capture_bucket resolves cleanly at every point in
+the tested ranges without tripping get_canonical_energy_read's genuine-
+policy-change rejection.
+
+Persisted rows seeded directly (Phase 1B discipline: continuous aggregates
+cannot be refreshed inside BEGIN/ROLLBACK, so native-tier population is out
+of scope here entirely — this test only needs analytics.energy_
+consumption_hourly and analytics.energy_consumption_daily rows, both plain
+persisted tables with no CAGG dependency, so they can be inserted directly
+with realistic, internally-consistent values without needing to fake any
+canonical calculation: the test does not assert on the correctness of the
+hourly/daily numbers themselves — Phase 1B already proved that — it asserts
+only that the ROUTER sends a long-range query to the daily rows instead of
+the hourly rows).
+
+Test cases:
+    1. Pure router assertions (no fixture needed — IMMUTABLE, no table
+       dependency): resolve_grafana_energy_routing_resolution returns
+       'native' for a 1-hour range, '15m' for a 7-day range, '1h' for a
+       30-day range, '1h' for exactly 90 days, '1d' for 91 days.
+    2. End-to-end long-range routing: seed one analytics.energy_
+       consumption_daily row (fixed consumption_date, known kWh) for the
+       fixture device; call get_grafana_asset_energy_intervals with a
+       >90-day range covering it; assert the returned row's elapsed_minutes
+       = 1440 (proving a daily-width interval, not hourly) and its
+       import_consumption_kwh matches the seeded value exactly.
+    3. Regression guard for the unchanged bracket: seed one analytics.
+       energy_consumption_hourly row; call get_grafana_asset_energy_
+       intervals with a 30-day range covering it; assert elapsed_minutes =
+       60 (still hourly, unchanged behavior).
+    4. Tenant isolation: call get_grafana_asset_energy_intervals with a
+       >90-day range but a grafana_org_id that does not own the fixture
+       asset; assert zero rows (reusing the proven grafana_organization_map
+       + PRIMARY_METER pattern; no new isolation logic is introduced by
+       this phase, so this is a guard, not new coverage).
+    5. Fallback behavior: unchanged by this phase (fallback_policy is fixed
+       to 'native' by the caller, as before); not re-tested here beyond
+       what Section item 2/3 already exercises implicitly.
+
+Distinguished explicitly, per the user's stated discipline: items 2 and 3
+directly exercise the real, unmodified get_canonical_energy_read and get_
+grafana_asset_energy_intervals functions against real (not faked) persisted
+rows; item 1 directly exercises the real, corrected router function; none
+of this fakes a canonical calculation output — the daily/hourly kWh values
+inserted are simple, arbitrary, internally-consistent test constants, exactly
+as Phase 1B's daily-tier fixture used arbitrary-but-consistent kWh values to
+prove routing/splitting behavior rather than re-deriving real classifier
+math (which Phase 1B already proved separately). No staging fixtures are
+introduced; everything runs in the local disposable database only.
+
+===============================================================================
+13. TENANT / SECURITY ANALYSIS
+===============================================================================
+
+No weakening. The router function is not directly callable by grafana_
+reader/ems_app (no such grant exists before or after this phase). get_
+canonical_energy_read and get_grafana_asset_energy_intervals's own tenant
+resolution, SECURITY DEFINER posture, and grants are entirely untouched by
+this phase. The new test's item 4 (tenant isolation) is a regression guard
+proving this remains true, not new tenant logic.
+
+===============================================================================
+14. GRAFANA BOUNDARY ANALYSIS
+===============================================================================
+
+Zero Grafana files change. asset-overview.json's existing panel call is
+untouched; it will simply receive daily-granularity rows instead of
+hourly-granularity rows when a viewer selects a >90-day time range, with no
+query or panel-configuration change required, matching the "preferred
+outcome" architecture (existing consumer -> existing boundary -> corrected
+routing -> canonical source) exactly.
+
+===============================================================================
+15. QUERY-PERFORMANCE IMPLICATIONS (CORRECTED after further inspection)
+===============================================================================
+
+CORRECTION to the original plan: analytics.v_energy_reporting_hourly and
+analytics.v_energy_reporting_daily are NOT reads of Phase 1B's persisted
+analytics.energy_consumption_hourly/daily tables. Verified empirically
+(pg_get_viewdef against the live local database) that both are live,
+query-time GROUP BY aggregations built on analytics.v_energy_reporting_15min,
+which is itself a live GROUP BY (analytics.v_energy_semantic_rollup_15min,
+date_bin('15 minutes', ...)) over analytics.v_energy_consumption_native
+(the native energy_consumption_1min/5min tables). This is an older,
+separate reporting-view lineage (postgres/ddl/147, predating Phase 1B) that
+was never repointed at Phase 1B's persisted 15min/hourly/daily tables —
+which is consistent with, and now explains, Phase 1B's own finding that its
+persisted energy_consumption_* rollup chain has zero real consumers.
+
+Consequence for this phase: routing a >90-day range to '1d' does NOT avoid
+a native-data scan — the database still aggregates every native interval
+in the requested range (the same rows it would scan to produce '1h'), just
+grouped one level coarser. The benefit of this phase is real but narrower
+than originally stated: fewer, more compact result rows returned to
+Grafana/the client for very long ranges (365 daily rows instead of up to
+8,760 hourly rows for a 1-year view), not a reduction in server-side scan
+cost. Short/medium-range behavior (<=90 days) is completely unchanged.
+Repointing the Grafana-facing reporting views at Phase 1B's persisted,
+already-proven tables (which would deliver the originally-assumed scan-cost
+reduction) is a separate, larger change explicitly out of scope for this
+phase — noted as a candidate for the later energy-consumption consolidation
+phase (Section 19).
+
+===============================================================================
+16. CI/CD VALIDATION PLAN
+===============================================================================
+
+Identical mechanism to Phase 1A/1B/1C: the new assert_*.sh runs as part of
+scripts/test/run_integration_environment.sh, which is exactly what the
+existing "Database / migration / repository integration tests" CI job
+invokes. No new CI job or workflow YAML change needed. Local full-suite run
+(clean reset) required before proposing a commit, per established practice.
+
+===============================================================================
+17. RISKS AND ROLLBACK CONSIDERATIONS
+===============================================================================
+
+Risk: choosing a threshold value that is a judgment call, not a documented
+requirement (Section 5) — flagged explicitly for user confirmation before
+implementation rather than silently assumed. Risk: none to existing
+consumers, since the only consumer's contract (asset-overview.json) is
+unaffected by which physical tier the router happens to choose. Rollback:
+a single CREATE OR REPLACE FUNCTION migration is trivially reversible by a
+follow-up migration restoring migration 045's three-branch definition if
+ever needed; no data migration, no irreversible state change.
+
+===============================================================================
+18. EXPLICIT PHASE 1D SCOPE BOUNDARY
+===============================================================================
+
+IN SCOPE: analytics.resolve_grafana_energy_routing_resolution only, plus
+its one new local disposable-DB contract test.
+NOT IN SCOPE (deferred per explicit instruction and the user's selected
+option): retiring any of the four duplicate energy-consumption
+implementations; migrating any additional real consumer; get_grafana_
+asset_energy_intervals's or get_canonical_energy_read's own bodies (both
+already correct); any Grafana dashboard file; the demand engine or demand
+consolidation; the stale postgres/ddl/141 snapshot (advisory, not selected
+this phase); any semantic-model redesign.
+
+===============================================================================
+19. DEFERRED WORK FOR THE LATER ENERGY-CONSUMPTION CONSOLIDATION PHASE
+===============================================================================
+
+Retiring analytics.v_energy_consumption_15min (Path A), the raw register-
+snapshot naming-collision object, and the Analytics Explorer's naive delta;
+migrating any consumer discovered to still depend on a non-canonical
+implementation; reconciling get_grafana_assets_energy_intervals's currently-
+zero dashboard usage (retire it, or wire it to a future multi-series panel);
+optionally correcting the stale ddl/141 baseline snapshot; NEW — repointing
+analytics.v_energy_reporting_hourly/daily (and the v_energy_semantic_
+rollup_15min chain beneath analytics.v_energy_reporting_15min) at Phase 1B's
+persisted, already-proven analytics.energy_consumption_{15min,hourly,daily}
+tables instead of live-re-aggregating from native data on every query —
+discovered this session (Section 15) as the reason Phase 1B's persisted
+rollup chain still has zero real consumers, and the actual mechanism that
+would deliver the scan-cost reduction originally assumed for this phase.
+
+===============================================================================
+20. EXACT FILES / OBJECTS EXPECTED TO CHANGE
+===============================================================================
+
+New: postgres/migrations/195_grafana_energy_routing_daily_tier.sql
+New: scripts/test/assert_grafana_energy_routing_daily_tier.sql
+New: scripts/test/assert_grafana_energy_routing_daily_tier.sh
+Modified: postgres/restructure_manifest.csv (+1 row)
+Modified: scripts/test/run_integration_environment.sh (+1 invocation)
+Database object changed: analytics.resolve_grafana_energy_routing_
+resolution (function body only; signature, grants, ownership unchanged)
+No other file or object.
+
+===============================================================================
+RECOMMENDATION
+===============================================================================
+
+READY FOR IMPLEMENTATION, contingent on confirming the 90-day threshold
+(Section 5) — or specifying a different value — before the migration is
+written for real.

@@ -1,0 +1,215 @@
+EMS Analytics Platform — Phase 1E-B Implementation Report
+Historical Backfill of Per-Flow Energy-Consumption Quality Columns
+
+Status: IMPLEMENTED, LOCALLY VALIDATED, COMMITTED, AND PUSHED TO
+origin/staging. NOT MANUALLY DEPLOYED (any deployment occurs only via the
+existing automatic CI/CD staging workflow). NO SSH ACCESS PERFORMED.
+
+Commit: b114c10dd5b5e5d3abb77507d9f04f6c39f2020e
+Subject: feat: add historical backfill for per-flow energy quality columns
+Branch: staging, pushed to origin/staging (523ac5b..b114c10; 0 ahead / 0 behind)
+
+===============================================================================
+1. SCOPE (as approved, per the corrected Phase 1E-B Architecture Plan)
+===============================================================================
+
+Exactly Phase 1E-B: a new orchestration procedure (analytics.backfill_
+energy_consumption_per_flow_quality) that re-invokes the existing,
+unmodified Phase 1E-A refresh functions (refresh_energy_consumption_
+15min/hourly/daily) in batches, in strict 15min-then-hourly-then-daily
+order, over a historical range. No new calculation or classification
+logic. No change to Phase 1E-A's schema or function bodies. No reporting
+view, get_canonical_energy_read, get_grafana_asset_energy_intervals,
+routing, or Grafana change. No retention-policy change. 1E-C and 1E-D were
+NOT performed — confirmed explicitly below.
+
+===============================================================================
+A. EXACT FILES CHANGED
+===============================================================================
+
+    New:      postgres/migrations/197_backfill_energy_consumption_per_flow_quality_procedure.sql
+    Modified: postgres/restructure_manifest.csv (+1 row registering migration 197)
+    New:      scripts/test/assert_energy_consumption_backfill_contract.sql
+    New:      scripts/test/assert_energy_consumption_backfill_contract.sh
+    Modified: scripts/test/run_integration_environment.sh (+4 lines, one
+              new invocation, same style as every prior phase)
+
+No other file touched. Confirmed via git diff HEAD --name-only: exactly
+these five files, plus the pre-existing unrelated .gitignore modification
+and untracked Audit/. Confirmed zero Grafana files and zero reference to
+any reporting view / get_canonical_energy_read / get_grafana_asset_
+energy_intervals anywhere in the diff.
+
+===============================================================================
+B. DATABASE OBJECTS AFFECTED
+===============================================================================
+
+Exactly one new object created: analytics.backfill_energy_consumption_
+per_flow_quality(p_from TIMESTAMPTZ, p_to TIMESTAMPTZ, p_batch_interval
+INTERVAL DEFAULT INTERVAL '7 days') RETURNS TABLE(batch_start, batch_end,
+rows_15min, rows_hourly, rows_daily, batch_error). SECURITY DEFINER, owned
+by ems_admin, EXECUTE granted to ems_admin only (matching the refresh
+functions' own internal-only posture — never exposed to grafana_reader or
+ems_app). It contains no calculation logic of its own: for each batch it
+calls, in order, analytics.refresh_energy_consumption_15min(), then
+_hourly(), then _daily() — all three completely unmodified since Phase
+1E-A (commit 523ac5b) — inside a nested exception block so a single
+batch's failure is caught, logged via RAISE WARNING, and does not abort
+the remaining range. No existing function, view, table, index, grant, or
+retention policy was modified.
+
+===============================================================================
+C. TEST SCENARIOS
+===============================================================================
+
+scripts/test/assert_energy_consumption_backfill_contract.sql — fixture:
+two organizations/sites (Asia/Kolkata), five devices:
+    Device A — Phase 1E-A's exact seven-combination native fixture
+        (GOOD/GOOD, GAP/GOOD, GOOD/GAP, RESET/GOOD, GOOD/RESET,
+        ROLLOVER/GOOD, GOOD/ROLLOVER), reused verbatim.
+    Device T — tenant-isolation control (org B), single GOOD/GOOD interval.
+    Device TZ — Phase 1B/1D's exact site-local-midnight-crossing native
+        pair (18:00/18:30 UTC, Asia/Kolkata).
+    Device D ("durability") — a 15-minute row seeded DIRECTLY with per-
+        flow columns already populated (simulating prior real-time
+        operation) and NO native source at all.
+    Device E ("unreconstructable") — a 15-minute row seeded directly with
+        per-flow columns NULL (simulating a legacy pre-1E-A row) and NO
+        native source at all.
+
+Assertions, all against the real orchestration procedure and the real,
+unmodified refresh functions:
+    1. First backfill run over the full fixture range (2025-12-31 to
+       2026-04-01, 7-day batches): at least one batch executed, zero
+       batch errors.
+    2. Device A 15-minute per-flow reconstruction: exact per-flow arrays
+       across all seven buckets (import/export gap, reset, rollover
+       counts) and exact consumption_kwh arrays (GAP/ROLLOVER contribute,
+       RESET excluded), matching Phase 1E-A's own proven values exactly.
+    3. Device A hourly propagation: two hourly buckets, exact per-flow
+       sums and exact kwh sums.
+    4. Device A daily propagation and Device T tenant isolation: daily
+       per-flow sums correct; Device T's row shows the correct
+       organization_id and zero per-flow counters (no cross-tenant
+       contamination via the backfill's own write path).
+    5. Device TZ site-local-midnight boundary: two correctly-split daily
+       rows (2025-12-31 and 2026-01-01) with correct bucket_start values,
+       proving timezone bucketing survives when exercised through the new
+       backfill procedure specifically, not just the raw refresh functions.
+    6. Device D ("durability"): 15-minute per-flow values UNCHANGED after
+       the backfill runs (no native exists, so the 15-minute call is a
+       safe no-op); pre-existing consumption_kwh values unchanged; hourly
+       and daily rows correctly derived FROM Device D's surviving 15-
+       minute per-flow data, proving forward durability — a lower tier's
+       absent native source does not prevent a higher tier from correctly
+       inheriting already-materialized per-flow semantics.
+    7. Device E ("unreconstructable"): per-flow columns remain NULL (not
+       zeroed) after the backfill runs; pre-existing consumption_kwh
+       values unchanged; hourly and daily rows are created (correctly
+       deriving consumption_kwh from Device E's existing 15-minute data)
+       with per-flow columns propagating as NULL (SUM of NULL = NULL,
+       falling out of standard SQL semantics with no special-case code),
+       proving the system never infers GOOD/zero from absent source data.
+    8. Idempotent rerun: the identical backfill call issued a second time
+       over the identical range; Device A, D, and E's 15-minute rows are
+       asserted byte-for-byte identical to their first-run values.
+
+===============================================================================
+D. FULL INTEGRATION-SUITE RESULT
+===============================================================================
+
+scripts/test/run_integration_environment.sh — full clean disposable-
+database reset and re-run, true exit code captured explicitly (via
+`echo REAL_EXIT_CODE=$?` after an un-piped invocation, to rule out any
+pipe-masking):
+
+    Exit code: 0 (REAL_EXIT_CODE=0, confirmed)
+    ERROR lines: none
+    WARNING lines present: all pre-existing and benign ("there is already/
+        no transaction in progress" from nested BEGIN/COMMIT in earlier
+        migrations' own replay; "column id should be used for segmenting
+        or ordering" TimescaleDB compression advisories from earlier
+        lifecycle migrations) — none introduced by or related to this
+        change.
+    Migration 197 applied cleanly (BEGIN / CREATE FUNCTION / COMMENT /
+        ALTER FUNCTION / ... / COMMIT).
+    New step output: "Energy consumption historical backfill contract
+        assertions passed."
+
+No fixture-bug iterations were required — passed on the first full run.
+
+===============================================================================
+E. PHASE 1A–1E-A REGRESSION RESULTS
+===============================================================================
+
+All five re-ran, unchanged, in the same clean-reset run, all explicitly
+confirmed PASS:
+    "Connectivity semantic contract assertions passed."                    (1A)
+    "Energy consumption semantic contract assertions passed."               (1B)
+    "Job-schedule canonical contract assertions passed."                     (1C)
+    "Grafana energy resolution-routing contract assertions passed."          (1D)
+    "Energy consumption per-flow quality persistence contract assertions
+     passed."                                                                (1E-A)
+
+===============================================================================
+F. GIT DIFF / STAT / STATUS
+===============================================================================
+
+    git diff HEAD --stat:
+        .gitignore                                                 | 5 +
+        postgres/restructure_manifest.csv                          | 1 +
+        scripts/test/assert_energy_consumption_backfill_contract.sh | 15 +
+        scripts/test/run_integration_environment.sh                | 4 +
+        4 files changed, 25 insertions(+)
+    (migration 197 and the new .sql test are untracked, not shown by
+    `git diff HEAD`; confirmed present via `git status`.)
+
+    git diff --cached --summary: create mode 100755 scripts/test/
+        assert_energy_consumption_backfill_contract.sh (only currently-
+        staged file, staged solely to force/verify the executable bit —
+        not yet a commit).
+
+    git status: staged — the new .sh only (100755, verified via git
+        ls-files --stage: 100755 3316e99c...). Not staged/untracked —
+        migration 197, new .sql test, manifest change, runner change (all
+        present, none committed). Unrelated — .gitignore (pre-existing
+        modification), Audit/ (untracked, as always).
+
+===============================================================================
+G. DISCREPANCIES DISCOVERED
+===============================================================================
+
+None. The implementation matches the corrected, approved architecture
+exactly. No new discrepancy was found during implementation or testing.
+
+===============================================================================
+H. EXPLICIT CONFIRMATION — 1E-C / 1E-D NOT PERFORMED
+===============================================================================
+
+No reporting view (analytics.v_energy_reporting_5min/15min/hourly/daily)
+was read, modified, or retargeted (1E-C) — confirmed via git diff: no such
+file appears in this change.
+No documentation/comment narrowing of v_energy_semantic_rollup_15min/5min
+was performed (1E-D) — those views are entirely untouched.
+get_canonical_energy_read(), get_grafana_asset_energy_intervals(), get_
+grafana_assets_energy_intervals(), resolve_grafana_energy_routing_
+resolution(), analytics.v_energy_consumption_15min, v_site_energy_
+balance_daily, get_grafana_explorer_intervals(), v_grafana_energy_samples,
+every Grafana dashboard file, and every retention/compression policy:
+confirmed untouched — none appears anywhere in this change's diff.
+Phase 1E-A's schema and refresh-function bodies: confirmed unmodified
+(the new procedure only calls them; no CREATE OR REPLACE was issued
+against any of the three refresh functions or the three tables in this
+migration).
+
+===============================================================================
+COMMIT / PUSH STATUS
+===============================================================================
+
+Commit b114c10dd5b5e5d3abb77507d9f04f6c39f2020e was created containing
+exactly the five approved files (609 insertions, 0 deletions), then
+pushed to origin/staging (523ac5b..b114c10). origin/staging now points at
+b114c10dd5b5e5d3abb77507d9f04f6c39f2020e; local staging is 0 ahead / 0
+behind. No manual deployment or SSH access to staging/production occurred
+as part of this push. Any deployment beyond this point occurs only via
+the repository's existing automatic CI/CD staging workflow.

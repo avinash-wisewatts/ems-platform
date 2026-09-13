@@ -1,0 +1,22 @@
+EMS Analytics Platform — Phase 1A Implementation Plan: Connectivity Semantic Consolidation
+
+Status: PLAN ONLY. No files, SQL, migrations, jobs, dashboards, or infrastructure have been touched. This plan is built from source verified this turn (full SQL bodies of get_grafana_asset_co
+9. Staging Validation Plan (read-only, after local tests pass — not performed in this task)
+
+1. Run the new/updated local test suite first (docker run --rm ems-admin-portal-test, matching ci.yml's existing pattern) — must pass before any staging step.
+2. Read-only staging queries (via ssh ems-staging + docker exec ems-timescaledb psql -U ems_admin -d ems, the same access path established earlier this session):
+-- Confirm the function exists and its exact current definition matches what this plan assumes
+SELECT pg_get_functiondef('analytics.get_grafana_asset_connectivity_context(bigint,uuid,timestamptz)'::regprocedure);
+
+-- Confirm the seeded threshold policy row (the fallback-divergence risk in §7 depends on this existing)
+SELECT * FROM config.telemetry_availability_policy WHERE policy_key = 'DEFAULT';
+
+-- Confirm no currently-commissioned asset/device would be affected differently
+-- (staging has 0 commissioned devices per the Runtime Verification — expect 0 rows)
+SELECT count(*) FROM metadata.asset_devices;
+3. Because staging currently has zero commissioned devices (confirmed in the Runtime Verification), no staging behavioral comparison is possible for the state-machine truth table today — this must be re-run once staging is commissioned (Phase 1G in the prior sequence), not blocking approval of this plan.
+4. Any schema/contract change (the new test file) reaches staging exclusively through the existing CI/CD path (ci.yml → deploy-staging.yml) — no manual staging mutation, consistent with the guardrails.
+
+---
+
+Per instruction: stopping here. No code, SQL, tests, or configuration have been created or modified. Awaiting review and approval before any implementation. When implementation is later approved, the Audit/ folder's existing documents will be updated to reflect what actually changed, as requested.

@@ -1,0 +1,101 @@
+EMS Analytics Platform — Phase 1 Canonical Semantic Model
+
+Method: synthesis only, from the nine Phase 0 audits and the Phase 0→1 Gap Analysis already produced this session, reconciled against the Development Bible. No new source investigation was performed; no files, schemas, jobs, dashboards, or infrastructure were touched.
+
+---
+
+1. Executive Summary
+
+The platform already contains, in working form, most of the raw material a canonical semantic model needs — a real quality classifier for energy registers, a real 3-method demand-resolution engine, a real tenant-isolation mechanism, and a real (if incompletely wired) validated-vs-general aggregation split. What it lacks is a single declared definition per metric that says which of the several existing implementations is authoritative. This document supplies that declaration for six core metrics, maps every existing implementation against it, and classifies each as canonical-candidate, duplicate, legacy, specialized, incorrect, or unknown — without changing anything.
+
+---
+
+2. Semantic Architecture Principles (established, not invented, from Phase 0 evidence)
+
+1. A metric's canonical definition is its calculation, not its name. Objects sharing a name (e.g. three things called "demand") are not automatically the same metric — Phase 0 proved this both ways: the 3 demand methods are legitimately the same metric computed differently; the dashboard "demand" panels are a different metric (instantaneous power) wearing the same label. VERIFIED.
+2. Validated/reporting-grade metrics never re-derive from raw cumulative registers more than once. This is already the design principle behind the energy-consumption rollup chain (15min → hourly, 15min → daily, never hourly → daily, never raw MAX/MIN reclassified). VERIFIED, and this document adopts it as a governing rule for every metric going forward.
+3. Tenant scope is Scope, not a per-metric concern. The grafana_organization_map + security_barrier mechanism is already correct and single-sourced; every metric's contract below inherits it rather than restating it. VERIFIED.
+4. Quality is layered, not singular. Ingestion validity, point validity, interval-classification validity, and device/registration existence are four different questions that Phase 0 found partially conflated in one existing object (v_grafana_devices.telemetry_state). This document treats them as separate axes.
+5. Resolution is metric-specific, not universal. The 1m→5m→15m→1h→1d ladder applies to energy consumption. It does not apply uniformly to demand (fixed 15min/30min only), load profile (hourly-only as implemented), energy balance (daily-only as implemented), or connectivity (not time-series at all). VERIFIED from source; stated explicitly because the task warns against assuming otherwise.
+
+---
+
+3. Canonical Metric Model — Summary Table
+
+Metric: Energy Consumption
+Definition: Interval delta of a cumulative energy register
+Unit: Wh (native), kWh (display)
+Entity: Device (native register) → Asset (via PRIMARY_METER)
+Scope: Org/Site/Asset, tenant-mapped
+Time Semantics: bucket_start, native 1m or 5m (site-exclusive), site-timezone-aware at hourly/daily
+Resolutions: 1m/5m (native) → 15m → 1h/1d (rollup, additive)
+Quality: classify_energy_register_delta() vocabulary; bad intervals excluded from sum, counted separately
+Calculation: Register delta, classified once at native resolution, never reclassified
+────────────────────────────────────────
+Metric: Demand
+Definition: Interval-average power draw, resolved by best-available method
+Unit: kW or kVA
+Entity: Site (opt-in) / Asset (always-on, PRIMARY_METER)
+Scope: Org/Site/Asset
+Time Semantics: interval_end, site-local wall-clock alignment
+Resolutions: 900s or 1800s native only; daily/monthly = MAX rollup of finalized intervals, not separately computed
+Quality: quality_status (VALID/INCOMPLETE/PROVISIONAL/NO_DATA/...), coverage_percent, finalization grace period
+Calculation: METER_NATIVE | ENERGY_COUNTER_DELTA | TIME_WEIGHTED_POWER, priority-resolved per device capability
+────────────────────────────────────────
+Metric: Load Profile
+Definition: Interval-average instantaneous power, descriptive shape over time
+Unit: kW
+Entity: Device/Asset
+Scope: Org/Site/Asset
+Time Semantics: bucket_start (hourly), or EXTRACT(hour/dow) for recurring pattern
+Resolutions: Hourly (implemented); recurring hour-of-day/day-of-week pattern derived from all history
+Quality: None — general (unvalidated) telemetry lineage
+Calculation: AVG/MIN/MAX of instantaneous power from raw CAGG, no method resolution
+────────────────────────────────────────
+Metric: Energy Balance
+Definition: Site-level accounting of import/generation/export/storage vs. derived consumption
+Unit: kWh
+Entity: Site
+Scope: Org/Site
+Time Semantics: bucket_start (daily)
+Resolutions: Daily only (as implemented)
+Quality: quality_status + coverage_status (direct-meter vs. derived-balance precedence)
+Calculation: Signed sum of role-classified meter registers per config.site_energy_meter_roles
+────────────────────────────────────────
+Metric: Connectivity / Device Status
+Definition: Is this device/asset currently communicating, and at what pipeline stage
+Unit: n/a (categorical state)
+Entity: Device / Asset
+Scope: Org/Site/Asset
+Time Semantics: "as of now" or as-of a supplied instant — not a time-series resolution concept
+Resolutions: Real-time/current-state only
+Quality: n/a — is itself a quality/state signal
+Calculation: Threshold comparison of latest-receipt timestamp vs. site/device capture expectation
+────────────────────────────────────────
+Metric: Data Quality
+Definition: A layered set of validity signals, not one metric
+Unit: n/a
+Entity: varies by layer (message / point / interval / device)
+Scope: inherits the entity it's attached to
+Time Semantics: inherits the entity it's attached to
+Resolutions: inherits the entity it's attached to
+Quality: is itself the concept
+Calculation: see §9 for the 5-category model
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents · shift+click to na
+Energy Consumption: 1m/5m (native, site-exclusive) → 15m → 1h/1d (both derived from 15m only). Demand: 15m/30m native only; daily/monthly are MAX rollups, not separate calculations. Load Profile: hourly + recurring hour-of-day/day-of-week pattern (as implemented; finer/coarser tiers not confirmed). Energy Balance: daily only (as implemented). Connectivity: real-time/current-state only, not part of the ladder. Data Quality: inherits whichever metric/tier it is attached to.
+
+C. AUTHORITATIVE IMPLEMENTATIONS
+Energy Consumption → the semantic-reporting pipeline (energy_consumption_{1min,5min} → rollups). Demand → the 3-method-resolved engine (demand_intervals/demand_state), used as-is. Data-quality classification for energy → classify_energy_register_delta(), already canonical. Connectivity → one or both of the two compact-state classifiers, pending the open decision in §16.
+
+D. DUPLICATES TO CONSOLIDATE
+v_energy_consumption_15min (Path A) and get_grafana_asset_energy_intervals's inline calculation, onto the semantic-reporting pipeline. The Analytics Explorer's naive energy delta. The orphaned raw-CAGG demand family and the 3 dashboards' mislabeled "demand" panels, once Decision #2 is resolved. v_grafana_devices.telemetry_state, once Decision #3 is resolved. The two recommended_aggregation heuristics.
+
+E. DECISIONS WE MUST MAKE BEFORE CODING
+Whether the two compact-state connectivity classifiers are one concept or two. Whether the orphaned demand/load-profile objects have any real consumer worth preserving. Whether Energy Balance and Load Profile need resolutions beyond daily/hourly. Whether energy-consumption buckets can be recomputed after their lookback window. Whether the admin-portal authorization model should ever integrate with Grafana's organization mapping.
+
+F. FIRST IMPLEMENTATION TASK
+Diff admin.list_accessible_device_telemetry_availability() against get_grafana_asset_telemetry_context()/get_grafana_asset_connectivity_context() to resolve whether connectivity is one concept or two (Decision #3) — this is the smallest, most isolated, most information-yielding task, and every later consolidation decision in §13 (especially replacing v_grafana_devices.telemetry_state, the platform's most-used but least-sound object) depends on its answer. Not performed in this task.

@@ -1,0 +1,50 @@
+EMS Analytics Platform — Phase 1D CI Failure and Corrective Commit
+
+===============================================================================
+1. FAILURE (commit 01e4c42d3d59ae5fc6c5ae686b97a2edddba5d2f)
+===============================================================================
+
+CI run 32656998564 and Deploy to Staging run 32656998718 both failed at the
+"Application test suite (pytest)" job/step. All other CI gates (config
+validation, Docker build validation, and — critically — the Database/
+migration/repository integration tests job containing the Phase 1D SQL
+contract) passed. Deployment stages (build/push artifact, deploy, post-
+deployment verification) were skipped; staging never redeployed and
+remained on the previous release (commit 4289b3919738d901c91dfc07975020fe
+141abcdb, Phase 1C).
+
+Exact error:
+    FAILED app/tests/test_analytics_grafana_routing.py::test_routing_thresholds[400 days-1h]
+    AssertionError: assert '1d' == '1h'
+    1 failed, 1034 passed in 7.43s
+
+Root cause: app/tests/test_analytics_grafana_routing.py (an existing test,
+docstring: "Functional contract tests for migration 044") hardcoded
+("400 days", "1h") as an expected router result — true under the pre-Phase-
+1D router (unbounded >14d -> 1h), invalidated by migration 195's approved,
+correct >90d -> 1d behavior. Not a Phase 1D defect: migration 195 behaves
+exactly as designed; the test's fixture value was simply never updated
+because it was not covered by the local disposable-DB integration suite,
+which is a different test mechanism than this app-level pytest suite.
+
+===============================================================================
+2. CORRECTIVE COMMIT
+===============================================================================
+
+Commit: ab3034ed3674e3fe6707e9558577981706d4b57a
+Subject: test: update energy routing threshold expectation
+Scope: exactly one file, one line —
+    app/tests/test_analytics_grafana_routing.py:
+        ("400 days", "1h") -> ("400 days", "1d")
+No other test case, migration, or production file touched. Migration 195
+and all Phase 1D production objects remain exactly as committed in
+01e4c42d.
+
+Validation performed before commit:
+    - Targeted test (test_routing_thresholds, all 8 parametrized cases): 8/8 passed
+    - Full application pytest suite: 1035/1035 passed (previously 1034/1035)
+    - Full disposable-database integration suite (clean reset): exit 0, zero
+      ERROR lines; Phase 1A/1B/1C/1D semantic contracts all explicitly
+      re-confirmed passing.
+
+Branch: staging, ahead of origin/staging by 1 commit (not yet pushed).

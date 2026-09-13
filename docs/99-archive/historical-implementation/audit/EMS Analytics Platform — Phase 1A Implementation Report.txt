@@ -1,0 +1,170 @@
+EMS Analytics Platform — Phase 1A Implementation Report
+Connectivity Semantic Consolidation — as approved in "Phase 1A Implementation Plan: Connectivity Semantic Consolidation"
+
+STATUS: Implementation complete, VALIDATED LOCALLY, COMMITTED, and PUSHED to origin/staging.
+Commit: b40495630ec70fff63fd0e633c7d094a9587a4a4 -- "test: add Phase 1A connectivity semantic
+contract" (3 files changed, 340 insertions). Pushed to origin/staging (672d2db..b404956,
+staging -> staging); local HEAD and origin/staging now identical (0 ahead, 0 behind).
+This push triggers the repository's existing deploy-staging.yml pipeline automatically
+(CI gates -> build/push image -> deploy to staging -> post-deploy verification) -- that
+is the repo's normal, pre-existing release mechanism, not a manual action taken here.
+No manual SSH, manual deployment, or additional commit was made. Staging/production were
+not touched directly by this session at any point in this task.
+
+CI/CD RESULT FOR b404956: FAILED. Both the "CI" and "Deploy to Staging" GitHub Actions
+workflows (run 32651623606 / 32651623774, both headSha b404956) completed with conclusion
+"failure" at the "Database / migration / repository integration tests" job, step "Run
+disposable-database canonical + migration integration suite":
+  ./scripts/test/assert_connectivity_semantic_contract.sh: Permission denied
+  Process completed with exit code 126.
+Root cause: the file was committed with git mode 100644 instead of 100755 (every sibling
+assert_*.sh script is 100755). Local validation had passed because it was invoked via
+`bash script.sh` (bypasses the exec bit); the Linux CI runner invokes it directly
+(./script.sh), which requires the bit. All prior steps in the suite (through the
+asset-demand regression) ran and passed correctly before this failure -- the Phase 1A
+connectivity contract's own logic was never in question. Deployment to staging did NOT
+occur (build-and-push/deploy-staging/verify-staging jobs were skipped as a consequence);
+no rollback was needed since nothing new was deployed.
+
+CORRECTIVE COMMIT: a8cce587b64cb7fd6dce0435e111e2481f9ac5de -- "fix: mark Phase 1A contract
+test executable". Mode-only change (100644 -> 100755) via `git update-index --chmod=+x`;
+file content/blob hash unchanged (f06d022770a3b84e441d8754858452ff7ae8691b), verified via
+`git diff --cached --stat` (0 insertions/deletions) before committing. No other file
+touched. Local branch is now 1 commit ahead of origin/staging (a8cce58); NOT YET PUSHED.
+
+PUSHED: a8cce587b64cb7fd6dce0435e111e2481f9ac5de pushed to origin/staging
+(b404956..a8cce58). Local HEAD and origin/staging identical (0 ahead, 0 behind).
+
+CI/CD RESULT FOR a8cce587: PASSED. CI and Deploy to Staging both succeeded; staging
+was deployed. Deploy history (/opt/ems-platform/.deploy-history/staging.log on the
+staging host) confirms exactly one new entry: 2026-08-23T16:36:50+00:00, commit
+a8cce587b64cb7fd6dce0435e111e2481f9ac5de. Note b404956 (the original implementation
+commit) never appears in the deploy history -- confirmed its CI failure correctly
+prevented any deployment for that commit.
+
+================================================================
+POST-DEPLOYMENT STAGING VERIFICATION (read-only, this session)
+================================================================
+- Deployed image: ems-admin-portal and ems-live-telemetry both running
+  ghcr.io/avinash-wisewatts/ems-platform-app:a8cce587b64cb7fd6dce0435e111e2481f9ac5de,
+  "Up About a minute (healthy)" at verification time. ems-timescaledb/ems-grafana/
+  ems-telegraf unchanged (no DB migration or dashboard change in Phase 1A). PASS.
+- analytics.get_grafana_asset_connectivity_context(bigint,uuid,timestamptz): EXISTS,
+  SECURITY DEFINER, STABLE, owner ems_admin, EXECUTE granted to ems_admin +
+  grafana_reader. Definition on staging matches postgres/migrations/021 exactly,
+  including the NEVER_SEEN>SILENT>STALE>DELAYED>RECEIVING CASE precedence. PASS.
+- config.telemetry_availability_policy DEFAULT row on staging: 300/900/3600s,
+  matching the function's fallback and the values used in the local contract test.
+  PASS.
+- Representative read-only queries: staging currently has 2 organizations, 1 active
+  Grafana mapping, 2 sites, but 0 assets / 0 devices / 0 PRIMARY_METER relationships
+  (still uncommissioned, unchanged in this respect since the earlier Runtime
+  Verification). Tenant/existence-mismatch behavior (random org_id + random asset_id)
+  correctly returned 0 rows -- VERIFIED. Online/healthy, stale, never-seen, and
+  disabled/unavailable state transitions, and real asset/device relationship
+  resolution, could NOT be exercised with real data (no commissioned asset/device
+  exists) and were NOT fabricated per instruction -- reported as NOT VERIFIED, not
+  faked. 22 pre-existing orphaned telemetry.device_raw_receipt_state rows (noted in
+  the earlier Runtime Verification) remain unreachable through the function since
+  they match no existing device.
+- Grafana/dashboard boundary: confirmed by `git show --stat` on both commits that
+  zero files under grafana/ were touched by Phase 1A -- no dashboard was changed.
+  PASS (by source-control fact, not staging inspection).
+- No staging mutation performed: all commands this session were SELECT/read-only
+  (docker ps, log tail, pg_get_functiondef, information_schema grants, SELECT count). Docker Desktop was started and the full local integration suite (scripts/test/run_integration_environment.sh, a clean reset -> canonical deploy -> migrations -> all 15 assertion scripts, the same path CI's database-integration-tests job runs) passed end-to-end: exit code 0, zero ERROR lines anywhere in the run, the new connectivity-semantics step passed all 12 assertions, and the final migration-ledger check passed. Nothing committed, pushed, deployed, or applied to staging/production. Scope held exactly to Phase 1A per the approved plan.
+
+Three real fixture bugs were found and fixed while getting this test green (all in the new test file only, not in any production object):
+1. Devices were inserted with lifecycle_status='ACTIVE' directly, which trg_reject_uncommissioned_active_device (postgres/ddl/91_device_lifecycle_management.sql) correctly rejects outside the controlled commissioning action. Fixed: omit the column (defaults to 'REGISTERED', which the connectivity function is correctly blind to regardless).
+2. PRIMARY_METER/SECONDARY_METER asset_devices assignments require the device to reference a metadata.device_models row in the "Energy Meter" config.device_categories category (metadata.assert_asset_device_relationship). Fixed: the test now inserts its own self-contained device_models row referencing the existing 'Energy Meter' category by name.
+3. A device cannot receive a *new* asset_devices assignment while already DECOMMISSIONED, and a device can have at most one PRIMARY_METER relationship (uq_asset_devices_primary_meter) -- the decommissioned-device fixture and the multi-device-asset fixture each initially violated one of these. Fixed: assign the decommissioned device before decommissioning it (UPDATE afterward, not INSERT already-decommissioned), and use a dedicated device for the multi-device asset's PRIMARY_METER instead of reusing another test case's device.
+None of these were bugs in analytics.get_grafana_asset_connectivity_context() or any other production object -- all three were fixture-construction mistakes in the new test, now corrected.
+
+================================================================
+1. FILES CHANGED
+================================================================
+- .gitignore (modified earlier this session, unrelated to Phase 1A itself — adds `.claude/settings.local.json` to ignore rules)
+- scripts/test/run_integration_environment.sh (modified — added one new step invoking the Phase 1A connectivity contract test, before the final migration-ledger check)
+- scripts/test/assert_connectivity_semantic_contract.sql (new)
+- scripts/test/assert_connectivity_semantic_contract.sh (new, executable, mirrors the existing assert_tenant_telemetry_isolation.sh wrapper pattern exactly)
+
+No SQL object was created, altered, or dropped. No migration was authored. No dashboard, job, Telegraf, or live-telemetry file was touched. This matches the approved plan's finding: the canonical connectivity source (`analytics.get_grafana_asset_connectivity_context()`, defined in postgres/migrations/021_asset_raw_connectivity_context.sql) already exists and its two legitimate consumers (asset-overview.json identity canvas; live-telemetry's grafana_asset_status_websocket) already call it correctly — so no consumer migration was required.
+
+================================================================
+2. SQL OBJECTS CHANGED
+================================================================
+None. `analytics.get_grafana_asset_connectivity_context()` is declared canonical by this work but its definition was not modified.
+
+================================================================
+3. TESTS ADDED
+================================================================
+scripts/test/assert_connectivity_semantic_contract.sql / .sh — a new entry in the scripts/test/assert_*.sql + .sh convention (the same pattern used by assert_tenant_telemetry_isolation.sql, assert_energy_register_semantics.sql, etc.: BEGIN; fixture INSERTs; DO $$ ... RAISE EXCEPTION ... $$ assertions; ROLLBACK;), run against the disposable ems_test database via compose.test.yaml's timescaledb-test service.
+
+Deviation from the original plan's wording, made deliberately and reported per instruction: the plan named the target file "app/tests/test_connectivity_semantic_contract.py". Investigation during implementation confirmed app/tests/*_contract.py files in this repo assert against migration SQL *text* and explicitly never open a live database connection (confirmed pattern from test_telemetry_pipeline_performance_state_contract.py and CI/CD documentation). Since the plan required tests that "verify semantic behavior, not merely SQL object existence" — i.e. actually invoke the function against real fixture data — the correct venue per existing repo convention is the scripts/test/assert_*.sql+.sh pattern, which does execute against a real (disposable) Postgres/TimescaleDB instance. This substitution preserves the plan's intent exactly; only the file location/format changed to match how this repository actually implements DB-executing contract tests.
+
+Cases covered (12 assertions in one script):
+1. Recently reporting device -> RECEIVING
+2. Stale device (400s old, between 300s/3600s) -> STALE
+3. Silent device (4000s old, past 3600s) -> SILENT
+4. Delayed device (fresh receipt, source 1000s old, past 900s) -> DELAYED
+5. Never-seen device (no device_raw_receipt_state row) -> NEVER_SEEN
+6. NULL source timestamp with fresh receipt -> RECEIVING, not DELAYED
+7. No assigned device -> NO_ASSIGNED_DEVICE, source_device_id NULL
+8. Decommissioned device with old telemetry -> SILENT (documents the confirmed gap: lifecycle_status is not a state input today, not a bug)
+9. Deterministic precedence: a device satisfying both SILENT and DELAYED conditions simultaneously -> SILENT wins
+10. Multi-device asset: PRIMARY_METER device selected regardless of assignment insertion order
+11. Correct site_id returned alongside state
+12. Tenant isolation: org A's grafana_org_id against org B's asset_id -> 0 rows; org B's own org_id against its own asset -> 1 RECEIVING row
+
+Wired into scripts/test/run_integration_environment.sh as a new step ("[connectivity-semantics]"), placed after the existing demand-capability/asset-demand regression steps and before the final migration-ledger verification — this script is exactly what .github/workflows/ci.yml's `database-integration-tests` job invokes, so the new test becomes part of the real CI gate once committed and pushed (not done in this task).
+
+================================================================
+4. TEST RESULTS
+================================================================
+PASSED. Docker Desktop was started; scripts/test/run_integration_environment.sh was run twice more:
+  - First re-run (Docker now up) surfaced the connectivity test's own fixture bugs (see the three fixes above) -- caught correctly by the trigger/constraint layer, not silently swallowed.
+  - After fixing the fixtures, scripts/test/assert_connectivity_semantic_contract.sh alone was re-run directly against the still-live disposable test database and passed all 12 assertions.
+  - The full suite was then run one more time from a completely clean reset (test_database.sh reset -> deploy -> migrate -> all 15 assertion scripts) to confirm nothing else regressed: exit code 0, zero ERROR lines anywhere in the full log, "Connectivity semantic contract assertions passed." printed, and the final migration-ledger check ("Migration ledger verified: admin.schema_migrations") passed.
+No test result has been fabricated at any point; the initial Docker-unavailable block and the three fixture bugs were both reported honestly before this final green result.
+
+================================================================
+5. EXACT SEMANTIC BEHAVIOR IMPLEMENTED
+================================================================
+No new behavior was implemented — analytics.get_grafana_asset_connectivity_context() was declared the canonical semantic source for device-level telemetry connectivity, exactly as it already exists:
+  Source: telemetry.device_raw_receipt_state (raw, pre-normalization receipt state)
+  Thresholds: config.telemetry_availability_policy (policy_key='DEFAULT'), hardcoded fallback 300/900/3600s if that config row is absent
+  Precedence: NEVER_SEEN > SILENT > STALE > DELAYED > RECEIVING (NO_ASSIGNED_DEVICE handled as an early, distinct return before the state CASE runs)
+  Tenant scope: metadata.grafana_organization_map, SECURITY DEFINER with pinned search_path
+This report/test formalizes that behavior as an executable contract; the function itself is unchanged.
+
+================================================================
+6. PARITY DIFFERENCES DISCOVERED
+================================================================
+None discovered this task, because no consumer was migrated (both real consumers already call the canonical function). One pre-existing inconsistency reconfirmed, not introduced: get_grafana_asset_telemetry_context()'s hardcoded config-absent fallback (180/900/1800s) differs from get_grafana_asset_connectivity_context()'s hardcoded fallback (300/900/3600s) and from v_grafana_devices.telemetry_state's fully-hardcoded literals (300/900/3600s). All three currently agree in practice because the seeded config.telemetry_availability_policy DEFAULT row is (300,900,3600) — divergence would only surface if that row were ever removed. Documented, not fixed (out of Phase 1A scope).
+
+================================================================
+7. LEGACY OBJECTS IDENTIFIED FOR FUTURE RETIREMENT (not touched this task)
+================================================================
+- analytics.v_grafana_devices.telemetry_state (full-history scan over telemetry.normalized_points; conflates configuration-validity with communication-freshness; consumed by 6 of 7 Grafana dashboards + v_grafana_active_alarms)
+- analytics.v_device_telemetry_availability / admin.list_accessible_device_telemetry_availability() (same full-history-scan pattern; admin-portal-only consumer)
+Both are explicitly left in place per the approved plan and the implementation rules ("do not delete legacy implementations merely because they are superseded"). Any future retirement/migration of their 6+ dashboard consumers is a separate, larger task, not part of Phase 1A.
+
+================================================================
+8. GIT DIFF / STAT SUMMARY
+================================================================
+ .gitignore                                  | 5 +++++
+ scripts/test/run_integration_environment.sh | 4 ++++
+ 2 files changed, 9 insertions(+)
+
+Untracked (new):
+ scripts/test/assert_connectivity_semantic_contract.sql
+ scripts/test/assert_connectivity_semantic_contract.sh
+
+(AnalyticalPlatformArchitecture.txt and Audit/ also show untracked but predate this task's work and are not part of this change.)
+
+================================================================
+9. ISSUES / UNCERTAINTIES
+================================================================
+- Resolved: Docker Desktop's engine was not running at the start of this task; it was started and full validation completed successfully (see section 4).
+- No files were committed or pushed. No staging or production access was made. No CI/CD configuration was changed (the new step lives inside an existing script that CI already calls — the workflow YAML itself is untouched).
+- Per instruction, no cleanup/deletion of the two flagged legacy connectivity objects was performed, and none is proposed as part of this task.
+- Not yet done, per the approved plan's own staging-validation section and this task's stop condition: the read-only staging verification queries and any eventual CI/CD-mediated deployment of this test. Awaiting authorization for that next step.

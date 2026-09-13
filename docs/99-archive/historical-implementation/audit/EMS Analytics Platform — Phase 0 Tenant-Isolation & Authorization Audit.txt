@@ -1,0 +1,99 @@
+EMS Analytics Platform — Phase 0: Tenant-Isolation & Authorization Audit
+
+Method: builds on tenant-scoping evidence already traced in the prior five audits, plus this session's targeted verification of RLS presence, session-variable usage, the Analytics Explorer's generic CAGGs' grant/scoping shape, and the admin-portal's application-side access-scope model. Facts only — no redesign.
+
+---
+
+Headline finding: two entirely separate, non-integrated authorization systems coexist
+
+1. The EMS admin/onboarding portal (app/src/auth/*, app/src/context/*) — a Python application-level model (PortalAccessScope: GLOBAL/ORGANIZATION/SELECTED_SITES, can_access_site()). This is application-side only — confirmed from app/src/auth/access_scope.py: pure dataclass/function logic, no SQL, no database call, no RLS. Its correctness depends entirely on every FastAPI route calling can_access_site() correctly before acting; there is no database-level backstop found for this specific model.
+2. Grafana's own per-organization membership — a Grafana-native concept. The EMS platform provisions one dedicated Grafana Organization per EMS organization (onboarding/grafana_provisioning_service.py:42: grafana_org_id = await client.provision_organization(...)), and which Grafana Organization a logged-in Grafana user belongs to is enforced entirely by Grafana itself, outside this codebase. ${__org.id} in every dashboard query is Grafana's own resolved value for "the org this viewer is currently in" — the EMS database has no visibility into or control over how a human got assigned to a Grafana org; it only records the mapping (metadata.grafana_organization_map) after the fact.
+
+These two systems do not share an enforcement mechanism, a session variable, or a common code path. A user's admin-portal site access (PortalAccessScope.SELECTED_SITES) has no automatic relationship to what that same person can see in Grafana — the two are provisioned and enforced independently.
+
+---
+
+The trace: User → Organization → Site → Area → Asset → Device → Point (Grafana/analytics path)
+
+┌─────────────────┬────────────────────────────────────────────────────────────┬─────────────────────────────────────────────────────────────────────────┬─────────────────────────────────────────────────┐
+│       Hop       │                 Where scope is established                 │                           Where it's enforced                           │                    Evidence                     │
+├─────────────────┼────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────┤
+│ User → Grafana  │ Grafana's own user/org membership, set up when the admin   │                                                                         │ onboarding/grafana_provisioning_service.py:42;  │
+│ Organization    │ portal calls provision_organization()                      │ Grafana itself (external to this codebase)                              │ no DB table governs Grafana login/session, only │
+│                 │                                                            │                                                                         │  the resulting grafana_org_id                   │
+├─────────────────┼────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────┤
+│ Grafana         │                                                            │                                                                         │ Confirmed across dozens of objects in the prior │
+│ Organization →  │ metadata.grafana_organization_map (organization_id,        │ Every analytics.v_grafana_* object joins this table with                │  four audits, zero exceptions found among the   │
+│ EMS             │ grafana_org_id, is_active)                                 │ is_active=TRUE; declared security_barrier                               │ v_grafana_* family                              │
+│ organization_id │                                                            │                                                                         │                                                 │
+├─────────────────┼────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────┤
+│                 │                                                            │ Every dashboard query filters WHERE grafana_org_id=${__org.id} [AND     │                                                 │
+│ Organization →  │ metadata.sites.organization_id FK                          │ site_id='$site_id'] — the $site_id variable's own backing query is      │ e.g. alarms.json, area-overview.json variable   │
+│ Site            │                                                            │ itself pre-filtered to grafana_org_id=${__org.id} (confirmed in the     │ SQL                                             │
+│                 │                                                            │ Grafana audit for every site_id-variable dashboard)                     │                                                 │
+├─────────────────┼────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────┤
+│ Site → Area     │ no dedicated table — a structural convention on            │ same org/site filter propagates through the recursive CTE               │ area-overview.json's $area_id variable and all  │
+│ (asset with     │ metadata.assets.parent_asset_id                            │ (v_grafana_assets), re-scoped by grafana_org_id at the CTE's own base   │ 6 recursive panels                              │
+│ children)       │                                                            │ case                                                                    │                                                 │
+├─────────────────┼────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────┤
+│ Site/Area →     │ metadata.assets (org_id, site_id FKs), surfaced via        │ same grafana_org_id filter                                              │ consistent across all 7 dashboards              │
+│ Asset           │ analytics.v_grafana_asset_selector/v_grafana_assets        │                                                                         │                                                 │
+├─────────────────┼────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────┤
+│ Asset → Device  │ metadata.asset_devices (asset_id, device_id,               │ analytics.v_grafana_asset_devices, always joined through an org-scoped  │ device-diagnostics, asset-overview              │
+│                 │ relationship_type)                                         │ asset first                                                             │                                                 │
+├─────────────────┼────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────┼─────────────────────────────────────────────────┤
+│ Device → Point  │ metadata.device_field_mapping/config.profile_field_mapping │ analytics.v_grafana_normalized_points/v_grafana_asset_point_selector,   │ device-diagnostics "Latest normalized points",  │
+│                 │  → metadata.logical_points                                 │ org-scoped                                                              │ asset-overview "Current Condition Metrics"      │
+└─────────────────┴────────────────────────────────────────────────────────────┴─────────────────────────────────────────────────────────────────────────┴─────────────────────────────────────────────────┘
+
+Every SECURITY DEFINER function in the analytics layer re-derives this entire chain independently, from grafana_org_id + asset_id alone, rather than trusting any caller-supplied intermediate value: get_canonical_energy_read(), get_grafana_asset_energy_intervals(), get_grafana_asset_demand_summary(), get_grafana_asset_telemetry_context(), get_grafana_asset_connectivity_context(), get_grafana_short_history(), get_grafana_explorer_intervals() — each independently joins grafana_organization_map → assets → asset_devices(PRIMARY_METER) → devices → gateways → site, and any mismatch anywhere in that chain collapses to zero rows, with no distinguishing error message. This is stated explicitly in get_canonical_energy_read's own comment (migration 042): "Tenant mismatch, a non-existent asset, an asset with no PRIMARY_METER, and a device with no gateway all collapse to zero rows... so this never leaks why resolution failed." This pattern is consistent across all 7 SECURITY DEFINER functions found in the analytics layer — a genuinely coherent, repeated design choice, not incidental.
+
+All of these functions additionally pin SET search_path TO pg_catalog, analytics, config, metadata, telemetry (or a subset) — a defense against search-path/object-shadowing attacks, confirmed on every SECURITY DEFINER function read across this investigation (e.g. postgres/ddl/138_asset_dashboard_consolidated_read_path_fix.sql:93,245,390).
+
+---
+
+Per-boundary answers
+
+Where is tenant scope established?
+At exactly one table: metadata.grafana_organization_map. Every other boundary (site/area/asset/device/point) is a plain foreign-key relationship in metadata, not a separate scoping mechanism.
+
+Where is it enforced?
+Database-side, inside the view/function definitions themselves (security_barrier views with an inline join; SECURITY DEFINER functions with an inline re-derivation) — not via PostgreSQL Row-Level Security (confirmed absent — see below), and not via a session variable (confirmed absent — see below). Enforcement is baked into each object's own SQL text, object by object.
+
+Can the browser influence it?
+The ${__org.id} macro is resolved server-side by Grafana based on the authenticated session, not supplied by the browser. The $site_id/$asset_id/$device_id template variables are browser-editable (they're dropdown selections, and Grafana allows manual URL-parameter overrides of template variables), but every panel re-applies grafana_org_id=${__org.id} in the same WHERE clause independent of what value the variable holds — so a manipulated $site_id/$asset_id value belonging to a different tenant would simply match zero rows (the org filter is AND-combined, not implied by the variable), confirmed structurally across every dashboard panel read in the Grafana audit. This is a design property of the query text, not of the variable mechanism.
+
+Can a Grafana query bypass it?
+For the v_grafana_* / SECURITY DEFINER family: no bypass found — grafana_reader has REVOKE ALL on the underlying metadata/config/telemetry schemas (postgres/ddl/55_grafana_tenant_analytics.sql), so even an ad hoc/hand-typed query by a Grafana user could only reach analytics.* objects that were explicitly granted, and every granted v_grafana_* object carries its own org join. Exception found (see next section): analytics.generic_telemetry_15m/_1h are granted directly to grafana_reader with no tenant join or security_barrier of their own — a hand-typed ad hoc query against these two objects specifically would not be automatically tenant-filtered.
+
+Can an API request bypass it?
+Not assessed for the Grafana/analytics path specifically (no analytics-serving API endpoints exist yet — confirmed in the metric-lineage audit: app/src/routers/ has only context.py, no /sites/{id}/energy/*-style analytics API). For the admin portal's own API routes, enforcement is PortalAccessScope/can_access_site() — application-side, in Python, with no confirmed database-level backstop (no RLS, no role-based row restriction found on metadata.* tables for the app's own ems_app role). Whether every route correctly calls this check was not verified in this audit (would require reading every route handler in app/src/main.py, out of scope here) — UNKNOWN, requires code-path verification per route.
+
+Is enforcement database-side, application-side, or both?
+- Grafana/analytics path: database-side, consistently, for every object except the two flagged CAGGs.
+- Admin-portal path: application-side only, as far as this audit traced — no RLS or equivalent DB-level restriction was found protecting metadata.*/telemetry.* tables from a query that doesn't go through can_access_site().
+
+---
+
+Database roles (confirmed from source across this and prior audits)
+
+ems_admin (owns/creates analytics objects, full access), ems_app (application service role), ems_readonly, grafana_reader (the only role Grafana's datasource connects as — REVOKE ALL on metadata/config/telemetry schemas directly, GRANT USAGE ON SCHEMA analytics plus per-object SELECT/EXECUTE grants). No additional roles (e.g. a per-tenant database role) were found — all tenants share the single grafana_reader role; isolation is entirely by query-level filtering, not by separate PostgreSQL roles/schemas per tenant.
+
+PostgreSQL RLS — confirmed absent
+
+A repo-wide grep for ROW LEVEL SECURITY, CREATE POLICY, FORCE ROW SECURITY across all of postgres/ returns zero matches. Tenant isolation relies entirely on security_barrier views + explicit joins/function parameters, never on RLS policies.
+
+Session variables for tenant context — confirmed absent
+
+A repo-wide grep for current_setting/set_config/SET LOCAL finds exactly two hits, both in the
+
+Objects whose tenant-safety could not be independently re-verified this session
+
+- analytics.v_energy_demand_15min, v_energy_peak_demand_daily/monthly, v_asset_peak_demand_*, v_energy_site_demand_kpis, v_site_energy_balance_daily, and the environment analytics views (v_environment_15min/hourly, environment_daily, v_environment_sensor_kpis) — all previously confirmed not consumed by any of the 7 Grafana dashboards. Several of these were traced in earlier audits as reading through metadata.grafana_organization_map in their own right (e.g. v_site_energy_balance_daily was confirmed org-scoped), but their grant lists were not re-confirmed in this specific audit — flagging as UNKNOWN whether any of them share the same "granted-directly, no self-contained tenant filter" pattern as generic_telemetry_15m/1h without re-reading each grant statement individually.
+- The admin-portal's own database access (ems_app role against metadata.*/telemetry.* directly, not through analytics.v_grafana_*) was not audited for row-level tenant safety in this session — the application-side PortalAccessScope model is the only enforcement confirmed, and whether ems_app's raw table grants could be misused by a bug in application code bypassing can_access_site() is UNKNOWN, out of this audit's SQL-only scope.
+
+---
+
+Summary
+
+Tenant isolation for the analytics/Grafana path is genuinely coherent and consistently database-enforced — a single mapping table, a repeated re-derivation pattern in every SECURITY DEFINER function, security_barrier on every v_grafana_* view, and schema-level revocation preventing grafana_reader from reaching anything outside analytics.*. The one confirmed structural gap is generic_telemetry_15m/_1h, granted directly to the shared reader role without any self-contained tenant predicate. The admin-portal path is a separate, application-only authorization model with no confirmed database-level backstop, and no RLS or session-variable mechanism exists anywhere in the platform to unify the two.

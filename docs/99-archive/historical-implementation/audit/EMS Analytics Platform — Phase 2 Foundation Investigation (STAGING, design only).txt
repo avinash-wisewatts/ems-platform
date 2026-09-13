@@ -1,0 +1,1359 @@
+EMS ANALYTICS PLATFORM — PHASE 2 FOUNDATION
+SELF-HEALING PIPELINE + JOB ORCHESTRATION + RETENTION / COMPRESSION AUDIT
+Environment: STAGING | Mode: INVESTIGATION / DESIGN ONLY | Date: 2026-08-27
+Nothing was modified. No migration, job, schedule, policy, CAGG, Grafana object,
+data row, or service was changed. All runtime facts below are read-only.
+
+EVIDENCE CLASSES (used inline as tags):
+  [VR]  VERIFIED FROM REPOSITORY — read from postgres/ddl, postgres/migrations,
+        postgres/jobs, scripts/, AND materialised in a local TimescaleDB 2.29.2
+        (pg16) container ("ems-timescaledb-test") built from the canonical
+        DDL + migration set. Function bodies, job CONFIG (schedule/max_runtime/
+        retries/lookback), retention/compression policy values, CAGG settings
+        are canonical. NOTE: TimescaleDB job_id NUMBERS are assigned per
+        environment and differ between this container and staging — proc_name
+        is the stable key throughout this document.
+  [VS]  VERIFIED AT STAGING RUNTIME — established by the prior Phase 0/Phase 1
+        reports and docs/platform-manual/23-known-issues-and-drift.md §8 /
+        25-change-history.md, dated 2026-08-23..27. NOT re-verified this pass:
+        no staging DB path was available (127.0.0.1:15432 refused, no psql
+        client on this host). Treated as authoritative prior context per the
+        task instruction.
+  [D]   SOURCE / RUNTIME DISCREPANCY.
+  [INF] INFERRED from code / config — a behavioural conclusion, not an
+        observation.
+  [UNK] UNKNOWN — requires a read-only staging query (consolidated in §W).
+
+===============================================================================
+A. EXECUTIVE SUMMARY
+===============================================================================
+
+1. The incident that triggered this work (job-1000 normalization stall →
+   downstream stale demand_intervals + energy_consumption_1min gap) was NOT a
+   1079/1080 problem. It is one instance of a single architectural class:
+   "a processing stage derives its work window from wall-clock time instead of
+   from how far its own input has actually been incorporated." The class is
+   present at THREE distinct layers, only one of which has been fixed:
+
+     a. telemetry.run_normalization_job (job 1000)  — FIXED (migration 205
+        added a bounded catch-up window; the watermark itself always existed).
+     b. telemetry.run_energy_routing_job (1001) and
+        telemetry.run_environment_routing_job (1012) — NOT FIXED. [INF] These
+        have the SAME "advance to max(source ingest time) in one transaction"
+        shape job 1000 had before migration 205. A large normalized_points
+        burst will make them attempt one unbounded transaction, exceed the
+        5-minute max_runtime, roll back, and retry against an equal-or-wider
+        window every minute — the exact stall mechanism, one hop downstream.
+        This is the single most important newly-surfaced finding.
+     c. Every analytics-tier job (1078 demand, 1079/1080 energy 1min/5min,
+        1099 15min, 1102 hourly, 1105 daily, 1107 environment daily) — NOT
+        FIXED, and worse than (b): they have NO persisted watermark at all,
+        their max_runtime is 00:00:00 (unlimited) and max_retries is -1
+        (infinite). [VR]
+
+2. analytics.demand_intervals has a second, independent defect: finalisation
+   writes INSERT ... ON CONFLICT DO NOTHING against a write-once row. A bucket
+   finalised NO_DATA / INCOMPLETE while upstream was stalled is never
+   reconsidered, even after real data arrives and even inside the 3-hour
+   lookback. [VR]
+
+3. The native continuous aggregates in the energy path
+   (ca_energy_1min/5min/15min/hourly/daily, and the phase-power / electrical
+   families) are all materialized_only = true. [VR] Querying them returns
+   NOTHING for any time range past their refresh watermark — there is no
+   real-time union with telemetry.energy_measurements. So a stalled or
+   too-narrow CAGG refresh directly produces an empty read for job 1079,
+   independent of job 1079's own lookback.
+
+4. Recovery is ultimately capped by telemetry.raw_messages retention = 48h
+   [VR, matches VS]. No watermark or backfill design can recover past that;
+   it is the binding constraint on "how long can this platform self-heal."
+
+5. Recommended architecture (design only, not approved): Option D (hybrid) —
+   each analytical child owns an independent processing watermark
+   (parent_available_through vs child_processed_through kept strictly
+   separate), each run does BOUNDED catch-up work (the migration-205 pattern),
+   every child write is idempotent (already true except demand_intervals,
+   which becomes a status-guarded DO UPDATE), plus a cheap bounded trailing
+   RECONCILIATION pass per tier as the safety net for the one thing a single
+   high-water mark cannot represent (an internal hole). NOTIFY is optional
+   latency sugar layered on top later, never the correctness mechanism. No
+   message broker, no external queue, no new work-queue table — reuse
+   telemetry.pipeline_state's shape and TimescaleDB's own job primitives.
+
+6. Independent of the self-healing work: normalized_points compress_after = 1
+   day [VR] is too aggressive for a table that is a backfill/reprocessing
+   source; and several analytical tables (demand_intervals, environment_daily,
+   energy_consumption_daily, ca_energy_daily, electrical_ext_*) have NO
+   retention policy at all [VR] — fine for low-cardinality daily tables, a
+   real unbounded-growth risk for demand_intervals (15-min resolution ×
+   per-asset + per-site scope).
+
+===============================================================================
+B. CURRENT COMPLETE PERSISTED ANALYTICAL DATA FLOW  (verified this pass)
+===============================================================================
+
+Raw + telemetry tier (all three have a telemetry.pipeline_state watermark):
+
+  MQTT / Telegraf
+    → telemetry.raw_messages            (hypertable; 1d chunk; compress 1d; retain 48h) [VR]
+        → telemetry.raw_message_failures (job: run_raw_message_failure_capture_job,
+                                          capture; run_failed_message_recovery_job,
+                                          per-row retry state) [VR]
+        → telemetry.raw_receipt_state    (job: run_raw_receipt_state_job — pipeline_state) [VR]
+    → telemetry.normalized_points        (job: run_normalization_job — pipeline_state
+                                          watermark on raw_messages.received_at,
+                                          + migration-205 p_max_window bounded catch-up;
+                                          7d chunk; compress 1d; retain 90d) [VR]
+        → telemetry.energy_measurements  (job: run_energy_routing_job — pipeline_state
+                                          watermark on normalized_points.platform_received_at;
+                                          NO p_max_window; 1d chunk; compress 7d; retain 90d) [VR]
+        → telemetry.environment_measurements (job: run_environment_routing_job — same
+                                          shape as energy; 7d chunk; compress 7d; retain 1y) [VR]
+
+Energy analytical path:
+
+  telemetry.energy_measurements
+    → ca_energy_1min   (native CAgg, materialized_only; refresh sched 1m,
+                        start_offset 2d, end_offset 1m; compress 7d; retain 180d) [VR]
+    → ca_energy_5min   (materialized_only; refresh 5m, start_offset 7d; compress 7d; retain 2y) [VR]
+    → ca_energy_15min  (materialized_only; refresh 5m, start_offset 2d; compress 7d; retain 2y) [VR]
+    → ca_energy_hourly (materialized_only; refresh 15m, start_offset 7d; compress 30d; retain 5y) [VR]
+    → ca_energy_daily  (materialized_only; refresh 1h, start_offset 30d; compress 90d; NO retention) [VR]
+
+  ca_energy_1min → analytics.energy_consumption_1min
+        (job run_energy_consumption_1min_job; wrapper window = now()-30min;
+         write ON CONFLICT (device_id,bucket_start) DO UPDATE [full overwrite];
+         hypertable 7d chunk; compress 7d; retain 180d) [VR]
+  ca_energy_5min → analytics.energy_consumption_5min
+        (job run_energy_consumption_5min_job; window now()-30min; DO UPDATE;
+         compress 14d; retain 2y) [VR]
+        NOTE [VS, prior audit] structurally empty for the current fleet:
+        refresh function only processes capture_interval_seconds = 300 devices;
+        every device here is 60. Not a defect — do not "fix" an empty table.
+
+  analytics.energy_consumption_1min ∪ _5min
+    → analytics.v_energy_consumption_native            (VIEW, UNION ALL) [VR]
+    → analytics.v_energy_semantic_rollup_15min         (VIEW) [VR]
+    → analytics.energy_consumption_15min
+        (job run_energy_consumption_15min_job; window date_bin(15m,now())-2h;
+         DO UPDATE; compress 7d; retain 2y) [VR]
+    → analytics.energy_consumption_hourly
+        (job run_energy_consumption_hourly_job; source = energy_consumption_15min;
+         window now()-2d; DO UPDATE; compress 30d; retain 5y) [VR]
+    → analytics.energy_consumption_daily
+        (job run_energy_consumption_daily_job; source = energy_consumption_15min;
+         window now()-8d; DO UPDATE; compress 90d; NO retention) [VR]
+
+  → semantic layer: analytics.get_canonical_energy_read(...),
+    analytics.v_energy_* reporting views → Grafana "Energy Consumption Trend".
+    [VS, prior Grafana audit] v_energy_consumption_daily and the semantic
+    "reporting" lineage are NOT confirmed consumed by any of the 7 dashboards.
+
+Demand path:
+
+  telemetry.energy_measurements + telemetry.normalized_points (read directly)
+    → analytics.demand_state      (live provisional accumulator — MUTABLE:
+                                   INSERT ON CONFLICT DO NOTHING then explicit UPDATE) [VR]
+    → analytics.demand_intervals  (job run_demand_calculation_job; wrapper lookback 3h;
+                                   finalisation write = INSERT ON CONFLICT DO NOTHING
+                                   [WRITE-ONCE]; compress 7d; NO retention) [VR]
+        unique keys: (asset_id,interval_start,demand_policy_id) WHERE scope='ASSET';
+                     (site_id,interval_start,demand_policy_id)  WHERE scope='SITE' [VR]
+        quality_status ∈ VALID | INCOMPLETE | NO_DATA | INVALID_SOURCE
+                        | INSUFFICIENT_SOURCE_RESOLUTION [VR]
+    → analytics.v_grafana_asset_demand_intervals → Grafana "Demand Profile"
+      [VS, prior Grafana audit — confirmed consumed].
+
+Electrical / phase-power path (native CAggs, materialized_only):
+
+  energy_measurements
+    → ca_energy_phase_power_1min/5min/15min/hourly/daily [VR]
+    → ca_energy_electrical_ext_15min/hourly  (NO retention policy) [VR]
+  No custom downstream job reads these. [VS, prior audit — not directly
+  consumed by dashboards; feed semantic views.] Out of self-healing scope
+  because TimescaleDB manages their refresh, but their start_offsets
+  (2d/7d/30d) are the same latent cliff as the energy CAggs.
+
+Environment daily path:
+
+  environment_measurements
+    → ca_environment_15min / ca_environment_hourly  (materialized_only = FALSE
+      — these DO union real-time data; refresh 5m/15m, start_offset 2d/7d;
+      retain 2y/5y) [VR]
+    → telemetry.environment_daily
+        (job run_environment_daily_job; wrapper window now()-8d; DO UPDATE;
+         compress 90d; NO retention) [VR]
+  [UNK] whether refresh_environment_daily reads the env CAggs or
+  environment_measurements directly — not disassembled this pass; matters for
+  §U phase 5.
+
+Also present, out of scope, flagged for completeness [VR]:
+  analytics.generic_telemetry_15m / _1h (native CAggs, materialized_only,
+  NO retention, NO compression, refresh 5m/15m). No custom consumer found.
+
+===============================================================================
+C. CURRENT FAILURE / SELF-HEALING MATRIX
+===============================================================================
+
+Legend for "Recoverable outage ceiling" = the longest upstream gap after which
+the stage still returns to correct data WITHOUT a manual repair.
+
+STAGE: telemetry.normalized_points  (job run_normalization_job)          [VR]
+  Watermark: pipeline_state.last_received_at, keyed on raw_messages.received_at
+  Source-avail vs child-processed: SAME COLUMN (single HWM) — acceptable here
+    because this is the first stage and its source (raw_messages) has no
+    upstream watermark to diverge from.
+  Write: capture_bucket_samples + normalized_points ON CONFLICT DO UPDATE
+    (guarded: only fill NULL lineage / newer receipt). Idempotent.
+  Transaction: single; EXCEPTION → set FAILED + RAISE ⇒ watermark ALSO rolls
+    back ⇒ no partial progress, no false advance.
+  Bounded catch-up: YES since migration 205 (p_max_window; NULL = old behaviour;
+    run_normalization_job still passes NULL, so steady state unchanged).
+  1h / 6h / 12h / 24h / 48h outage: self-heals; >~5min of backlog per run
+    needs a bounded p_max_window sequence (as executed manually in the incident:
+    32 × 30-min calls).
+  Burst after disconnect: self-heals (watermark advances further next run).
+  Child job down then resumes: self-heals (durable watermark).
+  Crash / DB restart mid-run: full rollback; watermark unmoved; retries.
+  Recoverable outage ceiling: 48h (raw_messages retention). Beyond → permanent.
+
+STAGE: telemetry.energy_measurements (job run_energy_routing_job)         [VR/INF]
+  Watermark: pipeline_state.last_received_at on normalized_points.platform_received_at
+  Write: ON CONFLICT (bucket_start,device_id) DO UPDATE WHERE newer AND
+    now()<=correction_deadline; MISSING rows INSERT regardless of age.
+    ⇒ gap buckets (no row) DO backfill; already-written rows past their
+    correction deadline do NOT get corrected.
+  Transaction: single; forward bound = max(platform_received_at) — UNBOUNDED.
+  NO p_max_window.
+  1h–2h outage: self-heals in one run.
+  6h+ outage / burst: [INF] one giant transaction, likely > 5-min max_runtime,
+    killed, rolled back, retried next minute against equal-or-wider window ⇒
+    STALL (same failure mode as job 1000 pre-205). Not observed on staging
+    this pass [UNK], but structurally identical.
+  Crash / DB restart: full rollback; watermark unmoved.
+  Recoverable outage ceiling (once bounded catch-up added): 90d (normalized_points
+    retention), but effectively 48h because raw→normalized is itself capped at 48h.
+
+STAGE: telemetry.environment_measurements (job run_environment_routing_job) [VR/INF]
+  Same shape as energy_measurements. Write = UPDATE-within-deadline then INSERT
+  ON CONFLICT DO NOTHING. Same UNBOUNDED forward bound, same 6h+ stall risk [INF].
+
+STAGE: native CAggs ca_energy_* / ca_energy_phase_power_* / electrical_ext_*  [VR]
+  materialized_only = TRUE ⇒ reads are EMPTY past the refresh watermark.
+  Refresh is TimescaleDB-managed; start_offset 2d (1min/15min), 7d (5min/hourly),
+  30d (daily).
+  Outage <= start_offset: self-heals when energy_measurements is repaired AND
+    the next scheduled refresh runs.
+  Outage > start_offset: refresh will NOT revisit that range ⇒ permanent empty
+    unless a manual refresh_continuous_aggregate(name, older_start, end) is run.
+  ca_environment_15min/hourly: materialized_only = FALSE ⇒ reads union live data
+    ⇒ much lower gap risk.
+
+STAGE: analytics.energy_consumption_1min (job run_energy_consumption_1min_job) [VR]
+  Watermark: NONE. Wrapper window = [date_trunc('min',now())-30min, now()).
+  Source: ca_energy_1min (materialized_only).
+  Write: ON CONFLICT (device_id,bucket_start) DO UPDATE — full recompute,
+    idempotent. (So the ONLY defects are the 30-min window and the missing
+    watermark — the writer itself is sound.)
+  1h+ outage: PERMANENT GAP (window never covers it again). Confirmed by the
+    incident [VS].
+  Even within 30 min: if ca_energy_1min refresh hasn't materialised the range,
+    reads empty ⇒ produces nothing.
+  max_runtime = 0 (unlimited), max_retries = -1 (infinite) [VR].
+
+STAGE: analytics.energy_consumption_5min (job 1080) [VR]
+  As above (30-min window, no watermark, DO UPDATE). Structurally empty for
+  this fleet [VS] — no traffic to gap.
+
+STAGE: analytics.energy_consumption_15min (job run_energy_consumption_15min_job) [VR]
+  Watermark: NONE. Window = [date_bin(15m,now())-2h, date_bin(15m,now())).
+  Source: v_energy_consumption_native → v_energy_semantic_rollup_15min, i.e.
+    the 1min ∪ 5min PERSISTED tables (not raw). ⇒ inherits any gap in 1min/5min.
+  Write: DO UPDATE (idempotent).
+  Parent-catches-up-child-stays-stale: a 1min repair does NOT propagate here
+    automatically; 15min must be independently re-driven for the same range,
+    AND its own 2h window must still cover it.
+  2h+ outage: PERMANENT GAP.
+
+STAGE: analytics.energy_consumption_hourly (job 1102) / _daily (job 1105) [VR]
+  Watermark: NONE. Windows now()-2d / now()-8d. Source = energy_consumption_15min.
+  Write: DO UPDATE (idempotent).
+  Outage <= 2d (hourly) / 8d (daily): self-heals IF 15min underneath is correct.
+  Outage > that: PERMANENT GAP. Also inherits 15min gaps regardless of own window.
+
+STAGE: analytics.demand_intervals (job run_demand_calculation_job) [VR]
+  Watermark: NONE. Wrapper lookback 3h; inner loop bound
+    v_max_n = ceil(3h / demand_interval_seconds) + 2; EXIT when interval_end
+    < now()-3h.
+  Write: analytics.demand_intervals INSERT ... ON CONFLICT DO NOTHING —
+    WRITE-ONCE. analytics.demand_state (provisional) is mutable.
+  Any outage: buckets finalised NO_DATA/INCOMPLETE during the stall stay that
+    way FOREVER — worse than a lookback bug; even a re-run inside 3h cannot
+    fix an already-finalised row. Confirmed by the incident [VS] (1,320 rows
+    manually corrected).
+  Transaction: single (no inner COMMIT). site × scope × interval triple loop.
+  max_runtime = 0, max_retries = -1 [VR] ⇒ a big run is never force-stopped;
+    it just holds locks.
+
+STAGE: telemetry.environment_daily (job run_environment_daily_job) [VR]
+  Watermark: NONE. Window now()-8d. Write DO UPDATE (idempotent).
+  Source unions live data (env CAggs materialized_only=FALSE) ⇒ lower gap risk,
+  but the fixed 8d window still caps recovery and there is no watermark.
+
+STAGE: telemetry.raw_message_failures per-row recovery (job run_failed_message_recovery_job) [VR]
+  THE ONE ALREADY-CORRECT PATTERN. Per-row state: resolution_status
+  (OPEN/RETRY_PENDING/RETRY.../RECOVERED/PERMANENT_FAILURE),
+  replay_attempt_count (<5), next_replay_at (escalating backoff 1h/2h/6h/...),
+  FOR UPDATE SKIP LOCKED, per-candidate COMMIT (migration 203), dynamic
+  retention cutoff read from timescaledb_information.jobs (migration 206).
+  Self-heals at every outage length up to the raw_messages retention cutoff,
+  past which it correctly marks PERMANENT_FAILURE. Leave untouched.
+
+===============================================================================
+D. CURRENT JOB INVENTORY  (canonical CONFIG [VR]; staging job_id numbers differ)
+===============================================================================
+
+proc_name                              sched  max_runtime  retries  retry_p  config
+-------------------------------------- ------ ------------ -------- -------- --------------------------
+telemetry.run_normalization_job         1m     5m           3        1m       overlap=15m  (+p_max_window arg, NULL)
+telemetry.run_energy_routing_job        1m     5m           3        1m       overlap=15m
+telemetry.run_environment_routing_job   1m     5m           3        1m       overlap=15m
+telemetry.run_raw_receipt_state_job     1m     1m           3        1m       overlap=2m
+telemetry.run_raw_message_failure_capture_job
+                                        5m     5m           3        1m       grace=20m, overlap=1m
+telemetry.run_failed_message_recovery_job
+                                        1h     10m          1        15m      limit=100  [D: staging=1000 per VS §8]
+analytics.run_demand_calculation_job    1m     00:00:00     -1       5m       lookback=3h
+analytics.run_energy_consumption_1min_job
+                                        1m     00:00:00     -1       5m       lookback=30m
+analytics.run_energy_consumption_5min_job
+                                        1m     00:00:00     -1       5m       lookback=30m
+analytics.run_energy_consumption_15min_job
+                                        5m     00:00:00     -1       5m       lookback=2h
+analytics.run_energy_consumption_hourly_job
+                                        15m    00:00:00     -1       5m       lookback=2d
+analytics.run_energy_consumption_daily_job
+                                        1h     00:00:00     -1       5m       lookback=8d
+telemetry.run_environment_daily_job     1h     00:00:00     -1       5m       lookback=8d
+
+Plus TimescaleDB-managed policy jobs [VR]:
+  - Continuous-aggregate refresh: one per CAgg (16 total), sched 1m–1h,
+    start_offset 2d/7d/30d, end_offset 1m/5m/1h, max_runtime 0.
+  - Columnstore (compression) policies: one per hypertable/CAgg, sched
+    12h or 1d, compress_after 1d–90d (full table in §J).
+  - Retention policies: one per retained hypertable/CAgg, sched 1d,
+    drop_after 48h–5y (full table in §I).
+  - policy_job_stat_history_retention: drop_after 1 month.
+
+Watermark / self-heal classification:
+  DURABLE WATERMARK + bounded catch-up ....... run_normalization_job only
+  DURABLE WATERMARK, UNBOUNDED forward ....... run_energy_routing_job,
+                                              run_environment_routing_job,
+                                              run_raw_receipt_state_job
+  PER-ROW RETRY STATE (gold standard) ........ run_failed_message_recovery_job
+  NO WATERMARK, fixed wall-clock lookback .... all 7 analytics/enviro-daily jobs
+  TimescaleDB-managed (start_offset window) .. all CAgg refresh policies
+
+===============================================================================
+E. CURRENT JOB SCHEDULING / FREQUENCY ANALYSIS
+===============================================================================
+
+[VR] Cadence today is coherent with source cadence and downstream freshness
+need — the frequencies themselves are NOT the bug:
+  - 1-minute source capture ⇒ 1-minute normalization/energy/environment
+    routing and 1-minute energy_consumption_1min + demand. Reasonable.
+  - 15-min tier every 5m, hourly every 15m, daily every 1h — each well
+    below its own resolution; gives near-real-time rollups. Reasonable.
+  - CAgg refresh cadence tracks resolution (1m/5m/15m/1h). Reasonable.
+
+[VR] The scheduling DEFECTS are not frequency, they are:
+  1. Window derivation (now()-lookback instead of watermark-based) — §G, §N.
+  2. max_runtime = 00:00:00 on all 7 analytics jobs ⇒ a run that falls
+     behind is never force-bounded; combined with max_retries = -1 it can
+     spin or hold locks indefinitely. The telemetry jobs correctly use
+     5m / 3 retries.
+  3. No config-validation hook: _timescaledb_config.bgw_job has
+     check_schema/check_name columns; NO EMS job populates them [VR], so a
+     bad alter_job config (e.g. lookback='0') is only caught at run time by
+     an in-body RAISE.
+  4. Canonicalisation gap [VS, known-issues §9]: the analytics rollup jobs
+     are registered only inside migrations (121/132/140/143/179–184), not in
+     postgres/jobs/*.sql, unlike the telemetry jobs. Schedule-drift assertion
+     (scripts/test/assert_job_schedule_canonical.sql) covers only the three
+     telemetry routing jobs.
+  [UNK] whether staging job CONFIG has drifted from canonical (migration 194
+  was a drift-correction; needs re-check — §W).
+
+Chain-timing observation [INF]: hourly reads 15min, daily reads 15min, 15min
+reads 1min∪5min, 1min reads ca_energy_1min, ca_energy_1min refreshes from
+energy_measurements. Nothing enforces that a downstream run happens AFTER its
+upstream run for the same wall-clock minute — each simply trusts its lookback
+window already contains complete upstream data. Usually true at steady state;
+false during and after any stall.
+
+===============================================================================
+F. CURRENT CRASH / TIMEOUT / RETRY BEHAVIOUR  (TimescaleDB 2.29.2) [VR]
+===============================================================================
+
+What TimescaleDB already provides:
+  - _timescaledb_internal.bgw_job_stat: total_runs, total_successes,
+    total_failures, total_crashes, consecutive_failures, consecutive_crashes,
+    last_run_success, last_start/last_finish/last_successful_finish, next_start.
+  - timescaledb_information.job_stats (view): last_run_status, job_status,
+    last_run_duration, next_start, totals. (No consecutive_failures in the
+    view — use bgw_job_stat.)
+  - timescaledb_information.job_history: per-run history (start, finish,
+    status, config snapshot, error data).
+  - timescaledb_information.job_errors: error log.
+  - Retry: on failure the job is retried after retry_period, backing off up to
+    max_retries; max_retries = -1 = retry every retry_period forever; after
+    the retry budget the job simply waits for its next fixed-schedule slot.
+  - max_runtime exceeded ⇒ the launcher sends the worker a cancel; the running
+    statement is rolled back like any cancelled statement.
+  - Process crash / DB restart ⇒ consecutive_crashes/total_crashes increment;
+    job is rescheduled with backoff. In-flight transaction is rolled back by
+    normal WAL recovery.
+  - fixed_schedule = true for policy jobs; UDA jobs created via add_job default
+    to drift-free fixed scheduling as configured.
+
+What TimescaleDB does NOT provide, and EMS must own:
+  - It NEVER touches an application watermark. Whether a killed/crashed run
+    leaves a false-advanced checkpoint is entirely determined by the proc.
+    Current state:
+      * run_normalization_job / run_energy_routing_job /
+        run_environment_routing_job / run_raw_receipt_state_job: watermark
+        UPDATE is the last statement in the single transaction ⇒ a kill/crash
+        rolls it back with everything else ⇒ SAFE (invariant holds today) [VR].
+      * run_failed_message_recovery_job: per-candidate COMMIT; each committed
+        candidate's state change is atomic with its own work ⇒ SAFE [VR].
+      * demand / energy_consumption_* jobs: single transaction, no watermark
+        at all ⇒ a kill rolls back the whole run; nothing false-advances, but
+        nothing durably progresses either — a run that can't finish inside
+        (unlimited, so: inside a lock-contention or statement-timeout event)
+        makes zero progress, exactly like job 1000 pre-205 [INF].
+  - No "stuck RUNNING" detector. pipeline_state.last_status can sit at
+    'RUNNING' indefinitely if a worker is killed between the RUNNING update
+    and the terminal update. (The local test DB currently shows exactly this
+    for the raw_message_failures pipeline: last_status='RUNNING',
+    last_started_at today, last_completed_at yesterday — a faithful
+    illustration of the pattern.) [VR]
+  - No consecutive-failure alerting surface (the data exists; nothing reads it).
+
+Critical invariant to carry into any new design:
+  A watermark (or per-range completion mark) is advanced in the SAME
+  transaction as the writes it accounts for, and only after them. A run that
+  is killed/crashes loses at most one bounded slice, never marks unprocessed
+  time as processed.
+
+===============================================================================
+G. CURRENT WATERMARK ARCHITECTURE  [VR]
+===============================================================================
+
+telemetry.pipeline_state (created in postgres/ddl/41; header comment explicitly
+anticipates "future pipelines such as environmental telemetry, alarms and
+asset-health normalization" — i.e. it is intended as a generic per-pipeline
+checkpoint, despite living in the telemetry schema):
+
+  pipeline_name       text  PRIMARY KEY
+  last_received_at     timestamptz          -- the SINGLE high-water mark
+  last_started_at      timestamptz
+  last_completed_at    timestamptz
+  last_inserted_rows   bigint  NOT NULL DEFAULT 0
+  last_status          text    NOT NULL DEFAULT 'NEVER_RUN'
+                       CHECK IN (NEVER_RUN,RUNNING,SUCCESS,FAILED,
+                                 SKIPPED_LOCKED,NO_SOURCE_DATA)
+  last_error           text
+  updated_at           timestamptz NOT NULL DEFAULT now()
+
+Rows present: normalized_points, energy_measurements, environment_measurements,
+raw_receipt_state, raw_message_failures. NONE for any analytics-tier pipeline.
+
+Gaps against the "authoritative principle" (§O of the task):
+  - ONE timestamp only. There is no separate "source_available_through" vs
+    "child_processed_through". Today each telemetry pipeline stores only its
+    own processed HWM and recomputes the source bound live each run
+    (max(source ingest ts)). That is acceptable at the telemetry tier (source
+    has no watermark to diverge from) but is exactly the thing the analytics
+    tier must NOT do.
+  - No hole / range representation. A single max() cannot distinguish
+    "09:00 OK, 10:00 FAILED, 11:00 OK" from "processed through 11:00".
+  - No consecutive-failure / retry / backoff counters (single last_status +
+    last_error only).
+  - Keying convention differs by stage: normalization keys on
+    raw_messages.received_at; energy/environment key on
+    normalized_points.platform_received_at (ingest time, not event_time).
+    Bucketing is by event_time / bucket_start. This source-vs-receipt split
+    is handled correctly today [VS, prior audit] and must be preserved.
+
+===============================================================================
+H. CURRENT CAGG ARCHITECTURE  [VR]
+===============================================================================
+
+CAgg                          mat_only  refresh   start_offset  end_offset  compress  retention
+----------------------------- --------  --------  ------------  ----------  --------  ---------
+ca_energy_1min                YES       1m        2d            1m          7d        180d
+ca_energy_5min                YES       5m        7d            1m          7d        2y
+ca_energy_15min               YES       5m        2d            1m          7d        2y
+ca_energy_hourly              YES       15m       7d            5m          30d       5y
+ca_energy_daily               YES       1h        30d           1h          90d       (none)
+ca_energy_phase_power_1min    YES       1m        2d            1m          7d        180d
+ca_energy_phase_power_5min    YES       5m        7d            1m          7d        2y
+ca_energy_phase_power_15min   YES       5m        2d            5m          7d        2y
+ca_energy_phase_power_hourly  YES       15m       7d            5m          30d       5y
+ca_energy_phase_power_daily   YES       1h        30d           1h          90d       (none)
+ca_energy_electrical_ext_15min YES      5m        2d            1m          7d        (none)
+ca_energy_electrical_ext_hourly YES     15m       7d            1m          30d       (none)
+ca_environment_15min          NO        5m        2d            1m          7d        2y
+ca_environment_hourly         NO        15m       7d            5m          7d        5y
+generic_telemetry_15m         YES       5m        2d            1m          (none)    (none)
+generic_telemetry_1h          YES       15m       7d            1m          (none)    (none)
+
+Implications:
+  - materialized_only = YES on the whole energy family ⇒ a read is only as
+    complete as the last successful refresh within start_offset. This is the
+    direct cause of "job 1079 produced nothing" during the incident.
+  - CAgg refresh watermark is readable read-only at
+    _timescaledb_catalog.continuous_aggs_watermark (join via mat_hypertable_id)
+    — a zero-cost observability signal (§T).
+  - start_offset 2d on ca_energy_1min/15min is the tightest auto-recovery
+    window in the energy path. It happens to align with the raw_messages 48h
+    retention ceiling, so widening it further only helps if raw retention is
+    also raised. Document the coupling; do not widen blindly.
+  - ca_environment_15min/hourly (materialized_only = NO) are the safer design —
+    reads union live rows, so a missed refresh degrades performance, not
+    correctness.
+  - CAgg vs validated-energy-consumption lineage are LEGITIMATELY DIFFERENT
+    representations, not redundant [VS, Phase 1 semantic model]:
+      * ca_energy_* = time-bucketed MAX/aggregate of raw registers (fast,
+        high-volume, electrical analytics).
+      * analytics.energy_consumption_* = register-delta classification
+        (reset/rollover/gap-aware consumption with quality codes) built ON TOP
+        of ca_energy_1min. The persisted table is the customer-facing
+        "consumption"; the CAgg is the substrate. Keep both.
+
+===============================================================================
+I. CURRENT RETENTION MATRIX  [VR canonical; the 3 marked * match VS]
+===============================================================================
+
+Table / CAgg                        retention   chunk    notes
+----------------------------------- ----------  -------   ----------------------------------
+telemetry.raw_messages *            48h         1d       BINDING CONSTRAINT on all recovery
+telemetry.raw_message_failures      30d         1d       audit/recovery queue — adequate
+telemetry.normalized_points *       90d         7d       operational-recovery source
+telemetry.energy_measurements *     90d         1d       operational-recovery source; CAgg source
+telemetry.environment_measurements  1y          7d
+telemetry.device_status             90d
+telemetry.water_measurements        1y
+ca_energy_1min                      180d
+ca_energy_5min                      2y
+ca_energy_15min                     2y
+ca_energy_hourly                    5y
+ca_energy_daily                     (none)      keeps forever — OK (low cardinality)
+ca_energy_phase_power_1min          180d
+ca_energy_phase_power_5min/15min    2y
+ca_energy_phase_power_hourly        5y
+ca_energy_phase_power_daily         (none)
+ca_energy_electrical_ext_15min      (none)      review — 15-min resolution, unbounded
+ca_energy_electrical_ext_hourly     (none)
+ca_environment_15min                2y
+ca_environment_hourly               5y
+analytics.energy_consumption_1min   180d        7d
+analytics.energy_consumption_5min   2y                   (empty for this fleet)
+analytics.energy_consumption_15min  2y          7d
+analytics.energy_consumption_hourly 5y
+analytics.energy_consumption_daily  (none)
+analytics.demand_intervals          (none)      7d chunk  UNBOUNDED GROWTH RISK: 15-min ×
+                                                          (per-asset PRIMARY_METER + per-site)
+telemetry.environment_daily         (none)
+generic_telemetry_15m / _1h         (none)
+
+Recovery-cliff relationships:
+  max_auto_recovery(child) = MIN over the child's dependency path of
+    { every upstream table retention, every native-CAgg start_offset }.
+  For the energy-consumption customer tiers, that MIN is:
+    raw_messages 48h  <  ca_energy_1min start_offset 2d  <  everything else.
+  ⇒ Today, NOTHING in the energy analytical path can self-heal an outage
+    longer than 48 hours, regardless of any watermark work, because the raw
+    payloads are physically dropped. This is the number to decide on first.
+
+Purpose classes (currently not distinguished, should be):
+  - operational-recovery retention: raw_messages, normalized_points,
+    energy_measurements — only needs to exceed (max plausible outage +
+    detection lag + catch-up drain time). 48h is thin; 7–14d would be
+    defensible. 90d on normalized/energy is already generous.
+  - customer-analytics history: energy_consumption_15min/hourly/daily,
+    demand_intervals — years; demand_intervals needs an EXPLICIT policy.
+  - audit/forensic: raw_message_failures 30d — fine.
+  - source-of-truth: normalized_points is the lowest re-derivable layer above
+    raw; its retention doubles as the deepest reprocessing floor.
+
+===============================================================================
+J. CURRENT COMPRESSION MATRIX  [VR]
+===============================================================================
+
+Table / CAgg                        compress_after   chunk   policy sched
+----------------------------------- --------------   -----   -----------
+telemetry.raw_messages              1d               1d      12h
+telemetry.raw_message_failures      7d               1d      12h
+telemetry.normalized_points         1d  <-- FLAG     7d      12h
+telemetry.energy_measurements       7d               1d      1d
+telemetry.environment_measurements  7d               7d      1d
+ca_energy_1min / 5min / 15min       7d               -       12h
+ca_energy_hourly                    30d
+ca_energy_daily                     90d
+ca_energy_phase_power_1min/5min/15min 7d
+ca_energy_phase_power_hourly        30d
+ca_energy_phase_power_daily         90d
+ca_energy_electrical_ext_15min      7d
+ca_energy_electrical_ext_hourly     30d
+analytics.energy_consumption_1min   7d               7d      12h
+analytics.energy_consumption_5min   14d
+analytics.energy_consumption_15min  7d
+analytics.energy_consumption_hourly 30d
+analytics.energy_consumption_daily  90d
+analytics.demand_intervals          7d               -       1d
+telemetry.environment_daily         90d
+
+Findings:
+  - normalized_points compress_after = 1 day: this table is (a) upsert-updated
+    by run_normalization_job's catch-up path (ON CONFLICT DO UPDATE), (b) read
+    directly by demand finalisation, (c) the reprocessing floor. Compressing
+    it at 1 day means routine catch-up and any demand backfill older than ~1
+    day fights decompression. Recommend aligning to the operational-recovery
+    window (7d min). [UNK] whether current staging backfills actually touch
+    compressed chunks — §W. (Chunk interval is 7d, so in practice a chunk
+    compresses ~1d after its 7-day span closes; the effective exposure is
+    smaller than "1 day" suggests but still tighter than energy_measurements.)
+  - energy_measurements compress 7d vs retention 90d: any backfill/correction
+    older than 7d decompresses a chunk. Acceptable if rare; note it as a cost.
+  - CAgg compression ages (7d–90d) all exceed their own refresh start_offsets
+    (2d–30d) ⇒ refresh never fights compression. OK.
+  - General principle to adopt and document:
+      compress_after >= MAX( refresh/start_offset window,
+                             operational-recovery window,
+                             routine-backfill window ).
+
+===============================================================================
+K. CURRENT METRIC DUPLICATION / REDUNDANCY  [VS prior Phase 0 + VR this pass]
+===============================================================================
+
+  1. Energy consumption: native CAgg family vs analytics.energy_consumption_*
+     — NOT redundant (different semantics, §H). Canonical customer metric =
+     analytics.energy_consumption_* / get_canonical_energy_read.
+  2. energy_consumption_5min: present, wired, but structurally empty for this
+     fleet [VS]. Keep the plumbing (future 300s devices) but treat as
+     no-traffic in any test/observability assertion.
+  3. Demand: analytics.demand_state (provisional, mutable) vs
+     analytics.demand_intervals (finalised, write-once) — a deliberate
+     provisional/final split, not duplication. Plus [VS prior audit] several
+     unconsumed demand views (v_energy_demand_15min, v_energy_peak_demand_*,
+     v_asset_peak_demand_*) — dead-ish, not in scope, do not remove here.
+  4. 15-min energy exists as BOTH a native CAgg (ca_energy_15min) AND a
+     persisted analytical table (energy_consumption_15min) built from
+     1min∪5min. Different lineages, different quality handling. The persisted
+     one is the customer path. [VS, known-issues §9] the persisted
+     15min/hourly/daily DDL is not canonicalised (migrations only).
+  5. Connectivity / resolution-routing duplication flagged in Phase 0 — not
+     part of the self-healing pipeline; carried forward as-is.
+
+None of these should be removed as part of Phase 2. Canonicalisation (one DDL
+home for the persisted rollups; schedule-drift assertions extended to the
+analytics jobs) is the only cleanup that belongs here.
+
+===============================================================================
+L. DATA QUALITY / BLANK-RISK ANALYSIS
+===============================================================================
+
+Distinctions the platform must preserve (partly present today):
+  - genuinely no source data ....... pipeline ran, source range empty
+    (pipeline_state last_status = NO_SOURCE_DATA at telemetry tier;
+     demand quality_status = NO_DATA).
+  - source delayed / not yet processed .. source rows exist beyond the child
+    watermark; TODAY invisible at the analytics tier (no watermark).
+  - source invalid ................. normalized_points.quality_code
+    (MISSING/INVALID_NUMERIC/GOOD); energy register classifier
+    (RESET/ROLLOVER/GAP/IMPLAUSIBLE_DELTA/...); demand
+    INVALID_SOURCE / INSUFFICIENT_SOURCE_RESOLUTION.
+  - downstream processing failed ..... pipeline_state last_status=FAILED
+    (telemetry tier only); NOTHING at analytics tier.
+  - downstream stale ................ NOT represented anywhere — there is no
+    "this row was computed at T, source has advanced since" signal.
+  - partial coverage / incomplete finalised interval ..
+    demand_intervals.coverage_percent + quality_status INCOMPLETE;
+    energy_consumption_* per-interval valid/invalid/gap counters.
+
+Blank-risk conclusions:
+  - get_canonical_energy_read maps import_quality_status != GOOD → NULL
+    [VS prior audit] — intentional quality signalling, but a Grafana line
+    chart cannot distinguish "no row" from "row present, low quality" unless
+    it also plots quality/coverage, which no panel does. UX caveat, not a
+    Phase 2 fix.
+  - The demand_intervals write-once bug is a QUALITY bug: a NO_DATA row is
+    indistinguishable from a legitimately-empty interval, and it is permanent.
+    The fix (status-guarded DO UPDATE) restores the distinction.
+  - Do NOT paper over gaps with zeros. The correct fix is: (a) the child
+    watermark makes "not yet processed" a first-class, queryable state;
+    (b) reconciliation removes stale/held-back rows; (c) the semantic layer
+    keeps returning NULL (not 0) for genuinely-absent/low-quality intervals,
+    with quality columns available for panels that want to shade them.
+  - Recommend one new lightweight signal: a per-pipeline
+    "processed_through" exposed in a read-only view so a panel / alert can
+    show "data current as of HH:MM" and distinguish freshness lag from real
+    absence.
+
+===============================================================================
+M. CANDIDATE SELF-HEALING ARCHITECTURES
+===============================================================================
+
+Shared requirement (the authoritative principle): the parent may only ever
+publish parent_available_through; each child owns child_processed_through; a
+parent value is NEVER assigned into a child's processed watermark. Outstanding
+work = (child_processed_through, LEAST(parent_available_through, safe_bound)].
+Each run processes a BOUNDED slice of that interval and advances
+child_processed_through only for the slice actually committed.
+
+OPTION A — Parent directly invokes child (synchronous chain)
+  Mechanism: run_normalization_job CALLs the energy routing loader, which CALLs
+    the 1min refresh, etc., in one call tree.
+  Reliability: LOW. A slow/failing/locked child now stalls the parent —
+    re-creates the exact cascade we are trying to remove, and widens the
+    blast radius (one failure stops the whole chain).
+  Failure/retry: parent and child share a transaction and a retry budget;
+    partial completion is all-or-nothing across the chain.
+  Transaction boundaries: one giant transaction per tick, or messy nested
+    subtransactions.
+  Coupling: maximal. Deployment: any child signature change breaks the parent.
+  TimescaleDB fit: UDA jobs are not designed to invoke each other; no clean
+    isolation. Concurrency: chain cannot overlap itself; a long catch-up
+    blocks all fresh data.
+  Crash/restart recovery: whole chain rolls back; zero durable progress.
+  VERDICT: reject.
+
+OPTION B — Durable work/range events (a queue / range table)
+  Mechanism: parent, on advancing, INSERTs a row like
+    (pipeline, range_start, range_end, status) into analytics.backfill_queue;
+    child consumes rows FOR UPDATE SKIP LOCKED, processes, marks done.
+  Reliability: HIGH if built carefully.
+  Failure/retry: per-row, like job 1077 — good.
+  Duplicate events: needs dedup (unique on range, or merge-on-insert).
+  Missed events: if the parent crashes between advancing and enqueuing, a
+    range is silently lost unless a reconciliation sweep also exists — so you
+    end up needing Option C's watermark anyway.
+  Ordering: must process ranges in order for cascade tiers, or track
+    dependencies — extra logic.
+  Operational complexity: a new schema surface, its own retention/vacuum,
+    monitoring, and back-pressure semantics.
+  DB overhead: an extra write per parent advance per child (x7), plus queue
+    bloat management.
+  TimescaleDB fit: fine (plain table).
+  Precedent: job 1077's per-ROW table — but that unit of work is naturally
+    per-item (a failed message). Aggregation work is naturally a contiguous
+    time range, for which a moving watermark is the simpler exact fit.
+  VERDICT: reject as the primary mechanism — it is more moving parts than the
+    problem needs and still requires a watermark/reconciliation backstop. Keep
+    in reserve only for a tier that is simultaneously expensive, non-idempotent
+    and hole-prone (none currently qualify).
+
+OPTION C — Child dependency watermark (pure)
+  Mechanism: each child stores child_processed_through in a pipeline_state-shaped
+    row. Each run: read child_processed_through; read parent_available_through
+    (= the parent pipeline's own watermark, NOT wall clock); v_to =
+    LEAST(parent_available_through, ...); v_from = child_processed_through -
+    small_overlap; cap forward progress at v_from + max_catchup_window
+    (migration-205 pattern); process [v_from, v_to_capped); on success advance
+    child_processed_through to v_to_capped in the same transaction.
+  Reliability: HIGH. Durable, survives any outage length up to source
+    retention, resumes exactly where it left off.
+  Failure/retry: run fails ⇒ transaction (incl. the watermark advance) rolls
+    back ⇒ same slice retried next tick. No false advance.
+  Transaction boundaries: one bounded slice per run (or an inner COMMIT per
+    slice if a single run drains several, à la job 1077).
+  Coupling: minimal — child reads parent's published watermark value only.
+  DB overhead: steady state identical to today (one small window per run).
+  TimescaleDB fit: perfect — pure SQL, reuses pipeline_state.
+  Duplicate/missed events: N/A — there are no events; the watermark IS the
+    truth. A parent advancing while the child is down just means a bigger
+    outstanding interval, drained over multiple bounded runs.
+  Crash/DB restart: watermark is durable table state; recovers automatically.
+  GAP: a single max() watermark cannot represent an internal hole
+    (09:00 OK, 10:00 FAILED, 11:00 OK). With strict "advance only the
+    contiguous committed prefix" semantics this is safe (the watermark simply
+    stops at 10:00 and 11:00's success is re-done later) — but only if each
+    run processes a contiguous slice from the watermark forward and never
+    "skips ahead". A run that processes newest-first, or a partial failure
+    inside a slice, can still leave a hole below the watermark.
+  VERDICT: strong core; needs a small backstop for the hole case.
+
+OPTION D — Hybrid: child watermark + bounded trailing reconciliation
+            (+ optional NOTIFY early-wake)   <<< RECOMMENDED
+  Mechanism: Option C as the steady-state driver, PLUS a low-frequency,
+    read-mostly reconciliation pass per tier that re-derives a bounded
+    trailing window (e.g. "last 24h" for the minute tiers, "last 8d" for
+    daily) straight from source and re-UPSERTs it. Because every child writer
+    is idempotent (energy_consumption_* already DO UPDATE; demand_intervals
+    becomes status-guarded DO UPDATE), re-processing a trailing window has no
+    side effects beyond correcting whatever was wrong. The reconciliation
+    window size is the explicit bound on "how large a hole can hide" — a hole
+    older than the window triggers an alert rather than silent correction.
+  Optional: parent emits pg_notify('pipeline_advanced', child) after advancing
+    its watermark; a listening child wakes immediately instead of waiting for
+    its next tick. Pure latency optimisation; if the NOTIFY is lost, the next
+    scheduled tick still does the work. NOTIFY is NEVER consulted for
+    correctness.
+  Reliability: HIGH + defence in depth. The watermark handles outages of any
+    length; reconciliation handles checkpoint bugs, partial-slice holes, and
+    late-arriving source data that landed behind an already-advanced window.
+  Cost: reconciliation is a bounded periodic scan (cheap, tunable, off the hot
+    path). No new schema beyond the watermark rows (+ optionally a tiny
+    reconciliation-run log for observability).
+  TimescaleDB fit: perfect. Operational complexity: low — one more scheduled
+    job pattern, same shape as everything else.
+  VERDICT: recommended.
+
+===============================================================================
+N. RECOMMENDED ARCHITECTURE
+===============================================================================
+
+Adopt Option D. Concretely, and reusing only mechanisms already in the
+codebase:
+
+1. WATERMARK STORE. Reuse the telemetry.pipeline_state SHAPE for the analytics
+   tier. Decision to make explicitly (do not assume): either
+   (a) add rows to telemetry.pipeline_state (its own header comment invites
+       "future pipelines"; simplest; one cross-schema read from analytics
+       procs), or
+   (b) create analytics.pipeline_state with the identical column contract if
+       schema ownership is considered load-bearing.
+   Recommendation: (a), unless a reviewer identifies an analytics-schema
+   isolation rule. Add one row per analytics pipeline:
+     energy_consumption_1min, energy_consumption_5min, energy_consumption_15min,
+     energy_consumption_hourly, energy_consumption_daily, demand_intervals,
+     environment_daily.
+   The single last_received_at column is repurposed as
+   child_processed_through. parent_available_through is NOT stored on the
+   child — it is read live from the parent pipeline's own row
+   (or, for tiers whose parent is a native CAgg, from
+   _timescaledb_catalog.continuous_aggs_watermark). This keeps the two values
+   structurally distinct and makes it impossible to accidentally persist a
+   parent value as a child's processed mark.
+
+2. WINDOW DERIVATION. In each analytics job wrapper replace
+     v_to   := clock_timestamp();  v_from := v_to - v_lookback;
+   with
+     v_parent_through := <parent watermark / CAgg watermark for this tier>;
+     v_to   := LEAST(date_bin(<res>, clock_timestamp()), v_parent_through);
+     v_from := GREATEST(v_checkpoint - v_overlap,
+                        v_to - v_max_catchup_window);
+     ... process [v_from, v_to) ...
+     -- on success, in the same txn:
+     v_checkpoint := v_to;
+   v_max_catchup_window is a NEW config key, separate from the existing
+   lookback/overlap (exactly as migration 205 kept p_max_window separate from
+   p_overlap). Steady state: v_checkpoint is at "now", so [v_from, v_to) is
+   one tick wide — identical cost to today. After an outage: the interval is
+   drained over ceil(outage / v_max_catchup_window) bounded runs.
+
+3. CASCADE TIERS derive v_parent_through from their IMMEDIATE parent's
+   checkpoint, never wall clock:
+     energy_consumption_15min.v_to =
+        LEAST(now_binned, checkpoint(energy_consumption_1min),
+                          checkpoint(energy_consumption_5min))
+     energy_consumption_hourly.v_to = LEAST(now_binned, checkpoint(15min))
+     energy_consumption_daily.v_to  = LEAST(now_binned, checkpoint(15min))
+   This closes "parent catches up, child stays stale" — a tier can never claim
+   to have processed a range its own input has not reached.
+
+4. demand_intervals FINALISATION becomes:
+     INSERT ... ON CONFLICT (<the two partial unique keys>) DO UPDATE
+       SET <all computed columns>, finalized_at = clock_timestamp()
+       WHERE demand_intervals.quality_status <> 'VALID';
+   i.e. a previously-uncertain finalised row (NO_DATA / INCOMPLETE /
+   INVALID_SOURCE / INSUFFICIENT_SOURCE_RESOLUTION) is reconsidered on every
+   pass; a VALID row is never overwritten. Same logic the manual incident
+   repair used, made automatic and bounded inside the job's normal run. Plus a
+   demand child watermark so the reconsideration window is watermark-bounded,
+   not the fixed 3h.
+
+5. TELEMETRY-TIER PARITY (do this FIRST — it is the smallest, safest, and
+   closes the "incident recurs one hop down" gap): add the migration-205
+   p_max_window parameter to telemetry.load_energy_measurements_incremental
+   and telemetry.load_environment_measurements_incremental. NULL default =
+   byte-for-byte current behaviour; run_energy_routing_job /
+   run_environment_routing_job keep passing NULL. This gives an operator the
+   same bounded manual catch-up tool that saved job 1000, for jobs 1001/1012.
+
+6. BOUNDED RECONCILIATION. One scheduled pass per tier (or one pass iterating
+   all tiers), low frequency (e.g. every 1h for minute tiers, every 6h for
+   daily), that recomputes a bounded trailing window straight from the tier's
+   source and re-UPSERTs. Emits a metric/log line; raises visibility (not an
+   exception) if it finds and corrects anything, and alerts if it finds a
+   discrepancy older than its own window.
+
+7. JOB HARDENING. On every analytics job: set max_runtime to a real value
+   (5m for the 1-minute tiers, 10m for demand/daily), set max_retries to a
+   finite value (3), keep retry_period 5m. Add a check_schema/check_name
+   config validator (TimescaleDB hook, currently unused) that rejects a
+   malformed v_max_catchup_window / lookback at alter_job time.
+
+8. NOTIFY (optional, later phase). Parent SELECTs pg_notify after its
+   in-transaction watermark advance; child LISTENs and wakes early. Removes
+   steady-state latency (up to one tick) without touching correctness.
+
+What is REUSED UNCHANGED: telemetry.pipeline_state shape; migration 205's
+p_max_window / LEAST(...) pattern; job 1077's per-candidate-COMMIT +
+retention-cutoff pattern (as the model for reconciliation bounding);
+analytics.refresh_energy_consumption_*() / analytics.calculate_demand_window()
+/ telemetry.refresh_environment_daily() calculation bodies — none of the maths
+changes, only window derivation and the demand ON CONFLICT clause.
+
+What is NOT introduced: no message broker, no external queue, no
+backfill_queue table, no new scheduler, no new service.
+
+===============================================================================
+O. CANONICAL PROCESSING / WATERMARK SEMANTICS
+===============================================================================
+
+Definitions (per analytical pipeline P with immediate source S):
+
+  available_through(S)  = the point up to which S's own processing has
+                          durably succeeded. For a telemetry pipeline: its
+                          pipeline_state.last_received_at. For a native CAgg:
+                          its continuous_aggs_watermark. For a persisted
+                          analytical tier: that tier's own processed_through.
+  processed_through(P)  = the point up to which P has durably incorporated S,
+                          stored in P's own watermark row. Initialised to a
+                          floor (e.g. now() - lookback) on first run.
+
+  outstanding(P) = ( processed_through(P),
+                     LEAST( available_through(S1..Sn), now_binned ) ]
+
+  Each run:
+    slice_end   = MIN( upper bound of outstanding(P),
+                       processed_through(P) + max_catchup_window )
+    slice_start = processed_through(P) - overlap
+    process [slice_start, slice_end)         -- contiguous, oldest-first
+    IF success: processed_through(P) := slice_end     -- same transaction
+    ELSE:       roll back everything, including the watermark advance
+
+Rules:
+  R1. A parent value is read, never written, by the child. processed_through is
+      written only by that pipeline's own successful run.
+  R2. Advance is monotonic and contiguous from the current watermark forward.
+      A run never advances past a sub-range it did not commit. No "process
+      newest first then set max()".
+  R3. The advance statement is the last write in the slice's transaction.
+  R4. overlap covers boundary races and just-closed buckets; max_catchup_window
+      bounds per-run cost; lookback (if retained at all) becomes just the
+      first-run floor.
+
+HOLE HANDLING — is a bare watermark enough, or is explicit range tracking
+required? Recommendation: watermark + bounded trailing reconciliation, NOT a
+per-range completion table, because:
+  - every child writer is idempotent (or made so), so re-running a trailing
+    window is free of side effects;
+  - contiguous oldest-first advance (R2) means a failed slice simply halts the
+    watermark — later successes are re-done, not skipped, so no hole forms
+    below the watermark in the first place;
+  - the reconciliation window is an explicit, per-tier bound on residual risk
+    (a hole can only hide if it is BOTH below the watermark AND older than the
+    reconciliation window — and that condition is alertable).
+  A per-range table (analytics.*_processed_ranges) is only justified for a tier
+  that is expensive AND non-idempotent AND hole-prone simultaneously. None of
+  the eight tiers meet all three today; revisit if one ever does.
+
+===============================================================================
+P. JOB SCHEDULING / FREQUENCY RECOMMENDATION
+===============================================================================
+
+A. Upstream watermark jobs (run_normalization_job, run_energy_routing_job,
+   run_environment_routing_job): keep continuous @1m, max_runtime 5m,
+   retries 3. ADD p_max_window to the energy + environment loaders (parity
+   with normalization). No cadence change.
+
+B. Domain routing jobs = the same three jobs as A. No separate action.
+
+C. Native CAggs: keep TimescaleDB-managed refresh at current cadence. Do NOT
+   widen start_offsets by default — the raw_messages 48h retention already
+   caps recoverable outage below the 2d minimum start_offset. IF raw retention
+   is raised (see R), revisit ca_energy_1min/15min start_offset to match.
+   Keep as a documented manual step: refresh_continuous_aggregate() for any
+   recovery beyond start_offset.
+
+D. Persisted analytical rollups (energy_consumption_1min/5min/15min/hourly/
+   daily): keep current cadence (1m / 1m / 5m / 15m / 1h — each well inside
+   its resolution). Change ONLY window derivation (watermark, §N/§O). Set
+   max_runtime (5m for 1m/5m/15m tiers, 10m for hourly/daily), retries 3.
+   Add per-tier max_catchup_window config (start it equal to the current
+   lookback, so behaviour is unchanged until an outage).
+
+E. Demand finalisation (run_demand_calculation_job): keep @1m. Add demand
+   watermark; status-guarded DO UPDATE; max_runtime 10m; retries 3. The 3h
+   lookback becomes the first-run floor only.
+
+F. Environment daily (run_environment_daily_job): keep @1h. Same treatment as
+   D, AFTER confirming its source chain (§U phase 5). Because ca_environment_*
+   are materialized_only=FALSE, gap risk is lower, but the watermark still
+   removes the fixed-8d ceiling.
+
+G. Failure recovery (run_failed_message_recovery_job): NO CHANGE to mechanism.
+   Reconcile the canonical registration to limit=1000 to match staging [D].
+   Consider raising cadence from 1h only if backlog-drain latency is a concern
+   (out of scope here).
+
+New reconciliation jobs (from §N.6): one @1h covering the minute/demand tiers
+(trailing 24h), one @6h covering hourly/daily/environment-daily (trailing
+8–14d). max_runtime 10m, retries 1, read-mostly.
+
+===============================================================================
+Q. CRASH / STUCK JOB RECOVERY RECOMMENDATION
+===============================================================================
+
+Use what TimescaleDB 2.29.2 already gives, add the minimum on top:
+
+  1. TERMINATION: give every analytics job a real max_runtime (§P). That alone
+     converts "unbounded run holds locks forever" into "run is cancelled,
+     rolled back, retried" — and with the §O watermark semantics a cancel
+     loses at most one bounded slice.
+
+  2. FALSE-ADVANCE PREVENTION: enforce R2/R3 (§O) — watermark advance is the
+     last write in the slice transaction, contiguous from current position.
+     Add a regression test per pipeline that kills a run mid-slice and asserts
+     the watermark did not move (the pattern already used for job 1077's
+     per-candidate commit test).
+
+  3. DETECTION (all from existing state, zero new tables):
+       - repeated failure: _timescaledb_internal.bgw_job_stat.consecutive_failures
+       - crash loop: bgw_job_stat.consecutive_crashes / total_crashes
+       - stuck RUNNING: pipeline_state.last_status='RUNNING' AND
+         age(last_started_at) > 3 * max_runtime
+       - watermark not advancing: age(processed_through) beyond SLA while the
+         parent watermark IS advancing
+       - per-run detail: timescaledb_information.job_history / job_errors
+
+  4. RETRY/BACKOFF: finite max_retries (3) + retry_period 5m on analytics jobs,
+     so a persistently failing job stops hammering and surfaces via
+     consecutive_failures instead of retrying forever silently (current
+     max_retries = -1).
+
+  5. CONFIG SAFETY: populate check_schema/check_name on each job with a small
+     validator function so a bad alter_job (negative/zero window, absurd
+     catch-up) is rejected at configuration time, not discovered at 02:00.
+
+  6. RECONCILIATION (§N.6) is itself the recovery mechanism for any watermark
+     that DID get corrupted by a bug outside these guarantees: it re-derives a
+     bounded trailing window from source regardless of watermark state.
+
+Do NOT build a bespoke "watchdog that kills RUNNING jobs" — max_runtime is
+that watchdog. The only EMS-side addition is the stuck-RUNNING ALERT (a job
+worker killed between the RUNNING and terminal pipeline_state writes leaves a
+stale RUNNING row; alert on it, and have each proc's normal start path
+overwrite a stale RUNNING for its own pipeline).
+
+===============================================================================
+R. RETENTION RECOMMENDATIONS
+===============================================================================
+
+Decide these PURPOSEFULLY; each line has a rationale, not "keep longer".
+
+  1. telemetry.raw_messages 48h → raise to 7d (or an explicit operational
+     number). RATIONALE: this is the single cap on automatic recovery for the
+     ENTIRE analytical pipeline. 48h did not cover the ~15h incident with much
+     margin; a longer undetected stall over a weekend would exceed it and make
+     recovery physically impossible. 7d covers "Friday-evening stall noticed
+     Monday". COST: highest-volume table — quantify the storage delta on
+     staging before committing (§W). This is the highest-leverage retention
+     change in the whole exercise.
+
+  2. telemetry.normalized_points 90d, telemetry.energy_measurements 90d:
+     KEEP. Already far exceed any plausible outage + drain time. They are the
+     reprocessing floor above raw.
+
+  3. analytics.demand_intervals (none) → set an explicit policy, e.g. 5y
+     (customer-analytics history) or 2y if peak-demand history need is
+     shorter. RATIONALE: 15-min resolution × (every PRIMARY_METER asset +
+     every site) with no retention = unbounded growth on a compressed but
+     ever-larger hypertable. [UNK] current row count / growth rate — §W.
+
+  4. ca_energy_electrical_ext_15min / _hourly (none): set retention consistent
+     with their sibling CAggs (2y / 5y) unless a consumer needs otherwise.
+     [VS] not directly dashboard-consumed; low urgency but tidy.
+
+  5. analytics.energy_consumption_daily (none), ca_energy_daily (none),
+     telemetry.environment_daily (none), phase_power_daily (none): daily
+     resolution, low cardinality — leaving unbounded is defensible; if a
+     policy is wanted for uniformity, 10y. Low priority.
+
+  6. Publish a RECOVERY-CEILING MATRIX in the platform manual:
+     for each customer-facing tier, max_auto_recovery = MIN(all upstream
+     retentions on its path, all native-CAgg start_offsets on its path),
+     so "how far back can this self-heal" and "past what point is data
+     physically gone" are answerable at a glance.
+
+  7. Classify retention by PURPOSE in the manual:
+     operational-recovery (raw_messages, normalized_points, energy_measurements)
+     vs customer-analytics-history (energy_consumption_*, demand_intervals)
+     vs audit (raw_message_failures) vs source-of-truth (normalized_points).
+
+===============================================================================
+S. COMPRESSION RECOMMENDATIONS
+===============================================================================
+
+  1. telemetry.normalized_points compress_after 1d → align to >= 7d (the
+     operational-recovery window). RATIONALE: it is upsert-updated by the
+     normalization catch-up path and read directly by demand finalisation;
+     compressing at 1d makes routine catch-up and demand backfill fight
+     decompression. [UNK] confirm on staging whether current backfills touch
+     compressed chunks (§W) — if they already do and it is fine, this drops in
+     priority.
+
+  2. telemetry.energy_measurements compress_after 7d: KEEP, but document that
+     any correction/backfill older than 7d incurs chunk decompression. With
+     the §N design, backfills of that age should be rare (bounded catch-up
+     drains within hours of an outage).
+
+  3. CAgg compression (7d–90d): KEEP. All ages exceed their refresh
+     start_offsets, so refresh never fights compression.
+
+  4. Adopt and document the rule:
+       compress_after(table) >= MAX( its refresh/start_offset window,
+                                     the operational-recovery window,
+                                     the routine-backfill window ).
+     Audit every hypertable against this rule once; today only
+     normalized_points violates it.
+
+  5. No table should be compressed MORE aggressively to "save space" without
+     checking this rule — the columnstore conversion cost on
+     decompress-for-write dwarfs the storage saving on a
+     frequently-reprocessed table.
+
+===============================================================================
+T. OBSERVABILITY + ALERTING MODEL
+===============================================================================
+
+METRICS — nearly all available from existing state; new state = only the
+per-analytics-pipeline watermark rows (+ optional reconciliation log).
+
+  Signal                        Source (read-only)
+  ----------------------------- ---------------------------------------------
+  source watermark              pipeline_state.last_received_at (telemetry);
+                                continuous_aggs_watermark (CAggs)
+  child watermark               new analytics pipeline_state rows
+  backlog duration              now() - child_processed_through
+  backlog rows                  count(source) between child & parent watermark
+  processing latency / runtime  job_stats.last_run_duration;
+                                bgw_job_stat.total_duration / total_runs
+  job failure count             bgw_job_stat.total_failures
+  consecutive failures          bgw_job_stat.consecutive_failures
+  crash count / loop            bgw_job_stat.total_crashes / consecutive_crashes
+  stuck duration                now() - pipeline_state.last_started_at
+                                where last_status='RUNNING'
+  oldest outstanding work       min(child_processed_through) across tiers
+  data freshness (per tier)     now() - child_processed_through
+  source-to-analytics latency   now() - min(child watermark of customer tiers)
+  CAgg refresh lag              now() - continuous_aggs_watermark
+  missing-bucket count          expected vs present rows in a trailing window
+  quality distribution          GROUP BY quality_code / quality_status on the
+                                persisted tables (columns already exist)
+
+Deliverable: a single read-only view, e.g. analytics.v_pipeline_health, one
+row per pipeline: name, child_through, parent_through, backlog_interval,
+last_status, consecutive_failures, last_run_duration, cagg_refresh_lag,
+stuck_seconds. Drives both a Grafana ops panel and the alerts below.
+
+ALERTING — proposed thresholds + rationale (implement later; values are
+starting points to tune against staging baselines):
+
+  Condition                                        Warn            Page
+  ----------------------------------------------- --------------- ---------------
+  job consecutive_failures                        >= 3            >= 10
+    (3 = past a finite retry budget; 10 ≈ 10 min of a 1-min job failing)
+  job stuck RUNNING (age/max_runtime)             > 2x            > 3x
+  child backlog (age / schedule_interval)         > 4 cycles      > 1h (1m/demand
+                                                                  tiers) /
+                                                                  > 26h (daily)
+  source watermark not advancing, ingest healthy  > 10 min        > 15 min
+    (this is the exact incident signature)
+  source→analytics freshness vs per-tier SLA      at SLA          2x SLA
+  CAgg refresh lag (/ refresh interval)           > 3x            > 6x
+  recovery runway: oldest_backlog vs
+    MIN(upstream retention on path)               > 25%           > 50%
+    (you are burning down the window in which recovery is still possible)
+  reconciliation found + corrected rows           any             hole older
+                                                                  than the
+                                                                  reconciliation
+                                                                  window
+
+Per-tier freshness SLA (proposed): energy_consumption_1min & demand <= 10 min;
+15min <= 30 min; hourly <= 90 min; daily <= 26 h; environment_daily <= 26 h.
+
+===============================================================================
+U. MIGRATION / IMPLEMENTATION PHASES  (design only; one migration per concern,
+   one PR each, one regression test each — the 201–206 discipline)
+===============================================================================
+
+Phase 0  Telemetry-tier parity (highest priority, lowest risk):
+         add p_max_window to telemetry.load_energy_measurements_incremental
+         and telemetry.load_environment_measurements_incremental. NULL default
+         = current behaviour; wrappers keep passing NULL. Closes the
+         "incident recurs at job 1001/1012" gap and gives an operator the
+         same manual catch-up tool that resolved job 1000.
+         Test: bounded-window drain of a synthetic backlog (mirror
+         scripts/test/assert_normalization_bounded_catchup_window.sql).
+
+Phase 1  Analytics watermark store + energy_consumption_1min/5min window
+         derivation (proposed migration 207). Decide pipeline_state schema
+         ownership here (§N.1). Wrapper: watermark-based v_from/v_to +
+         v_max_catchup_window config (seeded = current 30m lookback).
+
+Phase 2  energy_consumption_15min cascade watermark, sourced from the 1min &
+         5min child watermarks, not wall clock (proposed migration 208).
+
+Phase 3  energy_consumption_hourly + _daily watermarks, sourced from the
+         15min child watermark (proposed migration 209).
+
+Phase 4  demand_intervals: status-guarded ON CONFLICT DO UPDATE + demand
+         child watermark (proposed migration 210). Test: finalise a bucket
+         NO_DATA, provide source, assert next run upgrades it to VALID and
+         leaves an existing VALID row untouched.
+
+Phase 5  environment_daily watermark (proposed migration 211) — AFTER
+         disassembling refresh_environment_daily to confirm its source chain
+         and whether the env CAggs' materialized_only=FALSE changes anything.
+
+Phase 6  Job hardening: set max_runtime + finite max_retries on all 7
+         analytics jobs; add check_schema/check_name config validators.
+         (alter_job-only where possible; a migration where the registration
+         SQL is canonical.)
+
+Phase 7  Reconciliation job(s) + analytics.v_pipeline_health view + alert
+         rules / Grafana ops panel.
+
+Phase 8  (optional, later) pg_notify early-wake between parent and child.
+
+Independent track (any time, decided on its own merits):
+  - raise telemetry.raw_messages retention (R.1) after sizing;
+  - relax telemetry.normalized_points compression (S.1);
+  - set demand_intervals retention (R.3);
+  - canonicalise the persisted-rollup DDL + extend
+    assert_job_schedule_canonical to the analytics jobs (known-issues §9).
+
+===============================================================================
+V. RISKS AND TRADEOFFS
+===============================================================================
+
+  - Bounded catch-up = slower recovery (N small runs vs 1 big one). Tunable
+    via max_catchup_window; identical tradeoff migration 205 already accepted
+    for job 1000 (32 runs ≈ 96 min to drain 15h there).
+  - Reusing telemetry.pipeline_state from analytics procs crosses a schema
+    boundary. Mild; the alternative duplicates a table + its maintenance.
+  - Adding max_runtime to demand/analytics jobs: a run legitimately needing
+    more than max_runtime for a large backfill is cancelled mid-way — SAFE
+    only because of the §O invariant (advance only the committed contiguous
+    slice). If any proc later adds an inner COMMIT, each committed slice must
+    advance the watermark atomically with its own writes (the job-1077 rule).
+  - Widening CAgg start_offsets raises every-cycle refresh cost — only do it
+    where a real recovery need exceeds the current window AND raw retention
+    supports it.
+  - Raising raw_messages retention increases storage on the largest table —
+    size it on staging first.
+  - Reconciliation window sizing: too short lets a hole hide; too long wastes
+    scans. Per-tier tuning + the "hole older than window" alert as backstop.
+  - NOTIFY (Phase 8) is not durable; must remain a pure optimisation with the
+    scheduled tick as the guaranteed path. Risk only if someone later treats
+    it as the mechanism.
+  - Canonicalisation churn: moving the persisted-rollup job registration into
+    postgres/jobs/ touches deploy ordering — do it in isolation, verify
+    against a fresh-deploy test.
+
+===============================================================================
+W. REMAINING UNKNOWNS — read-only staging queries to run before implementing
+===============================================================================
+
+Run as ems_admin (or ems_readonly where sufficient) via the staging tunnel.
+All are read-only.
+
+ 1. Job config drift vs canonical:
+      SELECT proc_schema, proc_name, schedule_interval, max_runtime,
+             max_retries, retry_period, scheduled, config
+      FROM timescaledb_information.jobs
+      WHERE proc_schema IN ('analytics','telemetry')
+      ORDER BY proc_name;
+    Compare to §D. Confirms whether staging matches the canonical set and
+    whether run_failed_message_recovery_job.config = {"limit":1000} [D].
+
+ 2. Current watermarks & backlog:
+      SELECT * FROM telemetry.pipeline_state ORDER BY pipeline_name;
+      -- for each analytics tier, max(bucket_start) present vs its source's
+      -- max, to measure any CURRENT silent backlog.
+
+ 3. CAgg refresh watermarks vs now():
+      SELECT ca.user_view_name,
+             _timescaledb_functions.to_timestamp(w.watermark) AS through,
+             now() - _timescaledb_functions.to_timestamp(w.watermark) AS lag
+      FROM _timescaledb_catalog.continuous_agg ca
+      JOIN _timescaledb_catalog.continuous_aggs_watermark w
+        ON w.mat_hypertable_id = ca.mat_hypertable_id
+      ORDER BY 1;
+
+ 4. Job health / crash history:
+      SELECT j.proc_name, s.total_runs, s.total_successes, s.total_failures,
+             s.total_crashes, s.consecutive_failures, s.consecutive_crashes,
+             s.last_run_success, s.last_successful_finish, s.next_start
+      FROM _timescaledb_internal.bgw_job_stat s
+      JOIN _timescaledb_config.bgw_job j ON j.id = s.job_id
+      ORDER BY s.consecutive_failures DESC, j.proc_name;
+      SELECT * FROM timescaledb_information.job_errors
+      ORDER BY finish_time DESC LIMIT 100;
+
+ 5. Actual per-job runtime (sizing max_runtime):
+      SELECT job_id, last_run_duration, total_runs
+      FROM timescaledb_information.job_stats WHERE job_id >= 1000;
+      -- plus AVG(duration) from timescaledb_information.job_history per job.
+
+ 6. Compression exposure of reprocessing sources:
+      SELECT hypertable_name, range_start, range_end, is_compressed
+      FROM timescaledb_information.chunks
+      WHERE hypertable_schema='telemetry'
+        AND hypertable_name IN ('normalized_points','energy_measurements')
+      ORDER BY range_end DESC LIMIT 40;
+      -- would a 1–7 day backfill write into a compressed chunk today?
+
+ 7. Retention actuals vs canonical (§I):
+      SELECT j.config ->> 'drop_after' AS drop_after, h.hypertable_name
+      FROM timescaledb_information.jobs j
+      JOIN timescaledb_information.hypertables h
+        ON h.hypertable_name = (SELECT table_name FROM _timescaledb_catalog.hypertable
+                                WHERE id = (j.config ->> 'hypertable_id')::int)
+      WHERE j.proc_name = 'policy_retention' ORDER BY 2;
+      -- confirm raw_messages = 48h, normalized/energy = 90d on staging.
+
+ 8. demand_intervals size / growth (retention decision R.3):
+      SELECT count(*), min(interval_start), max(interval_start),
+             pg_size_pretty(pg_total_relation_size('analytics.demand_intervals'))
+      FROM analytics.demand_intervals;
+
+ 9. environment_daily source chain (Phase 5): read
+      \sf telemetry.refresh_environment_daily
+    and confirm whether it reads ca_environment_* or environment_measurements.
+
+10. Config-validation hooks:
+      SELECT proc_name, check_schema, check_name
+      FROM _timescaledb_config.bgw_job WHERE check_name IS NOT NULL;
+      -- expected: none (confirms §E.3).
+
+11. Any downstream/Grafana consumer of ca_energy_electrical_ext_*,
+    phase_power_*, generic_telemetry_* beyond the semantic views — reconcile
+    with the Phase 0 Grafana Consumption Audit rather than re-deriving.
+
+12. Stuck-RUNNING check (should normally be empty):
+      SELECT pipeline_name, last_status, last_started_at, last_completed_at
+      FROM telemetry.pipeline_state
+      WHERE last_status='RUNNING'
+        AND last_started_at < now() - interval '15 minutes';
+
+-------------------------------------------------------------------------------
+END — Phase 2 Foundation Investigation. Nothing in this document has been
+implemented. Await review of §N (recommended architecture), §O (watermark
+semantics), and §U (phase order) before any migration is written.
+-------------------------------------------------------------------------------

@@ -1,0 +1,183 @@
+EMS Analytics Platform — Phase 1D Implementation Report
+Grafana Energy Resolution-Routing — Daily Tier Extension
+
+Status: IMPLEMENTED, LOCALLY VALIDATED, COMMITTED, AND PUSHED TO
+origin/staging. NOT MANUALLY DEPLOYED (any deployment occurs only via the
+existing automatic CI/CD staging workflow). NO SSH ACCESS PERFORMED.
+
+Commit: 01e4c42d3d59ae5fc6c5ae686b97a2edddba5d2f
+Subject: fix: add daily tier to energy routing
+Branch: staging, pushed to origin/staging (4289b39..01e4c42; 0 ahead / 0 behind)
+
+===============================================================================
+1. SCOPE (as approved)
+===============================================================================
+
+Exactly: extend analytics.resolve_grafana_energy_routing_resolution with a
+fourth bracket (>90 days -> '1d'), preserving <=24h -> native, <=14d -> 15m,
+<=90d -> 1h unchanged. No other function, view, signature, grant, dashboard,
+or unrelated production object touched. This corrects a real scope
+clarification from the original Phase 1D framing — see "Phase 1D
+Investigation (STOP — Discrepancy Found).txt" and "Phase 1D Implementation
+Plan.txt" for the full discrepancy history (get_canonical_energy_read was
+found not to be orphaned; get_grafana_asset_energy_intervals already routes
+through it; the only concretely remaining gap was the router's missing
+daily branch).
+
+===============================================================================
+2. DISCREPANCY DISCOVERED AND CORRECTED DURING TEST-FIXTURE DESIGN
+===============================================================================
+
+While designing the contract test, direct inspection (pg_get_viewdef
+against the live local database, not assumption from a possibly-stale file)
+established that analytics.v_energy_reporting_hourly and analytics.v_
+energy_reporting_daily — what get_canonical_energy_read's 1h/1d branches
+actually query — are NOT reads of Phase 1B's persisted analytics.energy_
+consumption_hourly/daily tables. Both are live, query-time GROUP BY
+aggregations over analytics.v_energy_reporting_15min -> analytics.v_energy_
+semantic_rollup_15min -> analytics.v_energy_consumption_native (the native
+energy_consumption_1min/5min tables) — an older reporting-view lineage
+(postgres/ddl/147, predating Phase 1B) never repointed at the newer
+persisted tables. This explains Phase 1B's own finding that its persisted
+rollup chain has zero real consumers.
+
+Consequence: routing a >90-day range to '1d' does not reduce the native-data
+scan (the same rows are aggregated either way, just grouped coarser) — the
+real benefit is fewer, more compact result rows returned to the client for
+very long ranges, not a scan-cost reduction. This was corrected in the
+Implementation Plan document (Section 15) before writing the test, and the
+test fixture was designed accordingly: it seeds the NATIVE tier (analytics.
+energy_consumption_1min, via a real call to analytics.classify_energy_
+register_delta — Phase 1B's own discipline, not a faked calculation), since
+that is what the live view chain actually aggregates from; it does not seed
+the (uninvolved, for this call path) persisted hourly/daily tables. Also
+logged as a candidate for the later energy-consumption consolidation phase:
+repointing the reporting-view lineage at Phase 1B's persisted tables would
+be the change that actually delivers the scan-cost reduction originally
+assumed.
+
+No other discrepancy found. The migration content matches the approved
+plan exactly.
+
+===============================================================================
+3. IMPLEMENTATION — EXACT FILES CHANGED
+===============================================================================
+
+    New:      postgres/migrations/195_grafana_energy_routing_daily_tier.sql
+    Modified: postgres/restructure_manifest.csv (+1 row registering migration 195)
+    New:      scripts/test/assert_grafana_energy_routing_daily_tier.sql
+    New:      scripts/test/assert_grafana_energy_routing_daily_tier.sh
+    Modified: scripts/test/run_integration_environment.sh (+4 lines, one new
+              invocation, same style as the Phase 1A/1B/1C steps)
+
+No other file touched. Confirmed via git diff HEAD --stat: exactly these
+files, plus the pre-existing unrelated .gitignore modification and
+untracked Audit/ (neither part of this change).
+
+===============================================================================
+4. DATABASE OBJECT CHANGED
+===============================================================================
+
+analytics.resolve_grafana_energy_routing_resolution — CREATE OR REPLACE,
+same signature (TIMESTAMPTZ, TIMESTAMPTZ) -> TEXT, LANGUAGE SQL, IMMUTABLE.
+
+    Before: <=24h -> native, <=14d -> 15m, else -> 1h (unbounded)
+    After:  <=24h -> native, <=14d -> 15m, <=90d -> 1h, else -> 1d
+
+No grant change (function remains internal-helper-only, no direct
+grafana_reader/ems_app grant, exactly as before — REVOKE ALL FROM PUBLIC
+reasserted defensively, no compensating GRANT added). No change to
+analytics.get_grafana_asset_energy_intervals, analytics.get_grafana_assets_
+energy_intervals, or analytics.get_canonical_energy_read — all three
+already call/handle every tier correctly and needed no changes.
+
+===============================================================================
+5. TEST COVERAGE ADDED
+===============================================================================
+
+scripts/test/assert_grafana_energy_routing_daily_tier.sql — four scenarios:
+    1. Pure router assertions (no fixture — IMMUTABLE, no table dependency):
+       12h->native, 7d->15m, 30d->1h, exactly-90d->1h, 91d->1d.
+    2. Hourly regression guard: a 30-day range (<=90d) still returns exactly
+       one row with elapsed_minutes=60 and the correct kWh, through the
+       real, unmodified get_grafana_asset_energy_intervals -> get_
+       canonical_energy_read -> v_energy_reporting_hourly chain, seeded
+       from one real native-tier interval.
+    3. Daily end-to-end: a 91-day range (>90d) returns exactly one row with
+       elapsed_minutes=1440 and the correct kWh, through the same real
+       chain reaching v_energy_reporting_daily for the first time via
+       automatic routing.
+    4. Tenant isolation: the same 91-day query issued under an unrelated
+       organization's grafana_org_id returns zero rows.
+
+Fixture: one organization/site (Asia/Kolkata)/gateway, two devices (each
+with its own asset + PRIMARY_METER relationship, since one asset may have
+only one PRIMARY_METER device), one site-specific config.telemetry_capture_
+policies row fixed 2000 days before the test's reference instant (avoiding
+the platform-default policy's non-deterministic wall-clock effective_from),
+a second unrelated organization for the tenant-isolation control. All
+native rows are real classifier outputs (GOOD classification), not
+hand-asserted values.
+
+===============================================================================
+6. FULL INTEGRATION-SUITE RESULT
+===============================================================================
+
+scripts/test/run_integration_environment.sh — full clean disposable-database
+reset and re-run:
+
+    Exit code: 0
+    ERROR lines: none
+    Migration 195 applied cleanly (BEGIN/CREATE FUNCTION/COMMENT/.../COMMIT)
+    New step output: "Grafana energy resolution-routing contract assertions
+        passed." (all 4 scenarios + fixture sanity check passed)
+    Phase 1A connectivity, Phase 1B energy-consumption, and Phase 1C
+        job-schedule contracts: all unchanged, all still passing
+    Final banner: "Canonical integration-test database is ready."
+
+No fixture-bug iterations were required — passed on the first full run.
+
+===============================================================================
+7. GIT DIFF SUMMARY
+===============================================================================
+
+    postgres/restructure_manifest.csv                        | 1 +
+    scripts/test/assert_grafana_energy_routing_daily_tier.sh | 15 +++++++++++++++ (new, 100755)
+    scripts/test/run_integration_environment.sh              | 4 ++++
+    postgres/migrations/195_grafana_energy_routing_daily_tier.sql (new, untracked)
+    scripts/test/assert_grafana_energy_routing_daily_tier.sql     (new, untracked)
+
+.gitignore shows an unrelated pre-existing modification from earlier,
+unrelated SSH-access work; Audit/ is untracked as always. Neither is part
+of Phase 1D and neither will be staged/committed as part of it.
+
+Executable bit verified via git ls-files --stage:
+    100755 382e96312badba3d46248f214db1cc4c1f6c5f91 0  scripts/test/assert_grafana_energy_routing_daily_tier.sh
+
+===============================================================================
+8. CONFIRMATIONS
+===============================================================================
+
+- Grafana: untouched (no dashboard, datasource, or panel file modified;
+  asset-overview.json's existing panel call is unaffected).
+- Function signatures: unchanged for all three functions in the call chain.
+- Grants: unchanged.
+- Migrations: exactly one new migration added (195); no existing migration
+  file modified or replaced.
+- Phase 1A/1B/1C semantic objects and contracts: untouched; all three
+  contract tests re-ran and passed unchanged.
+- Unrelated production code: untouched.
+- Staging/production: no direct access performed. All verification was
+  against the local disposable Docker Compose test database only.
+
+===============================================================================
+9. COMMIT / PUSH STATUS
+===============================================================================
+
+Commit 01e4c42d3d59ae5fc6c5ae686b97a2edddba5d2f was created containing
+exactly the five approved files (362 insertions, 0 deletions), then pushed
+to origin/staging (4289b39..01e4c42). origin/staging now points at
+01e4c42d3d59ae5fc6c5ae686b97a2edddba5d2f; local staging is 0 ahead / 0
+behind. No manual deployment or SSH access to staging/production occurred
+as part of this push. Any deployment beyond this point occurs only via the
+repository's existing automatic CI/CD staging workflow.

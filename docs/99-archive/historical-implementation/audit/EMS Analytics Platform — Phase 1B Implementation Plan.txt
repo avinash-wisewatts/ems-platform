@@ -1,0 +1,132 @@
+EMS Analytics Platform — Phase 1B Implementation Plan
+
+Method: synthesis from the repository state already traced across this investigation (no new tool calls needed — this task is plan-only) and reconciliation against the four named source documents. Per instruction, current repository state governs where it differs from any older plan wording. No files modified.
+
+---
+
+1. Executive Summary
+
+Phase 1A proved a repeatable pattern: declare an already-correct object canonical, add a disposable-database behavioral contract test, migrate consumers only if they aren't already on it. Applying "architecture-driven, not generic cleanup" discipline, the next workstream the source documents themselves designate as highest-priority — restated verbatim in the Phase 1 Semantic Model ("This is the highest-priority semantic contract") — is Energy Consumption. Unlike connectivity, the canonical energy-consumption object (analytics.energy_consumption_{1min,5min,15min,hourly,daily}) is not yet consumed by anything (confirmed by its own repository test, test_reporting_contract_is_not_yet_exposed_to_consumers) — so Phase 1B cannot simply repeat "declare + test, no migration needed." This asymmetry is the central finding of this plan and the reason Phase 1B is scoped narrower than a full consolidation: prove the canonical calculation with a contract test; do not migrate any consumer yet. Consumer migration is deliberately deferred to a later phase, once resolution-routing (a separate, already-identified gap) is also addressed — exactly mirroring how the source documents sequenced this work.
+
+---
+
+2. Current State After Phase 1A
+
+analytics.get_grafana_asset_connectivity_context() is canonical for device-level telemetry connectivity, deployed and verified on staging (commit a8cce587). Two legacy connectivity objects (v_grafana_devices.telemetry_state, v_device_telemetry_availability/admin.list_accessible_device_telemetry_availability()) remain, untouched, with their consumers not yet migrated — correctly deferred, not this task's concern unless a genuine defect surfaces (none has). The known threshold-fallback inconsistency (hardcoded 180/900/1800 vs. 300/900/3600 defaults across the three connectivity functions, masked today because the seeded config row is 300/900/3600) remains explicitly unfixed, per this task's own instruction.
+
+No other Phase 1 workstream has been started. Energy consumption still has 5 implementations (semantic-reporting pipeline, Path A v_energy_consumption_15min, get_grafana_asset_energy_intervals()'s inline duplicate, the raw-register-snapshot naming-collision object, and the Analytics Explorer's naive delta) — unchanged since the Reconciliation document's findings.
+
+---
+
+3. Next Phase Objective
+
+Establish analytics.energy_consumption_{1min,5min} → {15min,hourly,daily} as the canonical, source-of-truth energy-consumption calculation, and prove its mathematical correctness with a disposable-database behavioral contract test — without migrating any consumer.
+
+Why this is next: (a) the Phase 1 Semantic Model names it the highest-priority contract explicitly; (b) the Reconciliation document's own implementation sequence places metric consolidation immediately after connectivity/operational items; (c) it is the single largest duplication finding in the entire Phase 0/1 investigation (5 implementations for one metric, versus connectivity's 3-4); (d) it directly serves this task's stated optimization criteria — canonical semantic ownership, removal of duplicated semantic logic — more than any other outstanding item; (e) the job-schedule-drift correction and the threshold-fallback inconsistency are both explicitly framed in this task as non-blocking, deferred items, not candidates for "next phase."
+
+---
+
+4. Semantic Model
+
+Already fully specified in the Phase 1 Semantic Model (§4) and re-verified in the Final Reconciliation (§12, reconciliation table). Restated only where it governs scope: energy consumption is a register delta, classified once at native resolution (1m or 5m, mutually exclusive by site capture policy) via analytics.classify_energy_register_delta(), rolled up additively at 15m (from native), then at hourly and daily (both from 15m only, never from each other or from raw registers), with site-local timezone correctness at hourly/daily. This is not being redefined here — Phase 1B's job is to prove this model against real fixture data, exactly as Phase 1A proved connectivity's state machine.
+
+---
+
+5. Current Consumers
+
+┌────────────────────────────────────────────────┬──────────────────────────────────────────────────────────────────────────────────────────────┬────────────────────────────────────────────────┐
+│                     Object                     │                                       Current consumer                                       │     Would Phase 1B (as scoped) affect it?      │
+├────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────────┤
+│ Semantic-reporting pipeline                    │ None (internal-only grants, self-documented as deliberately unexposed)                       │ No — a contract test does not change its       │
+│ (energy_consumption_*)                         │                                                                                              │ grants or exposure                             │
+├────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────────┤
+│ v_energy_consumption_15min (Path A)            │ Feeds v_site_energy_balance_daily; Grafana-granted, no confirmed dashboard consumer          │ No                                             │
+├────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────────┤
+│ get_grafana_asset_energy_intervals()           │ asset-overview.json "Total Energy vs previous period" — the only live dashboard consumer of  │ No — not touched in this phase                 │
+│                                                │ any consumption figure                                                                       │                                                │
+├────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────────┤
+│ Raw register-snapshot columns                  │ Multiple dashboards (not plotted as consumption)                                             │ No                                             │
+├────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────────┤
+│ Analytics Explorer's naive delta               │ analytics-explorer.json, energy-named points only                                            │ No                                             │
+└────────────────────────────────────────────────┴──────────────────────────────────────────────────────────────────────────────────────────────┴────────────────────────────────────────────────┘
+
+Explicit consequence: Phase 1B, as correctly scoped, changes zero consumer behavior. This is a deliberate, evidence-driven restriction, not an oversight.
+
+---
+
+6. Legacy / Duplicate Implementations
+
+Same four non-canonical implementations identified in the Reconciliation (§12/§13): Path A (DUPLICATE, consolidate later), get_grafana_asset_energy_intervals() (DUPLICATE, specialized motivation, consolidate later), raw register snapshot (SPECIALIZED — different metric, not a duplicate), Analytics Explorer's naive delta (DUPLICATE/INCORRECT, consolidate later). None are touched, migrated, or retired in Phase 1B. Per instruction, no retirement is proposed until every consumer is identified and migration is demonstrated safe — that demonstration itself requires consumer migration, which is out of scope here.
+
+---
+
+7. Proposed Changes
+
+Required: one new disposable-database contract test (scripts/test/assert_energy_consumption_semantic_contract.sql + .sh, following the exact Phase 1A convention), wired into run_integration_environment.sh. It should assert, using fixture data (no staging fixtures — local disposable DB only):
+- A native-resolution register delta computes the correct GOOD/GAP/RESET/ROLLOVER classification for representative scenarios (mirrors the already-existing classify_energy_register_delta unit coverage in assert_energy_register_semantics.sh, but exercised through the persisted table's refresh path, which is not currently covered end-to-end).
+- A 15-minute rollup correctly sums only valid native intervals and counts invalid/gap/reset/rollover intervals separately.
+- Hourly rolls up from 15-minute only; daily rolls up from 15-minute only (not hourly) — provable by constructing a case where hourly-then-daily and 15min-then-daily would disagree (a UTC-hour crossing a site-local midnight) and asserting the daily figure matches the 15-minute-derived expectation.
+- Site-local timezone correctness at the daily tier for a non-UTC site.
+
+Optional: none identified as clearly beneficial without also doing consumer migration (which is explicitly deferred).
+
+Must NOT be changed: any consumer object (v_energy_consumption_15min, get_grafana_asset_energy_intervals(), Analytics Explorer, any dashboard), any migration/DDL for the energy-consumption tables themselves (they are correct as-is), the job-schedule drift, the connectivity threshold-fallback inconsistency, demand/load-profile/energy-balance objects, ingestion/live-telemetry/Telegraf, CI workflow YAML (only the existing run_integration_environment.sh gains a new invocation line, same pattern as Phase 1A).
+
+---
+
+8. Files / Objects Expected to Change
+
+- New: scripts/test/assert_energy_consumption_semantic_contract.sql, scripts/test/assert_energy_consumption_semantic_contract.sh
+- Modified: scripts/test/run_integration_environment.sh (one new invocation line, identical pattern to Phase 1A)
+- No SQL object, migration, dashboard, application, or CI-workflow file changes
+
+---
+
+9. Files / Objects Explicitly Out of Scope
+
+analytics.v_energy_consumption_15min, analytics.get_grafana_asset_energy_intervals(), analytics.v_grafana_energy_samples/v_grafana_asset_electrical_samples, analytics-explorer.json and any other dashboard, analytics.classify_energy_register_delta() itself (already correct, already tested elsewhere), the demand engine, load profile, energy balance, connectivity objects (both canonical and legacy), Telegraf, live-telemetry, any migration file, CI workflow YAML files, .gitignore, Audit/.
+
+---
+
+10. Test Strategy
+
+Local disposable-DB behavioral contract test only (same mechanism as Phase 1A), run via scripts/test/run_integration_environment.sh locally before any commit. No application-level (app/tests) test is needed — energy consumption has no admin-portal-facing surface today. No Grafana/query validation applicable, since no consumer changes. CI validation: the new script runs automatically as part of the existing database-integration-tests job once committed — the executable-bit lesson from Phase 1A must be explicitly checked this time (git ls-tree on the new .sh file before committing, to avoid repeating the exact CI failure just diagnosed and fixed).
+
+---
+
+11. CI/CD Strategy
+
+Identical to Phase 1A: commit → push to staging → CI runs automatically (no workflow file changes needed) → if CI passes, deploy-staging.yml deploys (though since no application code changes, the deployed image will be functionally identical to what's already running — only the test-script addition is new). No new CI job, no new workflow trigger.
+
+---
+
+12. Staging Validation Strategy
+
+Read-only only, matching the Phase 1A pattern: confirm the deployed image tag matches the new commit SHA; confirm analytics.energy_consumption_{1min,5min,15min,hourly,daily} still exist with unchanged grants (still internal-only — this phase must not accidentally expose them); do not attempt behavioral verification against real staging data, since staging remains uncommissioned (0 assets/devices, confirmed as of the last Runtime Verification) — exactly the same limitation Phase 1A's staging verification hit, reported as NOT VERIFIED rather than fabricated.
+
+---
+
+13. Risks and Dependencies
+
+- Dependency: none blocking — this phase can proceed independently, since it changes only test coverage, not any consumer or production object.                                                    - Risk: low. The main risk is scope creep — a temptation to "also fix" Path A or getls() while writing the test, which must be resisted per this task's explicit
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents · shift+click to native sel
+17. Exact Implementation Sequence (for the next execution turn, not performed now)
+
+1. Write scripts/test/assert_energy_consumption_semantic_contract.sql (disposable fixtures: one device with a capture policy, native register readings producing a known-good delta, a gap scenario, a reset scenario, a rollup spanning a site-local-midnight-crossing UTC hour).
+2. Write scripts/test/assert_energy_consumption_semantic_contract.sh (identical wrapper pattern; explicitly chmod +x and verify via git ls-tree before committing this time).
+3. Wire the new script into scripts/test/run_integration_environment.sh.
+4. Run the full suite locally (clean reset) and confirm pass.
+5. Show diff/stat, confirm scope, commit only the three files.
+6. Await approval before push (matching the Phase 1A review gate).
+
+---
+
+DECISION
+
+Phase 1B should proceed: YES.
+
+What should be implemented in the next execution turn: exactly the three-file addition in §17 above — a disposable-database behavioral contract test proving analytics.energy_consumption_{1min,5min,15min,hourly,daily}'s register-delta classification, additive rollup chain (native→15m→hourly/daily, never hourly→daily), and site-timezone correctness at the daily tier — wired into the existing integration-test path, with no consumer migration, no SQL object changes, and no other Phase 1A/connectivity work reopened.

@@ -1,0 +1,247 @@
+EMS Analytics Platform — Staging Commissioning Investigation
+CORRECTED TOPOLOGY: Eniscope-as-gateway, onboard meters as devices
+
+Status: INVESTIGATION ONLY. No files modified. No staging mutation
+performed. All staging queries were read-only. Production was not
+accessed. This document corrects and supersedes the topology conclusion
+in the prior investigation ("Staging Commissioning Investigation.txt") —
+that document's evidence about the reference-data gap (device_models,
+device_profile_categories) remains valid and is reused below; only the
+"one gateway, three devices" conclusion was wrong and is replaced here.
+
+===============================================================================
+1. PROVEN TOPOLOGY FROM MQTT (empirical, not assumed)
+===============================================================================
+
+Inspected real, currently-arriving raw_messages payloads directly (not
+historical fixtures). Each Eniscope's MQTT message has exactly one
+top-level key, "rtdata", an ARRAY. telemetry.v_rtdata (postgres/ddl/
+122_telemetry_pipeline_performance_state.sql) already parses it this way
+via jsonb_array_elements — confirming the repository's own ingestion
+design already expects multiple entries per message, not one.
+
+Each rtdata array element carries: uid (the real, stable per-meter MQTT_UID,
+format 80:34:28:xx:xx:xx:xx:xx, matching admin.create_device's required
+regex exactly), C (a channel number), did (an internal Eniscope hardware
+slot index, not linearly related to either uid or C), ts, and ~55
+electrical measurement fields (A1-3, D1-3, E1-3, I1-3, P1-3, PF1-3, Q1-3,
+S1-3, U1-3, V1-3, RE*, REx*, AE*, Ex*, F, In — matching the already-seeded
+62-row profile_field_mapping for ENERGY_METER_ENISCOPE_V1). No model,
+type, or profile field exists anywhere in the payload — device-model/
+profile assignment is purely an EMS-side onboarding decision, never
+derivable from the wire data itself.
+
+This directly and empirically confirms your corrected topology: one
+Eniscope unit = one MQTT topic = one gateway = one message per cycle, and
+that single message's rtdata array enumerates that Eniscope's onboard
+energy meters, each independently addressable by its own uid — exactly
+the "one gateway with up to 8 onboard meters, each a separate DEVICE"
+architecture you described. The three existing gateway rows (Eniscope_1/
+2/3_Meenaxy_Unit2) are consistent with this and should NOT be deleted,
+merged, or re-modeled — my prior conclusion to the contrary was wrong and
+is withdrawn.
+
+===============================================================================
+2. PROVEN GATEWAY -> DEVICE MAPPING
+===============================================================================
+
+Queried DISTINCT (uid, channel) pairs per topic over the last 30 minutes
+of live traffic (stable across repeated messages within that window):
+
+Gateway 1 — Eniscope_1_Meenaxy_Unit2 (8 onboard meters observed):
+    80:34:28:16:22:fe:00:01   channel 2
+    80:34:28:16:22:fe:00:02   channel 1
+    80:34:28:16:22:fe:00:03   channel 0
+    80:34:28:16:22:fe:00:04   channel 0
+    80:34:28:16:22:fe:00:05   channel 0
+    80:34:28:16:22:fe:00:06   channel 0
+    80:34:28:16:22:fe:00:07   channel 0
+    80:34:28:16:22:fe:00:08   channel 0
+
+Gateway 2 — Eniscope_2_Meenaxy_Unit2 (8 onboard meters observed):
+    80:34:28:16:0a:20:00:01   channel 2
+    80:34:28:16:0a:20:00:02   channel 1
+    80:34:28:16:0a:20:00:03   channel 0
+    80:34:28:16:0a:20:00:04   channel 0
+    80:34:28:16:0a:20:00:05   channel 0
+    80:34:28:16:0a:20:00:06   channel 0
+    80:34:28:16:0a:20:00:07   channel 0
+    80:34:28:16:0a:20:00:08   channel 0
+
+Gateway 3 — Eniscope_3_Meenaxy_Unit2 (only 6 onboard meters observed —
+    reported as-is, per instruction not to assume 8):
+    80:34:28:15:7a:c6:00:01   channel 1
+    80:34:28:15:7a:c6:00:02   channel 2
+    80:34:28:15:7a:c6:00:03   channel 0
+    80:34:28:15:7a:c6:00:04   channel 0
+    80:34:28:15:7a:c6:00:05   channel 0
+    80:34:28:15:7a:c6:00:06   channel 0
+    (uid suffixes :00:07 and :00:08 do not appear in Eniscope_3's traffic
+    at all, in 30 minutes of live observation — reported as an observed
+    fact, not explained or assumed to mean anything further.)
+
+Note (factual, not explained further): channel numbering does not follow
+the uid suffix consistently across all three units — Eniscope_1/2 both
+show uid :00:01 -> channel 2 and :00:02 -> channel 1 (swapped), while
+Eniscope_3 shows :00:01 -> channel 1 and :00:02 -> channel 2 (matching).
+"did" (an internal Eniscope hardware slot index) also does not map
+linearly to either uid or channel. Neither did nor channel is required by
+admin.create_device — only the uid matters as the MQTT_UID identifier.
+
+The previously-known "one UID per Eniscope" (the three UIDs ending
+:00:01) are each just the FIRST onboard meter of their respective Eniscope
+— not an identifier for the gateway itself. This corrects an implicit
+assumption in the prior investigation.
+
+===============================================================================
+3. EXISTING DATABASE STATE (re-confirmed)
+===============================================================================
+
+metadata.gateways: exactly the three rows already known — Eniscope_1/2/3_
+Meenaxy_Unit2, under site "Unit 2" (UNIT_2) / MEENAXY_PHARMA, lifecycle
+REGISTERED, gateway_model_id = 99d83365-2fd9-4b3b-8617-f7f057703511
+("Best Energy" / "Eniscope 8 Hybrid") for all three. These are RETAINED
+per your correction — not touched.
+metadata.devices: 0 rows (unchanged).
+metadata.device_identifiers: 0 rows (unchanged) — none of the (up to) 22
+onboard-meter UIDs observed above are registered to any device anywhere.
+No relationship table (metadata.asset_devices) has any row referencing
+these gateways either, since no device exists yet to relate.
+No "admin.gateways" / "admin.devices" object exists (checked information_
+schema) — these are informal names for metadata.gateways/metadata.devices,
+not separate admin-schema tables.
+
+===============================================================================
+4. MISSING METADATA CAUSING THE EMPTY DROPDOWNS (unchanged from prior investigation, re-confirmed)
+===============================================================================
+
+metadata.device_models: 0 rows — root cause of the empty "Device Model"
+dropdown (admin.v_device_models, read from app/src/onboarding/repository.py,
+sources this table directly).
+config.device_profile_categories: 0 rows — root cause of ENERGY_METER_
+ENISCOPE_V1 showing with no compatible device category (admin.v_active_
+device_profiles joins through this table).
+Both are enforced as hard blockers inside admin.create_device's own body
+(read live, unchanged since the prior investigation):
+    devices model/category match check against metadata.device_models;
+    profile/category compatibility check against config.device_profile_categories.
+metadata.gateway_models is NOT a blocker for further work in this specific
+scenario (the three gateways already exist and already have a valid
+gateway_model_id assigned) — but it remains a genuine, separate repository
+seed gap (0 rows reproducible from any repo file) that would block
+creating any NEW gateway from scratch, noted for completeness, not
+relevant to commissioning devices under the three EXISTING gateways.
+
+===============================================================================
+5. EXACT REPOSITORY CHANGE REQUIRED (unchanged from prior investigation)
+===============================================================================
+
+A companion idempotent seed file alongside postgres/seeds/reference/
+28_01_eniscope_energy_profile.sql, populating:
+    metadata.device_models: one row, device_category_id resolved by name
+        ('Energy Meter', config.device_categories, id 34b8f2e4-b2f7-4072-
+        ab5a-3e4e531bc2be on staging) — NOT a hardcoded UUID, matching the
+        established pattern. Vendor/model string still needs your
+        confirmation (see §7) — real candidates observed on staging's own
+        (non-repo) gateway_models data: "Eniscope" (matching config.
+        device_profiles.manufacturer already seeded) paired with a
+        model name reflecting an 8-channel onboard-meter product.
+    config.device_profile_categories: one row linking ENERGY_METER_
+        ENISCOPE_V1's profile_id (resolved by profile_code, not hardcoded)
+        to the same 'Energy Meter' device_category_id.
+Not yet written. No repository file has been modified.
+
+===============================================================================
+6. STAGING DATA THAT CAN SAFELY BE REUSED
+===============================================================================
+
+Organization MEENAXY_PHARMA (unchanged). Site "Unit 2" / UNIT_2 under it
+(unchanged). All three existing gateways (Eniscope_1/2/3_Meenaxy_Unit2) —
+confirmed correct under the corrected topology, safe to build devices
+under, not to be touched/altered. gateway_model_id 99d83365 is already
+correctly assigned to all three and needs no change.
+
+===============================================================================
+7. AMBIGUITY REQUIRING YOUR DECISION
+===============================================================================
+
+    a. Exact vendor/model string for the new metadata.device_models seed
+       row (or rows — see b). No payload field or existing seed states
+       this explicitly; staging's own out-of-band gateway_models rows are
+       the only hint ("Eniscope 8 Hybrid" / "Best Energy" for the
+       gateway's own model — note this reads as a description of the
+       Eniscope UNIT itself, which supports up to 8 channels, so it may
+       actually belong on the DEVICE model, not just the gateway model,
+       or a distinct, correctly-named device model may be preferred).
+    b. Whether one single metadata.device_models row (generic "Eniscope
+       onboard energy meter", used by all up to 22 devices across the
+       three gateways) is correct, or whether the repository intends
+       distinct device models per channel type (e.g. the channel-2/
+       channel-1 "primary"-looking meters observed above versus the
+       channel-0 "secondary" ones) — nothing in the payload or existing
+       schema distinguishes these by model; this is a product/domain
+       question, not inferable from data.
+    c. Eniscope_3 shows only 6 onboard meters in 30 minutes of live
+       traffic versus 8 for the other two — whether this is expected
+       (physically fewer channels wired) or worth separately investigating
+       before commissioning proceeds; reported as observed fact only, not
+       resolved here.
+    d. Whether to commission all (up to) 22 observed devices in one pass,
+       or a smaller representative subset first for initial Phase 1A-1E
+       validation, deferring the rest.
+    e. The staging/production MQTT-credential-sharing question from the
+       prior investigation remains open and unverified (deliberately not
+       inspected, per the secrets-handling boundary).
+
+===============================================================================
+COMMISSIONING TABLE
+===============================================================================
+
+| Gateway | Eniscope identity | Gateway DB ID | Device/meter UID | Ch | Existing DB device? | Model | Compatible profile | Ready to create? |
+|---|---|---|---|---|---|---|---|---|
+| 1 | Eniscope_1_Meenaxy_Unit2 | 50747fae-ca69-4b10-9cbd-4e310a129b6e | 80:34:28:16:22:fe:00:01 | 2 | No | TBD (§7) | ENERGY_METER_ENISCOPE_V1 (candidate) | No — blocked (§4) |
+| 1 | Eniscope_1_Meenaxy_Unit2 | 50747fae-ca69-4b10-9cbd-4e310a129b6e | 80:34:28:16:22:fe:00:02 | 1 | No | TBD | ENERGY_METER_ENISCOPE_V1 (candidate) | No — blocked |
+| 1 | Eniscope_1_Meenaxy_Unit2 | 50747fae-ca69-4b10-9cbd-4e310a129b6e | 80:34:28:16:22:fe:00:03 | 0 | No | TBD | ENERGY_METER_ENISCOPE_V1 (candidate) | No — blocked |
+| 1 | Eniscope_1_Meenaxy_Unit2 | 50747fae-ca69-4b10-9cbd-4e310a129b6e | 80:34:28:16:22:fe:00:04 | 0 | No | TBD | ENERGY_METER_ENISCOPE_V1 (candidate) | No — blocked |
+| 1 | Eniscope_1_Meenaxy_Unit2 | 50747fae-ca69-4b10-9cbd-4e310a129b6e | 80:34:28:16:22:fe:00:05 | 0 | No | TBD | ENERGY_METER_ENISCOPE_V1 (candidate) | No — blocked |
+| 1 | Eniscope_1_Meenaxy_Unit2 | 50747fae-ca69-4b10-9cbd-4e310a129b6e | 80:34:28:16:22:fe:00:06 | 0 | No | TBD | ENERGY_METER_ENISCOPE_V1 (candidate) | No — blocked |
+| 1 | Eniscope_1_Meenaxy_Unit2 | 50747fae-ca69-4b10-9cbd-4e310a129b6e | 80:34:28:16:22:fe:00:07 | 0 | No | TBD | ENERGY_METER_ENISCOPE_V1 (candidate) | No — blocked |
+| 1 | Eniscope_1_Meenaxy_Unit2 | 50747fae-ca69-4b10-9cbd-4e310a129b6e | 80:34:28:16:22:fe:00:08 | 0 | No | TBD | ENERGY_METER_ENISCOPE_V1 (candidate) | No — blocked |
+| 2 | Eniscope_2_Meenaxy_Unit2 | f628fca3-31b9-42a3-a56c-a16e940fb0a4 | 80:34:28:16:0a:20:00:01 | 2 | No | TBD | ENERGY_METER_ENISCOPE_V1 (candidate) | No — blocked |
+| 2 | Eniscope_2_Meenaxy_Unit2 | f628fca3-31b9-42a3-a56c-a16e940fb0a4 | 80:34:28:16:0a:20:00:02 | 1 | No | TBD | ENERGY_METER_ENISCOPE_V1 (candidate) | No — blocked |
+| 2 | Eniscope_2_Meenaxy_Unit2 | f628fca3-31b9-42a3-a56c-a16e940fb0a4 | 80:34:28:16:0a:20:00:03 | 0 | No | TBD | ENERGY_METER_ENISCOPE_V1 (candidate) | No — blocked |
+| 2 | Eniscope_2_Meenaxy_Unit2 | f628fca3-31b9-42a3-a56c-a16e940fb0a4 | 80:34:28:16:0a:20:00:04 | 0 | No | TBD | ENERGY_METER_ENISCOPE_V1 (candidate) | No — blocked |
+| 2 | Eniscope_2_Meenaxy_Unit2 | f628fca3-31b9-42a3-a56c-a16e940fb0a4 | 80:34:28:16:0a:20:00:05 | 0 | No | TBD | ENERGY_METER_ENISCOPE_V1 (candidate) | No — blocked |
+| 2 | Eniscope_2_Meenaxy_Unit2 | f628fca3-31b9-42a3-a56c-a16e940fb0a4 | 80:34:28:16:0a:20:00:06 | 0 | No | TBD | ENERGY_METER_ENISCOPE_V1 (candidate) | No — blocked |
+| 2 | Eniscope_2_Meenaxy_Unit2 | f628fca3-31b9-42a3-a56c-a16e940fb0a4 | 80:34:28:16:0a:20:00:07 | 0 | No | TBD | ENERGY_METER_ENISCOPE_V1 (candidate) | No — blocked |
+| 2 | Eniscope_2_Meenaxy_Unit2 | f628fca3-31b9-42a3-a56c-a16e940fb0a4 | 80:34:28:16:0a:20:00:08 | 0 | No | TBD | ENERGY_METER_ENISCOPE_V1 (candidate) | No — blocked |
+| 3 | Eniscope_3_Meenaxy_Unit2 | a3925034-1b23-4429-a949-02d8a2029926 | 80:34:28:15:7a:c6:00:01 | 1 | No | TBD | ENERGY_METER_ENISCOPE_V1 (candidate) | No — blocked |
+| 3 | Eniscope_3_Meenaxy_Unit2 | a3925034-1b23-4429-a949-02d8a2029926 | 80:34:28:15:7a:c6:00:02 | 2 | No | TBD | ENERGY_METER_ENISCOPE_V1 (candidate) | No — blocked |
+| 3 | Eniscope_3_Meenaxy_Unit2 | a3925034-1b23-4429-a949-02d8a2029926 | 80:34:28:15:7a:c6:00:03 | 0 | No | TBD | ENERGY_METER_ENISCOPE_V1 (candidate) | No — blocked |
+| 3 | Eniscope_3_Meenaxy_Unit2 | a3925034-1b23-4429-a949-02d8a2029926 | 80:34:28:15:7a:c6:00:04 | 0 | No | TBD | ENERGY_METER_ENISCOPE_V1 (candidate) | No — blocked |
+| 3 | Eniscope_3_Meenaxy_Unit2 | a3925034-1b23-4429-a949-02d8a2029926 | 80:34:28:15:7a:c6:00:05 | 0 | No | TBD | ENERGY_METER_ENISCOPE_V1 (candidate) | No — blocked |
+| 3 | Eniscope_3_Meenaxy_Unit2 | a3925034-1b23-4429-a949-02d8a2029926 | 80:34:28:15:7a:c6:00:06 | 0 | No | TBD | ENERGY_METER_ENISCOPE_V1 (candidate) | No — blocked |
+
+(Eniscope_3 rows for :00:07/:00:08 are omitted — not observed in live
+traffic, per §2's note; may or may not exist physically.)
+
+===============================================================================
+ANSWERS TO A-H
+===============================================================================
+
+A. All three existing gateways are valid and should be retained — confirmed.
+B. All (up to) 22 device UIDs listed above are currently unregistered —
+   zero device_identifiers rows exist.
+C. No device records exist at all (metadata.devices = 0), so none can be
+   incorrectly associated — not applicable yet.
+D. Yes — each observed uid already matches admin.create_device's required
+   MQTT_UID format exactly; it can be passed directly as p_identifier_value.
+E/F. Device model and profile are both blocked pending the reference-data
+   fix in §5; ENERGY_METER_ENISCOPE_V1 is the correct candidate profile
+   once compatibility is linked.
+G/H. Answered in §4 — yes, the missing device_models and device_profile_
+   categories rows are the only blockers; no other blocker was found for
+   commissioning devices under the three existing, retained gateways.
+
+Nothing has been implemented. Awaiting your decisions on §7 before any
+repository or staging change is proposed.

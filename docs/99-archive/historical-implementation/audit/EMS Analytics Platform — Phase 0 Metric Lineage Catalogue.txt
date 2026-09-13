@@ -1,0 +1,391 @@
+EMS Analytics Platform — Phase 0 Metric Lineage Catalogue
+
+Method: every metric below is traced to actual SQL bodies already read in this investigation (schemas/tables, continuous aggregates, views/functions/triggers, and Grafana dashboard JSON), plus targeted follow-up reads this session of analytics.v_grafana_sites/assets/devices/asset_devices/energy_samples/normalized_points/active_alarms (all defined at postgres/migrations/001_ems_platform_baseline_20260807.sql:36714–37050, historically originating in archived 169_universal_grafana_mvp.sql), analytics.v_grafana_asset_electrical_samples (postgres/ddl/134_asset_dashboard_v1_contract.sql), and analytics.v_grafana_telemetry_capture_policies (postgres/ddl/150_grafana_telemetry_capture_policy.sql). A repo-wide grep confirmed zero occurrences of tariff/cost, baseline (in the analytics sense), anomaly, benchmark, insight, recommendation, or forecast logic anywhere in postgres/ or app/src/ — those are addressed as confirmed-absent, not assumed-absent.
+
+---
+
+Part A — Metric Lineage Summary Table
+
+Metric: Energy consumption (import/export, kWh) — classifier path
+Domain: energy
+Implemented?: Yes
+Source point(s)/table: telemetry.energy_measurements registers via ca_energy_1min/5min → energy_consumption_1min/5min
+Calculation: Register delta via classify_energy_register_delta()
+Resolutions: native(1m/5m), 15m (Path A)
+Final object(s): v_energy_consumption_15min, v_asset_consumption_15min/daily/monthly
+Grafana consumer(s): asset-overview? not directly — Path A feeds site-balance/demand-KPI family, not the 7 dashboards' energy
+tiles directly
+Classification: Multiple implementations (see Part B §1)
+────────────────────────────────────────
+Metric: Energy consumption (import/export, kWh) — semantic reporting path
+Domain: energy
+Implemented?: Yes
+Source point(s)/table: same native tables, one hop removed
+Calculation: Rollup of already-classified intervals, never reclassifies
+Resolutions: native/5m/15m/1h/1d
+Final object(s): v_energy_reporting_*, v_energy_consumption_daily, get_canonical_energy_read()
+Grafana consumer(s): none found calling get_canonical_energy_read directly from the 7 dashboards
+Classification: Multiple implementations, internal-only
+────────────────────────────────────────
+Metric: Energy consumption (kWh) — asset-overview path
+Domain: energy
+Implemented?: Yes
+Source point(s)/table: telemetry.energy_measurements registers, read live
+Calculation: Inline register-delta via classify_energy_register_delta inside get_grafana_asset_energy_intervals
+Resolutions: native only
+Final object(s): function output, v_grafana_asset_energy_intervals
+Grafana consumer(s): asset-overview "Total Energy vs previous period", "Energy Consumption Trend"
+Classification: Third independent implementation of the same metric
+────────────────────────────────────────
+Metric: Energy register reading (raw cumulative, mislabeled "energy_kwh")
+Domain: energy
+Implemented?: Yes
+Source point(s)/table: energy_measurements.import/export_energy_total_wh
+Calculation: Simple ÷1000, no delta, no classification
+Resolutions: instantaneous sample
+Final object(s): v_grafana_energy_samples.import_energy_register_kwh,
+v_grafana_asset_electrical_samples.import_energy_register_kwh
+Grafana consumer(s): org/site/area-overview (indirectly, not directly plotted)
+Classification: Exists, but is a register snapshot, not consumption — risk of confusion by column-name similarity
+────────────────────────────────────────
+Metric: Energy delta (Analytics Explorer)
+Domain: energy
+Implemented?: Yes
+Source point(s)/table: analytics.generic_telemetry_15m/1h (generic point CAGG)
+Calculation: MAX(value) - LAG(MAX(value)) computed in the Grafana panel SQL itself
+Resolutions: 15m/1h/native
+Final object(s): none — computed ad hoc, not a named DB object
+Grafana consumer(s): analytics-explorer.json (only for points named %ENERGY%)
+Classification: Grafana-only, and structurally different/less rigorous than the classifier path — no rollover/reset/gap
+handling
+────────────────────────────────────────
+Metric: Instantaneous active/reactive/apparent power (kW/kvar/kVA)
+Domain: power
+Implemented?: Yes
+Source point(s)/table: energy_measurements.active/reactive/apparent_power_total_w etc.
+Calculation: AVG/MIN/MAX in raw CAGGs; ÷1000 in Grafana views
+Resolutions: 1m/5m/15m/1h/1d (raw); native (Grafana)
+Final object(s): ca_energy_*, v_energy_15min/hourly, v_grafana_asset_electrical_samples, v_grafana_energy_samples
+Grafana consumer(s): asset-overview (Active Power Trend), org/site/area-overview (as "demand", see below)
+Classification: Single calculation, but relabeled inconsistently downstream
+────────────────────────────────────────
+Metric: Demand (kW/kVA) — dedicated engine
+Domain: demand
+Implemented?: Yes
+Source point(s)/table: METER_NATIVE / ENERGY_COUNTER_DELTA / TIME_WEIGHTED_POWER, resolved per-device
+Calculation: calculate_demand_window(), quality-gated, finalized with grace period
+Resolutions: 900s or 1800s only
+Final object(s): analytics.demand_intervals, demand_state
+Grafana consumer(s): asset-overview (Peak Demand, Demand Profile, Demand Context, Demand Quality History)
+Classification: The only rigorous, quality-gated demand implementation
+────────────────────────────────────────
+Metric: Demand (kW) — 15-min-CAGG family
+Domain: demand
+Implemented?: Yes, but orphaned
+Source point(s)/table: raw ca_energy_15min/ca_energy_hourly (AVG power)
+Calculation: v_energy_demand_15min (÷1000, availability%), v_energy_peak_demand_daily/monthly, v_asset_peak_demand_*,
+v_energy_site_demand_kpis
+Resolutions: 15m/hourly/daily/monthly
+Final object(s): analytics.v_energy_demand_15min etc.
+Grafana consumer(s): No consumer found in any of the 7 dashboards' panel SQL
+Classification: Independent of Grafana today — implemented, unused, possibly superseded-in-place
+────────────────────────────────────────
+Metric: Demand (kW) — dashboard ad hoc sum
+Domain: demand
+Implemented?: Yes
+Source point(s)/table: v_grafana_energy_samples.active_power_kw (raw instantaneous power, per-receipt row)
+Calculation: $__timeGroupAlias(sample_time,'15m'), SUM(active_power_kw) across all rows in bucket
+Resolutions: 15m (panel-side bucketing)
+Final object(s): none — panel query only
+Grafana consumer(s): organization-overview ("Portfolio demand"), site-overview ("Current demand kW" via DISTINCT ON
+latest-per-device, "Site demand profile"), area-overview ("Area demand profile")
+Classification: Third, informal demand calculation — SUM over raw per-sample rows (not time-weighted, not
+one-row-per-interval) is methodologically distinct from both engines above; v_grafana_asset_electrical_samples's own comment
+ states "active_power_kw is instantaneous power and is never  labelled demand" — directly contradicted by these three
+dashboards' panel titles
+────────────────────────────────────────
+Metric: Voltage (LN/LL, per-phase)
+Domain: electrical
+Implemented?: Yes
+Source point(s)/table: energy_measurements.voltage_*_v
+Calculation: AVG/MIN/MAX in raw CAGG
+Resolutions: 1m–1d
+Final object(s): ca_energy_*, v_grafana_asset_electrical_samples
+Grafana consumer(s): asset-overview (Voltage Trend)
+Classification: Single implementation
+────────────────────────────────────────
+Metric: Current (per-phase + neutral)
+Domain: electrical
+Implemented?: Yes
+Source point(s)/table: energy_measurements.current_*_a
+Calculation: AVG/MIN/MAX
+Resolutions: 1m–1d
+Final object(s): same
+Grafana consumer(s): asset-overview (Current Trend)
+Classification: Single implementation
+────────────────────────────────────────
+Metric: Frequency (Hz)
+Domain: electrical
+Implemented?: Yes
+Source point(s)/table: energy_measurements.frequency_hz
+Calculation: AVG/MIN/MAX
+Resolutions: 1m–1d
+Final object(s): same
+Grafana consumer(s): asset-overview (Power Factor & Frequency)
+Classification: Single implementation
+────────────────────────────────────────
+Metric: Power factor (total + phases)
+Domain: electrical
+Implemented?: Yes
+Source point(s)/table: energy_measurements.power_factor_total etc.
+Calculation: AVG/MIN/MAX
+Resolutions: 1m–1d
+Final object(s): same
+Grafana consumer(s): asset-overview
+Classification: Single implementation
+────────────────────────────────────────
+Metric: Current/Voltage THD (%)
+Domain: electrical quality
+Implemented?: Yes
+Source point(s)/table: energy_measurements.current_thd_*, supplemental ca_energy_electrical_ext_* for voltage THD
+Calculation: AVG/MAX
+Resolutions: 15m/hourly (voltage THD only in supplemental CAGG)
+Final object(s): v_grafana_asset_electrical_samples
+Grafana consumer(s): asset-overview (Current THD)
+Classification: Single implementation, voltage-THD added later as a non-breaking supplemental CAGG
+────────────────────────────────────────
+Metric: Environmental (temp, humidity, illuminance, occupancy, battery, pressure, CO2, VOC, signal strength)
+Domain: environment
+Implemented?: Yes
+Source point(s)/table: environment_measurements via v_environment_measurements_route (profile ENVIRONMENT_SENSOR_AIRSENSE_V1)
+Calculation: AVG/MIN/MAX in CAGGs; direct daily historian
+Resolutions: 15m/hourly (real-time CAGGs), daily (persisted)
+Final object(s): v_environment_15min/hourly, environment_daily, v_environment_latest, v_environment_sensor_kpis
+Grafana consumer(s): not found consumed by any of the 7 core dashboards read
+Classification: Implemented, apparently orphaned from the current Grafana dashboard set
+────────────────────────────────────────
+Metric: Environmental data quality
+Domain: environment
+Implemented?: No
+Source point(s)/table: n/a
+Calculation: routing view hardcodes quality_code=NULL, is_estimated=FALSE
+Resolutions: n/a
+Final object(s): n/a
+Grafana consumer(s): n/a
+Classification: Partially implemented — columns exist, never populated; no classifier analogous to the energy one
+────────────────────────────────────────
+Metric: Device/asset telemetry state — variant 1
+Domain: availability
+Implemented?: Yes
+Source point(s)/table: telemetry.normalized_points aggregated live
+Calculation: Hardcoded 300s/900s/3600s thresholds, states NEVER_SEEN/SILENT/INVALID_PROFILE/UNMAPPED/RECEIVING/STALE/VALIDATED
+Resolutions: live
+Final object(s): analytics.v_grafana_devices.telemetry_state
+Grafana consumer(s): organization/site-overview, device-diagnostics, feeds alarms
+Classification: Conflicts with variants 2 & 3
+────────────────────────────────────────
+Metric: Device/asset telemetry state — variant 2
+Domain: availability
+Implemented?: Yes
+Source point(s)/table: telemetry.device_telemetry_state (compact cache)
+Calculation: Config-driven thresholds via config.telemetry_availability_policy (defaults 180s/900s/1800s), states
+NEVER_SEEN/SILENT/RECEIVING/STALE/VALIDATED
+Resolutions: live
+Final object(s): analytics.get_grafana_asset_telemetry_context()
+Grafana consumer(s): asset-overview (identity/telemetry card, prose only, not confirmed as a distinct panel — see Part B §5)
+Classification: Conflicts with variants 1 & 3
+────────────────────────────────────────
+Metric: Device/asset connectivity state — variant 3
+Domain: availability
+Implemented?: Yes
+Source point(s)/table: telemetry.device_raw_receipt_state (raw transport receipt, not normalized)
+Calculation: Same threshold style but against raw receipt, distinguishing DELAYED (fresh receipt/stale source) from SILENT
+Resolutions: live
+Final object(s): analytics.get_grafana_asset_connectivity_context()
+Grafana consumer(s): asset-overview (identity canvas)
+Classification: Conflicts with variants 1 & 2
+────────────────────────────────────────
+Metric: Active alarms
+Domain: alarms/events
+Implemented?: Yes, but derived, not an event log
+Source point(s)/table: telemetry.asset_health.alarm_active/fault_code + v_grafana_devices.telemetry_state degradation
+Calculation: UNION ALL of two signal families, no ack/escalation/resolution state
+Resolutions: live
+Final object(s): analytics.v_grafana_active_alarms
+Grafana consumer(s): alarms.json, all other dashboards' alarm counts
+Classification: Single implementation, explicitly self-documented as MVP-only ("not an acknowledgement or escalation history")
+────────────────────────────────────────
+Metric: Data quality / gap / reset / rollover (energy)
+Domain: data quality
+Implemented?: Yes
+Source point(s)/table: register deltas
+Calculation: classify_energy_register_delta() vocabulary
+Resolutions: native and all rollups
+Final object(s): pervasive (§ Part B)
+Grafana consumer(s): asset-overview (Demand Quality History, implicit in energy trend NULLs)
+Classification: Single canonical implementation, reused everywhere
+────────────────────────────────────────
+Metric: Interval coverage_percent — demand
+Domain: data quality
+Implemented?: Yes
+Source point(s)/table: observed vs. expected samples in a demand window
+Calculation: (observed/expected)*100, threshold-gated quality_status
+Resolutions: 900s/1800s
+Final object(s): demand_intervals.coverage_percent
+Grafana consumer(s): asset-overview
+Classification: One of 3 differently-scoped "coverage" concepts
+────────────────────────────────────────
+Metric: Interval coverage_percent — environment/electrical availability
+Domain: data quality
+Implemented?: Yes
+Source point(s)/table: sample_count vs field_sample_count in CAGGs
+Calculation: 100*field_sample_count/sample_count
+Resolutions: 15m/hourly
+Final object(s): v_environment_15min/hourly, v_energy_demand_15min.power_data_availability_percent
+Grafana consumer(s): not confirmed consumed by any of the 7 dashboards
+Classification: Different formula, different scope from demand coverage
+────────────────────────────────────────
+Metric: Meter coverage (asset metering configuration)
+Domain: data quality (config, not telemetry)
+Implemented?: Yes
+Source point(s)/table: metadata.assets.metering_requirement + asset_hierarchy_closure
+Calculation: Structural check: does every DIRECT_METER_REQUIRED descendant have a PRIMARY_METER?
+Resolutions: n/a (point-in-time config check)
+Final object(s): v_asset_meter_coverage_configuration
+Grafana consumer(s): not confirmed consumed by any of the 7 dashboards
+Classification: Explicitly NOT a telemetry-freshness metric (own header states this) — a governance/config check, easily
+confused with the telemetry-coverage metrics above by name alone
+────────────────────────────────────────
+Metric: Site energy balance
+Domain: energy
+Implemented?: Yes
+Source point(s)/table: v_energy_consumption_15min (Path A) × config.site_energy_meter_roles
+Calculation: grid_import + onsite_generation − grid_export − battery_charge + battery_discharge
+Resolutions: 15min→daily
+Final object(s): v_site_energy_balance_daily
+Grafana consumer(s): not confirmed consumed by any of the 7 dashboards
+Classification: Implemented, orphaned from current Grafana set
+────────────────────────────────────────
+Metric: Cost / tariff
+Domain: cost
+Implemented?: No
+Source point(s)/table: —
+Calculation: —
+Resolutions: —
+Final object(s): —
+Grafana consumer(s): —
+Classification: Confirmed absent — zero matches repo-wide
+────────────────────────────────────────
+Metric: Baseline (expected/comparison energy model)
+Domain: intelligence
+Implemented?: No
+Source point(s)/table: —
+Calculation: —
+Resolutions: —
+Final object(s): —
+Grafana consumer(s): —
+Classification: Confirmed absent (grep hits were all false positives: migration-baseline terminology, an electrical seed file
+named ..._baseline.sql)
+────────────────────────────────────────
+Metric: Anomaly detection
+Domain: intelligence
+Implemented?: No
+Source point(s)/table: —
+Calculation: —
+Resolutions: —
+Final object(s): —
+Grafana consumer(s): —
+Classification: Confirmed absent
+────────────────────────────────────────
+Metric: Benchmarking
+Domain: intelligence
+Implemented?: No
+Source point(s)/table: —
+Calculation: —
+Resolutions: —
+Final object(s): —
+Grafana consumer(s): —
+Classification: Confirmed absent
+────────────────────────────────────────
+Metric: Insights / recommendations
+Domain: intelligence
+Implemented?: No
+Source point(s)/table: —
+Calculation: —
+Resolutions: —
+Final object(s): —
+Grafana consumer(s): —
+Classification: Confirmed absent
+────────────────────────────────────────
+Metric: Forecast
+Domain: intelligence
+Implemented?: No
+Source point(s)/table: —
+Calculation: —
+Resolutions: —
+Final object(s): —
+Grafana consumer(s): —
+Classification: Confirmed absent
+
+---
+
+Part B — Detailed lineage for the important metrics
+
+1. Energy Consumption (kWh) — the most-implemented metric in the platform
+
+Business meaning: interval energy delivered (import) or exported, in kWh, derived from a cumulative meter register.
+
+Three parallel, non-identical implementations were traced, all ultimately calling the same primitive classifier but assembled differently:
+
+(A) Path A — "general classifier" view, analytics.v_energy_consumption_15min
+- Source: telemetry.ca_energy_15min (raw MAX/MIN register CAGG) → CROSS JOIN LATERAL analytics.classify_energy_register_delta(...), gap threshold resolved live via config.resolve_interval_quality_rule(device_id, bucket_start).
+- Timestamp: bucket_start (UTC-aligned, received_at-keyed CAGG).
+- Tenant scope: metadata.grafana_organization_map join → grafana_org_id.
+- Quality: full vocabulary (GOOD/GAP/RESET/RESET_FROM_ZERO/ROLLOVER/ROLLOVER_UNRESOLVED/DIRECTION_ERROR/IMPLAUSIBLE_DELTA/CONFIG_MISSING/CONFIG_INVALID/MISSING_REGISTER/INITIAL) attached per import/export.
+- Feeds: v_energy_consumption_daily's pre-036 implementation (superseded), v_site_energy_balance_daily, v_energy_demand_15min-adjacent KPI family. Granted to grafana_reader but no panel in the 7 read dashboards queries it directly.
+
+(B) Path B — "semantic reporting" pipeline
+- Source: persisted analytics.energy_consumption_1min/5min (already-classified, populated by scheduled jobs, classify_energy_register_delta called once at native resolution) → v_energy_consumption_native → v_energy_semantic_rollup_5min/15min → v_energy_reporting_5min/15min/hourly/daily.
+- Never reclassifies; every rollup only sums WHERE is_valid, counts gap/reset/rollover/invalid intervals separately, derives a quality_status by priority (INVALID_INTERVALS > RESET_DETECTED > GAPS_DETECTED > ROLLOVER_DETECTED > GOOD).
+- Timezone: hourly/daily tiers use site-local time (bucket_start AT TIME ZONE s.timezone), explicitly fixed for DST-naive fixed-offset zones only (documented limitation).
+- Access: ems_admin-only except v_energy_consumption_daily (migration 036 cutover, Grafana-granted).
+- Exposed externally only via analytics.get_canonical_energy_read() — tenant/asset resolved, capture-policy-boundary-guarded (twice patched for false positives, migrations 191/192), dispatches by actual duration to native/5m/15m/hourly/daily. The auto-router (resolve_grafana_energy_routing_resolution, migration 045) never selects '1d' — the daily tier is reachable only by an explicit direct call, and none was found in the app or dashboard layer.
+
+(C) Path C — asset-overview's own function, analytics.get_grafana_asset_energy_intervals
+- Reads telemetry.energy_measurements directly (not through any CAGG), resolves one prior sample before p_from plus all in-range samples, computes LAG()-based deltas, classifies via the same classify_energy_register_delta() function, restricted to the asset's PRIMARY_METER device only.
+- This is the actual source of the Asset Dashboard's "Total Energy vs previous period" and "Energy Consumption Trend" panels (confirmed by migration 191/192 incident narratives naming these panels explicitly).
+- This is a third, independently-written implementation of the identical calculation (register delta + classifier), not a call into either Path A or Path B. It duplicates the LAG/classify logic rather than reading a shared view.
+
+(D) A fourth, much simpler thing that is not consumption but is easily mistaken for it: v_grafana_energy_samples.import_energy_register_kwh / export_energy_register_kwh and v_grafana_asset_electrical_samples's identically-named columns are the raw cumulative register value ÷1000, with no delta and no classification — a different metric wearing a similar name.
+
+(E) A fifth, ad hoc implementation: the Analytics Explorer dashboard computes GREATEST(0, MAX(value) − LAG(MAX(value))) directly in its panel SQL for any point matching %ENERGY%, over analytics.generic_telemetry_15m/1h (a generic, non-energy-specific point CAGG) — no register-semantics lookup, no reset/rollover handling, no quality code. This is the one place where "energy consumption" is computed with materially weaker guarantees than everywhere else in the platform.
+
+Classification: metric calculated in (at least) five places, with materially different quality guarantees; A/B/C are functionally equivalent in intent but structurally independent implementations — a change to the classifier's calling convention would need to be replicated in three places, not one.
+
+---
+
+2. Instantaneous Power (kW / kvar / kVA)
+
+- Single source of truth: telemetry.energy_measurements.active/reactive/apparent_power_total_w (+ per-phase).
+- Aggregated identically (AVG/MIN/MAX) across all raw CAGGs (ca_energy_1min/5min/15min/hourly/daily) — one calculation, five resolutions, no divergence found.
+- Converted to kW at the Grafana view layer only (÷1000.0), in v_grafana_asset_electrical_samples and v_grafana_energy_samples — conversion factor consistent across both.
+- Not flagged as multiply-implemented — the divergence problem starts one layer up, in what gets labeled demand (§3).
+
+---
+
+3. Demand (kW / kVA) — the clearest case of conflicting calculations found in this audit
+
+Three structurally different things are all called "demand" somewhere in this codebase:
+
+1. analytics.demand_intervals/demand_state (theys
+Confirmed entirely absent (not partially implemented — zero code found): cost/tariff, baseline/expected-value modeling, anomaly detection, benchmarking, insights, recommendations, forecasting. The Development Bible frames these as later phases (11–13); this audit confirms the codebase has not begun any of them — no tables, views, functions, or column scaffolding of any kind.
+
+---
+
+Confidence summary
+
+VERIFIED FROM SOURCE: every SQL body cited above, including the newly-read v_grafana_sites/assets/devices/asset_devices/energy_samples/point_catalog/normalized_points/active_alarms block and v_grafana_asset_electrical_samples/v_grafana_telemetry_capture_policies; the repo-wide grep confirming absence of tariff/baseline/anomaly/benchmark/insight/forecast.
+
+INFERRED: that the three demand implementations and three connectivity classifiers are unreconciled is inferred from the absence of any cross-referencing comment or shared call between them, not from an explicit statement that they conflict.
+
+UNKNOWN / REQUIRES RUNTIME VERIFICATION: whether v_energy_demand_15min, the peak-demand family, and v_site_energy_balance_daily are truly unused in production (this audit only confirms no consumer in the 7 dashboard JSON files read — an app-layer or ad hoc Grafana Explore-mode consumer cannot be ruled out from static files alone); whether environment metrics are consumed by any dashboard outside the 7 core ones (e.g. an org/site-specific customization not present in grafana/dashboards/core/); the full column list and population logic of analytics.demand_state.

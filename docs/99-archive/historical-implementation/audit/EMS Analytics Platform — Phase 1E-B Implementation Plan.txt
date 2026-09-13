@@ -1,0 +1,565 @@
+EMS Analytics Platform — Phase 1E-B Implementation Plan
+Historical Backfill of Per-Flow Energy-Consumption Quality Columns
+
+STATUS: PLAN ONLY. No files modified other than this document. No SQL
+written, no migration created, no staging/production access. Phase 1E-A
+(commit 523ac5b) is treated as the deployed, correct baseline throughout.
+
+===============================================================================
+1. OBJECTIVE
+===============================================================================
+
+Populate the six per-flow columns Phase 1E-A added (import_gap_intervals,
+export_gap_intervals, import_reset_intervals, export_reset_intervals,
+import_rollover_intervals, export_rollover_intervals) on analytics.
+energy_consumption_15min/hourly/daily for rows that existed before Phase
+1E-A deployed (and therefore currently have NULL in these columns),
+without recalculating or altering any pre-existing column's value, without
+touching Phase 1E-A's schema or function bodies, and without any reporting/
+consumer/Grafana change (all explicitly deferred to 1E-C/1E-D).
+
+===============================================================================
+2. CURRENT-STATE FINDINGS (re-verified this session)
+===============================================================================
+
+Phase 1E-A's three refresh functions (re-confirmed live, unchanged since
+commit 523ac5b): refresh_energy_consumption_15min() reads analytics.
+v_energy_semantic_rollup_15min (itself a live GROUP BY over analytics.
+v_energy_consumption_native = UNION ALL of energy_consumption_1min/5min);
+refresh_energy_consumption_hourly()/daily() read ONLY analytics.energy_
+consumption_15min (never native, never hourly-from-daily). All three use
+INSERT ... SELECT ... ON CONFLICT (device_id, bucket_start) DO UPDATE SET
+<every column> — a full-row UPSERT, not a blind UPDATE. This property is
+central to the recommended architecture (§5).
+
+Retention/compression policies (postgres/migrations/177, 179, 181, 183 —
+read in full this session, not assumed):
+
+    Table                          | Compression | Retention
+    energy_consumption_1min (native, 1-min-capture sites) | 7 days  | 180 days
+    energy_consumption_5min (native, 5-min-capture sites) | 14 days | 2 years
+    energy_consumption_15min (rollup)                     | 7 days  | 2 years
+    energy_consumption_hourly (rollup)                    | 30 days | 5 years
+    energy_consumption_daily (rollup)                     | 90 days | none (permanent)
+
+All five are TimescaleDB hypertables (create_hypertable confirmed in each
+DDL/migration file), so retention policies physically DROP entire chunks
+of data outside their window — this is not a soft delete; the data is
+gone.
+
+Tenant/org scoping: none of the three refresh functions filter by tenant
+at all — they process every organization's data in the given time range.
+Tenant isolation for this phase means "no cross-tenant data mixing in the
+persisted write path" (rows correctly attributed to their own organization_
+id/site_id/device_id), not a Grafana-facing security boundary — consistent
+with how Phase 1E-A's own contract test already defined "tenant isolation"
+in this context.
+
+Existing migration convention (Phase 1A-1E-A precedent): every phase's
+migration is additive, registered in postgres/restructure_manifest.csv,
+paired with a disposable-DB contract test wired into scripts/test/
+run_integration_environment.sh, staged/committed/pushed only after
+explicit approval at each step.
+
+Staging/production historical data: every post-deployment verification
+performed across Phases 1A-1E-A (including this session's own checks)
+confirms staging has zero commissioned devices/assets. There is currently
+no real historical energy-consumption data to backfill on staging today.
+This does not change the design (which must still be correct and durable
+for whenever real data exists), but it materially changes the operational
+risk profile of actually running this backfill right now (§11).
+
+===============================================================================
+3. AUTHORITATIVE DATA LINEAGE
+===============================================================================
+
+Unchanged from Phase 1E-A and Phase 1B: analytics.classify_energy_
+register_delta() is the sole classification point, called only at the
+native tier (energy_consumption_1min/5min). analytics.v_energy_semantic_
+rollup_15min aggregates native data into 15-minute buckets, computing both
+combined and per-flow gap/reset/rollover counts. energy_consumption_15min
+persists that aggregate; hourly/daily persist further additive rollups of
+the 15-minute table only. The backfill introduces no new source, no new
+join, and no new classification logic — it only re-exercises this existing
+chain over historical time windows.
+
+===============================================================================
+4. HISTORICAL RECONSTRUCTABILITY ANALYSIS (the critical question — CORRECTED)
+===============================================================================
+
+CORRECTION: the version of this section originally issued conflated loss
+of native source (A) with loss of the persisted 15-minute/hourly/daily
+aggregates themselves (B), and as a result understated how much history
+is actually reconstructable and durable. The corrected analysis follows.
+(One additional fact was checked to be sure: telemetry.ca_energy_15min/
+hourly/daily — a separate, general-telemetry-lineage set of continuous
+aggregates, unrelated to analytics.energy_consumption_* — happen to carry
+matching-looking 2yr/5yr/permanent retention numbers by coincidental
+design symmetry, confirmed via postgres/jobs/54_energy_aggregate_
+lifecycle.sql. They are a different object family and do not provide any
+additional recovery path for this problem; re-deriving from them would
+also require reclassifying raw register deltas at a coarser, different
+native resolution than what was originally computed, which would not be a
+faithful reconstruction but an approximation — correctly out of scope,
+not pursued.)
+
+The key distinction, applied per tier:
+
+    15-minute tier: per-flow detail (which specific flow gapped/reset/
+    rolled over) was NEVER captured anywhere before Phase 1E-A except in
+    the native rows themselves. So for a 15-minute row's per-flow columns
+    specifically, loss of A (native source for that exact bucket) DOES
+    prevent reconstruction — there is no shortcut, because the 15-minute
+    row itself (B) only ever stored COMBINED counts pre-1E-A, never
+    per-flow detail. This part of the original analysis was correct in
+    isolation. Critically, though: loss of A does NOT touch B's existing
+    columns at all — a 15-minute row whose native source has since expired
+    keeps its original consumption_kwh and combined counters completely
+    intact forever; only the new per-flow columns for that specific
+    bucket remain NULL.
+
+    Hourly / daily tiers: THIS is where the original analysis was too
+    broad, and the correction matters. refresh_energy_consumption_hourly/
+    daily() derive ONLY from analytics.energy_consumption_15min — never
+    from native directly. So hourly/daily's ability to acquire per-flow
+    data depends on whether the 15-MINUTE ROW they derive from has ITSELF
+    already been per-flow-populated (by ongoing operation or backfill)
+    at the time hourly/daily processes it — not on whether native still
+    exists at the moment hourly/daily is computed. Once a 15-minute row's
+    per-flow columns are populated, that information is now PART OF THE
+    15-MINUTE ROW and requires no further reference to native at all.
+    Since 15-minute's own retention (2 years) is always >= the native-
+    bounded reconstructable window (180 days for 1-minute-capture sites,
+    2 years for 5-minute-capture sites — i.e., 15-minute rows never
+    outlive the native data they could have been backfilled from), a
+    15-minute-first-then-hourly-then-daily backfill sequence can carry
+    per-flow data for the FULL currently-reconstructable window all the
+    way to hourly and daily — not merely within some shorter window.
+
+    Forward durability (the intended design, now confirmed correct):
+    once a tier's per-flow columns are populated — whether by real-time
+    operation going forward from Phase 1E-A's deployment, or by this
+    backfill — that data is self-sufficient. Hourly's per-flow columns,
+    once written, do NOT depend on the source 15-minute row continuing to
+    exist; hourly retains them for its own full 5-year retention,
+    independent of 15-minute's shorter 2-year retention subsequently
+    expiring. Daily's per-flow columns, once written, are permanent
+    (daily has no retention), independent of 15-minute or hourly
+    subsequently expiring. This is exactly "B does not occur merely
+    because A occurs," and it is exactly the intended, durable design:
+    analytics.energy_consumption_daily is the durable long-term
+    accounting layer, and Phase 1E-A's per-flow columns, once populated,
+    inherit that same durability guarantee at every tier.
+
+    Practical consequence: reconstruction urgency. The native-bounded
+    reconstructable window is a continuously advancing boundary (native
+    retention policies run daily). The sooner the 15-minute backfill runs
+    after Phase 1E-A's deployment, the more history gets permanently
+    captured at the hourly and (especially) daily tiers before it ages
+    out of native's shorter retention — once captured, it is safe
+    regardless of what happens to native or 15-minute afterward. Running
+    the backfill late does not corrupt anything; it only means a
+    narrower slice of history becomes eligible for capture, permanently.
+
+Answers to the seven specific questions:
+
+    1. What can be reconstructed for historical 15-minute rows: per-flow
+       columns for any row whose native source still survives (bounded by
+       that site's own native retention: 180 days for 1-minute-capture
+       sites, 2 years for 5-minute-capture sites, as of whenever the
+       backfill actually executes). Rows older than that: per-flow columns
+       permanently NULL; all pre-existing columns unaffected.
+    2. What can be reconstructed for historical hourly rows: per-flow
+       columns for any row whose corresponding 15-minute rows have
+       themselves been (or can still be) per-flow-populated — in
+       practice, the SAME native-bounded window as (1), propagated
+       through a correctly-sequenced backfill, NOT an independently
+       narrower window. Once populated, durable for hourly's full 5-year
+       retention regardless of 15-minute's subsequent expiration.
+    3. What can be reconstructed for historical daily rows: identical
+       logic to (2); once populated, permanently durable (no retention).
+    4. 1-minute data gone, 15-minute row still exists: the 15-minute row's
+       pre-existing values are completely safe; only its own per-flow
+       columns for that bucket are permanently unrecoverable.
+    5. 15-minute data gone, hourly/daily rows still exist: same structure
+       — pre-existing hourly/daily values are completely safe. If per-flow
+       backfill already ran while the 15-minute source still existed,
+       hourly/daily's per-flow columns are already populated and are now
+       completely independent of 15-minute's later expiration. If it
+       never ran, they are now permanently unrecoverable for that bucket.
+    6. Can the six columns be persisted forward through the hierarchy so
+       that a lower tier's expiration does not destroy a higher tier's
+       already-materialized semantic information? YES — this is the
+       intended, correct, now-confirmed durable architecture, achieved
+       automatically by Phase 1E-A's schema extension combined with a
+       15min-then-hourly-then-daily backfill/operation order. This should
+       be explicitly documented (and is, above) as the intended design,
+       not treated as an incidental side effect.
+    7. For pre-1E-A rows, exactly what is permanently unrecoverable versus
+       reconstructable: unrecoverable = any bucket (at any tier) whose
+       native source no longer survives at backfill time — because
+       per-flow granularity was never captured at any coarser tier before
+       Phase 1E-A, there is no shortcut once native is gone, regardless of
+       tier. Reconstructable = every bucket at every tier within the
+       native-bounded window, fully, via the sequenced backfill — and
+       once reconstructed, permanently durable per each tier's own
+       (longer) retention, independent of lower-tier expiration.
+
+Corrected conclusion: the original "permanently unrecoverable" framing was
+TOO BROAD. It correctly identified that native's survival is the single
+root constraint, but incorrectly implied hourly/daily faced an
+additional, independent, narrower limit tied to 15-minute's own 2-year
+retention as if that were a second bottleneck stacked on top of native's.
+It is not — 15-minute's retention is never the binding constraint (it
+always exceeds the native-bounded window for both capture-interval
+types), and once populated, higher tiers are durable on their own terms,
+decoupled from lower-tier expiration. The single, real, permanent limit
+is: per-flow detail for any bucket whose native source has already
+expired at backfill time is gone forever, at every tier that bucket
+appears in — nothing more, nothing less. This is still reported as a
+decision point (§17), not worked around, but it is materially narrower
+and more favorable than originally stated.
+
+===============================================================================
+5. RECOMMENDED BACKFILL ARCHITECTURE
+===============================================================================
+
+Evaluated:
+    One-shot historical UPDATE: rejected. Would either have to duplicate
+        v_energy_semantic_rollup_15min's aggregation logic inline (a
+        second implementation of already-existing logic, explicitly
+        prohibited) or be a single, multi-year, lock-heavy, non-resumable
+        transaction with no per-batch observability.
+    Batched 15-minute reconstruction followed by hourly/daily rollup: the
+        correct shape, detailed below.
+    Invoking existing refresh functions over historical windows: THIS,
+        combined with batching, is the recommendation. analytics.refresh_
+        energy_consumption_15min/hourly/daily() already perform exactly
+        the required re-aggregation, are already proven correct (Phase
+        1B, Phase 1E-A), and — critically — their INSERT ... SELECT ...
+        ON CONFLICT DO UPDATE shape means that when the SELECT finds no
+        source rows for a historical window (native fully retention-
+        deleted), the call is a safe no-op for that window: the existing
+        row is left completely untouched, its new columns remaining
+        correctly NULL. No new safety logic needs to be written for the
+        unreconstructable case — it falls out of the existing functions'
+        own design for free.
+    Dedicated backfill function/procedure: recommended as a thin
+        orchestration wrapper only — a new procedure that loops over
+        historical time batches and calls the three existing, unmodified
+        refresh functions in the correct order per batch, with RAISE
+        NOTICE progress logging. It contains no calculation logic of its
+        own.
+
+Recommendation: a new orchestration procedure (analytics.backfill_
+energy_consumption_per_flow_quality(p_from, p_to, p_batch_interval DEFAULT
+INTERVAL '7 days')) that, for each batch window from p_from to p_to:
+    1. calls refresh_energy_consumption_15min(batch_start, batch_end);
+    2. calls refresh_energy_consumption_hourly(batch_start, batch_end);
+    3. calls refresh_energy_consumption_daily(batch_start, batch_end);
+    4. RAISE NOTICE with the batch window and each call's returned
+       affected-row count;
+and moves to the next batch. This is correct (reuses the exact proven
+calculation), idempotent (re-running any batch, or the whole range,
+produces identical results wherever source survives, and a safe no-op
+where it does not), transactionally safe (each batch's three calls can
+run in their own transaction, so a mid-run failure only needs the current
+batch retried, not the whole range), observable (NOTICE per batch), and
+requires no new calculation logic whatsoever.
+
+===============================================================================
+6. EXACT AFFECTED OBJECTS / FILES
+===============================================================================
+
+New: postgres/migrations/197_backfill_energy_consumption_per_flow_
+quality_procedure.sql — defines ONLY the new orchestration procedure
+(analytics.backfill_energy_consumption_per_flow_quality). It does not
+alter energy_consumption_15min/hourly/daily's schema (already correct
+since Phase 1E-A) and does not alter refresh_energy_consumption_15min/
+hourly/daily() (reused exactly as-is).
+Modified: postgres/restructure_manifest.csv (+1 row).
+New: scripts/test/assert_energy_consumption_backfill_contract.sql/.sh —
+disposable-DB contract test (§9).
+Modified: scripts/test/run_integration_environment.sh (+1 invocation).
+Separate, NOT part of the migration itself: a one-time, explicitly
+approved EXECUTION of the procedure against staging (and, later,
+production under its own separate approval) — this is an operational
+action, not a schema change, and must not be wired into automatic CI/CD
+deploy (§11).
+
+===============================================================================
+7. MIGRATION / FUNCTION DESIGN
+===============================================================================
+
+The migration creates exactly one new object (the orchestration
+procedure) via CREATE OR REPLACE PROCEDURE, owned by ems_admin, SECURITY
+DEFINER, same search_path convention as the three functions it calls,
+granted EXECUTE to ems_admin only (matching the refresh functions' own
+posture — this is an internal operational tool, never Grafana- or app-
+facing). It takes p_from, p_to (the full historical range to backfill)
+and p_batch_interval (default 7 days, matching the 15-minute table's own
+compression cadence) and loops with a simple FOR loop over date_bin-
+aligned batch boundaries, calling the three existing functions per batch
+inside their own sub-transaction (via nested BEGIN/EXCEPTION in PL/pgSQL,
+so one batch's failure is caught, logged via RAISE WARNING, and the loop
+continues to the next batch rather than aborting the entire run).
+
+===============================================================================
+8. BATCHING / RESUME / IDEMPOTENCY STRATEGY
+===============================================================================
+
+Batch size: 7 days by default (matches the 15-minute table's own
+compression policy interval, a reasonable balance between transaction
+size and chunk-exclusion efficiency), configurable per invocation for
+operational tuning.
+Resume strategy: no separate watermark table is required. Because every
+batch is independently idempotent (re-running it reproduces identical
+results wherever source data survives, and remains a safe no-op where it
+does not), the correct and simplest resume strategy after any failure is
+to re-invoke the SAME procedure call with the SAME p_from — already-
+completed batches simply recompute to the same values (harmless, if
+mildly wasteful) and the run proceeds to cover any remaining range. If
+production-scale historical volume ever makes a full re-scan materially
+expensive to repeat, a lightweight watermark (a single row in a new,
+tiny admin table, or simply "pass p_from as the last successfully logged
+batch_end from the previous run's NOTICE output") can be added later
+without changing the procedure's core logic — not needed for correctness
+today, and not built speculatively now.
+Already-correct rows: detected implicitly — re-running a batch whose rows
+already have correct per-flow values simply re-writes the same values
+(the UPSERT is idempotent); no special "skip if already populated" check
+is needed or beneficial, since the recomputation is cheap relative to
+re-scanning the source data anyway and adding a skip-check would itself
+be new logic to test.
+
+===============================================================================
+9. DATA-INTEGRITY SAFEGUARDS AND TEST STRATEGY
+===============================================================================
+
+Disposable-DB contract test (scripts/test/assert_energy_consumption_
+backfill_contract.sql), reusing Phase 1E-A's exact fixture discipline
+(real classify_energy_register_delta() calls, no faked values):
+
+    1. Seed native rows for a historical window covering all required
+       cases: GOOD/GOOD, import-only GAP, export-only GAP, import-only
+       RESET, export-only RESET, import-only ROLLOVER, export-only
+       ROLLOVER (Phase 1E-A's exact seven scenarios), spanning multiple
+       15-minute buckets, multiple hours, and a site-local-midnight-
+       crossing daily boundary (Phase 1B's exact discriminating fixture).
+    2. Seed a SEPARATE 15-minute row directly (bypassing native entirely)
+       to simulate "native already retention-deleted" — a persisted row
+       with its original Phase-1B-era columns populated but no
+       corresponding native source rows in energy_consumption_1min/5min
+       for that bucket at all.
+    3. Call the new backfill procedure over a range covering both cases.
+    4. Assert: the real-native-backed buckets now show correct, non-NULL
+       per-flow columns matching the seven scenarios exactly (reusing
+       Phase 1E-A's own expected-value arithmetic); the simulated-
+       unreconstructable row's per-flow columns remain NULL (not 0, not
+       any other placeholder) and its pre-existing columns (consumption_
+       kwh, combined counters) are completely unchanged from before the
+       backfill ran.
+    5. Assert hourly/daily propagation: values roll up correctly from the
+       now-backfilled 15-minute tier only.
+    6. Assert the site-local daily boundary case (Phase 1B's discriminating
+       fixture) still produces two correctly-split daily rows.
+    7. Assert tenant/org attribution: a second organization's rows are
+       processed correctly and are not cross-contaminated (mirrors Phase
+       1E-A's own tenant-control device).
+    8. Idempotent rerun: call the backfill procedure a second time over
+       the identical range; assert every column's value (including the
+       still-NULL unreconstructable row) is byte-for-byte identical to
+       the first run's result.
+    9. Existing-value preservation: capture consumption_kwh/combined-
+       counter values before the backfill and assert they are unchanged
+       after — proving the backfill never alters what Phase 1B/1E-A
+       already computed correctly, even though the UPSERT technically
+       rewrites every column.
+Also: re-run Phase 1A/1B/1C/1D/1E-A contracts unchanged in the same
+clean-reset suite, per every prior phase's discipline.
+
+Staging validation (after deployment, read-only, no fixtures): confirm
+the new procedure exists with the expected signature/owner/grants;
+confirm it has NOT been invoked automatically by the deploy pipeline
+(no rows should change as a side effect of CI/CD alone); this phase's
+actual staging EXECUTION (§11) is a separate, explicitly approved step
+with its own before/after verification (row counts, NULL-column counts
+before and after, spot-checked against a small sample if any real data
+exists by then).
+
+===============================================================================
+10. PERFORMANCE CONSIDERATIONS
+===============================================================================
+
+All five tables are hypertables; 7-day batches align with chunk
+boundaries reasonably well, so each batch's scan is naturally limited by
+TimescaleDB's chunk exclusion rather than touching the full table.
+Compressed chunks (older than each table's own compression policy: 7/14/
+7/30/90 days respectively) can still be read by the SELECT side of the
+UPSERT, but writes to compressed chunks require decompression — this is
+an inherent TimescaleDB cost for backfilling old data, not something this
+design can avoid, and is exactly why batching (rather than one giant
+transaction) keeps each unit of work bounded and observable. Given
+staging/production currently hold no real historical rows (§2), the
+actual runtime cost of a real backfill cannot be measured today; the
+batched design is built to scale to real volume without requiring a
+redesign later.
+
+===============================================================================
+11. STAGING AND PRODUCTION EXECUTION STRATEGY
+===============================================================================
+
+The migration (§6) only DEFINES the procedure — it does not invoke it.
+Actually running the backfill is a separate, explicitly approved,
+observable operational step, run manually (via the same SSH-to-staging
+mechanism already established and permission-scoped in this project, or
+equivalently via a controlled psql invocation) AFTER the migration has
+deployed and been verified — never as an automatic part of CI/CD deploy,
+consistent with "prefer the normal migration/application mechanism" for
+the DEFINITION while keeping the EXECUTION a deliberate, monitored action
+given it is the one part of this phase that reads/writes potentially
+real historical data. Given staging currently has zero commissioned
+devices, the staging execution is expected to be a fast, empty no-op
+run — useful primarily to prove the procedure runs cleanly end-to-end
+before any real data exists, not to validate performance at scale.
+Production execution requires its own separate approval, following this
+same plan, only after staging's dry run is confirmed clean.
+
+===============================================================================
+12. OBSERVABILITY
+===============================================================================
+
+RAISE NOTICE per batch (window boundaries, rows affected at each of the
+three tiers, per Phase 1A-1E-A's existing NOTICE-based convention already
+used throughout postgres/jobs/*.sql). RAISE WARNING (not EXCEPTION) on a
+per-batch failure, so one bad batch is visible but does not abort
+progress on the rest of the range — the run's final summary (total
+batches, total rows affected, any batches that warned) is the objective
+completion signal (§14).
+
+===============================================================================
+13. ROLLBACK / RECOVERY STRATEGY
+===============================================================================
+
+The migration itself (defining the procedure) rolls back trivially like
+any other — DROP PROCEDURE, or a follow-up migration, with zero data
+impact since defining it changes nothing by itself. Rolling back an
+actual EXECUTION is not "undoing a mutation" in the destructive sense:
+the backfill only ever populates six specific columns that were
+previously NULL; if a rollback of populated values were ever desired, a
+narrow, explicit UPDATE ... SET <six columns> = NULL WHERE calculated_at
+>= <backfill start time> is possible and safe, though not anticipated to
+be needed given the operation is a pure, deterministic re-derivation of
+already-correct source data.
+
+===============================================================================
+14. ACCEPTANCE CRITERIA
+===============================================================================
+
+    - New contract test passes, covering all nine assertions in §9.
+    - Phase 1A/1B/1C/1D/1E-A contracts continue to pass unchanged.
+    - Full clean-reset integration suite: exit 0, zero ERROR lines.
+    - git diff shows exactly the files in §6; no reporting view, no
+      Grafana file, no existing migration, no Phase 1E-A function/schema
+      change.
+    - Staging deployment (once approved) shows the procedure exists with
+      correct owner/grants and has not altered any row merely by being
+      deployed.
+    - The explicit staging (and later production) EXECUTION run completes
+      with a clean summary (§12) and, when real data exists, a spot-check
+      confirms NULL-column counts decreased only for buckets with
+      surviving native source, and remained NULL (not zero) for buckets
+      without.
+
+===============================================================================
+15. RISKS AND MITIGATIONS
+===============================================================================
+
+Risk: a very large historical volume makes a full backfill run long.
+Mitigation: batching bounds each unit of work; the run is resumable by
+simple re-invocation (§8); not urgent today given zero real historical
+data exists.
+Risk: compressed chunks require decompression on write, adding cost.
+Mitigation: inherent to TimescaleDB, mitigated by batching; no design
+change avoids this.
+Risk: someone assumes NULL per-flow columns mean "no events" rather than
+"unreconstructable." Mitigation: this must be explicitly documented (this
+plan, and a code comment on the affected columns) — flagged as a decision
+point requiring your acknowledgment (§17), not silently handled.
+Risk: running the backfill automatically as part of deploy. Mitigation:
+explicitly designed against (§11) — the migration only defines the
+procedure; execution is always a separate, deliberate step.
+
+===============================================================================
+16. EXPLICIT NON-GOALS
+===============================================================================
+
+Does NOT retarget get_canonical_energy_read, get_grafana_asset_energy_
+intervals, or any reporting view (v_energy_reporting_5min/15min/hourly/
+daily) — 1E-C. Does NOT touch v_energy_semantic_rollup_15min/5min beyond
+reading them exactly as Phase 1E-A's own functions already do — no
+retirement, no redefinition. Does NOT change Grafana in any way. Does NOT
+change routing (resolve_grafana_energy_routing_resolution). Does NOT
+modify Phase 1E-A's schema or function bodies. Does NOT invent a new
+classification or aggregation formula anywhere.
+
+===============================================================================
+17. DECISION REQUIRING YOUR APPROVAL
+===============================================================================
+
+The historical-reconstructability limit (§4, corrected) is real,
+evidenced, and permanent, but narrower than originally stated: per-flow
+quality data cannot be recovered, at any tier, for a bucket whose NATIVE
+source has already been deleted by its own retention policy (180 days for
+1-minute-capture sites; 2 years for 5-minute-capture sites) as of whenever
+the backfill executes. It is NOT additionally limited by 15-minute's own
+2-year retention for hourly/daily — once captured via a correctly-
+sequenced backfill, hourly/daily per-flow data is durable per their own
+(longer) retention, independent of the lower tier's later expiration.
+This plan's recommendation is to accept the single, native-bounded limit
+explicitly — leave buckets outside that window's per-flow columns
+permanently NULL, documented as "cannot reconstruct," never approximated
+— and, separately, to run the backfill promptly once approved, since the
+reconstructable window narrows every day native retention continues to
+run. Please confirm this acceptance before implementation proceeds.
+
+===============================================================================
+18. IMPLEMENTATION SEQUENCE (once approved)
+===============================================================================
+
+    1. Write migration 197 (procedure definition only) and its manifest
+       entry.
+    2. Write the disposable-DB contract test (§9) and its wrapper,
+       executable-bit force-verified per the established Phase 1A lesson.
+    3. Wire into run_integration_environment.sh.
+    4. Run the full clean-reset suite; iterate on any fixture issues.
+    5. Pre-commit audit (diff/stat/status) — stop for commit approval.
+    6. Commit, stop for push approval; push, stop for CI/CD verification.
+    7. Post-deployment verification (procedure exists, nothing executed
+       automatically).
+    8. Separately propose and seek approval for the actual staging
+       EXECUTION of the backfill (§11) — a distinct action from deploying
+       the migration.
+
+===============================================================================
+19. FINAL RECOMMENDATION
+===============================================================================
+
+READY FOR IMPLEMENTATION, contingent on your explicit acknowledgment of
+the corrected decision in §17: the only permanent limit is per-flow data
+for buckets whose native source has already expired at backfill time
+(180 days back for 1-minute-capture sites, 2 years for 5-minute-capture
+sites) — NOT an additional, narrower limit on hourly/daily. Within that
+native-bounded window, all three tiers (15min, hourly, daily) are fully
+reconstructable, and once backfilled, permanently durable per each tier's
+own (longer) retention, independent of lower-tier expiration — exactly
+the intended "daily is the durable long-term accounting layer" design,
+now confirmed to hold for the per-flow columns too. No other blocking
+issue was found. The recommended mechanism — batched re-invocation of the
+existing, unmodified Phase 1E-A refresh functions, in strict 15min-then-
+hourly-then-daily order per batch, via a thin new orchestration procedure
+— requires no new calculation logic, is idempotent and resumable by
+construction, and correctly leaves unreconstructable history as NULL
+without any special-case code to do so. Recommend running the approved
+backfill promptly once implemented, since every day of delay narrows the
+window of history that can still be permanently captured.

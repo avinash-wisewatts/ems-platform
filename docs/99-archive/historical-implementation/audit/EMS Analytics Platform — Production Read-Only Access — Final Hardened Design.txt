@@ -1,0 +1,323 @@
+EMS Analytics Platform — Production Read-Only Access
+FINAL HARDENED DESIGN (supersedes the prior "Production Read-Only Access
+Design" document's SSH-layer implementation; the underlying view/role
+analysis from that document is re-verified and reused below)
+
+Status: DESIGN ONLY. Nothing implemented. No Linux user, sudoers file,
+SSH key, PostgreSQL role, or grant created. No production connection
+attempted.
+
+Note on labeling: this message referred to the approach as "Option B."
+Every specific requirement given (no port-forwarding, forced-command,
+one exact sudoers rule, no docker-group membership) matches what the
+prior design document called Option A (forced-command), which is what
+was recommended there and what this document proceeds with. Flagged
+rather than silently reinterpreted.
+
+===============================================================================
+WEAKNESSES FOUND IN THE PRIOR DESIGN AND CORRECTED HERE
+===============================================================================
+
+1. Meta-command escape hatch (the most serious finding). The prior design
+   piped arbitrary client-supplied SQL text into `psql` via stdin. psql
+   does not only execute SQL from stdin — it also processes backslash
+   meta-commands (\!, \copy ... TO/FROM PROGRAM, \o, \lo_import, \g).
+   \! spawns an interactive shell; \copy ... TO PROGRAM spawns an
+   arbitrary process — both execute INSIDE the ems-timescaledb container,
+   completely bypassing the SQL-level read-only role, regardless of that
+   role's privileges. This is a real command-execution path, not a
+   theoretical one. CORRECTED below: the client never supplies SQL or
+   meta-command text at all; only a fixed lookup key reaches the wrapper.
+
+2. "Accept arbitrary SQL via stdin" also directly conflicts with the
+   explicit requirement to avoid a generic execute-arbitrary-SQL
+   interface. CORRECTED: replaced with a small, fixed menu of exactly
+   four hardcoded, parameterless SELECT statements.
+
+3. The broader "approved information" list included "relevant
+   gateway/device metadata" and "observed MQTT device UID/channel
+   relationships." Verified this session: none of the four legitimate
+   reference views join through any tenant, gateway, device, or
+   telemetry-identity table (see D) — they are pure global catalog data.
+   Actual gateway/device INSTANCE records and MQTT identity are
+   production's real customer operational data, explicitly excluded by
+   the standing "do not copy production gateways, devices, sites,
+   telemetry, credentials, MQTT state, or customer data" rule stated
+   earlier. The MQTT UID/channel relationship question was already fully
+   and correctly answered from STAGING's own live traffic (prior
+   investigation) — production access is neither needed nor appropriate
+   for it. CORRECTED: this design's scope is exactly the four catalog
+   views; no gateway/device instance table or view is included, and none
+   should be added without a separate, explicit decision given the very
+   different (customer-data) risk profile that would carry.
+
+===============================================================================
+A. EXACT LINUX ACCOUNT/SSH CHANGES
+===============================================================================
+
+New system account, no interactive shell, no home directory contents
+beyond .ssh:
+    useradd --system --no-create-home --shell /usr/sbin/nologin ems_metadata_reader
+Not added to the docker group (root-equivalent on the host — confirmed
+avoided). No password set (SSH key only). One authorized_keys entry:
+    command="/usr/local/sbin/ems_metadata_reader_query.sh",no-pty,no-agent-forwarding,no-X11-forwarding,no-port-forwarding,no-user-rc,restrict ssh-ed25519 AAAA... ems-metadata-reader-key
+"restrict" (modern OpenSSH shorthand enabling all of no-pty/no-agent-
+forwarding/no-X11-forwarding/no-port-forwarding/no-user-rc at once, with
+the individual flags kept explicit for clarity/older-OpenSSH
+compatibility). This closes: interactive shell (no-pty), agent relay,
+X11 relay, TCP/port-forwarding (satisfies "no port-forwarding path to
+PostgreSQL" directly at the SSH layer, independent of anything else).
+sshd itself is not reconfigured — this is achieved entirely via the
+per-key authorized_keys restrictions, touching no global sshd_config
+setting and no other account.
+
+===============================================================================
+B. EXACT SUDOERS CHANGES
+===============================================================================
+
+One dedicated drop-in file, one exact literal command, no wildcards, no
+argument passthrough:
+    /etc/sudoers.d/ems_metadata_reader:
+    ems_metadata_reader ALL=(root) NOPASSWD: /usr/local/sbin/ems_metadata_reader_query.sh
+Note the sudoers rule targets the WRAPPER SCRIPT itself (not a raw
+`docker exec ... psql` line as previously drafted) — the wrapper is what
+actually invokes docker, and sudo's job is only to let this unprivileged
+system account execute that one specific script as root (needed because
+`docker exec` requires root or docker-group, and docker-group is
+rejected per §A). The wrapper script's own content (C) is therefore part
+of the trusted, root-executed surface and must itself be reviewed as
+carefully as any of these configuration files — it is not something the
+restricted account can edit (owned by root, mode 755, not writable by
+ems_metadata_reader).
+
+===============================================================================
+C. THE WRAPPER SCRIPT (the corrected core of this design)
+===============================================================================
+
+/usr/local/sbin/ems_metadata_reader_query.sh, owned by root, mode 0755,
+not writable by ems_metadata_reader:
+
+    #!/bin/bash
+    set -Eeuo pipefail
+    case "${SSH_ORIGINAL_COMMAND:-}" in
+        device_models)
+            QUERY='SELECT vendor, model, device_category_id, device_category_name FROM admin.v_device_models ORDER BY vendor, model;'
+            ;;
+        device_profiles)
+            QUERY='SELECT profile_code, manufacturer, model, device_category_ids, device_category_names FROM admin.v_active_device_profiles ORDER BY profile_code;'
+            ;;
+        device_categories)
+            QUERY='SELECT id, name, description FROM admin.v_device_categories ORDER BY name;'
+            ;;
+        gateway_models)
+            QUERY='SELECT id, vendor, model, protocol FROM admin.v_gateway_models ORDER BY vendor, model;'
+            ;;
+        *)
+            echo "Usage: ssh ems-production-readonly {device_models|device_profiles|device_categories|gateway_models}" >&2
+            exit 1
+            ;;
+    esac
+    exec docker exec -i ems-timescaledb psql -X --no-psqlrc -v ON_ERROR_STOP=1 -U ems_metadata_reader -d ems -c "$QUERY"
+
+Why this closes both weaknesses:
+    - $SSH_ORIGINAL_COMMAND (the client's requested "command") is used
+      ONLY as a `case` match key against four fixed literal strings.
+      It is never eval'd, never concatenated into a shell command, and
+      never passed as SQL text. An unrecognized value hits the default
+      branch and exits — no code path exists for it to influence
+      anything else.
+    - The four QUERY values are 100% hardcoded literals in a root-owned,
+      client-unwritable file. The client cannot inject SQL, cannot
+      reach a psql meta-command, and cannot supply \copy/\!/\o/\g in any
+      form, because no client-supplied text is ever passed to psql at
+      all — psql's -c argument is always one of these four fixed strings.
+    - `-X` (skip .psqlrc) and `--no-psqlrc` (defense in depth, explicit)
+      prevent any startup file from altering behavior. `-v ON_ERROR_STOP=1`
+      is a defensive default, not a security boundary by itself.
+    - This is a genuine "fixed menu," not a generic SQL interface —
+      directly satisfying the "no generic execute-arbitrary-SQL
+      interface" requirement, not merely asserting it.
+
+===============================================================================
+D. EXACT VIEWS THAT WILL BE EXPOSED (re-verified this session, not assumed)
+===============================================================================
+
+    admin.v_device_models            FROM metadata.device_models dm JOIN config.device_categories dc ON dc.id=dm.device_category_id
+    admin.v_active_device_profiles   FROM config.device_profiles dp LEFT JOIN config.device_profile_categories dpc ... LEFT JOIN config.device_categories dc ... WHERE dp.is_active=true
+    admin.v_device_categories        FROM config.device_categories dc
+    admin.v_gateway_models           FROM metadata.gateway_models gm
+
+Re-confirmed: none of the four joins through metadata.organizations,
+metadata.sites, metadata.gateways, metadata.devices, metadata.device_
+identifiers, or any grafana_organization_map/tenant table. There is no
+row-level tenant filter because there is no tenant-scoped data in any of
+these four views at all — they are pure global reference/catalog data
+(device model/category/profile/gateway-model names), confirmed by
+reading each view's actual FROM/JOIN/WHERE clause directly, not assumed.
+Tenant isolation is therefore not applicable to this specific set of
+views (it would become directly relevant and require separate review if
+any gateway/device INSTANCE object were ever proposed — none is here).
+
+All four are relkind='v', owner ems_admin, reloptions={security_barrier=
+true}, no security_invoker option (re-confirmed) — meaning they run with
+the owner's rights against the three underlying tables (metadata.device_
+models, config.device_profiles, config.device_profile_categories), so the
+querying role needs no grant on those tables at all. Since only SELECT
+is ever granted on the views (never INSERT/UPDATE/DELETE), Postgres
+blocks any mutation attempt against them regardless of whether the views
+are technically "auto-updatable" under Postgres's internal rules —
+privilege is checked before updatability is even considered.
+
+===============================================================================
+E. EXACT QUERIES CLAUDE WILL BE ALLOWED TO RETRIEVE
+===============================================================================
+
+Exactly and only the four fixed statements in C, invoked as:
+    ssh ems-production-readonly device_models
+    ssh ems-production-readonly device_profiles
+    ssh ems-production-readonly device_categories
+    ssh ems-production-readonly gateway_models
+No other invocation is possible through this account.
+
+===============================================================================
+F. POSITIVE SECURITY TESTS
+===============================================================================
+
+    ssh ems-production-readonly device_models        -- must return rows/empty set, no error
+    ssh ems-production-readonly device_profiles       -- must return rows/empty set, no error
+    ssh ems-production-readonly device_categories      -- must return rows/empty set, no error
+    ssh ems-production-readonly gateway_models         -- must return rows/empty set, no error
+
+===============================================================================
+G. NEGATIVE SECURITY TESTS (must all fail)
+===============================================================================
+
+    ssh ems-production-readonly                        -- no argument: usage message, exit 1, nothing executed
+    ssh ems-production-readonly 'anything else'         -- default case: usage message, exit 1
+    ssh ems-production-readonly '\! whoami'             -- SSH_ORIGINAL_COMMAND = literal text '\! whoami',
+                                                            matches no case branch -> usage message, exit 1.
+                                                            Proves the meta-command escape is closed: the
+                                                            string never reaches psql at all.
+    ssh ems-production-readonly 'device_models; DROP TABLE metadata.device_models;'
+                                                        -- does not match the exact string "device_models",
+                                                            falls to default branch, exit 1. Proves no
+                                                            partial-match/injection path through the case.
+    ssh ems-production-readonly -L 9999:127.0.0.1:5432 device_models
+                                                        -- port-forwarding refused by no-port-forwarding,
+                                                            independent of the wrapper script entirely.
+    ssh -o "ForwardAgent=yes" ems-production-readonly device_models
+                                                        -- agent forwarding refused by no-agent-forwarding.
+    Attempting, from a session that DID reach the query wrapper, to run
+    (this would require modifying the wrapper itself, which the account
+    cannot do — listed for completeness of what the role itself blocks
+    if this boundary were ever bypassed):
+        INSERT/UPDATE/DELETE/TRUNCATE on any of the four views or their
+        underlying tables; CREATE/ALTER/DROP anything; GRANT/REVOKE
+        anything — all must fail with permission denied (42501), since
+        ems_metadata_reader holds SELECT only, on the views only.
+    ssh ems-production-readonly 'device_models\ngetshell'  -- newline-embedded
+                                                            attempt still fails the exact-string case match.
+
+===============================================================================
+H. ROLLBACK PROCEDURE
+===============================================================================
+
+Any one of the following alone fully revokes access, independent of the
+others:
+    Database:  ALTER ROLE ems_metadata_reader NOLOGIN; (instant) or
+               DROP ROLE ems_metadata_reader;
+    Host:      remove /home/ems_metadata_reader/.ssh/authorized_keys,
+               remove /etc/sudoers.d/ems_metadata_reader, or
+               userdel ems_metadata_reader entirely.
+    Local:     remove the ~/.ssh/config Host block and the Claude Code
+               permission rule.
+None of these touch emsadmin, ems-staging access, or any other account.
+
+===============================================================================
+I. CREDENTIAL/KEY LIFECYCLE
+===============================================================================
+
+Dedicated ed25519 keypair, generated solely for this purpose, used for
+nothing else. No PostgreSQL password exists for ems_metadata_reader given
+the existing local-trust auth (confirmed in the prior document) — this
+means there is no database credential to rotate at all for this path;
+only the SSH key. Rotation: generate a new keypair, replace the single
+authorized_keys line, delete the old one; no database change needed.
+Revocation: H, either layer. Emergency disable: ALTER ROLE ...NOLOGIN or
+deleting the authorized_keys line — both instant, either sufficient
+alone. Owner: whoever holds emsadmin access today, since only an existing
+production administrator can perform the host-side steps (Claude cannot
+create this account itself even once approved, unless separately
+authorized to run these exact commands through the existing emsadmin
+access — a distinct decision from approving this design).
+
+===============================================================================
+J. HOW PRODUCTION DATA REACHES STAGING WITHOUT AN AUTOMATIC SYNC PATH
+===============================================================================
+
+There is no automated pipeline of any kind. The only "transfer" is: a
+human (you, or Claude reporting results to you) reads the output of one
+of the four fixed queries, and a value from that output (e.g., a
+confirmed canonical vendor/model string) is manually typed as a literal
+into a new, static, repository-committed seed file — exactly the same
+manual, human-reviewed process already used for the "Eniscope Energy
+Meter" value you supplied directly in the prior turn. That seed file then
+goes through the identical plan -> approve -> implement -> test -> stage
+-> commit -> push -> CI/CD -> verify sequence as every phase in this
+project. No code in the repository, in staging, or in this access path
+ever programmatically reads from production and writes to staging;
+nothing is scheduled, triggered, or automatic. The production read-only
+account exists solely as a manual investigative tool.
+
+===============================================================================
+K. NO PRODUCTION APPLICATION BEHAVIOR CHANGES
+===============================================================================
+
+Confirmed: nothing in this design touches production's compose.yaml,
+application containers (ems-admin-portal, ems-live-telemetry), Grafana,
+Telegraf, telemetry ingestion, MQTT configuration, or any application
+code or configuration file. The only new artifacts are one OS-level
+account, one sudoers drop-in, one wrapper script, and one new PostgreSQL
+role with four SELECT grants — none of which any running application
+process reads, calls, or depends on.
+
+===============================================================================
+L. NO PRODUCTION WRITE CAPABILITY IS INTRODUCED
+===============================================================================
+
+Confirmed at every layer independently: the SSH account has no shell, no
+sudo beyond one fixed script, and cannot forward ports/agent/X11 (A). The
+wrapper script accepts no client-supplied SQL or meta-command text
+whatsoever — only a four-way fixed lookup (C). The PostgreSQL role has
+NOSUPERUSER/NOCREATEDB/NOCREATEROLE/NOREPLICATION/NOBYPASSRLS and holds
+SELECT only, on four views only, granting no privilege on any underlying
+table (D). Any one of these four independent layers failing still leaves
+the others intact — this is defense in depth, not a single point of
+failure.
+
+===============================================================================
+C (DATABASE) — ROLE/GRANT, restated precisely for this hardened design
+===============================================================================
+
+    CREATE ROLE ems_metadata_reader WITH LOGIN NOSUPERUSER NOCREATEDB
+        NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+    GRANT CONNECT ON DATABASE ems TO ems_metadata_reader;
+    GRANT USAGE ON SCHEMA admin TO ems_metadata_reader;
+    GRANT SELECT ON
+        admin.v_device_models,
+        admin.v_active_device_profiles,
+        admin.v_device_categories,
+        admin.v_gateway_models
+    TO ems_metadata_reader;
+    ALTER ROLE ems_metadata_reader SET log_statement = 'all';  -- surgical,
+        role-scoped audit logging; does not touch any existing logging
+        configuration for any other role.
+No USAGE is granted on metadata/config/telemetry schemas — the role
+cannot even attempt to reference the underlying tables directly (it
+would fail on schema USAGE before privilege on the table were even
+checked), an additional, independent layer beyond D's table-grant
+analysis.
+
+Nothing implemented. Awaiting your explicit approval of this hardened
+design before any host, sudoers, wrapper-script, or database change is
+made.

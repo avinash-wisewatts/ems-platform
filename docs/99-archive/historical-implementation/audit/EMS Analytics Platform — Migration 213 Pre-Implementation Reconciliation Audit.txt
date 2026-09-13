@@ -1,0 +1,1870 @@
+===============================================================================
+EMS ANALYTICS PLATFORM
+MIGRATION 213 — PRE-IMPLEMENTATION RECONCILIATION AUDIT
+(STAGING context; AUDIT / DESIGN ONLY — no migration, no SQL, no DB mutation,
+ no staging contact, no commit, no push)
+===============================================================================
+Date        : 2026-08-27
+Repo        : C:\Users\avina\Documents\WiseWatts\ems-platform  (branch fix/recovery-retention-age-population)
+Local DB    : ems-timescaledb-test — canonical + migrations 205..212 applied,
+              ledger RE-VERIFIED. TimescaleDB 2.29.2 / PostgreSQL 16.15.
+Staging     : NOT contacted. Every staging-specific runtime/row-count value is UNKNOWN.
+
+EVIDENCE LABELS (per the task instruction):
+  HISTORICALLY VERIFIED             — established by a prior audit/report; object unchanged since
+  RE-VERIFIED NOW                   — read directly from the repo or local DB this session
+  INFERRED FROM HISTORIC + CURRENT  — reasoned from the two above
+  UNKNOWN                           — cannot be established without a staging read
+  [DESIGN]                          — a proposal in this document, not a fact
+
+Where current state contradicts a historic document, current state wins and the
+contradiction is called out (none material were found this pass).
+
+===============================================================================
+1. EXECUTIVE DECISION
+===============================================================================
+
+1.1  The v2 reconciliation architecture (Option C: seven tier-specific reconcile
+     procedures + one read-only energy deficit helper + seven per-tier jobs +
+     analytics.pipeline_reconciliation_log) REMAINS CORRECT against the post-212
+     repository and database. RE-VERIFIED NOW: none of the seven calculation
+     functions writes telemetry.pipeline_state; the forward watermark is written
+     by exactly 12 procedures (the 7 analytical wrappers + 5 telemetry
+     loaders) and by nothing else. The reconciliation-vs-forward separation is
+     therefore structurally enforceable.
+
+1.2  Two design refinements are REQUIRED beyond v2, both discovered by
+     re-reading the deployed refresh_* bodies this session:
+       (a) The energy 1min / 5min detector MUST replicate the calculation
+           function's device filter (resolve_site_capture_bucket(...)
+           .capture_interval_seconds <= 60 for 1min, = 300 for 5min). Without it
+           the detector would falsely flag every 300s/900s device's ca_energy_1min
+           rows as "missing 1min children". (§7, §9)
+       (b) energy_consumption_15min persists BOTH source_interval_count
+           (count of native rows) AND source_sample_count (sum of the native
+           rows' source_sample_count); energy_consumption_hourly / _daily persist
+           source_interval_count = SUM(parent.source_interval_count) (NOT a plain
+           count of parent rows). The fingerprint comparison per tier differs
+           accordingly. (§7)
+
+1.3  N2 CONFIRMED: energy_consumption_15min reconcile_window is currently 3 days
+     (RE-VERIFIED NOW); it must be >= max(1min 2d, 5min 7d) = 7 days because
+     15min consumes energy_consumption_1min UNION ALL energy_consumption_5min
+     and a ca_energy_5min-fed 5min repair can be up to 7 days old.
+     RECOMMENDATION: 8 days.
+
+1.4  DEMAND reconcile_window: RECOMMEND 12 hours (from the current 6 hours),
+     PENDING one staging cost read. max_catchup_window stays 6 hours (different
+     purpose). If the staging read shows a 12h demand re-finalisation for the
+     busiest site costs > ~2–3 minutes, retain 6 hours.
+
+1.5  refresh_continuous_aggregate() STAYS OUT of the automated reconcile path
+     (v2 §8, RE-CONFIRMED: the five energy refresh_* are SECURITY DEFINER
+     FUNCTIONS — atomic — so they cannot contain it, and the v2 probe proved it
+     is rejected inside any (sub)transaction on 2.29.2). reconcile_window for
+     1min/5min is set EQUAL TO each CAGG's automatic start_offset (2d / 7d) so
+     the automatic refresh policy keeps the CAGG truthful within the window.
+     Backfill older than the start_offset is a documented, log-recorded,
+     operator-remedied limitation — NOT silently claimed repaired.
+
+1.6  DECISION: GO WITH CONDITIONS — IMPLEMENT 213 AFTER the staging read-only
+     checks in §28 resolve NG5 (detector cost at scale) and the demand
+     reconcile-window value, and after a conservative-n_max first deployment
+     step. Full statement in §30.
+
+1.7  SCOPE HELD: exactly the seven approved tiers. No additional reconciliation
+     tier is proposed. (The routing/normalization tiers are explicitly NOT
+     reconciled — v2 §E, unchanged: they already re-scan a dynamic overlap
+     every run and roll their checkpoint back atomically on failure; adding
+     reconciliation there would be the "second forward pipeline" the contract
+     forbids.)
+
+===============================================================================
+2. HISTORIC AUDIT FINDINGS REUSED
+===============================================================================
+
+The following prior findings materially informed this design and were treated
+as reusable evidence (object unchanged) unless flagged for re-verification.
+
+H1  [Phase 0 Current-State Inventory / Metric Lineage Catalogue] The persisted
+    analytical tiers (analytics.energy_consumption_{1min,5min,15min,hourly,daily})
+    are plain hypertables written by dedicated refresh_* functions; the CAGGs
+    ca_energy_1min / ca_energy_5min aggregate telemetry.energy_measurements
+    directly. HISTORICALLY VERIFIED; the CAGG definitions and the FROM clauses
+    were RE-VERIFIED NOW.
+
+H2  [Migration 209 Implementation Report] The five energy wrappers became
+    watermark-driven; parent availability for 1min/5min is
+    analytics.cagg_available_through(<cagg>) (the scalar materialisation
+    watermark); 15min uses LEAST(cp_1min, cp_5min); hourly and daily use
+    cp_15min; each stores max_catchup_window / overlap / reconcile_window in job
+    config; the refresh_* functions themselves were NOT changed. RE-VERIFIED NOW
+    (§5, §6): the config values and the calc parents are as stated; daily reads
+    energy_consumption_15min DIRECTLY (not hourly).
+
+H3  [Migration 209 report + v2 §F] ca_energy_1min / ca_energy_5min are
+    materialized_only=TRUE native CAGGs; the materialisation watermark can
+    advance across empty source periods and is NOT a completeness signal; the
+    child tiers persist source_sample_count (1min/5min) and source_interval_count
+    (15min/hourly/daily) as source-count fingerprints. RE-VERIFIED NOW:
+    materialized_only=TRUE for ca_energy_1min/5min/15min; start_offset 2d/7d/2d;
+    end_offset 1 minute; refresh every 1 min / 5 min / 5 min.
+
+H4  [v2 §5 / Migration 209] refresh_energy_consumption_1min filters
+    capture_interval_seconds <= 60; refresh_energy_consumption_5min filters
+    = 300; the device sets are disjoint; a hypothetical 900s device feeds
+    neither tier (pre-existing gap). RE-VERIFIED NOW: the <=60 filter is present
+    verbatim in refresh_energy_consumption_1min (WHERE clause and the
+    previous-bucket LATERAL); the =300 filter is present in
+    refresh_energy_consumption_5min.
+
+H5  [Migration 210 Pre-Implementation Audit + Implementation Report]
+    analytics.demand_intervals is a plain table with TWO partial unique indexes
+    (uq_demand_intervals_site_scope WHERE scope_type='SITE';
+     uq_demand_intervals_asset_scope WHERE scope_type='ASSET'); the sole writer
+    is analytics.refresh_demand_analytics, now a 4-arg PROCEDURE
+    (p_now, p_lookback, p_finalize_from, p_finalize_to) whose historical
+    finalisation loop is bounded to [COALESCE(p_finalize_from, p_now-p_lookback),
+    COALESCE(p_finalize_to, p_now)); the finalisation write is a scope-branched
+    status-guarded upsert (VALID rows frozen); the live demand_state block stays
+    keyed to p_now. Test T-Refin-E proved a bounded finalize window repairs a
+    hole WITHOUT moving telemetry.pipeline_state('demand_intervals'). All
+    RE-VERIFIED NOW (§13): the 4-arg signature, v_win_from/v_win_to derivation,
+    the two ON CONFLICT arbiters, and that refresh_demand_analytics does NOT
+    write pipeline_state.
+
+H6  [Migration 211 Pre-Implementation Audit + Implementation Report]
+    telemetry.refresh_environment_daily(p_from, p_to) reads
+    telemetry.environment_measurements DIRECTLY (never a ca_environment_* CAGG);
+    localises bucket_start to metadata.sites.timezone (NOT NULL, DST-aware);
+    emits a (device, site-local-day) row ONLY where
+    local_day_end > p_from AND local_day_end <= p_to (complete local days only);
+    a day/device with no source produces NO row (no NO_DATA sentinel);
+    ON CONFLICT (device_id, bucket_start) DO UPDATE (unconditional). RE-VERIFIED
+    NOW (§14): the FROM, the AT TIME ZONE s.timezone local-day math, the
+    local_day_end filter, the GROUP BY, and that it does NOT write pipeline_state.
+
+H7  [N1 + Reconciliation Architecture Redesign Audit v2] §8: the automated
+    reconcile path must NOT call refresh_continuous_aggregate (rejected inside a
+    transaction block AND inside a plpgsql BEGIN...EXCEPTION subtransaction on
+    TSDB 2.29.2, proven by local probe). §7/§F: set reconcile_window(1min)=2d,
+    (5min)=7d = CAGG start_offsets; older backfill is alert-only. §12: Option C
+    (per-tier procs + read-only helper). §J: seven per-tier jobs, offset
+    cadences, each taking the FORWARD job's advisory key. §K: log = hypertable,
+    180d retention, one row per run. All CARRIED FORWARD; refined per §1.2.
+
+H8  [Migration 212 Implementation Report] Baseline is migrations 205..212;
+    job 1000 now bounded (config.max_window=2h); 213 = reconciliation only;
+    214 = health view. RE-VERIFIED NOW: ledger contains 205..212.
+
+H9  [Phase 0 Tenant-Isolation & Authorization Audit] Analytical calculation
+    functions derive organization_id / site_id from the source rows they read;
+    there is no user-supplied tenant parameter on the calculation path. Reused
+    (§23) as the basis for "tenant isolation is inherited from the calculation
+    function". RE-VERIFIED NOW: refresh_energy_consumption_1min selects
+    ca.organization_id / ca.site_id / ca.device_id straight from ca_energy_1min;
+    refresh_demand_analytics and refresh_environment_daily likewise derive
+    org/site from source. The reconcile procs pass only (from,to) timestamps.
+
+H10 [Phase 0 Static Analytical Query-Performance Audit + job-runtime findings]
+    Forward jobs run well inside their schedule/max_runtime in normal operation;
+    the incident class was window-derivation, not raw query cost. Reused (§24)
+    to argue the reconcile re-drive of a 1-hour coarse bucket is ~30x a normal
+    forward 1min run's scan and is bounded by n_max — but ACTUAL staging
+    detector cost at fleet scale is UNKNOWN and is a GO condition.
+
+H11 [Post-1D Energy-Consumption Reconciliation and Phase 1E Recommendation]
+    Historic precedent that energy-consumption discrepancies were corrected by
+    RE-RUNNING the same refresh helper over the affected window (no new business
+    logic), and that VALID/finalized rows must not be silently rewritten.
+    Reused as the guiding principle for §8–§12 (repair == re-run the existing
+    refresh_* over the mismatching sub-window; never a bespoke recompute).
+
+H12 [Migration 209 report — R10] energy_consumption_5min is legitimately empty
+    for the all-60s fleet; perpetual absence of 5min rows is NOT a fault.
+    Reused verbatim (§21).
+
+CONTRADICTIONS FOUND: none material. One terminology note: the change-history
+and known-issues docs (pre-212) used "migration 212" to mean the reconciliation
+pass; migration 212 implementation renumbered that to 213/214 and the docs were
+corrected in the 212 change-set. This audit uses 213 = reconciliation,
+214 = health view.
+
+===============================================================================
+3. CURRENT BASELINE THROUGH MIGRATION 212
+===============================================================================
+
+RE-VERIFIED NOW — admin.schema_migrations contains, in order:
+  205_normalization_bounded_catchup_window
+  206_recovery_retention_age_population
+  207_energy_environment_routing_bounded_catchup_window
+  208_analytics_job_hardening
+  209_energy_consumption_cascade_watermarks
+  210_demand_watermark_refinalization
+  211_environment_daily_watermark
+  212_normalization_bounded_window
+
+RE-VERIFIED NOW — the seven analytical forward jobs and their config:
+  proc                                sched   max_runtime  retries  retry_period  reconcile_window  max_catchup_window  overlap    lookback
+  ----------------------------------- ------- ----------- -------- ------------ ---------------- ----------------- ---------- --------
+  run_energy_consumption_1min_job     1m      5m           3        5m           2 days           2 hours           2 minutes  30 minutes
+  run_energy_consumption_5min_job     1m      5m           3        5m           7 days           2 hours           10 minutes 30 minutes
+  run_energy_consumption_15min_job    5m      5m           3        5m           3 days   <-- N2  6 hours           30 minutes 2 hours
+  run_energy_consumption_hourly_job   15m     10m          3        5m           10 days          2 days            2 hours    2 days
+  run_energy_consumption_daily_job    1h      10m          3        5m           21 days          8 days            2 days     8 days
+  run_demand_calculation_job          1m      10m          3        5m           6 hours          6 hours           30 minutes 3 hours
+  run_environment_daily_job           1h      10m          3        5m           35 days          2 days            1 day      8 days
+
+RE-VERIFIED NOW — the seven pipeline_state rows all exist
+  (energy_consumption_1min/5min/15min = NO_SOURCE_DATA;
+   hourly/daily/environment_daily = NEVER_RUN; demand_intervals = NO_SOURCE_DATA;
+   last_received_at = NULL on the fresh canonical DB).
+
+RE-VERIFIED NOW — the seven calculation objects:
+  analytics.refresh_energy_consumption_1min(timestamptz,timestamptz)   FUNCTION, SECURITY DEFINER, owner ems_admin,
+       search_path = pg_catalog, analytics, telemetry, config, metadata
+  analytics.refresh_energy_consumption_5min(...)                       FUNCTION, DEFINER, ems_admin, same search_path
+  analytics.refresh_energy_consumption_15min(...)                      FUNCTION, DEFINER, ems_admin, search_path = pg_catalog, analytics
+  analytics.refresh_energy_consumption_hourly(...)                     FUNCTION, DEFINER, ems_admin, search_path = pg_catalog, analytics
+  analytics.refresh_energy_consumption_daily(...)                      FUNCTION, DEFINER, ems_admin, search_path = pg_catalog, analytics
+  analytics.refresh_demand_analytics(timestamptz,interval,timestamptz,timestamptz)
+                                                                       PROCEDURE, SECURITY INVOKER, owner ems_admin,
+       search_path = pg_catalog, analytics, config, metadata
+  telemetry.refresh_environment_daily(timestamptz,timestamptz)         FUNCTION, DEFINER, ems_admin,
+       search_path = pg_catalog, telemetry, metadata
+
+RE-VERIFIED NOW — NO analytics.pipeline_reconciliation_log, NO analytics.reconcile_*
+  object exists. (Three unrelated admin.*grafana*reconciliation* functions exist;
+  no name collision with the analytics.* namespace this migration uses.)
+
+RE-VERIFIED NOW — local DB row counts: energy_measurements 0, normalized_points 0,
+  environment_measurements 0, energy_consumption_1min/15min 0, demand_intervals 0,
+  environment_daily 0, ca_energy_1min 0 (fresh canonical). First-run sizing
+  against local data is therefore meaningless; staging sizing is UNKNOWN (§20, §28).
+
+===============================================================================
+4. CURRENT RECONCILIATION GAP
+===============================================================================
+
+After 209–211 every analytical tier advances a forward checkpoint only over a
+contiguous bounded slice and rolls back atomically on failure. Three classes of
+sub-checkpoint hole are still unhandled:
+
+G1  LATE SOURCE below the checkpoint. Energy source data corrected/backfilled
+    into energy_measurements after the forward run passed that bucket (routing/
+    normalisation overlap, or a job-1077 replay); or a late environment_measurements
+    bucket for an already-finalised local day; or late energy_measurements /
+    normalized_points for an already-finalised demand interval.
+
+G2  CAGG MATERIALISATION-WATERMARK OVERSHOOT (energy 1min/5min). During an
+    upstream stall the CAGG refresh policy advances the scalar watermark while
+    materialising no rows; the forward child job's v_to advances to that
+    watermark, refresh_* writes 0 rows, and the child checkpoint advances over a
+    range that has no CAGG rows. When source later arrives and the CAGG
+    re-materialises (within its start_offset), the forward child never re-reads
+    that range (its v_from is checkpoint - overlap, minutes).
+
+G3  RETROACTIVE-CONFIG or BUG deficits: an effective-dated capture/quality/register
+    policy change, or a bad manual intervention, that changes the correct value
+    of already-finalised rows.
+
+None of G1–G3 is a "trailing backlog"; a high-water mark cannot see them. 213
+adds a bounded, observable, idempotent trailing re-drive that repairs them
+WITHOUT advancing any forward checkpoint. 213 does NOT implement the health
+view that EXPOSES the residual (CAGG-older-than-start_offset) limitation — that
+is 214; 213 only RECORDS the evidence 214 needs (§22).
+
+===============================================================================
+5. VERIFIED ENERGY PARENT / CHILD MATRIX
+===============================================================================
+
+RE-VERIFIED NOW from the deployed function bodies (not the generic template):
+
+ child tier                calc function                       reads (FROM)                                    grain / key
+ ------------------------- ----------------------------------- ---------------------------------------------- --------------------------------------
+ energy_consumption_1min   refresh_energy_consumption_1min      telemetry.ca_energy_1min ca                    (device_id, bucket_start) = 1-min UTC
+                                                               (+ self-join ca_energy_1min previous_ca for     bucket_start; PK (device_id, bucket_start)
+                                                                the prev register; + resolve_site_capture_
+                                                                bucket LATERAL; + metadata.devices; +
+                                                                logical_points/energy_register_semantics; +
+                                                                config.resolve_interval_quality_rule LATERAL)
+   WHERE ca.bucket_start >= p_from AND < p_to
+     AND resolve_site_capture_bucket(ca.site_id, ca.bucket_start).policy_id IS NOT NULL
+     AND resolve_site_capture_bucket(...).capture_interval_seconds <= 60          <-- DEVICE FILTER
+   ON CONFLICT (device_id, bucket_start) DO UPDATE SET ... source_sample_count = EXCLUDED.source_sample_count, ...
+   source_sample_count := ca.sample_count   (= ca_energy_1min.count(*) of energy_measurements rows in the minute)
+   RETURN v_affected := GET DIAGNOSTICS ROW_COUNT  (rows inserted-or-updated)
+   writes organization_id/site_id/device_id straight from ca_energy_1min.  Does NOT write pipeline_state.
+
+ energy_consumption_5min   refresh_energy_consumption_5min      telemetry.ca_energy_5min ca                    (device_id, bucket_start) = 5-min UTC
+   WHERE ... capture_interval_seconds = 300     <-- DEVICE FILTER (mutually exclusive with 1min's <=60)
+   ON CONFLICT (device_id, bucket_start) DO UPDATE SET ... source_sample_count = EXCLUDED.source_sample_count
+   source_sample_count := ca_energy_5min.sample_count.  Does NOT write pipeline_state.
+
+ energy_consumption_15min  refresh_energy_consumption_15min     analytics.v_energy_semantic_rollup_15min       (device_id, bucket_start) = 15-min bucket,
+   (SECURITY DEFINER; search_path pg_catalog, analytics)         -> analytics.v_energy_consumption_native n     date_bin('15 minutes', native.bucket_start,
+   -> analytics.energy_consumption_1min UNION ALL                                                              '2000-01-01 05:30:00+05:30')   [IST-fixed origin]
+      analytics.energy_consumption_5min   (native_resolution_seconds 60 / 300)
+   WHERE r.bucket_start >= p_from AND < p_to
+   ON CONFLICT (device_id, bucket_start) DO UPDATE
+   persists  source_interval_count := count(*) of native rows in the 15-min bucket
+        AND  source_sample_count   := sum(native.source_sample_count)
+        AND  gap_interval_count / invalid_interval_count / reset_interval_count / rollover_interval_count
+   Does NOT write pipeline_state.
+
+ energy_consumption_hourly refresh_energy_consumption_hourly    analytics.energy_consumption_15min s           (device_id, bucket_start) = 1-hour bucket,
+   WHERE s.bucket_start >= p_from AND < p_to ; GROUP BY date_bin(1 hour, ...)     date_bin('1 hour', ...)
+   ON CONFLICT (device_id, bucket_start) DO UPDATE
+   persists source_interval_count := SUM(s.source_interval_count)   (NOT count of 15min rows)
+   Does NOT write pipeline_state.
+
+ energy_consumption_daily  refresh_energy_consumption_daily     analytics.energy_consumption_15min s           (device_id, bucket_start) = SITE-LOCAL day,
+   uses metadata.sites.timezone via AT TIME ZONE site.timezone (multiple)          bucket_start = site-local midnight in UTC
+   WHERE s.bucket_start >= <p_from adjusted> AND < <p_to adjusted>
+   ON CONFLICT (device_id, bucket_start) DO UPDATE ; also persists site_timezone
+   persists source_interval_count := SUM(l.source_interval_count)
+   Does NOT write pipeline_state.
+
+CONFIRMED PARENT CHAIN (matches the historic 209 statement; RE-VERIFIED NOW):
+  energy_consumption_1min   <- ca_energy_1min
+  energy_consumption_5min   <- ca_energy_5min
+  energy_consumption_15min  <- energy_consumption_1min UNION ALL energy_consumption_5min
+  energy_consumption_hourly <- energy_consumption_15min
+  energy_consumption_daily  <- energy_consumption_15min          (NOT hourly — RE-VERIFIED NOW)
+  15min bypasses nothing (there is no ca_energy_15min in this chain; ca_energy_15min
+  exists but is not read by refresh_energy_consumption_15min).
+
+===============================================================================
+6. CAGG BOUNDARY AND WATERMARK ANALYSIS
+===============================================================================
+
+RE-VERIFIED NOW:
+  ca_energy_1min : time_bucket('1 min', bucket_start) OVER telemetry.energy_measurements,
+                   GROUP BY (bucket, organization_id, site_id, device_id);
+                   sample_count = count(*); also active_power_sample_count =
+                   count(active_power_total_w), import_energy_sample_count =
+                   count(import_energy_total_wh). materialized_only = TRUE.
+                   refresh policy: start_offset 2 days, end_offset 1 minute,
+                   schedule 1 minute.
+  ca_energy_5min : identical shape, time_bucket('5 min'); materialized_only = TRUE;
+                   start_offset 7 days, end_offset 1 minute, schedule 5 minutes.
+
+CONSEQUENCES (INFERRED FROM HISTORIC + CURRENT):
+  C1  A ca_energy_1min row EXISTS for (device, minute) iff >= 1
+      energy_measurements row exists there. sample_count is therefore always
+      >= 1 and never NULL. There is no "empty materialised row".
+  C2  materialized_only = TRUE => reading ca_energy_1min for a bucket beyond the
+      materialisation watermark returns NOTHING even if source exists. So the
+      detector MUST operate within a window the automatic policy keeps current.
+  C3  end_offset = 1 minute => the automatic policy never materialises the
+      current, still-filling bucket. The reconcile window ends at the tier
+      checkpoint (always behind "now") so the reconcile never touches an
+      unsettled bucket.
+  C4  Within [checkpoint - start_offset, checkpoint) the automatic policy
+      (running every 1 / 5 minutes) has re-materialised every bucket, INCLUDING
+      any recent backfill. So ca_energy_1min.sample_count within that window
+      EQUALS the current count(*) of energy_measurements for that (device,
+      minute). The detector comparing child.source_sample_count vs
+      ca_energy_1min.sample_count is truthful for the whole window.
+  C5  BACKFILL OLDER THAN start_offset: the automatic policy does NOT
+      re-materialise it. Both ca_energy_1min.sample_count and
+      child.source_sample_count remain at their old (stale) values, so the
+      detector sees "equal" and reports HEALTHY — a MISS. This is the
+      OLDER-BACKFILL LIMITATION. 213 does NOT auto-repair it; 213 records
+      window_start/window_end in the log so 214 can compare against
+      energy_measurements directly and flag it; the operator remedy is a
+      one-off top-level  CALL refresh_continuous_aggregate('telemetry.ca_energy_1min',
+      old_from, old_to)  (legal at the top level per the v2 probe), after which
+      the next reconcile pass repairs the children.
+
+DESIGN DECISION [DESIGN]:
+  reconcile_window(1min) = 2 days  = ca_energy_1min start_offset
+  reconcile_window(5min) = 7 days  = ca_energy_5min start_offset
+  The detector NEVER reads analytics.cagg_available_through or
+  _timescaledb_catalog.continuous_aggs_watermark (NG3). It compares
+  per-(device, coarse-bucket) row counts and fingerprint sums only.
+
+===============================================================================
+7. ENERGY COMPLETENESS / FINGERPRINT CONTRACT
+===============================================================================
+
+RE-VERIFIED NOW. Per-tier authoritative fingerprint and comparison grain:
+
+--- energy_consumption_1min ---------------------------------------------------
+  child fingerprint      : energy_consumption_1min.source_sample_count   (bigint,
+                           NOT NULL in practice — always >= 1)
+  authoritative parent   : telemetry.ca_energy_1min.sample_count for the SAME
+                           (device_id, bucket_start)
+  comparison grain       : per (device_id, 1-min bucket). Rolled up to a coarse
+                           1-hour bucket only for candidate SELECTION and for the
+                           refresh_* re-drive window; the mismatch test itself is
+                           per (device, minute).
+  parent-side filter     : MUST apply resolve_site_capture_bucket(ca.site_id,
+                           ca.bucket_start).policy_id IS NOT NULL
+                           AND .capture_interval_seconds <= 60
+                           (identical to refresh_energy_consumption_1min's WHERE).
+  multi-device           : the comparison is per device_id; a coarse bucket with
+                           any device mismatch is re-driven for ALL devices in
+                           [coarse, coarse+1h) (idempotent no-op for healthy
+                           devices).
+  missing bucket         : parent row present, child row absent -> MISSING_CHILD.
+  zero-source bucket     : no parent row -> no child expected -> HEALTHY
+                           (EXPECTED_NO_DATA). Never flagged.
+  NULLs                  : coalesce(child.source_sample_count, 0) and
+                           coalesce(parent.sample_count, 0) in the comparison; a
+                           real child row never has NULL source_sample_count, a
+                           real ca row never has NULL sample_count — the coalesce
+                           is defensive.
+  child-without-parent   : child row present, no parent row -> SOURCE_RETRACTED
+                           (energy_measurements rows deleted by a correction or
+                           past 90d retention). LEAVE the child row; log a
+                           WARNING count. Do NOT delete (historical record).
+  legitimate scope/device mismatch : yes — the capture_interval filter. Handled
+                           by replicating the filter on the parent side.
+  extra dimension beyond time : device_id (mandatory). site_id only implicitly
+                           (via resolve_site_capture_bucket).
+
+--- energy_consumption_5min -------------------------------------------------
+  Identical to 1min, against telemetry.ca_energy_5min.sample_count, with the
+  device filter  capture_interval_seconds = 300  (mutually exclusive with 1min).
+  For the current all-60s fleet the parent side has ZERO qualifying rows, so the
+  detector reports HEALTHY forever (R10 preserved — §21).
+
+--- energy_consumption_15min ----------------------------------------------
+  child fingerprints     : source_interval_count (= count(*) of native rows) AND
+                           source_sample_count (= sum of native.source_sample_count).
+  authoritative parent    : analytics.energy_consumption_1min UNION ALL
+                           analytics.energy_consumption_5min (= v_energy_consumption_native),
+                           bucketed by  date_bin('15 minutes', native.bucket_start,
+                           TIMESTAMPTZ '2000-01-01 05:30:00+05:30')  [the IST-fixed
+                           origin the deployed rollup view uses — RE-VERIFIED NOW].
+  comparison per (device_id, 15-min bucket):
+      count(native rows)                         vs  child.source_interval_count
+      sum(native.source_sample_count)            vs  child.source_sample_count
+  NO device filter (15min rolls up whatever 1min/5min child rows exist; disjoint
+  device sets => no double counting — RE-VERIFIED NOW via the two filters).
+  missing / zero-source / NULL / retracted : as 1min, against the native union.
+
+--- energy_consumption_hourly --------------------------------------------
+  child fingerprint       : source_interval_count = SUM(parent.source_interval_count)
+                           over the hour  (NOT count of parent rows — RE-VERIFIED NOW).
+  authoritative parent    : analytics.energy_consumption_15min, bucketed
+                           date_bin('1 hour', s.bucket_start).
+  comparison per (device_id, hour):
+      count(15min rows)                          -- used for MISSING/COUNT sanity
+      sum(15min.source_interval_count)           vs  child.source_interval_count
+  no device filter.
+
+--- energy_consumption_daily ----------------------------------------------
+  child fingerprint       : source_interval_count = SUM(parent.source_interval_count)
+                           over the SITE-LOCAL day.
+  authoritative parent    : analytics.energy_consumption_15min, bucketed by
+                           (s.bucket_start AT TIME ZONE site.timezone)::date.
+  comparison per (device_id, site-local day):
+      count(15min rows in the local day)
+      sum(15min.source_interval_count)           vs  child.source_interval_count
+  grain = site-local day (metadata.sites.timezone). The candidate query computes
+  each site's local-day UTC bounds; the re-drive passes those exact bounds.
+
+MISMATCH CONDITION (all energy tiers):
+    coalesce(parent_row_count, 0)      <> coalesce(child_row_count, 0)
+ OR coalesce(parent_fingerprint_sum,0) <> coalesce(child_fingerprint_sum,0)
+for at least one (device_id, tier-bucket) inside a coarse bucket
+=> that coarse bucket is a REPAIR CANDIDATE.
+
+DO NOT ASSUME plain COUNT(*) is sufficient: hourly/daily persist SUM(child
+fingerprint), so the reconcile MUST compare the summed fingerprint, not just
+row counts. 15min compares BOTH count and summed source_sample_count.
+
+===============================================================================
+8. ENERGY RECONCILIATION DESIGN — 1min
+===============================================================================
+
+[DESIGN — pseudocode, NOT code]
+
+PROCEDURE analytics.reconcile_energy_consumption_1min(job_id integer, config jsonb)
+  LANGUAGE plpgsql  SECURITY DEFINER  owner ems_admin
+  SET search_path = pg_catalog, analytics, telemetry, config, metadata   -- match refresh_energy_consumption_1min
+
+  CONSTANTS:
+    v_pipeline  = 'energy_consumption_1min'
+    v_fwd_lock  = 'analytics.run_energy_consumption_1min_job'   -- the FORWARD wrapper's advisory key
+  CONFIG (all optional, validated positive):
+    reconcile_window  default INTERVAL '2 days'
+    coarse            default INTERVAL '1 hour'
+    n_max             default 24
+  LOCALS:
+    v_run uuid := gen_random_uuid(); v_started := clock_timestamp();
+    v_cp timestamptz; v_ws timestamptz;
+    v_coarse_examined int := 0; v_coarse_mismatch int := 0;
+    v_rows_examined bigint := 0; v_rows_repaired bigint := 0; v_err_count int := 0;
+    v_first_sqlstate text; v_first_errmsg text; v_outcome text;
+
+  1. IF NOT pg_try_advisory_xact_lock(hashtextextended(v_fwd_lock, 0)) THEN
+        INSERT pipeline_reconciliation_log(v_run, v_pipeline, v_started,'SCHEDULED',
+               NULL, NULL, 0,0,0,0,0,'SKIPPED_LOCKED', NULL,NULL,
+               (extract(ms FROM clock_timestamp()-v_started))::int);
+        RETURN;                       -- single txn; implicit commit; no analytical work
+     END IF;
+  2. SELECT last_received_at INTO v_cp FROM telemetry.pipeline_state
+        WHERE pipeline_name = v_pipeline;                 -- READ ONLY; no FOR UPDATE
+     IF v_cp IS NULL THEN
+        INSERT pipeline_reconciliation_log(... 'NO_CHECKPOINT' ...);  RETURN;
+     END IF;
+  3. v_ws := v_cp - reconcile_window;
+  4. -- CANDIDATE DETECTION (single set query, oldest-first, LIMIT n_max+1):
+     WITH parent AS (
+       SELECT ca.device_id,
+              date_trunc('hour', ca.bucket_start) AS coarse,
+              ca.bucket_start,
+              ca.sample_count AS p_vol
+       FROM telemetry.ca_energy_1min ca
+       CROSS JOIN LATERAL telemetry.resolve_site_capture_bucket(ca.site_id, ca.bucket_start) cp
+       WHERE ca.bucket_start >= v_ws AND ca.bucket_start < v_cp
+         AND cp.policy_id IS NOT NULL
+         AND cp.capture_interval_seconds <= 60
+     ),
+     child AS (
+       SELECT device_id, date_trunc('hour', bucket_start) AS coarse, bucket_start,
+              source_sample_count AS c_vol
+       FROM analytics.energy_consumption_1min
+       WHERE bucket_start >= v_ws AND bucket_start < v_cp
+     ),
+     mism AS (
+       SELECT COALESCE(p.coarse, c.coarse) AS coarse
+       FROM parent p FULL JOIN child c
+            ON p.device_id = c.device_id AND p.bucket_start = c.bucket_start
+       WHERE COALESCE(p.p_vol, -1) IS DISTINCT FROM COALESCE(c.c_vol, -1)
+         AND NOT (p.p_vol IS NULL AND c.c_vol IS NOT NULL)   -- SOURCE_RETRACTED: warn, do not repair
+     )
+     SELECT coarse, count(*) AS mism_rows
+     FROM mism GROUP BY coarse ORDER BY coarse LIMIT n_max + 1;
+     -- (SOURCE_RETRACTED rows, i.e. child present & parent absent, are counted
+     --  separately into a warn tally, not into mism.)
+  5. FOR rec IN <the query above> LOOP
+        v_coarse_examined := v_coarse_examined + 1;
+        IF v_coarse_examined > n_max THEN v_outcome := 'PARTIAL'; EXIT; END IF;
+        v_coarse_mismatch := v_coarse_mismatch + 1;
+        v_rows_examined := v_rows_examined + rec.mism_rows;
+        BEGIN
+          v_rows_repaired := v_rows_repaired
+              + analytics.refresh_energy_consumption_1min(rec.coarse, rec.coarse + coarse);
+        EXCEPTION WHEN OTHERS THEN
+          v_err_count := v_err_count + 1;
+          IF v_first_sqlstate IS NULL THEN
+             v_first_sqlstate := SQLSTATE; v_first_errmsg := left(SQLERRM, 1000);
+          END IF;
+          EXIT;                        -- stop after the first repair error; do not hammer
+        END;
+     END LOOP;
+  6. v_outcome := COALESCE(v_outcome,
+        CASE WHEN v_err_count > 0 THEN 'FAILED'
+             WHEN v_coarse_mismatch > 0 THEN 'REPAIRED'
+             ELSE 'HEALTHY' END);
+     INSERT pipeline_reconciliation_log(v_run, v_pipeline, v_started, 'SCHEDULED',
+        v_ws, v_cp, v_coarse_examined, v_coarse_mismatch, v_rows_examined,
+        v_rows_repaired, v_err_count, v_outcome, v_first_sqlstate, v_first_errmsg,
+        (extract(ms FROM clock_timestamp()-v_started))::int);
+     -- proc ends -> single-transaction implicit COMMIT: all successful
+     --   refresh_* repairs from step 5 + this log row commit atomically.
+     --   The xact advisory lock is released here.
+
+TIER-SPECIFIC VALUES for 1min:
+  source/parent       telemetry.ca_energy_1min
+  bucket grain         1-minute UTC (comparison); 1-hour coarse (candidate + re-drive)
+  window               [v_cp - 2 days, v_cp)
+  candidate detection  the FULL JOIN above, with the <=60 capture filter on the
+                       parent side
+  mismatch condition   per (device, minute): ca.sample_count IS DISTINCT FROM
+                       energy_consumption_1min.source_sample_count, OR one side
+                       missing (excluding SOURCE_RETRACTED)
+  repair call          analytics.refresh_energy_consumption_1min(coarse, coarse + '1 hour')
+  row-level behaviour  ON CONFLICT (device_id, bucket_start) DO UPDATE — a
+                       healthy row is rewritten with identical values (counts in
+                       ROW_COUNT but no semantic change); a stale/missing row is
+                       corrected/created.
+  no-source behaviour  no ca row -> not a candidate -> HEALTHY
+  missing-child        ca row present, child absent -> candidate -> repaired (INSERT)
+  logging status       HEALTHY | REPAIRED | PARTIAL | FAILED | SKIPPED_LOCKED | NO_CHECKPOINT
+  error behaviour      per-coarse-bucket BEGIN..EXCEPTION; first error stops the
+                       loop; outcome='FAILED', error fields set; the log row
+                       still commits (single-txn); earlier successful re-drives
+                       in the same run also commit; the failed coarse bucket is
+                       re-flagged next run. The proc does NOT RAISE, so
+                       job_stats shows Success — DELIBERATE: the
+                       pipeline_reconciliation_log is the authoritative
+                       observability surface (§19).
+  concurrency          xact advisory lock on the FORWARD job's key -> a reconcile
+                       and the forward 1min job cannot run concurrently for this
+                       tier (the loser gets SKIPPED_LOCKED); two reconcile runs
+                       for this tier cannot overlap either. Different tiers are
+                       independent. Lock auto-released at the single implicit
+                       commit/rollback.
+  bounded work         <= n_max coarse buckets re-driven per run; oldest-first =>
+                       guaranteed forward progress across runs; PARTIAL outcome
+                       when > n_max.
+  idempotency          refresh_* is an idempotent ON CONFLICT DO UPDATE; a
+                       repaired coarse bucket passes the detector on the next
+                       run -> 0 re-drives, HEALTHY.
+
+===============================================================================
+9. ENERGY RECONCILIATION DESIGN — 5min
+===============================================================================
+
+Structurally identical to §8 with:
+  v_pipeline  = 'energy_consumption_5min'
+  v_fwd_lock  = 'analytics.run_energy_consumption_5min_job'
+  reconcile_window default INTERVAL '7 days'    (= ca_energy_5min start_offset)
+  parent      telemetry.ca_energy_5min ;  device filter capture_interval_seconds = 300
+  bucket grain 5-minute UTC (comparison) ; 1-hour coarse
+  repair call  analytics.refresh_energy_consumption_5min(coarse, coarse + '1 hour')
+
+EMPTY-BY-DESIGN: for the current all-60s fleet, the parent CTE (WHERE
+capture_interval_seconds = 300) yields ZERO rows and the child table is empty,
+so the FULL JOIN yields ZERO mismatches -> outcome HEALTHY, rows_repaired 0,
+every run. This is correct and MUST NOT be treated as broken (§21). A 300s
+device that reports but has no 5min child -> MISSING_CHILD -> repaired.
+
+===============================================================================
+10. ENERGY RECONCILIATION DESIGN — 15min
+===============================================================================
+
+  v_pipeline  = 'energy_consumption_15min'
+  v_fwd_lock  = 'analytics.run_energy_consumption_15min_job'
+  reconcile_window default INTERVAL '8 days'    (N2 — raised from the current 3d; §1.3, §15)
+  coarse      INTERVAL '1 hour'   (contains 4 fifteen-minute buckets)
+  bucket key  b15 := date_bin('15 minutes', native.bucket_start,
+                     TIMESTAMPTZ '2000-01-01 05:30:00+05:30')
+
+  CANDIDATE DETECTION:
+    WITH native AS (
+      SELECT device_id,
+             date_bin('15 minutes', bucket_start, TIMESTAMPTZ '2000-01-01 05:30:00+05:30') AS b15,
+             source_sample_count AS ss
+      FROM analytics.energy_consumption_1min
+      WHERE bucket_start >= v_ws - INTERVAL '15 minutes' AND bucket_start < v_cp
+      UNION ALL
+      SELECT device_id,
+             date_bin('15 minutes', bucket_start, TIMESTAMPTZ '2000-01-01 05:30:00+05:30') AS b15,
+             source_sample_count
+      FROM analytics.energy_consumption_5min
+      WHERE bucket_start >= v_ws - INTERVAL '15 minutes' AND bucket_start < v_cp
+    ),
+    parent AS (
+      SELECT device_id, b15, count(*) AS p_cnt, sum(ss) AS p_ss
+      FROM native GROUP BY device_id, b15
+    ),
+    child AS (
+      SELECT device_id, bucket_start AS b15, source_interval_count AS c_cnt,
+             source_sample_count AS c_ss
+      FROM analytics.energy_consumption_15min
+      WHERE bucket_start >= v_ws AND bucket_start < v_cp
+    ),
+    mism AS (
+      SELECT COALESCE(p.b15, c.b15) AS b15
+      FROM parent p FULL JOIN child c ON p.device_id=c.device_id AND p.b15=c.b15
+      WHERE p.p_cnt IS DISTINCT FROM c.c_cnt
+         OR COALESCE(p.p_ss,-1) IS DISTINCT FROM COALESCE(c.c_ss,-1)
+    )
+    SELECT date_trunc('hour', b15) AS coarse, count(*) AS mism_rows
+    FROM mism GROUP BY 1 ORDER BY 1 LIMIT n_max + 1;
+
+  repair call  analytics.refresh_energy_consumption_15min(coarse, coarse + '1 hour')
+  no-source    a 15-min bucket with no native rows -> not a candidate -> HEALTHY
+  missing-child native rows present, no 15min row -> candidate -> repaired
+  everything else (concurrency / bounded work / idempotency / logging / error) as §8.
+
+  RATIONALE for 8 days: 15min consumes energy_consumption_5min, which the 5min
+  reconcile repairs over its 7-day window (= ca_energy_5min start_offset). A
+  15min reconcile_window shorter than 7 days would fail to propagate a 6-day-old
+  5min repair. 8d = 7d + 1d margin, tied to the ca_energy_5min start_offset (an
+  upstream recovery boundary), not an arbitrary number.
+
+===============================================================================
+11. ENERGY RECONCILIATION DESIGN — Hourly
+===============================================================================
+
+  v_pipeline  = 'energy_consumption_hourly'
+  v_fwd_lock  = 'analytics.run_energy_consumption_hourly_job'
+  reconcile_window default INTERVAL '10 days'   (keep — >= 15min's 8d + 2d slack)
+  coarse      the hour itself (INTERVAL '1 hour')
+
+  CANDIDATE DETECTION per (device_id, hour):
+    parent = analytics.energy_consumption_15min, bucketed date_bin('1 hour', bucket_start):
+        p_cnt = count(15min rows), p_si = sum(15min.source_interval_count)
+    child  = analytics.energy_consumption_hourly:
+        c_si = source_interval_count   (this IS SUM(15min.source_interval_count) — RE-VERIFIED NOW)
+    mismatch: p_cnt = 0 xor child present  OR  COALESCE(p_si,-1) IS DISTINCT FROM COALESCE(c_si,-1)
+  repair call  analytics.refresh_energy_consumption_hourly(hour, hour + '1 hour')
+  Everything else as §8.
+
+===============================================================================
+12. ENERGY RECONCILIATION DESIGN — Daily
+===============================================================================
+
+  v_pipeline  = 'energy_consumption_daily'
+  v_fwd_lock  = 'analytics.run_energy_consumption_daily_job'
+  reconcile_window default INTERVAL '21 days'   (keep — DST/month-boundary margin;
+     well inside energy_measurements 90d retention)
+  grain       SITE-LOCAL day (metadata.sites.timezone), NOT UTC.
+
+  CANDIDATE DETECTION:
+    -- per site, the set of local days whose local-midnight bucket_start is in
+    -- [v_ws, v_cp); for each (device, local-day):
+    parent = analytics.energy_consumption_15min s
+             JOIN metadata.sites site ON site.id = s.site_id
+             grouped by device_id, (s.bucket_start AT TIME ZONE site.timezone)::date:
+        p_cnt = count(15min rows in the local day),
+        p_si  = sum(15min.source_interval_count)
+    child  = analytics.energy_consumption_daily:
+        c_si = source_interval_count
+    mismatch: as hourly, per (device, local-day).
+  candidate output: the DISTINCT set of (local_day_start_utc, local_day_end_utc)
+     pairs to re-drive (computed from the local date + site timezone), LIMIT n_max.
+  repair call  analytics.refresh_energy_consumption_daily(local_day_start_utc,
+                                                          local_day_end_utc)
+     — the deployed function does its own site-local grouping and has a
+       comment "p_from is available regardless of timezone offset", so passing
+       the exact local-day UTC bounds is safe.
+  coarse / n_max : coarse = 1 day; n_max default 21.
+  DST: handled entirely inside refresh_energy_consumption_daily (unchanged). The
+  candidate query only needs (local date, site timezone) to compute the two UTC
+  bounds; a 23h / 25h DST day is expressed correctly by AT TIME ZONE.
+
+===============================================================================
+13. DEMAND RECONCILIATION DESIGN
+===============================================================================
+
+RE-VERIFIED NOW:
+  - analytics.refresh_demand_analytics(p_now timestamptz DEFAULT clock_timestamp(),
+      p_lookback interval DEFAULT '03:00:00',
+      p_finalize_from timestamptz DEFAULT NULL,
+      p_finalize_to   timestamptz DEFAULT NULL)   — PROCEDURE, SECURITY INVOKER,
+      owner ems_admin, search_path pg_catalog, analytics, config, metadata.
+  - Body: v_win_from := COALESCE(p_finalize_from, p_now - p_lookback);
+          v_win_to   := COALESCE(p_finalize_to,   p_now);
+          the historical finalisation loop steps back from v_win_to and
+          EXIT WHEN v_interval.interval_end <= v_win_from;
+          the finalisation write is the scope-branched status-guarded upsert:
+            ON CONFLICT (site_id, interval_start, demand_policy_id)  WHERE scope_type = 'SITE'
+            ON CONFLICT (asset_id, interval_start, demand_policy_id) WHERE scope_type = 'ASSET'
+            DO UPDATE ... WHERE analytics.demand_intervals.quality_status <> 'VALID' AND (materially changed);
+          the live demand_state block is keyed to p_now (NOT v_win_from/to);
+          the two DELETE FROM analytics.demand_state statements are the
+          policy-disabled / PRIMARY_METER-removed cleanups, per-site, keyed to
+          p_now — NOT historical (210 test T-DS proved a historical finalize
+          window does not replay demand_state).
+  - refresh_demand_analytics does NOT write telemetry.pipeline_state
+    (RE-VERIFIED NOW: it is NOT among the 12 procedures that assign
+    last_received_at).
+  - analytics.demand_intervals is a plain table; the two partial unique indexes
+    are as above (RE-VERIFIED NOW).
+  - demand_intervals has NO source-count fingerprint — the "detector" IS the
+    recompute (H11).
+
+[DESIGN] PROCEDURE analytics.reconcile_demand_intervals(job_id integer, config jsonb)
+  LANGUAGE plpgsql  SECURITY DEFINER  owner ems_admin
+  SET search_path = pg_catalog, analytics, config, metadata     -- match refresh_demand_analytics
+  CONSTANTS: v_pipeline='demand_intervals';
+             v_fwd_lock='analytics.run_demand_calculation_job'
+  CONFIG:    reconcile_window default INTERVAL '12 hours'  (§15 — pending staging cost read)
+             lookback         default INTERVAL '3 hours'   (only used as the p_lookback arg;
+                              irrelevant to the finalize loop because p_finalize_from/to are set)
+
+  1. advisory xact lock on v_fwd_lock; on miss -> log 'SKIPPED_LOCKED', RETURN.
+  2. SELECT last_received_at INTO v_cp FROM telemetry.pipeline_state
+        WHERE pipeline_name='demand_intervals';    -- READ ONLY
+     IF v_cp IS NULL -> log 'NO_CHECKPOINT', RETURN.
+  3. v_ws := v_cp - reconcile_window;
+     v_before := (SELECT count(*) FROM analytics.demand_intervals
+                  WHERE interval_start >= v_ws AND interval_start < v_cp
+                    AND finalized_at IS NOT NULL);   -- baseline for the repaired count
+  4. BEGIN
+       CALL analytics.refresh_demand_analytics(
+              p_now          => clock_timestamp(),
+              p_lookback     => lookback,
+              p_finalize_from => v_ws,
+              p_finalize_to   => v_cp);
+     EXCEPTION WHEN OTHERS THEN
+       v_err_count := 1; v_first_sqlstate := SQLSTATE; v_first_errmsg := left(SQLERRM,1000);
+     END;
+  5. v_rows_repaired := (SELECT count(*) FROM analytics.demand_intervals
+                         WHERE interval_start >= v_ws AND interval_start < v_cp
+                           AND finalized_at >= v_started);   -- rows re-finalised by THIS run
+  6. v_outcome := CASE WHEN v_err_count>0 THEN 'FAILED'
+                       WHEN v_rows_repaired>0 THEN 'REPAIRED' ELSE 'HEALTHY' END;
+     INSERT pipeline_reconciliation_log(v_run,'demand_intervals',v_started,'SCHEDULED',
+        v_ws, v_cp, NULL /*coarse_examined n/a*/, NULL, NULL, v_rows_repaired,
+        v_err_count, v_outcome, v_first_sqlstate, v_first_errmsg, <duration_ms>);
+     -- single transaction: the re-finalisation writes + the log row commit
+     --   atomically; a failure inside step 4's subtransaction is caught and the
+     --   log row still records outcome='FAILED'.
+
+  NO per-coarse-bucket loop: refresh_demand_analytics already loops internally,
+  bounded by v_max_n = ceil((v_win_to - v_win_from) / demand_interval_seconds) + 2
+  per (site x scope). At 12h / 900s that is 50 iterations per (site x scope) —
+  the internal bound IS the "n_max" for demand. No config n_max needed; the
+  bound scales with reconcile_window.
+
+  PER-TRANSITION BEHAVIOUR (the 210 status guard, unchanged):
+    NO_DATA     -> INCOMPLETE / VALID   : REPAIRED (quality changes -> DO UPDATE)
+    INCOMPLETE  -> VALID                : REPAIRED
+    INCOMPLETE  -> INCOMPLETE (better kW): REPAIRED (IS DISTINCT FROM)
+    NO_DATA/INCOMPLETE -> identical      : HEALTHY (guard all-false -> 0 rows; finalized_at not churned)
+    VALID       -> anything              : FROZEN (quality_status <> 'VALID' is FALSE -> never updated)
+    (row absent), a valid interval computes : the scope-branched INSERT path creates it.
+  SITE scope   -> uq_demand_intervals_site_scope arbiter.
+  ASSET scope  -> uq_demand_intervals_asset_scope arbiter.
+  demand_state : NOT double-applied — p_now = clock_timestamp() keeps the live
+  block current; p_finalize_from/to bound ONLY the historical loop (210 T-DS).
+
+  FORWARD-WATERMARK SAFETY: refresh_demand_analytics does not touch
+  pipeline_state; the reconcile proc does not touch pipeline_state; therefore
+  telemetry.pipeline_state('demand_intervals').last_received_at is unchanged.
+  Proven by the contract-gate test (§26) and by 210 test T-Refin-E.
+
+===============================================================================
+14. ENVIRONMENT_DAILY RECONCILIATION DESIGN
+===============================================================================
+
+RE-VERIFIED NOW:
+  telemetry.refresh_environment_daily(p_from, p_to) — FUNCTION, SECURITY DEFINER,
+  owner ems_admin, search_path pg_catalog, telemetry, metadata. Reads
+  telemetry.environment_measurements e; localises via AT TIME ZONE s.timezone
+  (metadata.sites); computes local_day_start / local_day_end; source scan
+  e.bucket_start >= p_from - INTERVAL '1 day' AND < p_to; emits rows WHERE
+  l.local_day_end > p_from AND l.local_day_end <= p_to; GROUP BY
+  l.local_day_start, ...; ON CONFLICT (device_id, bucket_start) DO UPDATE;
+  RETURN v_affected. Does NOT write pipeline_state. No quality_status / NO_DATA
+  sentinel; a (device, local-day) with no source produces NO row.
+
+[DESIGN] PROCEDURE telemetry.reconcile_environment_daily(job_id integer, config jsonb)
+  -- schema: telemetry (matches refresh_environment_daily and the forward
+  --   wrapper telemetry.run_environment_daily_job)
+  LANGUAGE plpgsql  SECURITY DEFINER  owner ems_admin
+  SET search_path = pg_catalog, telemetry, metadata
+  CONSTANTS: v_pipeline='environment_daily';
+             v_fwd_lock='telemetry.run_environment_daily_job'
+  CONFIG:    reconcile_window default INTERVAL '35 days'
+             n_max            default 35   (max local days re-driven per run)
+
+  1. advisory xact lock on v_fwd_lock; on miss -> log 'SKIPPED_LOCKED', RETURN.
+  2. SELECT last_received_at INTO v_cp FROM telemetry.pipeline_state
+        WHERE pipeline_name='environment_daily';   -- READ ONLY
+     IF v_cp IS NULL -> log 'NO_CHECKPOINT', RETURN.
+     -- v_cp is a UTC-day boundary meaning "every site-local day whose
+     --   local_day_end <= v_cp has been finalised" (migration 211 semantics).
+  3. v_ws := v_cp - reconcile_window;
+  4. CANDIDATE DETECTION — per (device_id, site-local day D) where D's
+     local_day_start (in UTC) is in [v_ws, v_cp):
+       -- STRICT, false-positive-free signal:
+       WITH sites AS (SELECT id AS site_id, timezone FROM metadata.sites
+                      WHERE COALESCE(lifecycle_status,'ACTIVE') <> 'DECOMMISSIONED'),
+       -- local-day grid per site over [v_ws, v_cp):
+       days AS (
+         SELECT s.site_id, s.timezone, d::date AS local_date,
+                (d::date::timestamp   AT TIME ZONE s.timezone)      AS local_start_utc,
+                ((d::date + 1)::timestamp AT TIME ZONE s.timezone)  AS local_end_utc
+         FROM sites s,
+              generate_series( (v_ws AT TIME ZONE s.timezone)::date,
+                               (v_cp AT TIME ZONE s.timezone)::date, INTERVAL '1 day') g(d)
+       ),
+       src AS (
+         SELECT em.device_id, dy.site_id, dy.local_date, dy.local_start_utc, dy.local_end_utc,
+                count(*) AS src_buckets
+         FROM days dy
+         JOIN telemetry.environment_measurements em
+           ON em.site_id = dy.site_id
+          AND em.bucket_start >= dy.local_start_utc
+          AND em.bucket_start <  dy.local_end_utc
+         GROUP BY 1,2,3,4,5
+       ),
+       chi AS (
+         SELECT device_id, site_id, bucket_start, sample_count
+         FROM telemetry.environment_daily
+         WHERE bucket_start >= v_ws AND bucket_start < v_cp
+       )
+       SELECT s.local_start_utc, s.local_end_utc
+       FROM src s
+       LEFT JOIN chi c
+         ON c.device_id = s.device_id AND c.bucket_start = s.local_start_utc
+       WHERE c.device_id IS NULL                      -- MISSING_CHILD: source exists, no daily row
+          OR s.src_buckets > c.sample_count           -- LATE_SOURCE: more source than the row reflects
+       GROUP BY s.local_start_utc, s.local_end_utc
+       ORDER BY s.local_start_utc
+       LIMIT n_max + 1;
+  5. FOR rec IN <above> LOOP  (n_max cap; per-day BEGIN..EXCEPTION)
+        v_rows_repaired := v_rows_repaired
+            + telemetry.refresh_environment_daily(rec.local_start_utc, rec.local_end_utc);
+     END LOOP;
+  6. log one row (outcome HEALTHY | REPAIRED | PARTIAL | FAILED | SKIPPED_LOCKED
+     | NO_CHECKPOINT), same shape as §8.
+
+  DESIGN NOTES:
+   - LOCAL-DAY BOUNDARIES: computed per site from metadata.sites.timezone via
+     AT TIME ZONE; the repair passes [local_start_utc, local_end_utc) so
+     refresh_environment_daily does ALL its own tz/DST math (unchanged). This is
+     NOT a UTC-bucket algorithm.
+   - PARTIAL CURRENT DAY: v_cp is a past UTC-day boundary; the generate_series
+     upper bound is (v_cp AT TIME ZONE tz)::date, so today's still-incomplete
+     local day is never a candidate. Consistent with migration 211's
+     complete-days-only rule.
+   - MISSING SOURCE: a (device, local-day) with no environment_measurements rows
+     produces no `src` row -> never a candidate -> HEALTHY (EXPECTED_NO_DATA).
+   - THIN DAY (device offline mid-day, src_buckets = sample_count, both low):
+     NOT a candidate under the strict signal. A plausibility-fraction check
+     (src_buckets < expected * frac) is DEFERRED — it belongs in 214's health
+     view, not 213's repair path, and requires staging evidence (O-E) to
+     calibrate `frac`. Re-driving a genuinely thin day just rewrites the same
+     thin row (0 rows_changed) — harmless but noisy, hence excluded.
+   - FORWARD WATERMARK: refresh_environment_daily does not touch pipeline_state;
+     the reconcile proc does not; last_received_at('environment_daily') is
+     unchanged.
+
+===============================================================================
+15. FINAL RECONCILIATION WINDOW MATRIX
+===============================================================================
+
+ tier                      reconcile_window   current   verdict   derivation
+ ------------------------- ---------------- --------- --------- ------------------------------------------------
+ energy_consumption_1min   2 days            2 days    KEEP      = ca_energy_1min automatic refresh start_offset
+                                                                 (the horizon in which the CAGG is kept
+                                                                 truthful; older backfill = alert-only, §22)
+ energy_consumption_5min   7 days            7 days    KEEP      = ca_energy_5min start_offset
+ energy_consumption_15min  8 days            3 days    RAISE     >= max(1min 2d, 5min 7d) = 7d ; +1d margin;
+                                                                 tied to ca_energy_5min start_offset (N2)
+ energy_consumption_hourly 10 days           10 days   KEEP      >= 15min 8d ; +2d month/DST slack
+ energy_consumption_daily  21 days           21 days   KEEP      >= 15min 8d ; generous DST/month margin;
+                                                                 << energy_measurements 90d retention
+ demand_intervals          12 hours          6 hours   RAISE*    late-but-not-failed source into
+                                                                 energy_measurements/normalized_points
+                                                                 (routing/normalisation overlap horizon)
+                                                                 beyond the job-1077 failed-replay ceiling
+                                                                 (1h+2h+6h). Internal bound v_max_n ~ 50 at
+                                                                 12h/900s. *PENDING staging cost read O-D;
+                                                                 retain 6h if a 12h re-finalise for the
+                                                                 busiest site > ~2-3 min. Distinct from
+                                                                 max_catchup_window (6h forward — UNCHANGED).
+ environment_daily         35 days           35 days   KEEP      environment_measurements retention = 1 year;
+                                                                 35d covers any realistic late-arrival +
+                                                                 operator backfill for a consumer-less
+                                                                 historian. INTENTIONALLY NOT aligned to
+                                                                 max_catchup_window (2d) — different purpose.
+
+All windows are far inside their tier's source retention (energy_measurements
+90d ; environment_measurements 1y), so ground truth is available for any repair
+inside the window. RE-VERIFIED NOW.
+
+===============================================================================
+16. RECONCILIATION JOB / CADENCE DESIGN
+===============================================================================
+
+[DESIGN] SEVEN per-tier jobs (v2 §J; Option D dispatcher rejected — a slow/failed
+tier must not starve the others, and per-tier cadence + per-tier advisory-lock
+timing are required).
+
+ reconcile job                              schedule  max_runtime  max_retries  retry_period  config (proposed)
+ ----------------------------------------- --------- ----------- ----------- ------------ ----------------------------------------------
+ analytics.reconcile_energy_consumption_1min   1 hour   5 min        3           15 min       {"reconcile_window":"2 days","coarse":"1 hour","n_max":24}
+ analytics.reconcile_energy_consumption_5min   1 hour   5 min        3           15 min       {"reconcile_window":"7 days","coarse":"1 hour","n_max":24}
+ analytics.reconcile_energy_consumption_15min  6 hours  10 min       3           30 min       {"reconcile_window":"8 days","coarse":"1 hour","n_max":24}
+ analytics.reconcile_energy_consumption_hourly 12 hours 10 min       3           30 min       {"reconcile_window":"10 days","coarse":"1 hour","n_max":24}
+ analytics.reconcile_energy_consumption_daily  24 hours 10 min       3           30 min       {"reconcile_window":"21 days","coarse":"1 day","n_max":21}
+ analytics.reconcile_demand_intervals          1 hour   10 min       3           15 min       {"reconcile_window":"12 hours","lookback":"3 hours"}
+ telemetry.reconcile_environment_daily         24 hours 10 min       3           30 min       {"reconcile_window":"35 days","n_max":35}
+
+ CADENCE RATIONALE:
+  - fast tiers (1min/5min/demand) every hour — they feed the slower tiers and a
+    1-hour cadence bounds the "how long a late correction takes to surface".
+  - 15min every 6h, hourly every 12h, daily/env every 24h — matches how slowly
+    those tiers' forward checkpoints actually advance; a faster cadence would
+    just find HEALTHY repeatedly.
+  - schedule_interval / max_runtime deliberately > the forward jobs' 5-minute
+    max_runtime for the fast tiers (10 min for the slow ones) because a
+    reconcile run may re-drive up to n_max coarse buckets whereas a forward run
+    processes one bounded slice.
+  - retry_period 15–30 min (not the forward jobs' 5 min): a failed reconcile is
+    not urgent; it retries next cadence anyway.
+
+ INITIAL_START / PHASE OFFSET:
+  add_job's initial_start should be set so each reconcile job fires OFF the
+  hour/:00 boundary where the forward jobs run, e.g.
+     initial_start => date_trunc('hour', now()) + INTERVAL '33 minutes'  (demand)
+     ... '37 minutes' (1min) ... '39' (5min) ... '41' (15min) ... '43' (hourly)
+     ... '47' (daily) ... '51' (env)
+  so a reconcile does not lose the advisory-lock race to a forward job every
+  single run. If a reconcile does coincide with a forward run it simply logs
+  SKIPPED_LOCKED and retries next cadence — correct, just less efficient.
+
+ JOB IDS: assigned by add_job at implementation time and CANNOT be
+ predetermined. All 213 code (the reconcile procs, the check_config wiring, any
+ test) must look jobs up by (proc_schema, proc_name) via
+ timescaledb_information.jobs — exactly as migrations 208–211 do. State this
+ explicitly; do not hard-code IDs.
+
+ check_config: a NEW tiny validator
+     config.assert_reconciliation_job_config(config jsonb) RETURNS void
+   accepting ONLY keys {reconcile_window, coarse, n_max, lookback}, each
+   (interval keys) a positive finite interval and n_max a positive integer.
+   RECOMMENDATION: a dedicated validator rather than extending
+   config.assert_analytical_lookback_job_config — the reconcile key set is
+   distinct and mixing them would loosen the forward-job validator.
+
+===============================================================================
+17. pipeline_reconciliation_log DESIGN
+===============================================================================
+
+[DESIGN] analytics.pipeline_reconciliation_log
+
+ column               type          null?  notes
+ -------------------- ------------- ------ ------------------------------------------------
+ ran_at               timestamptz   NO     DEFAULT clock_timestamp(). HYPERTABLE TIME DIMENSION.
+ run_id               uuid          NO     DEFAULT gen_random_uuid() (pg16 builtin — RE-VERIFIED NOW).
+ tier                 text          NO     = pipeline_name ('energy_consumption_1min' ... 'environment_daily').
+ trigger_reason       text          NO     DEFAULT 'SCHEDULED'. {'SCHEDULED','MANUAL'}.
+ window_start         timestamptz   YES    = checkpoint - reconcile_window. NULL for SKIPPED_LOCKED / NO_CHECKPOINT.
+ window_end           timestamptz   YES    = the tier checkpoint at run time. NULL as above.
+ coarse_examined      integer       YES    coarse buckets iterated (energy tiers). NULL for demand.
+ coarse_mismatch      integer       YES    coarse buckets found mismatching (energy). NULL for demand.
+ rows_examined        bigint        YES    per-(device,bucket) mismatches counted by the detector.
+ rows_repaired        bigint        NO     DEFAULT 0. SUM of refresh_* ROW_COUNT (energy/env) or count of
+                                           demand_intervals with finalized_at >= run start (demand).
+ error_count          integer       NO     DEFAULT 0.
+ outcome              text          NO     {'HEALTHY','REPAIRED','PARTIAL','FAILED','SKIPPED_LOCKED','NO_CHECKPOINT'}.
+ first_error_sqlstate text          YES
+ first_error_message  text          YES    left(SQLERRM, 1000).
+ duration_ms          integer       YES
+ created_at           timestamptz   NO     DEFAULT now().
+
+ - HYPERTABLE: create_hypertable('analytics.pipeline_reconciliation_log', 'ran_at',
+   chunk_time_interval => INTERVAL '30 days').
+ - PRIMARY KEY: (run_id, ran_at). (TimescaleDB requires the partitioning column
+   in any unique constraint; run_id alone would be a disallowed cross-chunk
+   unique.)
+ - INDEXES:
+     (tier, ran_at DESC)                                       -- "last reconcile for tier X"
+     (tier, ran_at DESC) WHERE outcome IN ('FAILED','PARTIAL') OR error_count > 0
+                                                               -- alert/forensics scans (214)
+ - RETENTION: add_retention_policy('analytics.pipeline_reconciliation_log',
+   INTERVAL '180 days'). VALIDATED against expected volume:
+     1min 24 + 5min 24 + 15min 4 + hourly 2 + daily 1 + demand 24 + env 1
+       ~= 80 rows/day ~= 29,000 rows/year ; 180 days ~= 14,000 rows. Trivial.
+   180d is chosen for operational-log hygiene, not space.
+ - COMPRESSION: NOT added. At ~14k rows the benefit is negligible and it is one
+   more policy to reason about. (If a future high-cardinality detail table is
+   ever added, revisit.)
+ - TENANT / SITE / ASSET COLUMNS: NONE. Reconcile runs are tier-global over a
+   time window; the detector does not emit per-entity detail and per-entity
+   rows would bloat the log by orders of magnitude. Per-entity forensics, if
+   ever required, is a separate detail table — OUT of 213 scope.
+ - BUCKET-LEVEL DETAIL: NOT stored. One row per run is sufficient to answer
+   "what did reconciliation inspect (window_start..window_end, coarse_examined,
+   rows_examined), what did it repair (rows_repaired, coarse_mismatch), why did
+   it run (trigger_reason; HEALTHY vs REPAIRED), did it succeed (outcome,
+   error_*, duration_ms), which run (run_id)".
+ - OWNER ems_admin; REVOKE ALL FROM PUBLIC; GRANT SELECT TO ems_readonly,
+   grafana_reader (for the future 214 view and operator queries); GRANT
+   INSERT TO ems_admin (the reconcile procs run as ems_admin).
+
+ P4–P7 storage/retention items (raw_messages, normalized_points compression,
+ demand_intervals retention, capture_bucket_samples pruning,
+ energy_consumption_daily / environment_daily retention) remain OUT of 213 (§25).
+
+===============================================================================
+18. TRANSACTION / LOCK / ERROR / CONCURRENCY DESIGN
+===============================================================================
+
+TRANSACTION BOUNDARY [DESIGN]:
+  Each reconcile procedure is EXACTLY ONE transaction. NO explicit COMMIT /
+  ROLLBACK anywhere in the body. (This avoids all TimescaleDB job-proc
+  transaction-control uncertainty and is the simplest provably-safe shape.)
+  On normal completion the job runner commits: the successful refresh_* repairs
+  from the loop + the single pipeline_reconciliation_log row commit ATOMICALLY.
+  On max_runtime cancellation or an uncaught error the job runner rolls back:
+  nothing is repaired, nothing is logged, nothing is advanced — safe; the next
+  cadence retries; the operator sees job_stats.last_run_status='Failed'.
+
+PER-REPAIR ATOMICITY (NG2) [DESIGN]:
+  Each refresh_* call is wrapped in a plpgsql  BEGIN ... EXCEPTION WHEN OTHERS
+  ... END  subtransaction. A single refresh_energy_consumption_*(a,b) call
+  either fully recomputes [a,b) (its INSERT ... ON CONFLICT DO UPDATE completes)
+  or its subtransaction rolls back that one coarse bucket entirely. There is no
+  half-recomputed bucket. On the FIRST repair error the loop EXITs (does not
+  hammer); earlier successful coarse-bucket repairs in the same run remain in
+  the outer transaction and commit with the log row.
+  NOTE: this BEGIN..EXCEPTION subtransaction is SAFE here because the reconcile
+  procs call ONLY refresh_energy_consumption_* / refresh_demand_analytics /
+  refresh_environment_daily — never refresh_continuous_aggregate (which the v2
+  probe proved is rejected inside a subtransaction on 2.29.2). NG4 is structurally
+  prevented: refresh_continuous_aggregate does not appear anywhere in 213.
+
+ADVISORY LOCK [DESIGN]:
+  pg_try_advisory_xact_lock( hashtextextended( '<the FORWARD job proc name>', 0 ) )
+    1min   -> 'analytics.run_energy_consumption_1min_job'
+    5min   -> 'analytics.run_energy_consumption_5min_job'
+    15min  -> 'analytics.run_energy_consumption_15min_job'
+    hourly -> 'analytics.run_energy_consumption_hourly_job'
+    daily  -> 'analytics.run_energy_consumption_daily_job'
+    demand -> 'analytics.run_demand_calculation_job'
+    env    -> 'telemetry.run_environment_daily_job'
+  RATIONALE (RE-VERIFIED NOW): the five refresh_energy_consumption_* FUNCTIONS,
+  refresh_demand_analytics and refresh_environment_daily take NO advisory lock
+  of their own (touches_advisory_lock = FALSE for all seven). The ONLY thing
+  serialising forward runs of a tier is the FORWARD WRAPPER's
+  pg_try_advisory_xact_lock on hashtextextended('<wrapper proc>', 0). A
+  reconcile that takes the SAME key therefore:
+    - cannot run concurrently with that tier's forward job (whichever starts
+      second gets the try-lock miss -> SKIPPED_LOCKED, logs it, RETURNs — no
+      analytical work);
+    - cannot run concurrently with another reconcile run of the same tier;
+    - is independent of every other tier.
+  The lock is transaction-scoped -> released automatically at the single
+  implicit commit/rollback. No pg_advisory_unlock bookkeeping, no session-lock
+  leak risk.
+
+CONCURRENT-INVOCATION / FORWARD-JOB-PROCESSING-SAME-PERIOD:
+  Handled by the shared lock above. If the forward job is mid-run, the reconcile
+  gets SKIPPED_LOCKED and retries next cadence — over a window that now includes
+  the forward job's fresh work, still correct.
+
+TIMEOUT: max_runtime cancellation -> whole outer transaction aborts -> no
+  repairs, no log row -> safe; job_stats records the timeout.
+
+PARTIAL STATE ON FAILURE: impossible for a single repair (subtransaction). A
+  run that repaired buckets 1–2 then errored on bucket 3 commits 1–2 + a
+  log row with outcome='FAILED' + error_*; bucket 3 (and any later) are
+  re-flagged next run. Each of 1–2 is a complete recompute of its window, so
+  the committed state is internally consistent.
+
+DOES THE LOG SURVIVE A ROLLBACK? On an UNCAUGHT failure / timeout: NO (whole
+  txn rolls back) — accepted; job_stats records it and 214 can surface
+  "job ran but wrote no log row" as a health signal. On a CAUGHT repair
+  failure: YES — the loop EXITs, the log row is written with outcome='FAILED'
+  in the same (committing) transaction. This is the DELIBERATE trade-off
+  spelled out in §19.
+
+EXCEPTION HANDLING: used ONLY as the per-coarse-bucket subtransaction wrapper
+  around each refresh_* call, plus (optionally) a top-level catch that records
+  outcome='FAILED' and re-raises for the timeout case. No EXCEPTION block ever
+  wraps a refresh_continuous_aggregate call (there are none).
+
+===============================================================================
+19. FORWARD-WATERMARK SAFETY PROOF
+===============================================================================
+
+REQUIREMENT: no reconcile procedure may modify
+telemetry.pipeline_state.last_received_at, directly or indirectly.
+
+DIRECT (RE-VERIFIED NOW): a catalog query over every FUNCTION/PROCEDURE in
+schemas telemetry/analytics/config/metadata/admin found that EXACTLY twelve
+procedures assign last_received_at:
+    analytics.run_energy_consumption_1min_job     analytics.run_energy_consumption_5min_job
+    analytics.run_energy_consumption_15min_job    analytics.run_energy_consumption_hourly_job
+    analytics.run_energy_consumption_daily_job    analytics.run_demand_calculation_job
+    telemetry.run_environment_daily_job           telemetry.load_energy_measurements_incremental
+    telemetry.load_environment_measurements_incremental
+    telemetry.load_normalized_points_incremental  telemetry.capture_raw_message_failures_incremental
+    telemetry.load_device_raw_receipt_state_incremental
+i.e. the seven analytical FORWARD WRAPPERS + five telemetry LOADERS, and
+NOTHING else.
+
+INDIRECT (RE-VERIFIED NOW): NONE of the seven calculation objects the reconcile
+procs will call (refresh_energy_consumption_{1min,5min,15min,hourly,daily},
+refresh_demand_analytics, refresh_environment_daily) is in that list
+(touches_pipeline_state = FALSE for all seven, confirmed by
+pg_get_functiondef inspection). Their reachable helpers
+(resolve_site_capture_bucket, resolve_interval_quality_rule,
+config.resolve_interval_quality_rule, calculate_demand_window,
+resolve_demand_interval, capture_bucket_correction_deadline, the ca_energy_*
+views, metadata.sites/devices, config.* resolvers) do not appear in the
+twelve-writer list either.
+
+CANNOT ACCIDENTALLY CALL A WRAPPER: the reconcile procs call the calculation
+FUNCTIONS/PROCEDURE (analytics.refresh_energy_consumption_1min(...),
+analytics.refresh_demand_analytics(...), telemetry.refresh_environment_daily(...))
+— NOT the run_*_job wrappers. The contract-gate test (§26) FAILS if any
+deployed analytics.reconcile_* / telemetry.reconcile_* body contains
+'run_energy_consumption', 'run_demand_calculation_job',
+'run_environment_daily_job', or any 'pipeline_state' token paired with
+'last_received_at', or a 'last_received_at' assignment.
+
+CONCLUSION: forward-watermark safety is provable by construction + an automated
+grep gate. NG1 is NOT triggered.
+
+===============================================================================
+20. FIRST-RUN / BOUNDED-WORK ANALYSIS
+===============================================================================
+
+Per tier, first run after 213 deploy:
+
+  IF the tier's pipeline_state.last_received_at IS NULL (forward job not yet
+  advanced) -> the reconcile writes outcome='NO_CHECKPOINT' and returns. Zero
+  work. (Expected on a freshly-migrated DB and possibly on staging for the
+  daily/hourly/env tiers whose forward jobs run hourly.)
+
+  ONCE the forward checkpoint is set:
+    window scanned      = [checkpoint - reconcile_window, checkpoint)
+    candidate detection = 2 grouped index-range scans (parent + child) over that
+                          window, GROUP BY (device_id, coarse). Supported by the
+                          (device_id, bucket_start) PK on every energy_consumption_*
+                          table and by ca_energy_* materialised-hypertable
+                          indexing. Cost at STAGING FLEET SCALE = UNKNOWN
+                          (local DB has 0 rows).
+    repair work         = up to n_max coarse-bucket re-drives; each
+                          refresh_energy_consumption_1min([h,h+1h)) recomputes
+                          <= 60 buckets x (devices with data in that hour) — the
+                          same query the forward job runs every minute over a
+                          2-minute window, so ~30x one forward run per hour
+                          re-driven, capped at n_max per reconcile run.
+    "no candidate mismatches" -> outcome='HEALTHY', 0 repairs, cost = the
+                          detector query only.
+    "child completely empty" -> for a tier that legitimately has no rows (5min
+                          on the 60s fleet), the detector's parent side is also
+                          empty (device filter) -> 0 mismatches -> HEALTHY.
+    can the first run exceed max_runtime?  POSSIBLE if staging has a large
+                          accumulated backlog of sub-watermark holes (209/210/211
+                          are NOT deployed to staging yet; the pre-watermark
+                          forward logic could have left many). MITIGATION: the
+                          coarse-bucket loop IS the chunking — a single
+                          refresh_* call is bounded to one coarse bucket, and
+                          n_max bounds the loop. On PARTIAL, the next cadence
+                          continues oldest-first. There is NO one-transaction
+                          processing of the whole reconcile_window.
+    per-run max_catchup vs reconcile_window: `n_max` IS the per-run bound;
+                          `reconcile_window` is the trailing horizon. They are
+                          distinct (mirrors the forward jobs'
+                          max_catchup_window vs the lookback floor).
+
+  DEPLOYMENT STEP [DESIGN]: ship 213 with n_max small (e.g. 6) in each energy
+  job's config; after ~24h of log observation, alter_job n_max up to 24 (25/26
+  for daily/env). This caps first-run cost regardless of the staging backlog
+  size and is a config change, not a code change.
+
+  demand first run: refresh_demand_analytics over a 12h finalize window; internal
+  bound v_max_n = ceil(12h/900s)+2 = 50 iterations per (site x scope). Cost at
+  staging site/scope count = UNKNOWN -> O-D.
+
+  environment_daily first run: up to n_max=35 site-local-day re-drives of
+  refresh_environment_daily; each recomputes one (device, local-day) group.
+  Cost UNKNOWN -> O-E1.
+
+===============================================================================
+21. EMPTY-5min SEMANTICS
+===============================================================================
+
+HISTORICAL R10 PRESERVED (RE-VERIFIED NOW that the filters are <=60 / =300):
+
+  energy_consumption_5min is empty for the current all-60s fleet because
+  refresh_energy_consumption_5min filters capture_interval_seconds = 300.
+
+  The §9 detector applies the SAME =300 filter to the parent side
+  (ca_energy_5min via resolve_site_capture_bucket). For a 60s device NO
+  ca_energy_5min row qualifies, so the FULL JOIN has:
+      parent side: 0 rows     child side: 0 rows     -> 0 mismatches -> HEALTHY.
+  => perpetual absence of 5min rows is ALWAYS reported HEALTHY,
+     rows_repaired = 0, error_count = 0.
+
+  DISTINCTION the completeness logic makes:
+    - "no source data"                : no ca_energy_5min row at all -> HEALTHY.
+    - "expected empty tier"            : ca_energy_5min rows exist but ALL fail
+                                        the =300 filter -> parent side empty ->
+                                        HEALTHY. (This is the 60s-fleet case.)
+    - "missing child despite source"   : ca_energy_5min row PASSES the =300
+                                        filter (a genuine 300s device) and no
+                                        energy_consumption_5min row -> MISSING_CHILD
+                                        -> repaired.
+  Consistent with the forward semantics: the forward 5min job returns
+  NO_SOURCE_DATA when refresh_energy_consumption_5min yields 0 rows but still
+  advances its checkpoint; the reconcile likewise does not treat the empty
+  result as a hole.
+
+===============================================================================
+22. CAGG OLDER-BACKFILL LIMITATION  (what 213 must RECORD for 214)
+===============================================================================
+
+The health/alert view is Migration 214 (NOT bundled — see §27). 213 must record
+enough in pipeline_reconciliation_log for 214 to later expose:
+
+  - CAGG WATERMARK AHEAD OF SOURCE: every reconcile log row stores window_end
+    (= the tier checkpoint) and ran_at. 214 computes, at query time,
+    cagg_available_through('telemetry.ca_energy_1min') minus
+    (SELECT max(bucket_start) FROM telemetry.energy_measurements); a positive
+    value beyond ~2 minutes (2 x end_offset) = overshoot in progress. 213 does
+    NOT need to store this — it is derivable live.
+  - CORRECTIONS OLDER THAN THE CAGG AUTO-REFRESH BOUNDARY: 213 stores
+    window_start (= checkpoint - reconcile_window). A deficit older than
+    window_start is BY DEFINITION outside what the reconcile can see or repair.
+    214 detects it by comparing, over [now - <a wider horizon>, window_start),
+    count(*) FROM telemetry.energy_measurements grouped by hour against
+    count(*) FROM analytics.energy_consumption_1min — a direct source-vs-child
+    check that does NOT rely on the (possibly stale) CAGG. 213 provides the
+    window_start boundary; 214 does the comparison.
+  - COMPLETENESS DEFICITS / UNREPAIRED GAPS: outcome='PARTIAL' (hit n_max) and
+    coarse_mismatch > 0 for >= 3 consecutive runs of a tier = a persistent
+    upstream problem or an un-drainable backlog. 214 alerts on that pattern
+    from the log.
+  - UNSUPPORTED HISTORICAL GAPS: outcome='FAILED' with a first_error_message,
+    or repeated 'NO_CHECKPOINT' while the forward job is running.
+
+OPERATOR REMEDY for the older-backfill case (documented, NOT automated):
+  CALL public.refresh_continuous_aggregate('telemetry.ca_energy_1min',
+       <old_from>, <old_to>);        -- legal at the top level (v2 probe)
+  then the next scheduled reconcile pass sees the now-current CAGG and repairs
+  the children within its window (or the operator widens n_max temporarily).
+
+213 creates NO health view, NO alert, NO 214 SQL.
+
+===============================================================================
+23. TENANT / SECURITY ANALYSIS
+===============================================================================
+
+RE-VERIFIED NOW + [Phase 0 Tenant-Isolation & Authorization Audit reused]:
+
+  - refresh_energy_consumption_{1min,5min,15min,hourly,daily} : SECURITY DEFINER,
+    owner ems_admin, per-tier search_path. They SELECT organization_id / site_id
+    / device_id STRAIGHT FROM the source (ca_energy_* / energy_consumption_15min),
+    which carry tenancy from telemetry.energy_measurements. There is NO
+    caller-supplied org/site/asset parameter — only (p_from, p_to).
+  - refresh_demand_analytics : SECURITY INVOKER, owner ems_admin (runs as the
+    job owner ems_admin). Iterates metadata.sites and derives org/scope from
+    config + source; no caller org/site parameter (only p_now, p_lookback,
+    p_finalize_from, p_finalize_to).
+  - refresh_environment_daily : SECURITY DEFINER, owner ems_admin. Derives
+    org/site from environment_measurements + metadata.sites; only (p_from, p_to).
+
+  => A reconcile procedure that passes ONLY timestamps to these calculation
+     objects CANNOT cross a tenant boundary — there is no identifier through
+     which it could. Tenant isolation is INHERITED from the calculation path,
+     which is the authoritative boundary (as the Phase 0 audit established for
+     the forward path). A "malicious/incorrect site identifier" is not
+     expressible in the reconcile API.
+
+  RECONCILE PROC SECURITY [DESIGN]:
+    LANGUAGE plpgsql, SECURITY DEFINER, OWNER ems_admin
+      (matches the refresh functions and the forward wrappers; the job runs as
+       ems_admin regardless, but DEFINER + explicit owner is the established
+       pattern in 208–211),
+    SET search_path = <the same as the refresh_* it calls> (pinned; no mutable
+      search_path),
+    REVOKE ALL ON PROCEDURE ... FROM PUBLIC,
+    GRANT EXECUTE ON PROCEDURE ... TO ems_admin.
+  Grafana / application authorization is IRRELEVANT — these are TimescaleDB
+  background jobs, never invoked by a user session. No new tenant-security layer
+  is introduced (none is needed; none would be appropriate).
+
+  NG8 is NOT triggered: tenant isolation IS proven through the existing
+  calculation path.
+
+===============================================================================
+24. PERFORMANCE ANALYSIS
+===============================================================================
+
+[Phase 0 Static Analytical Query-Performance Audit + H10 reused; staging-scale
+numbers UNKNOWN.]
+
+  CANDIDATE DETECTION per energy tier: 2 grouped range scans over
+  [checkpoint - reconcile_window, checkpoint), GROUP BY (device_id, coarse) on
+  indexed bucket_start. The heaviest is 1min (2 days x fleet-devices x 1440
+  min/day). INDEXES AVAILABLE: energy_consumption_1min PK (device_id,
+  bucket_start) + ix_energy_consumption_1min_org_site_time + _device_time
+  (from ddl/140, HISTORICALLY VERIFIED); ca_energy_1min materialised hypertable
+  has TimescaleDB's automatic (device grouping cols, bucket) internal index.
+  EXPECTED to be an index-only-ish aggregate; RISK is a seq scan of a large
+  materialised hypertable chunk set if the planner mis-estimates -> NG5.
+  MITIGATION: max_runtime finite (5 min) kills a runaway detector and the run
+  rolls back (safe); `coarse` and `n_max` are config-tunable; the detector can
+  be split by narrowing reconcile_window on first deploy.
+
+  REPAIR CALLS per run: <= n_max. Each refresh_energy_consumption_1min([h,h+1h))
+  is ~30x a normal forward 1min run (2-min window). n_max=24 -> ~24 hours of
+  1min re-computation per reconcile run, once per hour. This is well within a
+  5-minute max_runtime IF the forward job's per-run cost is what H10 implies
+  (sub-second). UNKNOWN at staging scale.
+
+  DEMAND: refresh_demand_analytics over 12h finalize window, v_max_n=50 per
+  (site x scope). Staging site/scope count UNKNOWN. The 210 audit estimated
+  ~0.15–0.65s for a 6h window at 5 sites x 5 scopes; 12h ~ double. -> O-D.
+
+  ENVIRONMENT_DAILY: <= 35 refresh_environment_daily(local-day) re-drives per
+  run, each one (device, local-day) GROUP BY over environment_measurements for
+  that day. UNKNOWN at staging scale -> O-E1.
+
+  CANDIDATE DETECTION AS THE BOTTLENECK: yes, this is the more likely bottleneck
+  than the repairs (repairs are n_max-bounded; the detector scans the whole
+  window). This is the primary reason §30 is GO-WITH-CONDITIONS and O-C2 (time
+  the detector query on staging) is a hard pre-enable check.
+
+  DO NOT use the local empty-DB timings as production evidence (they are 0).
+
+===============================================================================
+25. MIGRATION 213 EXACT CHANGE SET
+===============================================================================
+
+FILE: postgres/migrations/213_analytical_reconciliation.sql        -> CREATE (new)
+  Contents (all NEW objects; one BEGIN;/COMMIT; wrapper):
+   - CREATE TABLE analytics.pipeline_reconciliation_log (...)        -> CREATE
+       + create_hypertable(..., 'ran_at', chunk_time_interval => 30 days)
+       + PRIMARY KEY (run_id, ran_at)
+       + 2 indexes (§17)
+       + add_retention_policy(..., INTERVAL '180 days')
+       + ALTER TABLE ... OWNER TO ems_admin; REVOKE ALL FROM PUBLIC;
+         GRANT SELECT TO ems_readonly, grafana_reader; GRANT INSERT TO ems_admin;
+       + COMMENT ON TABLE
+   - CREATE FUNCTION config.assert_reconciliation_job_config(jsonb) RETURNS void -> CREATE
+       (validates {reconcile_window, coarse, n_max, lookback})
+   - CREATE PROCEDURE analytics.reconcile_energy_consumption_1min(integer,jsonb)  -> CREATE
+   - CREATE PROCEDURE analytics.reconcile_energy_consumption_5min(integer,jsonb)  -> CREATE
+   - CREATE PROCEDURE analytics.reconcile_energy_consumption_15min(integer,jsonb) -> CREATE
+   - CREATE PROCEDURE analytics.reconcile_energy_consumption_hourly(integer,jsonb)-> CREATE
+   - CREATE PROCEDURE analytics.reconcile_energy_consumption_daily(integer,jsonb) -> CREATE
+   - CREATE PROCEDURE analytics.reconcile_demand_intervals(integer,jsonb)         -> CREATE
+   - CREATE PROCEDURE telemetry.reconcile_environment_daily(integer,jsonb)        -> CREATE
+       (each: OWNER ems_admin; REVOKE ALL FROM PUBLIC; GRANT EXECUTE TO ems_admin;
+        SET search_path pinned to match the refresh_* it calls; COMMENT)
+   - OPTIONAL: CREATE FUNCTION analytics.reconcile_energy_deficits(text, timestamptz,
+       timestamptz, interval) RETURNS TABLE(...)                     -> CREATE
+       (a read-only helper encapsulating the FULL JOIN detector for the 5 energy
+        tiers via a CASE on the tier name; NO writes, NO refresh_* call; purely
+        for testability and to avoid 5 copies of the detector CTE. DECISION:
+        include it — it is side-effect-free and makes the contract-gate + unit
+        tests trivial. It is shared INFRASTRUCTURE, not shared semantic
+        calculation, so it does not violate the "no generic reconcile" rule.)
+   - DO $$ ... add_job for each of the 7 reconcile procedures                    -> CREATE (jobs)
+       with schedule_interval / config / check_config =>
+       'config.assert_reconciliation_job_config'::regproc, and an initial_start
+       offset per §16; guarded so a re-apply does not double-register
+       (SELECT ... WHERE NOT EXISTS a job for that proc).
+   - ALTER JOB run_energy_consumption_15min_job  config
+       reconcile_window '3 days' -> '8 days'                          -> MODIFY (config only)  [N2]
+   - ALTER JOB run_demand_calculation_job config
+       reconcile_window '6 hours' -> '12 hours'                       -> MODIFY (config only)
+       (CONDITIONAL on O-D; if O-D says retain 6h, this line is omitted)
+
+  NO CHANGE in 213 to: any refresh_* function/procedure; any run_*_job wrapper
+  body; telemetry.pipeline_state schema or rows; any CAGG or CAGG policy; any
+  retention/compression policy on any EXISTING table; job schedule/runtime/retry
+  of any FORWARD job; migration 212; postgres/jobs/*.sql; Grafana; application
+  code; normalization; routing.
+
+TEST FILES:
+  scripts/test/assert_analytical_reconciliation.sh / .sql                        -> CREATE
+    (the §26 suite: contract gates + behavioural rollback-only + concurrency)
+  scripts/test/run_integration_environment.sh                                     -> MODIFY
+    (add one invocation of the new assert script)
+  scripts/test/assert_job_schedule_canonical.sql                                  -> MODIFY (optional)
+    (extend to assert the 7 reconcile jobs' schedule/runtime/retry/check_config;
+     the existing forward-job assertions are untouched)
+
+DOCUMENTATION FILES (§27):
+  postgres/restructure_manifest.csv                                               -> MODIFY (append 1 row)
+  docs/platform-manual/25-change-history.md                                       -> MODIFY (dated 213 entry)
+  docs/platform-manual/23-known-issues-and-drift.md                              -> MODIFY (§8 update; item 16
+                                                                                    — reconciliation now closes
+                                                                                    the internal-hole / CAGG-
+                                                                                    overshoot gap within bounds)
+  docs/platform-manual/07-telemetry-pipeline.md  OR  10-analytics.md / 11-aggregation.md -> MODIFY
+                                                                                    (a "Reconciliation" subsection)
+
+DATABASE OBJECTS SUMMARY:
+  CREATE : analytics.pipeline_reconciliation_log (hypertable + retention policy);
+           config.assert_reconciliation_job_config;
+           7 reconcile procedures; 1 optional read-only helper function;
+           7 TimescaleDB jobs.
+  MODIFY : job config for run_energy_consumption_15min_job (reconcile_window)
+           [+ run_demand_calculation_job reconcile_window, conditional].
+  NO CHANGE : everything else.
+
+CONFIG KEYS INTRODUCED:
+  on the 7 NEW reconcile jobs: reconcile_window, coarse, n_max, (demand: lookback).
+  on run_energy_consumption_15min_job: reconcile_window value 3d -> 8d.
+  (conditional) on run_demand_calculation_job: reconcile_window 6h -> 12h.
+
+JOB IDS: not predetermined; assigned by add_job at apply time; all lookups by
+(proc_schema, proc_name).
+
+ROLLBACK CONSIDERATIONS:
+  - delete_job for each of the 7 reconcile jobs (by proc name lookup);
+  - DROP the 7 reconcile procedures + the optional helper + the validator;
+  - DROP TABLE analytics.pipeline_reconciliation_log (its retention policy drops
+    with it);
+  - ALTER JOB run_energy_consumption_15min_job config reconcile_window back to
+    '3 days' [and demand back to '6 hours' if it was changed].
+  NO forward-path state was ever written by 213, so rollback cannot corrupt or
+  strand anything. A rolled-back 213 leaves the platform exactly at the 212
+  baseline.
+
+===============================================================================
+26. TESTS / CONTRACT-GATE DESIGN
+===============================================================================
+
+Type key: [C]=SQL contract (grep/parse deployed defs) ; [B]=behavioural
+rollback-only ; [X]=cross-session concurrency ; [D]=catalog/config drift.
+
+CONTRACT GATES (hard fails):
+  [C] For EACH of the 7 deployed reconcile_* bodies:
+        - contains NO  'last_received_at'  token at all (strongest form);
+        - contains NO  'run_energy_consumption'  /  'run_demand_calculation_job'
+          /  'run_environment_daily_job'  substring (never calls a wrapper);
+        - contains NO  'refresh_continuous_aggregate'  substring;
+        - contains  pg_try_advisory_xact_lock( ... hashtextextended('<the
+          correct FORWARD job proc>', 0) ... );
+        - contains the correct calc call:
+            reconcile_energy_consumption_1min  -> 'refresh_energy_consumption_1min('
+            ... 5min/15min/hourly/daily analogously ...
+            reconcile_demand_intervals        -> 'refresh_demand_analytics(' with
+                                                 'p_finalize_from' and 'p_finalize_to'
+            reconcile_environment_daily        -> 'refresh_environment_daily(';
+        - contains  'pipeline_reconciliation_log'  (writes exactly one log row path).
+  [C] EACH reconcile_* is a PROCEDURE, SECURITY DEFINER, owner ems_admin, with a
+      pinned (non-empty) search_path; REVOKE FROM PUBLIC present.
+  [C] The 7 refresh_* calc objects are UNCHANGED by 213 (checksum / body
+      fingerprint vs the 209/210/211 baseline).
+  [C] telemetry.pipeline_state schema unchanged; the 7 pipeline_state rows still
+      exist.
+  [D] 7 reconcile jobs registered exactly once each, with the expected
+      schedule_interval / max_runtime / max_retries / retry_period / config /
+      check_config = config.assert_reconciliation_job_config.
+  [D] run_energy_consumption_15min_job config.reconcile_window = '8 days'
+      (and run_demand_calculation_job = '12 hours' if O-D approved 12h).
+
+BEHAVIOURAL (rollback-only where possible; synthetic fixtures; hold the tier's
+forward advisory lock in-session so the scheduler cannot race):
+  [B] MISSING_CHILD (1min): seed ca_energy_1min rows for a coarse hour minus a
+      device; delete the child rows for that device/hour; set the checkpoint
+      past it; run reconcile -> child rows recreated; log outcome='REPAIRED',
+      rows_repaired = deleted count; CHECKPOINT UNCHANGED (assert before/after).
+  [B] STALE_COUNT (1min): child.source_sample_count = 3, ca_energy_1min.sample_count
+      = 10 for the same (device,minute); reconcile -> child.source_sample_count
+      becomes 10; rows_repaired > 0.
+  [B] EXPECTED_NO_DATA: window with no ca rows anywhere -> outcome='HEALTHY',
+      0 repairs, 0 errors.
+  [B] EMPTY-5MIN: all-60s fixture -> reconcile_5min outcome='HEALTHY', 0/0.
+  [B] 300s DEVICE MISSING 5min CHILD: a 300s-policy device with ca_energy_5min
+      rows and no 5min child -> REPAIRED (proves the =300 filter path).
+  [B] CAPTURE-FILTER (1min): a 300s device with ca_energy_1min rows and no 1min
+      child -> outcome='HEALTHY' (NOT flagged — proves the <=60 filter
+      replication).
+  [B] 15min LEAST/NATIVE: repair a 1min hole, then run reconcile_15min ->
+      the affected 15-min buckets' source_interval_count / source_sample_count
+      corrected. A hole 5 days old IS repaired at reconcile_window=8d and NOT at
+      3d (proves N2).
+  [B] hourly / daily: analogous, source_interval_count = SUM check.
+  [B] daily SITE-LOCAL: 2-timezone fixture (Asia/Kolkata, America/New_York);
+      reconcile a specific local day -> refresh_energy_consumption_daily gets
+      the correct local-day UTC bounds; no cross-day contamination.
+  [B] DEMAND NO_DATA -> VALID / INCOMPLETE -> VALID: seed a non-VALID
+      demand_intervals row + add source -> reconcile_demand_intervals ->
+      row becomes VALID, finalized_at moves, pipeline_state('demand_intervals')
+      .last_received_at UNCHANGED (assert before/after).
+  [B] DEMAND VALID FROZEN: seed a VALID row, run reconcile with source that
+      would compute differently -> row byte-identical.
+  [B] DEMAND SITE + ASSET partial-index paths in one run -> correct arbiter,
+      no "ON CONFLICT specification" error.
+  [B] DEMAND demand_state NOT double-applied: reconcile over an old window ->
+      demand_state rows for historical intervals unchanged (reuse 210 T-DS).
+  [B] ENV sparse day: env_daily row sample_count=20, add 10 late buckets ->
+      reconcile re-drives that day, sample_count=30, checkpoint unchanged; a
+      thin day with no new source -> NOT re-driven.
+  [B] ENV DST day: 2025-11-02 (25h) / 2025-03-09 (23h) America/New_York ->
+      reconcile re-drive reproduces the 211-correct row.
+  [B] ENV partial current day: reconcile window ends at a past UTC-day boundary
+      -> today's partial local day never a candidate.
+  [B] BOUNDED WORK / n_max: seed > n_max mismatching coarse buckets ->
+      outcome='PARTIAL', exactly n_max repaired, oldest-first; next run
+      continues.
+  [B] IDEMPOTENT: run any reconcile twice -> 2nd run outcome='HEALTHY',
+      rows_repaired=0.
+  [B] ERROR PATH: inject a failure inside a refresh_* (temp trigger) ->
+      reconcile catches it per-coarse-bucket, EXITs, writes outcome='FAILED' +
+      first_error_sqlstate/message, earlier repairs in the run still commit,
+      checkpoint unchanged, proc does NOT raise.
+  [B] SOURCE_RETRACTED: child row present, parent (ca) row absent -> NOT
+      repaired, NOT deleted; counted in a warn tally (rows_examined /
+      a dedicated column if added).
+  [X] ADVISORY-LOCK CONTENTION: hold the tier's forward-job advisory key in a
+      second session -> foreground reconcile logs outcome='SKIPPED_LOCKED',
+      0 work, no detector scan.
+  [X] CONCURRENT SCHEDULER: same via the real jobs.
+  [B] TENANT ISOLATION: 2-org fixture; a hole in org B repaired; org A rows
+      byte-identical; every repaired row's organization_id matches its site.
+  [B] LOG RETENTION: assert the retention policy is registered on
+      pipeline_reconciliation_log with drop_after = 180 days.
+
+NON-ROLLBACK-ONLY tests (document in the .sh header): the CAGG-dependent ones
+(STALE_COUNT, 300s-device) may need to materialise a ca_energy_* window; run
+these in a dedicated synthetic org/site fixture far from any real data and
+tolerate the CAGG residue, exactly as the 209 P/Q suite already does.
+
+===============================================================================
+27. DOCUMENTATION IMPACT
+===============================================================================
+
+  postgres/restructure_manifest.csv            append one 213 row (category migration).
+  docs/platform-manual/25-change-history.md    dated "Phase 1 (4/4): analytical
+     reconciliation (migration 213)" entry, in the 207/209/210/211 style:
+     what changed (log table + 7 reconcile procs + 7 jobs + N2 15min window
+     [+ demand window]); why (G1–G3); scope boundary (NO refresh_* / wrapper /
+     CAGG / retention / Grafana change; NO forward-checkpoint write); evidence
+     (integration suite green); the 2-hour... n/a; "n_max provisional, raise
+     after log observation"; "not deployed to staging"; "migration 214
+     (v_pipeline_health) NOT implemented".
+  docs/platform-manual/23-known-issues-and-drift.md  §8 / item 16: a
+     "Update — migration 213" note that the internal-hole and
+     CAGG-materialisation-overshoot gaps are now bounded-and-self-repairing
+     within each tier's reconcile_window; the residual (backfill older than the
+     CAGG start_offset) is log-recorded and operator-remediable, with the
+     health-view exposure deferred to migration 214.
+  docs/platform-manual/07-telemetry-pipeline.md  (or 10-analytics.md /
+     11-aggregation.md) a "Reconciliation" subsection: the forward-vs-reconcile
+     separation (§19), the per-tier windows (§15), the cadences (§16), the log
+     table, and the operator remedy for the older-backfill case (§22).
+  NO reconciliation content is added to any document that pre-dates this change
+  beyond these targeted updates. NO 214 / health-view material.
+
+===============================================================================
+28. OPEN QUESTIONS / REQUIRED STAGING READS
+===============================================================================
+
+All READ-ONLY. Operator to run; do NOT let the audit process SSH.
+
+O-C1  [REQUIRED BEFORE IMPLEMENTATION — sizing]  energy-tier row counts + ranges:
+  SELECT 'energy_consumption_1min' t, count(*), min(bucket_start), max(bucket_start) FROM analytics.energy_consumption_1min
+  UNION ALL SELECT 'energy_consumption_5min', count(*), min(bucket_start), max(bucket_start) FROM analytics.energy_consumption_5min
+  UNION ALL SELECT 'energy_consumption_15min', count(*), min(bucket_start), max(bucket_start) FROM analytics.energy_consumption_15min
+  UNION ALL SELECT 'energy_consumption_hourly', count(*), min(bucket_start), max(bucket_start) FROM analytics.energy_consumption_hourly
+  UNION ALL SELECT 'energy_consumption_daily', count(*), min(bucket_start), max(bucket_start) FROM analytics.energy_consumption_daily
+  UNION ALL SELECT 'demand_intervals', count(*), min(interval_start), max(interval_start) FROM analytics.demand_intervals
+  UNION ALL SELECT 'environment_daily', count(*), min(bucket_start), max(bucket_start) FROM telemetry.environment_daily
+  UNION ALL SELECT 'ca_energy_1min', count(*), min(bucket_start), max(bucket_start) FROM telemetry.ca_energy_1min;
+  SELECT count(*) FROM metadata.sites WHERE COALESCE(lifecycle_status,'ACTIVE')<>'DECOMMISSIONED';
+  SELECT count(*) FROM metadata.devices WHERE lifecycle_status='ACTIVE';
+  SELECT capture_interval_seconds, count(*) FROM config.telemetry_capture_policies WHERE is_enabled GROUP BY 1;
+
+O-C2  [REQUIRED BEFORE ENABLING THE JOBS — NG5 resolution]  time the detector
+      query for the heaviest tier (1min) over its 2-day window, rolled back:
+  BEGIN; SET LOCAL statement_timeout='120s'; \timing on
+    WITH parent AS (
+      SELECT ca.device_id, date_trunc('hour', ca.bucket_start) coarse, ca.bucket_start, ca.sample_count p_vol
+      FROM telemetry.ca_energy_1min ca
+      CROSS JOIN LATERAL telemetry.resolve_site_capture_bucket(ca.site_id, ca.bucket_start) cp
+      WHERE ca.bucket_start >= now() - INTERVAL '2 days' AND ca.bucket_start < now()
+        AND cp.policy_id IS NOT NULL AND cp.capture_interval_seconds <= 60),
+    child AS (
+      SELECT device_id, date_trunc('hour', bucket_start) coarse, bucket_start, source_sample_count c_vol
+      FROM analytics.energy_consumption_1min
+      WHERE bucket_start >= now() - INTERVAL '2 days' AND bucket_start < now())
+    SELECT count(*) FROM (
+      SELECT COALESCE(p.coarse,c.coarse) coarse FROM parent p FULL JOIN child c
+        ON p.device_id=c.device_id AND p.bucket_start=c.bucket_start
+      WHERE COALESCE(p.p_vol,-1) IS DISTINCT FROM COALESCE(c.c_vol,-1)) x;
+  ROLLBACK;
+  -- if this is > ~30s at staging scale: reduce reconcile_window / raise coarse
+  -- to 1 day for the first deploy, or split the detector; do NOT enable the
+  -- 1min reconcile job until it fits comfortably inside max_runtime.
+  -- Repeat for 5min (7-day window) and 15min (8-day window) analogously.
+
+O-C3  [OPTIONAL — first-run sizing]  existing deficit magnitude, 1min, trailing 14d:
+  WITH src AS (SELECT date_trunc('hour', bucket_start) h, count(*) n
+               FROM telemetry.ca_energy_1min
+               WHERE bucket_start >= now()-INTERVAL '14 days' GROUP BY 1),
+       chi AS (SELECT date_trunc('hour', bucket_start) h, count(*) n
+               FROM analytics.energy_consumption_1min
+               WHERE bucket_start >= now()-INTERVAL '14 days' GROUP BY 1)
+  SELECT count(*) FILTER (WHERE src.n IS DISTINCT FROM COALESCE(chi.n,0)) AS mismatching_hours
+  FROM src LEFT JOIN chi USING (h);
+  -- large -> deploy 213 with n_max small (6) and raise after ~24h.
+
+O-D   [REQUIRED BEFORE SETTING demand reconcile_window]  12h vs 6h demand cost:
+  BEGIN; \timing on
+    -- for the busiest site by recent demand_intervals volume, ~50
+    -- calculate_demand_window calls over 12h:
+    SELECT count(*) FROM (
+      SELECT (analytics.calculate_demand_window(:busy_site, sc.scope_type, sc.asset_id,
+               g.gs, g.gs + interval '15 min', g.gs + interval '15 min', TRUE)).*
+      FROM ( /* that site's (scope_type, asset_id, demand_policy_id) rows */ ) sc,
+           generate_series(date_trunc('hour', now()) - interval '12 hours',
+                           date_trunc('hour', now()) - interval '15 min',
+                           interval '15 min') g(gs)) x;
+  ROLLBACK;
+  -- > ~2-3 min -> keep demand reconcile_window at 6h (omit the ALTER JOB line in §25).
+
+O-E1  [REQUIRED BEFORE IMPLEMENTATION — env sizing]
+  SELECT last_status, last_received_at FROM telemetry.pipeline_state WHERE pipeline_name='environment_daily';
+  SELECT count(*), min(observation_date), max(observation_date) FROM telemetry.environment_daily;
+  SELECT max(late_arrival_tolerance_seconds), max(capture_interval_seconds)
+  FROM config.telemetry_capture_policies WHERE is_enabled;
+
+O-E2  [OPTIONAL]  env sparse-day evidence (informs whether a future
+      plausibility-fraction check is worth it — NOT for 213):
+  SELECT observation_date, count(*) device_days, avg(sample_count)::int, min(sample_count), max(sample_count)
+  FROM telemetry.environment_daily WHERE observation_date >= current_date - 35 GROUP BY 1 ORDER BY 1;
+
+O-F   [OPTIONAL — 214 input, not 213]  current CAGG overshoot:
+  SELECT _timescaledb_functions.to_timestamp(w.watermark) AS ca1_materialised_through
+  FROM _timescaledb_catalog.continuous_agg ca
+  JOIN _timescaledb_catalog.continuous_aggs_watermark w ON w.mat_hypertable_id = ca.mat_hypertable_id
+  WHERE ca.user_view_name = 'ca_energy_1min';
+  SELECT max(bucket_start) FROM telemetry.energy_measurements;
+
+O-G   [OPTIONAL]  storage of the new log after 30/90 days is derivable from the
+      cadence math in §17 (no staging read needed).
+
+UNRESOLVED VERIFICATION ITEMS (local, for the implementation phase — cheap):
+  V1  Confirm a TimescaleDB job-action PROCEDURE may take
+      pg_try_advisory_xact_lock and run a plpgsql BEGIN..EXCEPTION subtransaction
+      around a plain FUNCTION call. HISTORICALLY VERIFIED indirectly: the seven
+      209/210/211 forward wrapper PROCEDURES already do exactly this
+      (pg_try_advisory_xact_lock + EXCEPTION WHEN OTHERS). So V1 is effectively
+      already proven; re-confirm at implementation with the first reconcile
+      proc's integration test.
+  V2  Confirm gen_random_uuid() is available without an extension on this
+      PG16.15 image. INFERRED: pg16 ships it in core. Re-confirm at
+      implementation (SELECT gen_random_uuid()).
+
+===============================================================================
+29. NO-GO CONDITIONS
+===============================================================================
+
+ NG1  A reconciliation repair path can advance a forward pipeline_state
+      checkpoint.
+      STATUS: NOT triggered. Proven §19 (the 7 calc objects do not write
+      pipeline_state; the 12 writers are exactly the wrappers + loaders; the
+      reconcile procs call calc objects, not wrappers; contract-gate test).
+
+ NG2  A reconciliation path can partially commit analytical repairs leaving
+      inconsistent state.
+      STATUS: NOT triggered. Each refresh_*(a,b) is atomic within a
+      per-coarse-bucket BEGIN..EXCEPTION subtransaction; a run either commits a
+      set of FULLY-recomputed coarse buckets + a log row, or (timeout/uncaught)
+      commits nothing.
+
+ NG3  CAGG completeness detection relies solely on the materialisation
+      watermark.
+      STATUS: NOT triggered. The detector compares per-(device,bucket) row
+      counts and fingerprint sums; it never reads cagg_available_through or the
+      watermark catalog.
+
+ NG4  Automated reconciliation requires refresh_continuous_aggregate() inside a
+      prohibited transaction context.
+      STATUS: NOT triggered. 213 contains no refresh_continuous_aggregate call.
+      reconcile_window(1min/5min) = the CAGG start_offset so the automatic
+      policy suffices within the window; older backfill is alert-only (§22).
+
+ NG5  Candidate detection is unbounded enough to violate job max_runtime.
+      STATUS: OPEN — the detector's cost at staging fleet scale is UNKNOWN.
+      RESOLUTION: O-C2 (time the detector on staging) must pass before enabling
+      each energy reconcile job; max_runtime is finite so a runaway detector is
+      killed and the run rolls back safely; coarse / n_max / reconcile_window
+      are config-tunable for a conservative first deploy. This is the primary
+      reason for GO-WITH-CONDITIONS.
+
+ NG6  Demand reconciliation cannot safely re-finalise historical rows without
+      violating the 210 quality/status contract.
+      STATUS: NOT triggered. The repair IS the 210 re-finalisation path
+      (refresh_demand_analytics with p_finalize_from/to; status-guarded upsert;
+      VALID frozen), proven by 210 test T-Refin-E.
+
+ NG7  Environment reconciliation cannot preserve site-local-day / DST semantics.
+      STATUS: NOT triggered. The reconcile passes [local_day_start_utc,
+      local_day_end_utc) per candidate day; refresh_environment_daily does all
+      tz/DST math (unchanged). The candidate query only derives the two UTC
+      bounds from (local date, site timezone) via AT TIME ZONE.
+
+ NG8  Tenant/site isolation cannot be proven through the existing calculation
+      path.
+      STATUS: NOT triggered. §23 — the calc functions derive org/site from
+      source; the reconcile API is timestamps-only; no cross-tenant identifier
+      is expressible.
+
+ NG9  First-run work cannot be bounded.
+      STATUS: NOT triggered (with a deployment step). n_max per run +
+      oldest-first ordering + PARTIAL outcome = bounded, resumable. Deploy with
+      n_max small; raise after log observation (§20).
+
+ NG10 The reconciliation log introduces unacceptable write amplification or
+      unbounded growth.
+      STATUS: NOT triggered. One row per run (~80/day ~29k/yr); 180-day
+      retention policy; ~14k steady-state rows; no bucket-level detail.
+
+ NG11 (added) A reconcile proc's advisory lock could deadlock or livelock
+      against the forward job.
+      STATUS: NOT triggered. pg_try_advisory_xact_lock is non-blocking: on a
+      miss the reconcile immediately logs SKIPPED_LOCKED and returns. No
+      blocking lock is ever taken. Cadence offsets (§16) minimise contention.
+
+ NG12 (added) The 900s-capture-device class corrupts the energy fingerprint.
+      STATUS: NOT triggered for the fingerprint (the <=60 / =300 filter
+      replication excludes 900s devices from both the 1min and 5min detector).
+      It IS a pre-existing forward-processing gap (900s energy feeds no
+      consumption tier) — documented as constraint R-900, NOT fixed by 213,
+      flagged for 214 to surface. Current fleet is 100% 60s so the exposure is
+      latent.
+
+===============================================================================
+30. FINAL GO / NO-GO DECISION
+===============================================================================
+
+GO WITH CONDITIONS — IMPLEMENT 213 AFTER the following are resolved:
+
+  C1  O-C1 (staging energy/demand/env row counts + ranges + fleet/site/policy
+      counts) has been run and reviewed — needed to finalise n_max defaults and
+      to confirm the 900s-device class is absent (or, if present, to record
+      R-900 explicitly in the 213 docs).
+
+  C2  O-C2 (staging \timing of the 1min / 5min / 15min detector queries over
+      their reconcile_windows, rolled back) shows each detector completes
+      comfortably inside the proposed max_runtime (target < ~30s; hard ceiling
+      well under 5 min). If it does not, the 213 change-set must ship those
+      jobs DISABLED (scheduled => false) or with a reduced reconcile_window /
+      coarse => '1 day', to be tuned on staging before enabling. THIS RESOLVES
+      NG5.
+
+  C3  O-D (staging \timing of a 12h demand re-finalise for the busiest site)
+      decides the demand reconcile_window: 12 hours if <= ~2-3 min, otherwise
+      retain 6 hours (and the §25 demand ALTER JOB line is omitted).
+
+  C4  O-E1 (staging environment_daily state + capture-policy grace) reviewed —
+      needed to confirm env n_max=35 and that the env forward checkpoint is
+      advancing (so the env reconcile has a non-NULL checkpoint to work from).
+
+  C5  Implementation deploys 213 with n_max = 6 in every energy reconcile job's
+      config (env n_max = 8), and a documented follow-up alter_job to raise
+      n_max to the §16 values after ~24 h of pipeline_reconciliation_log
+      observation showing bounded per-run work.
+
+  C6  The local implementation-phase verifications V1 (job-proc advisory lock +
+      subtransaction — already proven by the 209/210/211 wrappers) and V2
+      (gen_random_uuid in core PG16) are confirmed green in the first
+      integration run.
+
+RATIONALE FOR GO (not NO-GO): every NG except NG5 is structurally NOT triggered
+against the RE-VERIFIED post-212 state; the completeness signal exists and is
+truthful within the chosen windows; the forward-watermark separation is
+provable by construction and by an automated gate; the demand and environment
+paths reuse the exact 210/211 semantics. NG5 is a bounded, measurable
+performance question with safe failure modes (finite max_runtime, whole-txn
+rollback) and config-only mitigations — it warrants a staging read, not a
+rejection.
+
+RATIONALE AGAINST unconditional GO: the detector's cost and the size of any
+existing sub-watermark backlog on staging are genuinely UNKNOWN (the local DB is
+empty; 209/210/211 are not on staging), and shipping the reconcile jobs
+enabled without O-C2 risks a first-run max_runtime breach on the 1min tier.
+
+===============================================================================
+33. ABSOLUTE STOP
+===============================================================================
+
+This is an audit. The only file created is this report
+(Audit/EMS Analytics Platform — Migration 213 Pre-Implementation Reconciliation Audit.txt).
+No migration, procedure, job, table, test, or documentation change was made.
+The local database was READ ONLY (three degenerate-window probes were NOT run
+this pass; all queries were SELECT / catalog reads). Staging was not contacted.
+Nothing was committed or pushed.
+
+Await explicit "IMPLEMENT 213" authorization (and the resolution of C1–C6).
+Do not implement Migration 213. Do not implement Migration 214.
+
+===============================================================================
+END OF REPORT
+===============================================================================

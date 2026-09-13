@@ -1,0 +1,512 @@
+EMS Analytics Platform — Phase 0 Current-State Inventory
+
+Scope executed: full repository inspection (read-only) of postgres/ddl/, postgres/migrations/, postgres/jobs/, postgres/legacy/, postgres/archive/, postgres/restructure_manifest.csv, grafana/dashboards/, grafana/provisioning/, and docs/operations/*.md. No files were modified. This builds on the existing Telemetry Ingestion Pipeline audit as upstream reference and does not repeat that MQTT/Telegraf-layer work except where it directly touches analytics lineage.
+
+---
+
+1. Schemas
+
+┌─────────────┬─────────────────────────────────────────────────────────────────────┬─────────────────────────────┐
+│   Schema    │                Purpose (verbatim COMMENT ON SCHEMA)                 │           Source            │
+├─────────────┼─────────────────────────────────────────────────────────────────────┼─────────────────────────────┤
+│ admin       │ Platform administration, security and operational metadata          │ postgres/ddl/01_schemas.sql │
+├─────────────┼─────────────────────────────────────────────────────────────────────┼─────────────────────────────┤
+│ metadata    │ Core business entities: organizations, sites, assets, devices       │ same                        │
+├─────────────┼─────────────────────────────────────────────────────────────────────┼─────────────────────────────┤
+│ telemetry   │ Raw time-series telemetry and hypertables                           │ same                        │
+├─────────────┼─────────────────────────────────────────────────────────────────────┼─────────────────────────────┤
+│ analytics   │ Continuous aggregates, reporting views and derived metrics          │ same                        │
+├─────────────┼─────────────────────────────────────────────────────────────────────┼─────────────────────────────┤
+│ config      │ Device profiles, engineering units, parser/quality-rule definitions │ same                        │
+├─────────────┼─────────────────────────────────────────────────────────────────────┼─────────────────────────────┤
+│ integration │ External system mappings                                            │ same                        │
+└─────────────┴─────────────────────────────────────────────────────────────────────┴─────────────────────────────┘
+
+No analytics objects live in public other than the out-of-scope public.mqtt_staging compatibility view (telemetry audit territory).
+
+Confidence: VERIFIED FROM SOURCE.
+
+---
+
+2. Tables / hypertables in the analytical lineage
+
+2.1 Raw → normalized (upstream, telemetry schema)
+
+Table: telemetry.raw_messages
+Type: hypertable, PK (received_at,id)
+Tenant scoping: none (resolved downstream)
+Timestamp semantics: received_at=platform receipt; source_timestamp=device time
+Retention/compression: short raw retention stated in comments (~7d) but no add_retention_policy call located for this exact
+table — UNKNOWN, needs runtime check
+Status: ACTIVE
+────────────────────────────────────────
+Table: telemetry.raw_message_failures
+Type: hypertable, 1-day chunks
+Tenant scoping: source_identifier only
+Timestamp semantics: raw_received_at
+Retention/compression: compress@7d, drop@30d
+Status: ACTIVE
+────────────────────────────────────────
+Table: telemetry.normalized_points
+Type: hypertable
+Tenant scoping: organization_id, site_id, gateway_id, device_id
+Timestamp semantics: event_time=source event; platform_received_at=watermark
+Retention/compression: compress interval 1 day found; explicit retention not located
+Status: ACTIVE — canonical "one row = one logical point value" store
+────────────────────────────────────────
+Table: telemetry.device_point_state, device_telemetry_state, device_live_point_state, pipeline_state, capture_bucket_samples,
+device_raw_receipt_state
+Type: regular state/cache tables (not history)
+Tenant scoping: varies
+Timestamp semantics: latest-value/state tables
+Retention/compression: n/a (upsert caches)
+Status: ACTIVE — commissioning/connectivity/idempotency bookkeeping, explicitly documented as not a substitute for
+normalized_points/domain tables
+
+2.2 Domain measurement hypertables
+
+Table: telemetry.energy_measurements
+Columns (summary): full electrical model: import/export active/reactive/reactive-export/apparent energy (Wh/varh/VAh),
+active/reactive/apparent power (W/var/VA), voltage (LN/LL), current, PF, frequency, phase angle, THD, bucket_start
+(provenance not directly located — INFERRED), asset_id (set by trigger, see §7)
+Tenant scoping: org/site/gateway/device/asset (all but org nullable)
+Compression: segment org,site,device; order received_at DESC; compress@7d
+Retention: drop@90d
+Loader/CAGG/lifecycle present?: Yes — full loader→CAGG→persisted-rollup chain (§3/§4)
+Status: ACTIVE — primary electrical hypertable
+────────────────────────────────────────
+Table: telemetry.environment_measurements
+Columns (summary): temperature, humidity, pressure, CO2, VOC, illuminance, occupancy, battery, signal strength
+(extended-sensor columns confirmed only via loader code, not a dedicated ALTER DDL read — INFERRED)
+Tenant scoping: org/site/gateway/device/asset
+Compression: segment org,site,device; compress@7d
+Retention: drop@2y
+Loader/CAGG/lifecycle present?: Yes — loader + 2 CAGGs + persisted daily
+Status: ACTIVE
+────────────────────────────────────────
+Table: telemetry.water_measurements
+Columns (summary): flow rate, volume, pressure, temperature, pH, conductivity, turbidity
+Tenant scoping: org/site/gateway/device
+Compression: not found
+Retention: not found
+Loader/CAGG/lifecycle present?: No loader job, no CAGG, no lifecycle policy found anywhere in the repo
+Status: UNCERTAIN — dormant/scaffold. Confirmed by grep: zero other files reference this table beyond its own DDL, one
+taxonomy migration, and one archived cutover migration. Genuine coverage gap, not inferred from naming.
+────────────────────────────────────────
+Table: telemetry.asset_health
+Columns (summary): running/operating state, runtime hours, temperatures, vibration (x/y/z), current, power, alarm/fault codes
+Tenant scoping: org/site/gateway/device/asset
+Compression: not found
+Retention: not found
+Loader/CAGG/lifecycle present?: none found
+Status: UNCERTAIN — dormant/scaffold (same pattern as water)
+────────────────────────────────────────
+Table: telemetry.device_status
+Columns (summary): communication status, signal, battery, firmware, error code
+Tenant scoping: org/site/gateway/device
+Compression: not found
+Retention: not found
+Loader/CAGG/lifecycle present?: none found
+Status: UNCERTAIN — dormant/scaffold. Possibly redundant with device_telemetry_state/device_live_point_state, which are the
+tables actually used operationally — not confirmed, flagged for runtime verification.
+────────────────────────────────────────
+Table: telemetry.environment_daily
+Columns (summary): persisted (non-CAGG) daily historian, bucket_start=site-local midnight instant, observation_date,
+site_timezone, avg/min/max/sample_count × 9 metric groups
+Tenant scoping: org/site/device
+Compression: segment org,site,device; compress@90d
+Retention: none (explicit "durable low-resolution layer")
+Loader/CAGG/lifecycle present?: source = raw environment_measurements directly, not the hourly CAGG (explicit rationale:
+AVG(hourly AVG) compounds error; UTC-hour ≠ site-local day)
+Status: ACTIVE
+
+Confidence: table columns/retention — VERIFIED FROM SOURCE except where marked INFERRED above.
+
+---
+
+3. Continuous aggregates — "general" raw/electrical family
+
+All in telemetry schema, all sourced directly from telemetry.energy_measurements / telemetry.environment_measurements (never from the validated lineage in §4).
+
+Object: telemetry.ca_energy_1min
+Resolution: 1 min (bucket_start)
+Refresh policy: 2d/1min/1min
+Compress after: 7d
+Retention: 180d
+Notes: MAX/MIN of cumulative registers; AVG/MIN/MAX of instantaneous power/voltage/current/PF/freq/THD. No quality logic.
+────────────────────────────────────────
+Object: telemetry.ca_energy_5min
+Resolution: 5 min
+Refresh policy: 7d/1min/5min
+Compress after: 7d
+Retention: 2y
+Notes: same shape
+────────────────────────────────────────
+Object: telemetry.ca_energy_15min
+Resolution: 15 min (received_at)
+Refresh policy: 2d/1min/5min
+Compress after: 7d
+Retention: 2y
+Notes: Documented as "the primary 15-minute CAGG… 19 dependent views across 5 levels" — heavily depended-upon
+────────────────────────────────────────
+Object: telemetry.ca_energy_hourly
+Resolution: 1 hour
+Refresh policy: 7d/5min/15min
+Compress after: 30d
+Retention: 5y
+Notes:
+────────────────────────────────────────
+Object: telemetry.ca_energy_daily
+Resolution: 1 day, hardcoded Asia/Kolkata timezone
+Refresh policy: 30d/1h/1h
+Compress after: 90d
+Retention: indefinite (explicit: "until a later business/regulatory decision")
+Notes: Only tier in this family with a baked-in timezone
+────────────────────────────────────────
+Object: telemetry.ca_energy_electrical_ext_15min / _hourly
+Resolution: 15min/1h
+Refresh policy: same cadence as base tiers
+Compress after: 7d/30d
+Retention: not fully confirmed
+Notes: Supplemental CAGGs added (migration 046) purely because TimescaleDB CAGGs can't get ALTER TABLE ADD COLUMN; adds
+voltage-LN-avg, neutral current, voltage THD without touching the 19-dependent base CAGG
+────────────────────────────────────────
+Object: telemetry.ca_energy_phase_power_1min/5min/15min/hourly/daily
+Resolution: full 1m-1d ladder
+Refresh policy: mirrors base-tier cadence
+Compress after: mirrors base tiers
+Retention: mirrors base tiers
+Notes: Supplemental phase reactive/apparent power historian (migration 178), same "can't ALTER a CAGG" pattern
+────────────────────────────────────────
+Object: telemetry.ca_environment_15min
+Resolution: 15 min, real-time (materialized_only=FALSE)
+Refresh policy: 2d/1min/5min
+Compress after: 7d
+Retention: 2y
+Notes: includes asset_id directly in dimensions
+────────────────────────────────────────
+Object: telemetry.ca_environment_hourly
+Resolution: 1 hour, also real-time
+Refresh policy: 7d/5min/15min
+Compress after: 30d
+Retention: 5y
+Notes: Built from raw table directly, NOT from the 15min CAGG — TimescaleDB won't accept a real-time CAGG as a
+hierarchical-CAGG source
+────────────────────────────────────────
+Object: analytics.generic_telemetry_15m / _1h
+Resolution: 15m/1h
+Refresh policy: 2d/1min/5min; 7d/5min/15min
+Compress after: —
+Retention: —
+Notes: A third, independent aggregation family (migration 185): generic AVG/MIN/MAX over telemetry.normalized_points for any
+logical point, for the Analytics Explorer dashboard. Granted directly to grafana_reader.
+
+Water and demand: no continuous aggregate exists for either domain (demand is a persisted-table pipeline, see §6).
+
+Confidence: VERIFIED FROM SOURCE (each CAGG's time_bucket(), policy args, compression/retention read directly).
+
+---
+
+4. Persisted aggregate tables — "validated energy-consumption" lineage
+
+This is architecturally distinct from §3: it never re-derives energy from raw power/register MAX-MIN; it classifies register deltas once at native resolution, then every coarser tier sums already-classified intervals.
+
+Native tier (mutually exclusive per site by capture policy, not a resolution hierarchy)
+
+Object: analytics.energy_consumption_1min
+Source: telemetry.ca_energy_1min
+Eligibility: sites with capture interval ≤60s
+Refresh: job every 1 min, 30-min lookback
+Retention: none — explicitly deferred ("prevents data loss until higher-resolution rollups exist and are verified")
+Access: internal only — REVOKE ALL FROM PUBLIC, no grant to grafana_reader/ems_app
+────────────────────────────────────────
+Object: analytics.energy_consumption_5min
+Source: telemetry.ca_energy_5min
+Eligibility: sites with capture interval exactly 300s
+Refresh: job every 1 min, 30-min lookback, date_bin epoch-anchored
+Retention: none (same rationale)
+Access: internal only
+
+Each row carries: register value + previous register, consumption (Wh and kWh), quality_code, is_valid, reset_detected, rollover_detected, plus which effective-dated quality rule applied. Calculation delegates entirely to analytics.classify_energy_register_delta() (§5).
+
+Persisted rollup hierarchy (one-directional, never reclassifies registers)
+
+Object: analytics.energy_consumption_15min
+Source: analytics.v_energy_semantic_rollup_15min (i.e. native 1min/5min tables, one hop)
+Refresh: job every 5 min
+Compress: 7d
+Retention: 2y
+────────────────────────────────────────
+Object: analytics.energy_consumption_hourly
+Source: analytics.energy_consumption_15min only (never hourly-from-raw)
+Refresh: job every 15 min
+Compress: 30d
+Retention: 5y
+────────────────────────────────────────
+Object: analytics.energy_consumption_daily
+Source: analytics.energy_consumption_15min only (explicitly not hourly, to avoid UTC-hour crossing site-local midnight)
+Refresh: job every 1 hour
+Compress: 90d
+Retention: none ("durable long-term accounting layer")
+
+Chain: ca_energy_1min/5min (raw CAGG) → energy_consumption_1min/5min (validated/classified) → energy_consumption_15min (rollup) → hourly/daily (further rollup) → exposed via analytics.get_canonical_energy_read() (§5).
+
+Canonical read function (not a table, but the contract everything feeds)
+
+analytics.get_canonical_energy_read(grafana_org_id, asset_id, from, to, resolution, fallback_policy) — resolves tenant→asset→PRIMARY_METER→device→site, rejects ranges crossing a genuine capture-policy change, dispatches to exactly one of v_energy_consumption_native / v_energy_reporting_5min/15min/hourly/daily by actual duration comparison. Explicitly documented: never reads the raw MAX/MIN CAGGs, never reclassifies registers. Grants extend to grafana_reader (migration 043) but no direct dashboard call site was found in the 7 Grafana dashboards read — it's reached only indirectly via get_grafana_asset_energy_intervals (asset-overview's actual entry point).
+
+Confidence: VERIFIED FROM SOURCE for all object definitions and comments quoted; the "why this table has no retention yet" rationale is a direct quote, not inference.
+
+---
+
+5. Views, functions, procedures, triggers
+
+5.1 The single authoritative quality classifier
+
+analytics.classify_energy_register_delta(current, previous, elapsed_minutes, counter_direction, rollover_behavior, rollover_value, reset_behavior, expected_max_interval_delta, gap_threshold_minutes) — pure, IMMUTABLE, PARALLEL SAFE function.
+
+Full quality-code vocabulary, in decision order (verified from source): INITIAL → MISSING_REGISTER → CONFIG_MISSING/CONFIG_INVALID → ROLLOVER_UNRESOLVED → ROLLOVER → RESET_FROM_ZERO → RESET → DIRECTION_ERROR → IMPLAUSIBLE_DELTA → GAP → GOOD.
+
+Every downstream consumption object (native tables, v_energy_consumption_15min, get_grafana_asset_energy_intervals) calls this same function rather than re-implementing classification — confirmed by tracing v_energy_consumption_15min through 4 generations (ddl/56→80→82→84), where generation 3 (82_refactor_energy_consumption_to_classifier.sql) is literally the migration that replaced inline classification logic with a call to this function.
+
+Config driving it: config.energy_register_semantics (per-profile counter direction/rollover/reset rules, seeded only for ENERGY_METER_ENISCOPE_V1) + config.interval_quality_rules/resolve_interval_quality_rule() (effective-dated gap threshold, precedence DEVICE→PROFILE→SITE→ORGANIZATION→PLATFORM, default 30 min).
+
+5.2 Two coexisting "validated" reporting paths (important nuance)
+
+The audit traced two parallel paths, both ultimately built on the same classifier, that the task's framing ("general CAGGs vs. validated lineage") doesn't fully capture as a single split:
+
+- Path A — direct classifier view: analytics.v_energy_consumption_15min (Gen 4, ddl/84) reads the raw ca_energy_15min CAGG and classifies live via CROSS JOIN LATERAL classify_energy_register_delta. Grafana-granted; feeds v_energy_demand_15min, peak-demand daily/monthly, load-profile views, v_site_energy_balance_daily (§5.4).
+- Path B — semantic reporting pipeline: v_energy_consumption_native → v_energy_semantic_rollup_5min/15min → v_energy_reporting_5min/15min/hourly/daily, built entirely on the persisted energy_consumption_1min/5min tables (§4), which were already classified once and never reclassified. Internal-only (ems_admin) except v_energy_consumption_daily, which migration 036 (036_energy_daily_semantic_compatibility_cutover.sql) explicitly re-pointed from Path A to Path B while preserving its public 15-column contract — quoted: "Energy comes from already-classified semantic native intervals… No cumulative-register classification occurs here."
+
+Fact, stated plainly: Path A's demand/load-profile/site-balance family still hardcodes 'Asia/Kolkata'; Path B was migrated to per-site timezone (migrations 037/041/034/036). This divergence was not resolved by any migration found — flagged as UNCERTAIN whether intentional (may be masked by all current sites sharing one timezone).
+
+5.3 Grafana resolution routing
+
+- analytics.resolve_grafana_energy_routing_resolution — two generations: migration 044 (≤24h→15m, ≤14d→1h, >14d→1d, superseded) → migration 045, current: ≤24h→native, ≤14d→15m, >14d→1h. The router's ELSE branch never returns '1d' — the daily reporting tier is reachable only via an explicit direct caller, and none was found in the files read (UNKNOWN whether one exists in the app layer).
+- analytics.get_grafana_asset_energy_intervals — the actual Grafana Asset Dashboard entry point (confirmed by migration 191/192 incident narratives naming it explicitly), max-10-asset multi-asset sibling, calls the router then get_canonical_energy_read(..., 'native').
+- analytics.get_grafana_short_history — three generations (171→173→175 superseded, 176 current), rewritten from SQL-language SECURITY DEFINER to plpgsql with dynamic EXECUTE…USING specifically to fix an observed slow cached query plan (migration 176 comment).
+
+5.4 Demand engine (independent of energy CAGGs)
+
+- config.demand_register_semantics — per-profile "true native demand register" certification (basis kW/kVA, native interval 900 or 1800 seconds only — the one resolution outside the 1m/5m/15m/1h/1d ladder).
+- config.resolve_device_demand_method / analytics.resolve_demand_capability — 3-tier method priority METER_NATIVE > ENERGY_COUNTER_DELTA > TIME_WEIGHTED_POWER. Two generations: migration 012 (unified SITE/ASSET resolver, superseded) → migration 017, current (splits SITE, user-opt-in, from ASSET, platform-managed/always-on/15-min/kW, explicitly decoupled: "ASSET source... does not depend on SITE demand enablement").
+- analytics.calculate_demand_window / analytics.refresh_demand_analytics (procedure) — writes analytics.demand_intervals (finalized, 10-min processing grace beyond late_arrival_tolerance_seconds) and analytics.demand_state (provisional/current).
+- analytics.v_site_energy_balance_daily — balance equation (verified): derived_site_consumption_kwh = grid_import + onsite_generation − grid_export − battery_charge + battery_discharge, precedence DIRECT_METER > DERIVED_BALANCE > UNAVAILABLE, excludes LOAD_SUBMETER role explicitly to avoid double-counting.
+
+5.5 Triggers found
+
+┌───────────────────────────────────────────┬─────────────────────────────────────────────┬─────────────────────────────┐
+│                  Trigger                  │                    Table                    │           Purpose           │
+├───────────────────────────────────────────┼─────────────────────────────────────────────┼─────────────────────────────┤
+│                                           │                                             │ BEFORE INSERT/UPDATE;       │
+│ trg_set_energy_measurement_asset_id       │ telemetry.energy_measurements               │ resolves asset_id from      │
+│                                           │                                             │ PRIMARY_METER relationship, │
+│                                           │                                             │  tenant/site-matched        │
+├───────────────────────────────────────────┼─────────────────────────────────────────────┼─────────────────────────────┤
+│                                           │                                             │ validates                   │
+│ trg_validate_site_energy_meter_role       │ config.site_energy_meter_roles              │ device→gateway→site         │
+│                                           │                                             │ consistency, prevents       │
+│                                           │                                             │ cross-site role assignment  │
+├───────────────────────────────────────────┼─────────────────────────────────────────────┼─────────────────────────────┤
+│                                           │                                             │ auto-seeds the              │
+│ trg_ensure_asset_demand_policy_for_site   │ metadata.sites (AFTER INSERT)               │ platform-managed ASSET      │
+│                                           │                                             │ demand policy for every new │
+│                                           │                                             │  site                       │
+├───────────────────────────────────────────┼─────────────────────────────────────────────┼─────────────────────────────┤
+│                                           │ prevents                                    │                             │
+│ metadata.validate_asset_hierarchy()       │ self-parenting/cross-org/cross-site         │                             │
+│ (trigger on metadata.assets)              │ parents/cycles — foundational to            │                             │
+│                                           │ asset-hierarchy rollup views                │                             │
+└───────────────────────────────────────────┴─────────────────────────────────────────────┴─────────────────────────────┘
+
+5.6 Environment analytics — no equivalent classifier
+
+No environment-specific quality/validation function analogous to classify_energy_register_delta was found anywhere in the read files. quality_code/is_estimated exist as columns on the domain table but are hardcoded NULL/FALSE at the routing view. analytics.v_environment_sensor_kpis uses hardcoded freshness thresholds (180s/600s), not the configurable config.telemetry_availability_policy mechanism used for asset connectivity. UNCERTAIN whether this is a genuine gap or intentional (environment isn't a cumulative counter, so register-delta classification doesn't apply the same way) — stated as fact, not judged.
+
+5.7 Tenant-isolation mechanism (verified, cross-cutting)
+
+Every Grafana-facing analytics.* object joins metadata.grafana_organization_map ON organization_id = ... AND is_active = TRUE, exposing grafana_org_id; all declared security_barrier. grafana_reader has REVOKE ALL on metadata/config/telemetry schemas directly — zero table access outside explicitly granted analytics.* objects (structural, not conventional).
+
+Confidence: VERIFIED FROM SOURCE throughout §5 (SQL bodies read directly); the "two coexisting validated paths" framing in §5.2 is a synthesis across files (INFERRED from tracing FROM-clauses), not a single document's stated claim.
+
+---
+
+6. Water domain
+
+Confirmed gap: telemetry.water_measurements has a table definition but no loader routing view/procedure, no continuous aggregate, no persisted rollup, and no retention/compression job anywhere in the repository. No Grafana dashboard references it. This was confirmed by grep across the full postgres/ tree, not inferred from the absence of a search hit alone.
+
+---
+
+7. Grafana layer — dashboard-to-object lineage
+
+7 dashboards, all provisioned dynamically per-tenant (both grafana/provisioning/*.yaml files are empty stubs — the admin portal provisions datasources/dashboards per Grafana organization at runtime, keyed via metadata.grafana_organization_map).
+
+Dashboard: organization-overview.json
+Key objects queried: v_grafana_sites, v_grafana_assets, v_grafana_devices, v_grafana_active_alarms, v_grafana_energy_samples
+Notes: portfolio-level counts + 15-min demand sum
+────────────────────────────────────────
+Dashboard: site-overview.json
+Key objects queried: same views, site-filtered
+Notes: + latest-per-device demand snapshot
+────────────────────────────────────────
+Dashboard: area-overview.json
+Key objects queried: v_grafana_assets (recursive WITH RECURSIVE descendant walk), v_grafana_asset_devices,
+v_grafana_active_alarms, v_grafana_energy_samples
+Notes:
+────────────────────────────────────────
+Dashboard: device-diagnostics.json
+Key objects queried: v_grafana_devices, v_grafana_normalized_points, v_grafana_asset_devices, v_grafana_active_alarms
+Notes:
+────────────────────────────────────────
+Dashboard: alarms.json
+Key objects queried: v_grafana_active_alarms only
+Notes: Dashboard's own text panel states verbatim: "Acknowledgement, assignment, escalation, suppression, and resolution
+history require the dedicated alarm-event engine planned after the MVP" — confirms this view is derived/computed state, not
+a persisted alarm-event log
+────────────────────────────────────────
+Dashboard: analytics-explorer.json
+Key objects queried: v_grafana_asset_selector, v_grafana_asset_point_selector, get_grafana_explorer_intervals()
+Notes: The one dashboard that computes its own energy delta client-side: max_value - LAG(max_value) in the panel SQL for any
+point named %ENERGY%, rather than delegating to a named consumption object — a direct exception to the rest of the
+platform's pattern
+────────────────────────────────────────
+Dashboard: asset-overview.json (3999 lines, largest)
+Key objects queried: v_grafana_asset_identity_context, get_grafana_asset_connectivity_context,
+get_grafana_asset_energy_intervals, v_grafana_asset_electrical_samples, v_grafana_telemetry_capture_policies,
+get_grafana_asset_demand_summary, v_grafana_asset_demand_intervals, get_canonical_energy_read, v_grafana_normalized_points,
+v_grafana_asset_devices, plus 6 live-datasource panels
+Notes: Only dashboard using the custom wisewatts-live-datasource Go/React plugin (websocket, EMS_GRAFANA_STREAM_TOKEN +
+EMS_LIVE_TELEMETRY_WS_BASE_URL, no MQTT credentials in the plugin — consistent with CLAUDE.md's live-telemetry isolation
+rule)
+
+Tenant scoping in dashboard SQL is via Grafana's ${__org.id} macro (per-org datasource binding), not a client-editable template variable — stated as fact, not a security judgment.
+
+No dashboard queries telemetry.* raw/normalized tables directly — everything routes through analytics.* views/functions, consistent with the intended Grafana layering.
+
+Confidence: VERIFIED FROM SOURCE (every panel's raw SQL was read).
+
+---
+
+8. Legacy / superseded / redundant objects
+
+Object: config.site_sectors
+Evidence: Migration 188 explicit: "Fully deprecate the legacy flat site-sector classification introduced in migration 120...
+now that migration 187's Sector → Sub-Sector taxonomy is in place"
+Superseded by: metadata.sectors/sub_sectors/sub_sector_asset_mapping (migration 187)
+────────────────────────────────────────
+Object: config.site_energy_roles.role_code='LOAD_SUBMETER'
+Evidence: Row explicitly is_active=FALSE, comment "Legacy role retained only for historical rows"
+Superseded by: n/a — row-level deactivation
+────────────────────────────────────────
+Object: telemetry.v_energy_meter
+Evidence: Own COMMENT: "Legacy... compatibility view. New integrations should use the normalized telemetry contract"
+Superseded by: telemetry.v_normalized_points pipeline
+────────────────────────────────────────
+Object: telemetry.v_energy_measurements_route Gen 1 (ddl/43)
+Evidence: Manifest-confirmed: restructure_manifest.csv row tags it legacy, note: "Superseded preliminary energy routing view;
+canonical contract is 46_energy_routing_contract.sql"
+Superseded by: Gen 2 (ddl/46) → Gen 3 current (ddl/79, profile-aware scaling)
+────────────────────────────────────────
+Object: analytics.v_energy_consumption_15min Gens 1–3 (ddl/56,80,82)
+Evidence: Each is CREATE OR REPLACE over predecessor
+Superseded by: Gen 4 (ddl/84, dynamic quality-rule resolution)
+────────────────────────────────────────
+Object: analytics.v_energy_consumption_daily pre-036 implementation
+Evidence: Migration 036 title itself: "compatibility cutover"
+Superseded by: Semantic reporting pipeline (v_energy_reporting_15min)
+────────────────────────────────────────
+Object: analytics.get_canonical_energy_read migrations 042/191
+Evidence: Each a full CREATE OR REPLACE fixing a named production incident
+Superseded by: Migration 192 (current)
+────────────────────────────────────────
+Object: analytics.resolve_grafana_energy_routing_resolution (044 thresholds)
+Evidence: Migration 045: "thresholds in 044 were too coarse"
+Superseded by: 045 (current)
+────────────────────────────────────────
+Object: analytics.get_grafana_short_history (171/173/175)
+Evidence: Migration 176: rewritten for a slow-plan bug
+Superseded by: 176 (current)
+────────────────────────────────────────
+Object: analytics.resolve_demand_capability (migration 012)
+Evidence: Migration 017 explicit SITE/ASSET decoupling
+Superseded by: 017 (current)
+────────────────────────────────────────
+Object: postgres/legacy/07_05_telegraf_ingest_bridge.sql
+Evidence: Manifest-confirmed legacy, note "Superseded experimental Telegraf landing-to-MQTT staging trigger"; own header says
+"RETIRED... must not be executed"
+Superseded by: telemetry-audit territory (upstream of analytics)
+────────────────────────────────────────
+Object: postgres/legacy/init/09_get_logical_point.sql
+Evidence: Own header: "RETIRED PROTOTYPE FILE — DO NOT EXECUTE... retained only for historical reference"
+Superseded by: telemetry.v_normalized_points + normalized_points hypertable
+────────────────────────────────────────
+Object: postgres/ddl/07_02_mqtt_staging.sql, 07_03_telegraf_ingest.sql
+Evidence: Manifest-tagged legacy: "Retired persistent telemetry MQTT staging table" / "Retired Telegraf bridge landing table"
+Superseded by: current public.mqtt_staging compatibility-view path (telemetry audit territory)
+────────────────────────────────────────
+Object: postgres/archive/prebaseline_20260807/migrations/ (187 files)
+Evidence: Entire pre-2026-08-07 forward-migration history, preserved unchanged, immutable
+Superseded by: Consolidated into canonical postgres/ddl/ + postgres/migrations/001_ems_platform_baseline_20260807.sql
+────────────────────────────────────────
+Object: postgres/archive/ddl/04_metadata.sql.backup_v1, 07_telemetry.sql.v0
+Evidence: Explicit backup/version-suffix archive files
+Superseded by: current postgres/ddl/04_metadata.sql, 07_telemetry_archive.sql
+────────────────────────────────────────
+Object: postgres/deploy/, postgres/functions/, postgres/views/
+Evidence: Empty placeholder directories (per docs/operations/REPOSITORY_CLEANUP_AUDIT_20260817.md)
+Superseded by: postgres/ddl/
+
+Also flagged (not legacy, but a provenance gap affecting confidence in this inventory): per docs/operations/REPOSITORY_CLEANUP_AUDIT_20260817.md (dated 6 days before this audit), postgres/migrations/153 and 170–184, plus postgres/ddl/139, 150–152, were git-tracked but not registered in postgres/restructure_manifest.csv as of that date — meaning they were live in the ems database via out-of-band application, with git as their only source-of-truth copy. This affects several objects in §4 (the persisted 15min/hourly/daily consumption tables) and §5.3 (Grafana asset-identity/capture-policy context). Whether this has since been fixed was not re-verified in this session — UNKNOWN, requires checking postgres/restructure_manifest.csv's current state against admin.schema_migrations at runtime.
+
+---
+
+9. Resolutions found beyond 1m/5m/15m/1h/1d
+
+- 900/1800 seconds (15/30-min) native demand interval — config.demand_register_semantics.native_interval_seconds CHECK (... IN (900,1800)). This is the one confirmed resolution outside the standard ladder.
+- 10/30/60/300/900-second capture intervals (config.telemetry_capture_policies) govern site eligibility for the 1min/5min native validated tiers — not a new aggregation resolution itself, but worth distinguishing from the ladder.
+- No weekly, monthly, yearly, or sub-minute (e.g. 30s) persisted aggregate or continuous aggregate was found anywhere in the codebase.
+
+---
+
+10. Existing APIs overlapping with analytics
+
+app/src/ contains no dedicated analytics-query router — app/src/routers/ has only context.py. The FastAPI app is presently onboarding/admin/asset-management/live-telemetry focused (grafana_client.py handles provisioning, live_telemetry/ handles the live streaming path). No /sites/{id}/energy/*-style analytics API exists yet — this is a genuine current-state absence, consistent with the Development Bible's Phase 4 ("Analytics API") being unstarted.
+
+---
+
+VERIFIED FROM SOURCE / INFERRED / UNKNOWN — overall summary
+
+VERIFIED FROM SOURCE: all schema/table/CAGG/view/function/trigger/job definitions cited above with a file reference; all quality-code vocabularies, retention/compression numbers, and quoted migration comments; the manifest's explicit legacy tags; all Grafana dashboard SQL.
+
+INFERRED:
+- telemetry.energy_measurements.bucket_start column's exact origin/semantics (used pervasively, ALTER statement not located).
+- environment_measurements extended sensor columns (illuminance, occupancy, external inputs) — seen only in loader UPDATE lists, not a dedicated ALTER TABLE.
+- Phase-power CAGG compression/retention for the 5min/15min/hourly/daily tiers beyond the 1min tier (pattern-matched from identical file structure, not each individually re-read).
+- The "two coexisting validated paths" framing in §5.2 (a synthesis across multiple files' FROM-clauses, not one document's stated architecture).
+
+UNKNOWN / REQUIRES RUNTIME VERIFICATION:
+- Whether telemetry.raw_messages has an explicit retention policy (only a comment states ~7 days; no add_retention_policy call located).
+- Whether water_measurements, asset_health, device_status have any rows or are ingested at all, versus pure unused scaffolding.
+- Current registration status of migrations 153/170–184 and ddl 139/150–152 in restructure_manifest.csv vs. admin.schema_migrations (flagged as a gap on 2026-08-17; not re-checked here).
+- Whether any caller ever requests get_canonical_energy_read(..., '1d') directly (the auto-router never selects it).
+- Whether the demand/load-profile/site-balance views' hardcoded 'Asia/Kolkata' (vs. the per-site-timezone consumption/reporting views) reflects current production reality or an unaddressed divergence.
+- Full current definition of telemetry.v_energy_measurements_full_resolution (referenced and patched by migration 174's logical-point rename, not opened in full).
+- Whether metadata.grafana_organization_map-based tenant scoping is complete for every path, or whether any object was missed in this reading pass — recommend a targeted \dv/\df catalog dump against a live database to cross-check completeness.
+
+---
+
+Authoritative source files for this analytics architecture
+
+Canonical DDL (postgres/ddl/): 01_schemas, 07_telemetry_archive, 08_energy_measurements, 09_environment_measurements, 10_water_measurements, 11_asset_health, 12_device_status, 20_indexes, 21_constraints, 22_functions (empty), 23_views, 24_continuous_aggregates, 37_telemetry_normalization_view, 38_normalized_points_hypertable, 41_incremental_normalization_loader, 43_energy_routing_view (legacy), 46_energy_routing_contract, 51/52/53_energy_*_continuous_aggregate, 55_grafana_tenant_analytics, 56_energy_consumption_15min_view, 57_energy_consumption_reporting_views, 58_peak_demand_load_profile_views, 60_asset_analytics_base, 61_energy_asset_identity, 61_metadata_integrity_indexes, 62_asset_centric_analytics, 66_environment_routing_contract, 71/72_environment_*_continuous_aggregate, 75_environment_analytics_views, 77_energy_register_semantics, 79_profile_aware_energy_routing, 80_semantic_energy_consumption, 81_energy_register_delta_classifier, 82_refactor_energy_consumption_to_classifier, 83_interval_quality_rules, 84_apply_interval_quality_rules, 85_site_energy_meter_roles, 86_site_energy_balance_daily, 87_asset_hierarchy_closure, 88_asset_hierarchy_rollup_daily, 89_asset_metering_requirements, 90_asset_meter_coverage, 100_site_energy_role_administration, 111_site_specific_telemetry_capture_rate, 120_site_sector_classification (legacy), 121_energy_1min_5min_analytics, 122_telemetry_pipeline_performance_state, 126_site_frequency_normalization_recovery, 130_site_demand_policy_contract, 131_demand_capability_resolution, 138_asset_dashboard_consolidated_read_path_fix, 139_live_telemetry_state, 140/143_persisted_validated_energy_consumption_*, 144–152_* (semantic rollups, reporting contract, daily reporting, quality counters, compatibility cutover, timezone views, capture policy, gap threshold, asset identity context).
+
+Forward migrations (postgres/migrations/): 001_ems_platform_baseline_20260807 (consolidated pre-baseline history), 002 onward through 046 (electrical CAGG expansion), 153, 170–193 (Grafana asset selector, Analytics Explorer, persisted 15min/hourly/daily consumption, persisted environment daily, sector taxonomy + deprecation, capture-policy boundary fixes).
+
+Jobs (postgres/jobs/): 25_retention (empty), 26_compression (empty), 48_energy_background_job, 50_energy_storage_lifecycle, 54_energy_aggregate_lifecycle, 69_environment_routing_job, 70_environment_storage_lifecycle, 74_environment_aggregate_lifecycle.
+
+Legacy/archive: postgres/legacy/07_05_telegraf_ingest_bridge.sql, postgres/legacy/init/09_get_logical_point.sql, postgres/archive/ddl/*.backup_v1/*.v0, postgres/archive/prebaseline_20260807/migrations/ (187 files).
+
+Grafana: grafana/provisioning/{datasources,dashboards}/*.yaml, grafana/dashboards/core/{organization-overview,site-overview,area-overview,device-diagnostics,alarms,analytics-explorer,asset-overview}.json, grafana/plugin-src/wisewatts-live-datasource/.
+
+Operational docs: docs/operations/PREPRODUCTION_MIGRATION_BASELINE_20260807.md, PREPRODUCTION_BASELINE_CORRECTION_20260807.md, REPOSITORY_CLEANUP_AUDIT_20260817.md, TELEMETRY_PIPELINE.md; postgres/restructure_manifest.csv.
+
+──────────────────────────────────────────────────────────────────
