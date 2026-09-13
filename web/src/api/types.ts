@@ -266,3 +266,26 @@ export type PowerQualityResponse = {
   no_data: boolean;
   series: PowerQualityPoint[];
 };
+
+// ---- GET /api/v1/sites/{site_id}/telemetry-freshness (MVP-4) ---------------
+// Device connectivity/freshness only -- a signal kept deliberately separate
+// from, and never merged into, the measurement-quality lattice
+// (web/src/components/QualityIndicator.tsx) or Demand's own quality_status/
+// coverage_percent above. state is one of exactly four values; no internal
+// device state, device_id, or gateway_id is ever returned. as_of exists on
+// the wire but is intentionally not consumed by the frontend in MVP-4 (no
+// approved UX decision on timestamp presentation yet).
+
+export type FreshnessState = "FRESH" | "STALE" | "NO_DATA" | "UNKNOWN";
+
+export type DomainFreshness = {
+  state: FreshnessState;
+  as_of: string | null;
+};
+
+export type SiteTelemetryFreshnessResponse = {
+  site_id: string;
+  energy: DomainFreshness;
+  demand: DomainFreshness;
+  power_quality: DomainFreshness;
+};

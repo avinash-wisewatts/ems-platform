@@ -28,6 +28,9 @@ function isDemandSeriesUrl(url: string): boolean {
 function isPowerQualityUrl(url: string): boolean {
   return url.includes(`/api/v1/sites/${SITE_ID}/power-quality`);
 }
+function isFreshnessUrl(url: string): boolean {
+  return url.includes(`/api/v1/sites/${SITE_ID}/telemetry-freshness`);
+}
 
 function energyResponse(importKwh: number, noData = false) {
   return {
@@ -174,6 +177,15 @@ function pqResponse(noData = false) {
             current_thd_l3_max: 5.3,
           },
         ],
+  };
+}
+
+function freshnessResponse(overrides: Partial<{ energy: string; demand: string; power_quality: string }> = {}) {
+  return {
+    site_id: SITE_ID,
+    energy: { state: overrides.energy ?? "FRESH", as_of: "2026-09-13T09:58:00Z" },
+    demand: { state: overrides.demand ?? "FRESH", as_of: "2026-09-13T09:58:00Z" },
+    power_quality: { state: overrides.power_quality ?? "FRESH", as_of: "2026-09-13T09:58:00Z" },
   };
 }
 
@@ -385,5 +397,49 @@ describe("SiteOverview (MVP-3 -- Site Health & Attention)", () => {
     await waitFor(() => expect(consumptionCalls).toBe(2));
     await waitFor(() => expect(demandSeriesCalls).toBe(2));
     await waitFor(() => expect(pqCalls).toBe(2));
+  });
+
+  it("MVP-4: shows each section's own device freshness, independently, with no blended site-wide verdict", async () => {
+    stubFetch((url) => {
+      if (isFreshnessUrl(url)) return { jsonBody: freshnessResponse({ energy: "FRESH", demand: "STALE", power_quality: "NO_DATA" }) };
+      if (isEvidenceUrl(url)) return { jsonBody: evidenceResponse() };
+      if (isTypicalReferenceUrl(url)) return { jsonBody: typicalReferenceResponse({ typical_kwh: 100 }) };
+      if (isConsumptionUrl(url)) return { jsonBody: energyResponse(105) };
+      if (isDemandCurrentUrl(url)) return { jsonBody: currentDemandResponse(true) };
+      if (isDemandSeriesUrl(url)) return { jsonBody: demandSeriesResponse() };
+      if (isPowerQualityUrl(url)) return { jsonBody: pqResponse() };
+      return { status: 404, jsonBody: { error: "not_found", detail: "unexpected" } };
+    });
+
+    renderWithProviders(<SiteOverview />, { sites: () => Promise.resolve(SITES_ONE) });
+
+    await waitFor(() => expect(screen.getByTestId("site-overview-energy-value")).toHaveTextContent("105.0 kWh"));
+    const indicators = await screen.findAllByTestId("freshness-indicator");
+    expect(indicators).toHaveLength(3);
+    expect(screen.getByTestId("site-overview-energy-value")).toHaveTextContent("FRESH");
+    expect(screen.getByTestId("site-overview-demand-value")).toHaveTextContent("STALE");
+    expect(screen.getByTestId("site-overview-pq-value")).toHaveTextContent("NO_DATA");
+  });
+
+  it("MVP-4: a freshness fetch failure is non-blocking -- Energy, Demand, and Power Quality values still render, with no freshness indicator shown", async () => {
+    stubFetch((url) => {
+      if (isFreshnessUrl(url)) return { status: 500, jsonBody: { error: "server_error" } };
+      if (isEvidenceUrl(url)) return { jsonBody: evidenceResponse() };
+      if (isTypicalReferenceUrl(url)) return { jsonBody: typicalReferenceResponse({ typical_kwh: 100 }) };
+      if (isConsumptionUrl(url)) return { jsonBody: energyResponse(105) };
+      if (isDemandCurrentUrl(url)) return { jsonBody: currentDemandResponse(true) };
+      if (isDemandSeriesUrl(url)) return { jsonBody: demandSeriesResponse() };
+      if (isPowerQualityUrl(url)) return { jsonBody: pqResponse() };
+      return { status: 404, jsonBody: { error: "not_found", detail: "unexpected" } };
+    });
+
+    renderWithProviders(<SiteOverview />, { sites: () => Promise.resolve(SITES_ONE) });
+
+    await waitFor(() => expect(screen.getByTestId("site-overview-energy-value")).toHaveTextContent("105.0 kWh"));
+    await waitFor(() => expect(screen.getByTestId("site-overview-demand-value")).toHaveTextContent("60.5 kW"));
+    await waitFor(() => expect(screen.getByTestId("site-overview-pq-value")).toHaveTextContent("PF 0.94"));
+    expect(screen.queryByTestId("freshness-indicator")).toBeNull();
+    // Freshness failing never touches Site Health/Attention.
+    expect(screen.getByTestId("site-health-banner")).toHaveAttribute("data-state", "HEALTHY");
   });
 });

@@ -43,11 +43,13 @@ import {
   getSiteEnergyConsumption,
   getSiteEnergyConsumptionEvidence,
   getSiteEnergyTypicalReference,
+  getSiteTelemetryFreshness,
 } from "../../api/endpoints";
 import type {
   EnergyConsumptionEvidenceResponse,
   EnergyConsumptionResponse,
   EnergyTypicalReferenceResponse,
+  SiteTelemetryFreshnessResponse,
 } from "../../api/types";
 import {
   planEnergyComparisonRequest,
@@ -68,6 +70,7 @@ import { HierarchyCrumb } from "../../components/HierarchyCrumb";
 import { TimeRangePicker } from "../../components/TimeRangePicker";
 import { StatusBadge } from "../../components/StatusBadge";
 import { EnergyEvidencePanel } from "../../components/EnergyEvidencePanel";
+import { FreshnessIndicator } from "../../components/FreshnessIndicator";
 import { ChartFrame, type ChartPoint } from "../../components/ChartFrame";
 import { Loading } from "../../components/states/Loading";
 import { ErrorState } from "../../components/states/ErrorState";
@@ -117,6 +120,11 @@ export function EnergyOverview() {
   // counters, from the additive GET .../energy/consumption/evidence endpoint.
   const [evidence, setEvidence] = useState<EnergyConsumptionEvidenceResponse | null>(null);
   const [nonce, setNonce] = useState(0);
+  // MVP-4 -- device freshness. A "right now" read, independent of preset/
+  // basis. Additive UI: a failure leaves this null, rendered as nothing by
+  // FreshnessIndicator, never blocking the Current/Comparison/Trend/
+  // Evidence sections above.
+  const [freshness, setFreshness] = useState<SiteTelemetryFreshnessResponse | null>(null);
 
   useEffect(() => {
     if (!selectedSite) return;
@@ -203,6 +211,21 @@ export function EnergyOverview() {
       active = false;
     };
   }, [selectedSite, preset, basis, nonce]);
+
+  useEffect(() => {
+    if (!selectedSite) return;
+    let active = true;
+    getSiteTelemetryFreshness(selectedSite.site_id)
+      .then((data) => {
+        if (active) setFreshness(data);
+      })
+      .catch(() => {
+        if (active) setFreshness(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [selectedSite]);
 
   if (!selectedSite) {
     return (
@@ -361,6 +384,12 @@ export function EnergyOverview() {
                 No evidence available for this period yet.
               </p>
             )}
+            {/* MVP-4 -- device freshness: separate from the evidence above
+                (coverage of the historical comparison), not a replacement
+                for it. */}
+            <p className="energy-freshness" data-testid="energy-freshness">
+              <FreshnessIndicator state={freshness?.energy.state} />
+            </p>
           </section>
         </>
       ) : null}

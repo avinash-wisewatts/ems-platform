@@ -23,12 +23,13 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useTenant } from "../../tenant/TenantProvider";
-import { getSitePowerQuality } from "../../api/endpoints";
-import type { PowerQualityPoint, PowerQualityResponse } from "../../api/types";
+import { getSitePowerQuality, getSiteTelemetryFreshness } from "../../api/endpoints";
+import type { PowerQualityPoint, PowerQualityResponse, SiteTelemetryFreshnessResponse } from "../../api/types";
 import { planPowerQualityRequest, type TimeRangePreset } from "../../time/ranges";
 import { HierarchyCrumb } from "../../components/HierarchyCrumb";
 import { TimeRangePicker } from "../../components/TimeRangePicker";
 import { ChartFrame, type ChartPoint } from "../../components/ChartFrame";
+import { FreshnessIndicator } from "../../components/FreshnessIndicator";
 import { Loading } from "../../components/states/Loading";
 import { ErrorState } from "../../components/states/ErrorState";
 import { NoDataYet } from "../../components/states/NoDataYet";
@@ -54,6 +55,10 @@ export function PowerQualityOverview() {
   const [unsupportedReason, setUnsupportedReason] = useState<string | null>(null);
   const [data, setData] = useState<PowerQualityResponse | null>(null);
   const [nonce, setNonce] = useState(0);
+  // MVP-4 -- device freshness: the first trust signal this screen has ever
+  // had (decision pack Sec 3). Still no reading-level PF/THD quality
+  // concept -- this is device-level only, not a replacement for one.
+  const [freshness, setFreshness] = useState<SiteTelemetryFreshnessResponse | null>(null);
 
   useEffect(() => {
     if (!selectedSite) return;
@@ -86,6 +91,21 @@ export function PowerQualityOverview() {
       active = false;
     };
   }, [selectedSite, preset, nonce]);
+
+  useEffect(() => {
+    if (!selectedSite) return;
+    let active = true;
+    getSiteTelemetryFreshness(selectedSite.site_id)
+      .then((res) => {
+        if (active) setFreshness(res);
+      })
+      .catch(() => {
+        if (active) setFreshness(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [selectedSite]);
 
   if (!selectedSite) {
     return (
@@ -158,10 +178,17 @@ export function PowerQualityOverview() {
             )}
           </section>
 
-          {/* Evidence / Data Quality -- honestly absent, not fabricated */}
+          {/* Evidence / Data Quality -- reading-level PF/THD quality is
+              still honestly absent, not fabricated (unchanged). MVP-4 adds
+              the first real signal this screen has ever had: device
+              connectivity/freshness -- a separate, device-level question,
+              not a reading-level quality verdict. */}
           <section className="pq-evidence" data-testid="pq-evidence">
             <h2>Data quality</h2>
-            <p className="hint">Data quality / freshness indicators are not yet available for power quality.</p>
+            <p className="hint">Reading-level power quality data quality indicators are not yet available.</p>
+            <p className="pq-freshness" data-testid="pq-freshness">
+              <FreshnessIndicator state={freshness?.power_quality.state} />
+            </p>
           </section>
         </>
       ) : null}

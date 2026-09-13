@@ -13,6 +13,7 @@
  *   GET /api/v1/sites/{site_id}/power-quality            (Slice B)
  *   GET /api/v1/sites/{site_id}/energy/consumption/evidence (Slice C)
  *   GET /api/v1/sites/{site_id}/energy/consumption/typical-reference (Slice C)
+ *   GET /api/v1/sites/{site_id}/telemetry-freshness (MVP-4)
  *
  * No other paths, no arbitrary parameters, no generic query mechanism.
  *
@@ -43,6 +44,7 @@ import type {
   PowerQualityResolution,
   PowerQualityResponse,
   SitesResponse,
+  SiteTelemetryFreshnessResponse,
   SpacesResponse,
 } from "./types";
 
@@ -175,6 +177,19 @@ export function getSitePowerQuality(
   return apiGet<PowerQualityResponse>(
     `/sites/${encodeURIComponent(siteId)}/power-quality`,
     { resolution: query.resolution, from: query.from, to: query.to },
+    init,
+  );
+}
+
+/** MVP-4 -- device connectivity/freshness, per domain. No query
+ *  parameters: this is always a "right now" read. */
+export function getSiteTelemetryFreshness(
+  siteId: string,
+  init?: RequestInit,
+): Promise<SiteTelemetryFreshnessResponse> {
+  return apiGet<SiteTelemetryFreshnessResponse>(
+    `/sites/${encodeURIComponent(siteId)}/telemetry-freshness`,
+    undefined,
     init,
   );
 }

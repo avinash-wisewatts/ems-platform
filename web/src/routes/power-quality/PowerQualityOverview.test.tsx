@@ -31,6 +31,15 @@ function pqResponse(noData = false) {
   };
 }
 
+function freshnessResponse(state = "FRESH") {
+  return {
+    site_id: SITE_ID,
+    energy: { state: "FRESH", as_of: "2026-09-13T09:58:00Z" },
+    demand: { state: "FRESH", as_of: "2026-09-13T09:58:00Z" },
+    power_quality: { state, as_of: "2026-09-13T09:58:00Z" },
+  };
+}
+
 describe("PowerQualityOverview (Slice B)", () => {
   it("composes PF Current -> PF Trend -> per-phase THD Current -> Data quality note from the verified endpoint", async () => {
     stubFetch((url) => {
@@ -94,5 +103,41 @@ describe("PowerQualityOverview (Slice B)", () => {
     renderWithProviders(<PowerQualityOverview />, { sites: () => Promise.resolve(SITES_ONE) });
 
     await waitFor(() => expect(screen.getAllByTestId("state-no-data").length).toBeGreaterThan(0));
+  });
+
+  it("MVP-4: shows device freshness -- the first trust signal this screen has ever had -- without fabricating reading-level PF/THD quality", async () => {
+    stubFetch((url) => {
+      if (url.includes(`/api/v1/sites/${SITE_ID}/telemetry-freshness`)) {
+        return { jsonBody: freshnessResponse("UNKNOWN") };
+      }
+      if (url.includes(`/api/v1/sites/${SITE_ID}/power-quality`)) {
+        return { jsonBody: pqResponse() };
+      }
+      return { status: 404, jsonBody: { error: "not_found", detail: "unexpected" } };
+    });
+
+    renderWithProviders(<PowerQualityOverview />, { sites: () => Promise.resolve(SITES_ONE) });
+
+    await waitFor(() => expect(screen.getByTestId("pq-freshness")).toHaveTextContent("UNKNOWN"));
+    // Reading-level PF/THD quality disclaimer stays -- freshness does not
+    // fabricate a reading-level verdict.
+    expect(screen.getByTestId("pq-evidence")).toHaveTextContent("not yet available");
+  });
+
+  it("MVP-4: a freshness fetch failure is non-blocking -- PF/THD values still render", async () => {
+    stubFetch((url) => {
+      if (url.includes(`/api/v1/sites/${SITE_ID}/telemetry-freshness`)) {
+        return { status: 500, jsonBody: { error: "server_error" } };
+      }
+      if (url.includes(`/api/v1/sites/${SITE_ID}/power-quality`)) {
+        return { jsonBody: pqResponse() };
+      }
+      return { status: 404, jsonBody: { error: "not_found", detail: "unexpected" } };
+    });
+
+    renderWithProviders(<PowerQualityOverview />, { sites: () => Promise.resolve(SITES_ONE) });
+
+    await waitFor(() => expect(screen.getByTestId("pq-current-pf")).toHaveTextContent("0.94"));
+    expect(screen.queryByTestId("freshness-indicator")).toBeNull();
   });
 });
