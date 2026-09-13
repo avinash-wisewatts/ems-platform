@@ -367,6 +367,37 @@ class PowerQualityResponse(BaseModel):
     series: list[PowerQualityPoint]
 
 
+# MVP-4 -- Data Quality & Freshness. state is one of the four API-semantic
+# values FRESH / STALE / NO_DATA / UNKNOWN -- never the internal six-value
+# device_telemetry_state vocabulary (NEVER_SEEN/SILENT/RECEIVING/STALE/
+# VALIDATED), and never a device_id. This is a signal separate from, and
+# independent of, both the measurement-quality lattice (GOOD/GAP/ESTIMATED/
+# INVALID/PARTIAL, see web/src/components/QualityIndicator.tsx) and Demand's
+# own quality_status/coverage_percent -- neither is read, set, or influenced
+# by this response. See docs/00-governance/decision-packs/
+# mvp-4-data-quality-and-freshness-decision-pack.md Sec 5/5a.
+FRESHNESS_STATES: tuple[str, ...] = ("FRESH", "STALE", "NO_DATA", "UNKNOWN")
+
+
+class DomainFreshness(BaseModel):
+    state: str
+    as_of: datetime | None = None
+
+
+class SiteTelemetryFreshnessResponse(BaseModel):
+    """Per-domain freshness only -- deliberately no blended/site-wide
+    verdict (decision pack Sec 5a). Energy and Power Quality currently
+    resolve the same underlying SITE_CONSUMPTION meter, so their values
+    will often match -- they remain three independent fields, not derived
+    from one another, so that a future change to either resolution path
+    does not silently couple them."""
+
+    site_id: UUID
+    energy: DomainFreshness
+    demand: DomainFreshness
+    power_quality: DomainFreshness
+
+
 # ---------------------------------------------------------------------------
 # Request validation -- deterministic, closed-set, explicit windows.
 # ---------------------------------------------------------------------------
@@ -757,6 +788,21 @@ async def fetch_site_power_quality_series(
     )
 
 
+async def fetch_site_telemetry_freshness(
+    portal_user_id: int, site_id: UUID
+) -> dict[str, Any] | None:
+    rows = await _read_rows(
+        """
+        SELECT site_id, energy_state, energy_as_of,
+               demand_state, demand_as_of,
+               power_quality_state, power_quality_as_of
+        FROM analytics.get_portal_site_telemetry_freshness(%s, %s)
+        """,
+        (portal_user_id, str(site_id)),
+    )
+    return rows[0] if rows else None
+
+
 # ---------------------------------------------------------------------------
 # Row -> response-model mapping.
 # ---------------------------------------------------------------------------
@@ -1084,4 +1130,32 @@ def build_power_quality_response(
         **{"from": dt_from, "to": dt_to},
         no_data=len(points) == 0,
         series=points,
+    )
+
+
+def build_site_telemetry_freshness_response(
+    *, site_id: UUID, row: dict[str, Any] | None
+) -> SiteTelemetryFreshnessResponse:
+    # The router already gates this call on portal_user_can_access_site, and
+    # analytics.get_portal_site_telemetry_freshness always returns exactly
+    # one row once access is confirmed -- row is None is therefore an
+    # unreachable defense-in-depth case, not a real "no data yet" state
+    # (that is expressed per-domain via state="UNKNOWN", not row absence).
+    # If it is ever hit, never fabricate a positive state.
+    if row is None:
+        unknown = DomainFreshness(state="UNKNOWN")
+        return SiteTelemetryFreshnessResponse(
+            site_id=site_id, energy=unknown, demand=unknown, power_quality=unknown
+        )
+    return SiteTelemetryFreshnessResponse(
+        site_id=site_id,
+        energy=DomainFreshness(
+            state=row["energy_state"], as_of=row["energy_as_of"]
+        ),
+        demand=DomainFreshness(
+            state=row["demand_state"], as_of=row["demand_as_of"]
+        ),
+        power_quality=DomainFreshness(
+            state=row["power_quality_state"], as_of=row["power_quality_as_of"]
+        ),
     )
