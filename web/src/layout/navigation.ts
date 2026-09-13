@@ -36,7 +36,7 @@ export const NAV_GROUP_LABELS: Record<NavGroup, string> = {
 };
 
 export const PRIMARY_NAV: readonly NavItem[] = [
-  { key: "home", label: "Home", to: "/home", requiresAnyOf: ["dashboard.view"], group: "site" },
+  { key: "home", label: "Overview", to: "/home", requiresAnyOf: ["dashboard.view"], group: "site" },
   { key: "energy", label: "Energy", to: "/features/energy", requiresAnyOf: ["dashboard.view"], group: "site" },
   { key: "demand", label: "Demand", to: "/features/demand", requiresAnyOf: ["dashboard.view"], group: "site" },
   {
@@ -61,9 +61,10 @@ export const SECONDARY_NAV: readonly NavItem[] = [
   },
 ];
 
-export const PLANNED_FEATURE_AREAS: readonly { key: string; label: string }[] = [
-  { key: "site-overview", label: "Site overview" },
-];
+/** MVP-3: Site Overview shipped -- removed from the planned list. Nothing
+ *  else exists yet, so this is empty for now, not deleted (PlaceholderArea
+ *  keeps rendering it honestly as later screens are added here). */
+export const PLANNED_FEATURE_AREAS: readonly { key: string; label: string }[] = [];
 
 export function visibleNav(items: readonly NavItem[], permissions: readonly string[]): NavItem[] {
   return items.filter(

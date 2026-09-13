@@ -40,7 +40,9 @@ function toPowerFactorChartPoints(series: PowerQualityPoint[]): ChartPoint[] {
   return series.map((point) => ({ t: Date.parse(point.bucket_start), value: point.power_factor_avg }));
 }
 
-function latest(series: PowerQualityPoint[]): PowerQualityPoint | null {
+/** Exported (MVP-3) so SiteOverview's Power Quality summary reuses this
+ *  exact "current = latest point" convention instead of duplicating it. */
+export function latestPowerQualityPoint(series: PowerQualityPoint[]): PowerQualityPoint | null {
   return series.length ? series[series.length - 1]! : null;
 }
 
@@ -93,7 +95,7 @@ export function PowerQualityOverview() {
     );
   }
 
-  const current = data ? latest(data.series) : null;
+  const current = data ? latestPowerQualityPoint(data.series) : null;
 
   return (
     <div className="page page--power-quality-overview" data-testid="page-power-quality-overview">

@@ -5,7 +5,7 @@ import { canUseShell } from "./auth/permissions";
 import { AppLayout } from "./layout/AppLayout";
 import { Bootstrap } from "./routes/Bootstrap";
 import { SelectContext } from "./routes/SelectContext";
-import { ShellHome } from "./routes/ShellHome";
+import { SiteOverview } from "./routes/SiteOverview";
 import { PlaceholderArea } from "./routes/PlaceholderArea";
 import { Forbidden } from "./routes/Forbidden";
 import { NotFound } from "./routes/NotFound";
@@ -23,7 +23,7 @@ import { PowerQualityOverview } from "./routes/power-quality/PowerQualityOvervie
  * Foundation routes:
  *   /            session/tenant bootstrap -> redirect
  *   /select      organization / site picker
- *   /home        the empty application shell
+ *   /home        Site Overview & Attention (MVP-3)
  *   /features/*  honest placeholder namespace for later-phase features
  *   *            not found
  *
@@ -68,7 +68,7 @@ export function AppRoutes() {
         path="/home"
         element={
           <ShellGate>
-            <ShellHome />
+            <SiteOverview />
           </ShellGate>
         }
       />
