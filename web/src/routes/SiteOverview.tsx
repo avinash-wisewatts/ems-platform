@@ -366,21 +366,28 @@ export function SiteOverview() {
         ) : null}
         {energy.unsupportedReason ? <NoDataYet message={energy.unsupportedReason} /> : null}
         {energy.status === "ready" && !energy.unsupportedReason && energy.current ? (
-          energy.current.no_data ? (
-            <NoDataYet />
-          ) : (
-            <p data-testid="site-overview-energy-value">
-              {comparisonResult?.currentTotalKwh?.toFixed(1) ?? "—"} kWh
-              {comparisonResult?.deltaPercent !== null && comparisonResult?.deltaPercent !== undefined ? (
-                <span data-testid="site-overview-energy-delta">
-                  {" "}
-                  ({comparisonResult.deltaPercent >= 0 ? "+" : ""}
-                  {comparisonResult.deltaPercent.toFixed(1)}% vs. typical)
-                </span>
-              ) : null}{" "}
+          <>
+            {energy.current.no_data ? (
+              <NoDataYet />
+            ) : (
+              <p data-testid="site-overview-energy-value">
+                {comparisonResult?.currentTotalKwh?.toFixed(1) ?? "—"} kWh
+                {comparisonResult?.deltaPercent !== null && comparisonResult?.deltaPercent !== undefined ? (
+                  <span data-testid="site-overview-energy-delta">
+                    {" "}
+                    ({comparisonResult.deltaPercent >= 0 ? "+" : ""}
+                    {comparisonResult.deltaPercent.toFixed(1)}% vs. typical)
+                  </span>
+                ) : null}
+              </p>
+            )}
+            {/* MVP-4 fix: freshness renders independent of whether the
+                primary Energy value is present -- it must not disappear
+                just because the period has no_data. */}
+            <p className="site-overview-energy-freshness" data-testid="site-overview-energy-freshness">
               <FreshnessIndicator state={freshness.data?.energy.state} />
             </p>
-          )
+          </>
         ) : null}
         <Link to="/features/energy">See Energy details →</Link>
       </section>
@@ -394,17 +401,24 @@ export function SiteOverview() {
         ) : null}
         {demand.unsupportedReason ? <NoDataYet message={demand.unsupportedReason} /> : null}
         {demand.status === "ready" && !demand.unsupportedReason && demand.current ? (
-          demand.current.has_data ? (
-            <p data-testid="site-overview-demand-value">
-              {demand.current.current_demand_kw?.toFixed(1) ?? "—"} kW
-              {demandPeak ? (
-                <span data-testid="site-overview-demand-peak"> — peak {demandPeak.kw.toFixed(1)} kW</span>
-              ) : null}{" "}
+          <>
+            {demand.current.has_data ? (
+              <p data-testid="site-overview-demand-value">
+                {demand.current.current_demand_kw?.toFixed(1) ?? "—"} kW
+                {demandPeak ? (
+                  <span data-testid="site-overview-demand-peak"> — peak {demandPeak.kw.toFixed(1)} kW</span>
+                ) : null}
+              </p>
+            ) : (
+              <NoDataYet />
+            )}
+            {/* MVP-4 fix: freshness renders independent of whether the
+                primary Demand value is present -- it must not disappear
+                just because current demand has no_data. */}
+            <p className="site-overview-demand-freshness" data-testid="site-overview-demand-freshness">
               <FreshnessIndicator state={freshness.data?.demand.state} />
             </p>
-          ) : (
-            <NoDataYet />
-          )
+          </>
         ) : null}
         <Link to="/features/demand">See Demand details →</Link>
       </section>
@@ -416,13 +430,19 @@ export function SiteOverview() {
         {pq.status === "error" ? <ErrorState error={pq.error} onRetry={() => setPqNonce((n) => n + 1)} /> : null}
         {pq.unsupportedReason ? <NoDataYet message={pq.unsupportedReason} /> : null}
         {pq.status === "ready" && !pq.unsupportedReason && pq.data ? (
-          pq.data.no_data || !pqCurrent || pqCurrent.power_factor_avg === null ? (
-            <NoDataYet />
-          ) : (
-            <p data-testid="site-overview-pq-value">
-              PF {pqCurrent.power_factor_avg.toFixed(2)} <FreshnessIndicator state={freshness.data?.power_quality.state} />
+          <>
+            {pq.data.no_data || !pqCurrent || pqCurrent.power_factor_avg === null ? (
+              <NoDataYet />
+            ) : (
+              <p data-testid="site-overview-pq-value">PF {pqCurrent.power_factor_avg.toFixed(2)}</p>
+            )}
+            {/* MVP-4 fix: freshness renders independent of whether the
+                primary Power Quality value is present -- it must not
+                disappear just because the period has no_data. */}
+            <p className="site-overview-pq-freshness" data-testid="site-overview-pq-freshness">
+              <FreshnessIndicator state={freshness.data?.power_quality.state} />
             </p>
-          )
+          </>
         ) : null}
         <Link to="/features/power-quality">See Power Quality details →</Link>
       </section>

@@ -416,9 +416,37 @@ describe("SiteOverview (MVP-3 -- Site Health & Attention)", () => {
     await waitFor(() => expect(screen.getByTestId("site-overview-energy-value")).toHaveTextContent("105.0 kWh"));
     const indicators = await screen.findAllByTestId("freshness-indicator");
     expect(indicators).toHaveLength(3);
-    expect(screen.getByTestId("site-overview-energy-value")).toHaveTextContent("FRESH");
-    expect(screen.getByTestId("site-overview-demand-value")).toHaveTextContent("STALE");
-    expect(screen.getByTestId("site-overview-pq-value")).toHaveTextContent("NO_DATA");
+    expect(screen.getByTestId("site-overview-energy-freshness")).toHaveTextContent("FRESH");
+    expect(screen.getByTestId("site-overview-demand-freshness")).toHaveTextContent("STALE");
+    expect(screen.getByTestId("site-overview-pq-freshness")).toHaveTextContent("NO_DATA");
+  });
+
+  it("MVP-4 fix: Demand and Power Quality freshness render even when their primary sections have no data -- previously suppressed alongside the missing value", async () => {
+    stubFetch((url) => {
+      if (isFreshnessUrl(url)) return { jsonBody: freshnessResponse({ energy: "UNKNOWN", demand: "STALE", power_quality: "NO_DATA" }) };
+      if (isEvidenceUrl(url)) return { jsonBody: evidenceResponse() };
+      if (isTypicalReferenceUrl(url)) return { jsonBody: typicalReferenceResponse({ typical_kwh: 100 }) };
+      if (isConsumptionUrl(url)) return { jsonBody: energyResponse(0, true) }; // Energy: no_data
+      if (isDemandCurrentUrl(url)) return { jsonBody: currentDemandResponse(false) }; // Demand: has_data false
+      if (isDemandSeriesUrl(url)) return { jsonBody: demandSeriesResponse(true) };
+      if (isPowerQualityUrl(url)) return { jsonBody: pqResponse(true) }; // PQ: no_data
+      return { status: 404, jsonBody: { error: "not_found", detail: "unexpected" } };
+    });
+
+    renderWithProviders(<SiteOverview />, { sites: () => Promise.resolve(SITES_ONE) });
+
+    // Primary values are genuinely absent -- NoDataYet, not a fabricated value.
+    await waitFor(() => expect(screen.getAllByTestId("state-no-data").length).toBeGreaterThanOrEqual(3));
+    expect(screen.queryByTestId("site-overview-energy-value")).toBeNull();
+    expect(screen.queryByTestId("site-overview-demand-value")).toBeNull();
+    expect(screen.queryByTestId("site-overview-pq-value")).toBeNull();
+
+    // Freshness still renders for all three, including the real UNKNOWN value.
+    const indicators = await screen.findAllByTestId("freshness-indicator");
+    expect(indicators).toHaveLength(3);
+    expect(screen.getByTestId("site-overview-energy-freshness")).toHaveTextContent("UNKNOWN");
+    expect(screen.getByTestId("site-overview-demand-freshness")).toHaveTextContent("STALE");
+    expect(screen.getByTestId("site-overview-pq-freshness")).toHaveTextContent("NO_DATA");
   });
 
   it("MVP-4: a freshness fetch failure is non-blocking -- Energy, Demand, and Power Quality values still render, with no freshness indicator shown", async () => {
