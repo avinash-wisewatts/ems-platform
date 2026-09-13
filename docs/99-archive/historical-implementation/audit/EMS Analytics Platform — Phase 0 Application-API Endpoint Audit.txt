@@ -1,0 +1,108 @@
+EMS Analytics Platform — Phase 0: Application/API Endpoint Audit
+
+Method: enumerated every route decorator across app/src/main.py (7,456 lines, ~95 routes), app/src/live_main.py (408 lines, fully read), and app/src/routers/context.py (fully read), then read the specific handlers/services relevant to telemetry, energy, demand, assets, alarms, data quality, dashboards, or Grafana data. Facts only, no redesign.
+
+---
+
+Headline finding
+
+The vast majority of main.py's ~95 routes are pure CRUD/onboarding forms (/administration/{organizations,sites,locations,gateways,devices,users,assets} and /onboarding/{organization,site,location,gateway,device,asset,review,result}) — HTML-rendered (response_class=HTMLResponse, include_in_schema=False), covering entity management, not analytics. A repo-wide check of every route path confirms zero routes contain "energy," "demand," "alarm," or "dashboard" (Grafana-sense), and exactly one contains "grafana" (POST /administration/organizations/{organization_id}/grafana/reconcile — a provisioning action, not a data endpoint). Energy, demand, and alarm data are exposed exclusively through the database analytics layer consumed by Grafana (documented in the prior four audits) — no FastAPI route re-exposes them.
+
+The only genuinely analytics/telemetry-relevant surface is: (1) the standalone live_main.py service, and (2) three small admin-portal pages (metering-coverage, commissioning, telemetry-validation) that read tenant/portal-scoped device/asset health data.
+
+---
+
+1. live_main.py — the EMS Live Telemetry service (standalone FastAPI app, distinct process from main.py)
+
+Route: /health
+Method: GET
+Auth: none
+Scope: none
+DB object called: SELECT 1 + in-memory MQTT broker health snapshot
+Response: JSON health/readiness
+Used by: ops/monitoring
+────────────────────────────────────────
+Route: /api/live/assets/{asset_id}
+Method: GET
+Auth: session cookie (deserialize_authenticated_user)
+Scope: portal user, checked via admin.portal_user_can_access_asset(actor_id, asset_id)
+DB object called: admin.get_portal_asset_live_state(actor_id, asset_id, statement_timestamp())
+Response: {"type":"snapshot","asset_id","points":[...]}
+Used by: EMS admin-portal frontend (not Grafana)
+────────────────────────────────────────
+Route: /api/live/assets/{asset_id}/ws
+Method: WebSocket
+Auth: session cookie, same access check
+Scope: same
+DB object called: same function, then streams publish_device_update pushes
+Response: live point stream
+Used by: EMS admin-portal frontend
+────────────────────────────────────────
+Route: /api/live/grafana/{grafana_org_id}/assets/{asset_id}/ws
+Method: WebSocket
+Auth: bearer token (grafana_stream_authorized(), compares against settings.grafana_stream_token — the EMS_GRAFANA_STREAM_TOKEN secret from CLAUDE.md §18)
+Scope: tenant enforced inside analytics.get_grafana_asset_live_state(grafana_org_id, asset_id, ...), not by this endpoint
+DB object called: analytics.get_grafana_asset_live_state
+Response: live point stream
+Used by: the wisewatts-live-datasource Grafana plugin (asset-overview.json's 6 instrument panels)
+────────────────────────────────────────
+Route: /api/live/grafana/{grafana_org_id}/assets/{asset_id}/status/ws
+Method: WebSocket
+Auth: same bearer-token check
+Scope: same, via analytics.get_grafana_asset_connectivity_context(grafana_org_id, asset_id, statement_timestamp())
+DB object called: same function traced in the semantic-layer audit (classifier #3: NEVER_SEEN/SILENT/STALE/DELAYED/RECEIVING)
+Response: {"type":"status","asset_id","latest_received_timestamp","connectivity_state"}
+Used by: the plugin's __STATUS_LAST_SEEN panel target
+
+Metric semantics: these endpoints return live point-level values only (no aggregation, no resolution, no time filtering — genuinely instantaneous, "what is the value right now"). Tenant/site scope: the two admin-facing endpoints use portal_user_id + admin.portal_user_can_access_asset() (the app-side PortalAccessScope system); the two Grafana-adapter websockets authenticate the adapter via a shared bearer secret and delegate all tenant/asset scoping to the database function itself (explicitly commented: "Tenant/asset scope is enforced by analytics.get_grafana_asset_live_state"). Aggregation/resolution: none — native/live only, consistent with every other live-datasource finding in this audit. Duplication: none found — this is the sole implementation of live-state delivery; the two parallel code paths (portal user vs. Grafana adapter) call different database functions (admin.get_portal_asset_live_state vs. analytics.get_grafana_asset_live_state) for conceptually the same "live asset state" idea — a parallel-implementation pattern consistent with the rest of this audit's findings (two authorization systems, two functions), not a bug.
+
+---
+
+2. main.py — the three data-quality/health admin pages
+
+GET /administration/metering-coverage (line 2343)
+
+- Auth: require_authenticated_portal_user (session-based, app-side PortalAccessScope).
+- DB call: admin.list_accessible_asset_meter_coverage(portal_user_id) (via metering_coverage_service.list_accessible_metering_coverage, app/src/metering_coverage_service.py:5-20) — an admin schema function, portal-user-scoped, not analytics.v_asset_meter_coverage_configuration (the Grafana/tenant-scoped object traced in the prior semantic-layer audit).
+- Response model: HTML (metering_coverage.html), server-rendered; underlying rows carry coverage_status values (CONFIGURED, MISSING_DIRECT_METER, PARTIALLY_CONFIGURED, MISSING_DESCENDANT_COVERAGE, NO_REQUIRED_DESCENDANTS, UNKNOWN_POLICY, EXCLUDED, is_coverage_in_scope) — the identical vocabulary already documented for analytics.v_asset_meter_coverage_configuration in the metric-lineage audit.
+- Embedded business logic: summarize_metering_coverage() (app/src/metering_coverage_service.py:23-48) computes KPI counts (in-scope/configured/action-required/excluded) in Python, a third location for logic conceptually about the same "meter coverage" metric (alongside whatever admin.list_accessible_asset_meter_coverage computes in SQL, and the separately-existing analytics.* version).
+- Time/resolution/aggregation: none — point-in-time configuration state, not telemetry.
+- Used by frontend/Grafana: admin-portal only; not used by Grafana (Grafana has its own separate object for this concept, confirmed unused by any of the 7 dashboards in the earlier Grafana audit).
+- Duplicates analytics logic elsewhere: yes, plausibly — same status vocabulary as analytics.v_asset_meter_coverage_configuration, but a structurally separate admin.* function and separate Python KPI-aggregation logic; the two SQL bodies were not diffed against each other in this session (UNKNOWN whether their underlying coverage-determination logic is identical or has independently drifted).
+
+GET /administration/commissioning (line 3160)
+
+- Auth: same portal-user session model.
+- DB call: list_accessible_commissioning_readiness(...) — called from three separate route handlers in main.py (lines 1777, 3174, 3316), meaning the same readiness dataset feeds at least 3 different pages (this route, and two others not further identified in this pass — plausibly the /administration landing page and /administration/reconciliation, based on line proximity, not independently confirmed for the other two call sites).
+- Embedded business logic: build_commissioning_dashboard() (app/src/commissioning_dashboard_service.py:41-89) — groups rows by a hardcoded COMMISSIONING_STATUSES tuple, maps blocking_reason_codes to human-readable guidance via a hardcoded BLOCKER_GUIDANCE dict (16 entries, e.g. "QUALIFYING_PRIMARY_METER_REQUIRED": "Assign a qualifying primary meter to the asset."), and a hardcoded CORRECTION_LINKS dict mapping entity type to admin route — all three are Python-side, presentation-layer business logic, structurally the same kind of finding as the Grafana panel SQL's inline CASE-based humanization already documented in the Grafana audit, just implemented in Python instead of SQL.
+- Response model: HTML, grouped-by-status dashboard.
+- Used by frontend/Grafana: admin-portal only.
+
+GET /administration/telemetry-validation (line 3216)
+
+- Auth: portal-user session; additional filter params organization_id, site_id, telemetry_state read from query string.
+- DB call: admin.list_accessible_device_telemetry_availability(portal_user_id, organization_id, site_id, telemetry_state) (app/src/telemetry_validation_service.py:12-25) — another admin-schema function, distinct from analytics.v_grafana_devices.
+- TELEMETRY_STATES = ("NEVER_SEEN","RECEIVING","STALE","SILENT","INVALID_PROFILE","UNMAPPED","VALIDATED") (telemetry_validation_service.py:7-10) — this is the exact same 7-value vocabulary as analytics.v_grafana_devices.telemetry_state (confirmed identical in the semantic-layer/tenant audits: NEVER_SEEN/SILENT/INVALID_PROFILE/UNMAPPED/RECEIVING/STALE/VALIDATED).
+- Duplicates analytics logic elsewhere: yes, by vocabulary — same state names, but computed via a separate admin.* function rather than analytics.v_grafana_devices or either of the other two Grafana-facing connectivity classifiers (get_grafana_asset_telemetry_context, get_grafana_asset_connectivity_context). Whether the underlying thresholds (300s/900s/3600s vs. 180s/900s/1800s, per the semantic-layer audit's finding of three non-unified classifiers) match this fourth, admin-side implementation was not verified in this session — the admin.list_accessible_device_telemetry_availability function body itself was not read. This is presented as an open question, not a confirmed fourth divergent implementation.
+- Time/resolution: none — current state only.
+
+GET /administration/reconciliation (line 3260) and POST /administration/organizations/{organization_id}/grafana/reconcile (line 3983)
+
+- Backed by reconciliation_queue_service (list_accessible_reconciliation_queue, imported alongside ISSUE_TYPES at line 56-58) and grafana_reconciliation_service (imported per the earlier cleanup-audit memory of app/src/onboarding/grafana_reconciliation_service.py). Not read in full this session — based on naming and the earlier repository cleanup audit's mention of this file, this tracks drift between the EMS metadata database and Grafana's own provisioned state (orgs/dashboards/datasources out of sync), i.e. a data-quality concept about the provisioning pipeline itself, not about telemetry data quality. Flagged as UNKNOWN in calculation detail — not traced to SQL in this pass, included here only because "data quality" and "Grafana" were both named in scope.
+
+---
+
+3. Endpoints that could be mistaken for a future EMS Analytics API
+
+- GET /api/live/assets/{asset_id} — the strongest candidate: its path literally starts with /api/, returns JSON, and is named generically enough ("live asset state") to look like the start of a REST analytics surface. In fact it returns only current point-in-time telemetry values, with no aggregation, resolution, or historical range — nothing like the Development Bible's envisioned /sites/{id}/energy/consumption-style contract.
+- GET /administration/telemetry-validation and GET /administration/metering-coverage — both expose exactly the kind of "data quality"/"availability" concept the target Analytics API would need, but are HTML-only, portal-user-scoped (not organization/tenant-scoped the way Grafana's analytics layer is), and read from separate admin.* functions rather than the analytics.* schema — a naive reader could mistake either for an existing data-quality API when it is, in fact, an admin-portal convenience page with its own independent data path.
+- No endpoint anywhere in main.py or live_main.py exposes energy, demand, or alarm data directly — so none of them could be mistaken for that specific slice of the target API; that gap is total, not partial.
+
+---
+
+Summary: what does NOT exist
+
+- No endpoint returns aggregated/historical energy, power, demand, or environmental data in any resolution (native/5m/15m/1h/1d) — confirmed by the absence of any matching route path and by every energy/demand database object's only confirmed consumers being Grafana dashboards (per the Grafana audit) or nothing at all.
+- No endpoint returns alarm data — analytics.v_grafana_active_alarms has no application-layer consumer found; alarms are Grafana-only.
+- No dedicated "dashboard" or "Grafana proxy" data endpoint exists beyond the one provisioning-reconciliation action route.
+- app/src/routers/context.py's three routes (/organization, /site, /location, each with a /clear sibling) are onboarding-wizard session-state helpers (store/clear a selection in the user's session) — not analytics-relevant, included here only for completeness of the full route enumeration.

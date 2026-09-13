@@ -1,0 +1,336 @@
+EMS Analytics Platform — Phase 1E Implementation Plan
+Energy-Consumption Reporting-Layer Consolidation
+
+STATUS: PLAN ONLY. Two independent, material discrepancies were found
+between the prior reconciliation document and the current live repository/
+database state. Per the explicit critical stop condition, they are reported
+before any implementation is proposed. Recommendation at the end is
+STOP — DISCREPANCY REQUIRES DECISION, not a go-ahead.
+
+Method: all ten named objects' live definitions were retrieved via
+pg_get_viewdef/\d against a fully-migrated local disposable database
+(the same container used throughout Phases 1A-1D), not assumed from
+possibly-stale files — the exact discipline Phase 1D's own investigation
+required twice already. No files modified. No staging/production access.
+
+===============================================================================
+1. EXECUTIVE SUMMARY
+===============================================================================
+
+The prior reconciliation document ("Post-1D Energy-Consumption
+Reconciliation and Phase 1E Recommendation") correctly identified that two
+real, live implementations compute the same classified-consumption metric
+and that only one is read by Grafana. It did NOT verify the two
+implementations' output contracts column-by-column, or trace which objects
+the "duplicate" view chain feeds besides the reporting layer. This
+investigation did both, and found:
+
+    (a) The four v_energy_reporting_* views expose six per-flow quality-
+        detail columns (import_gap_intervals, export_gap_intervals,
+        import_reset_intervals, export_reset_intervals, import_rollover_
+        intervals, export_rollover_intervals) that analytics.get_canonical_
+        energy_read directly consumes to compute independently-meaningful
+        import_quality_status/export_quality_status values. The persisted
+        analytics.energy_consumption_{15min,hourly,daily} tables do NOT
+        have these columns — Phase 1B deliberately persisted only COMBINED
+        (import-OR-export) gap/reset/rollover counters. There is no way to
+        reconstruct the per-flow values from the persisted schema without
+        either extending that schema (touching a "DO NOT touch" object) or
+        silently degrading the output (a real behavior change for the one
+        live dashboard consumer, detailed in §3).
+
+    (b) analytics.v_energy_semantic_rollup_15min is not solely a "duplicate
+        query-time path" — analytics.refresh_energy_consumption_15min()
+        (Phase 1B's OWN function, explicitly on the "DO NOT touch" list)
+        reads FROM it directly (postgres/migrations/180_fix_persisted_
+        energy_consumption_15min.sql:104). It cannot be retired under any
+        version of this phase, because doing so would break the very
+        "canonical" persisted-table population Phase 1E is meant to
+        promote. The two lineages are not cleanly separable at the
+        15-minute tier; they share this object as required infrastructure.
+
+    (c) analytics.v_energy_reporting_5min's underlying rollup (v_energy_
+        semantic_rollup_5min) represents "a 5-minute bucket of whichever
+        native granularity a site actually captures at" (works for both
+        1-minute and 5-minute capture sites). analytics.energy_consumption_
+        5min represents something different: Phase 1B's persisted NATIVE
+        tier, populated only for sites whose capture interval is exactly
+        5 minutes (mutually exclusive with energy_consumption_1min by
+        site). Retargeting the 5-minute reporting view to the persisted
+        5-minute table would return no data at all for any 1-minute-
+        capture site. This is not a column gap; it is a conceptual mismatch
+        in what the two objects represent.
+
+These are reported now, before proposing an implementation, per the
+explicit instruction to do so on discovering a material discrepancy.
+
+===============================================================================
+2. CURRENT-STATE FINDINGS (re-verified live, this session)
+===============================================================================
+
+v_energy_reporting_5min / v_energy_reporting_15min — identical 39-column
+shape (required: analytics.get_canonical_energy_read's 5m/15m branch does
+`SELECT * FROM v_energy_reporting_5min ... UNION ALL SELECT * FROM
+v_energy_reporting_15min`, which requires byte-identical column name/type/
+order between the two). Both currently:
+    SELECT gom.grafana_org_id, r.organization_id, r.site_id, r.device_id,
+      d.external_id, d.name AS device_name, r.bucket_start,
+      r.source_interval_count, r.source_sample_count,
+      r.valid_import_intervals, r.invalid_import_intervals,
+      r.valid_export_intervals, r.invalid_export_intervals,
+      r.import_gap_intervals, r.export_gap_intervals,
+      r.import_reset_intervals, r.export_reset_intervals,
+      r.import_rollover_intervals, r.export_rollover_intervals,
+      r.import_consumption_wh, r.import_consumption_kwh,
+      r.export_consumption_wh, r.export_consumption_kwh,
+      r.first_native_bucket_start, r.last_native_bucket_start,
+      r.first_previous_bucket_start, r.previous_import_register_wh,
+      r.import_register_wh, r.previous_export_register_wh,
+      r.export_register_wh, r.import_quality_codes, r.export_quality_codes,
+      r.minimum_native_resolution_seconds, r.maximum_native_resolution_
+      seconds, r.quality_status, r.gap_interval_count, r.reset_interval_
+      count, r.rollover_interval_count, r.invalid_interval_count
+    FROM analytics.v_energy_semantic_rollup_{5min,15min} r
+    JOIN metadata.devices d ON d.id = r.device_id AND d.organization_id = r.organization_id
+    JOIN metadata.grafana_organization_map gom ON gom.organization_id = r.organization_id AND gom.is_active = true
+
+v_energy_reporting_hourly / v_energy_reporting_daily — same shape (32
+columns; daily substitutes consumption_date + site_timezone for bucket_
+start; both add site_timezone which 5min/15min lack), same per-flow
+gap/reset/rollover columns present, confirmed via information_schema.
+columns (§ above). Both are live GROUP BY aggregations over v_energy_
+reporting_15min (confirmed Phase 1D session; re-confirmed unchanged).
+
+energy_consumption_5min (persisted, NATIVE tier for 5-min-capture sites):
+bucket_start, organization_id, site_id, device_id, previous_bucket_start,
+elapsed_minutes, source_sample_count, import/export_register_wh (+
+previous), import/export_consumption_wh/kwh, import/export_quality_code
+(singular, not array), import/export_is_valid, import/export_reset_
+detected, import/export_rollover_detected (booleans, not counts), gap_
+detected, quality_rule_*, calculated_at. This is a NATIVE-INTERVAL-LEVEL
+schema (one row per native sample), structurally different in kind from
+v_energy_reporting_5min's AGGREGATED-BUCKET schema (one row per 5-minute
+bucket with interval COUNTS) — confirming finding (c) above at the schema
+level as well as the conceptual level.
+
+energy_consumption_{15min,hourly,daily} (persisted, rollup tiers): bucket_
+start [consumption_date+site_timezone for daily], organization_id, site_id,
+device_id, source_interval_count, import/export_consumption_kwh (kwh only,
+no wh), valid_import_intervals, invalid_import_intervals, valid_export_
+intervals, invalid_export_intervals, gap_interval_count, reset_interval_
+count, rollover_interval_count (all three COMBINED, not per-flow),
+invalid_interval_count (combined), first_source_bucket, last_source_bucket,
+calculated_at. Confirms finding (a): no import_gap_intervals/export_gap_
+intervals/import_reset_intervals/export_reset_intervals/import_rollover_
+intervals/export_rollover_intervals; no source_sample_count; no wh values;
+no register snapshots; no quality_codes arrays; no min/max_native_
+resolution_seconds; no quality_status; no external_id/device_name (would
+need a join, not a gap).
+
+get_canonical_energy_read (unchanged this session, re-confirmed): 5m/15m
+branch's CASE logic for import_quality_status/export_quality_status reads
+r.invalid_import_intervals / r.import_reset_intervals / r.import_gap_
+intervals / r.import_rollover_intervals (and the export equivalents)
+directly — this is the exact dependency finding (a) describes. 1h/1d
+branches use the identical CASE pattern against h./d. equivalents.
+
+analytics.refresh_energy_consumption_15min() (Phase 1B, "DO NOT touch"):
+confirmed via grep and file read (postgres/migrations/180_fix_persisted_
+energy_consumption_15min.sql:104) that it reads FROM analytics.v_energy_
+semantic_rollup_15min directly. This is finding (b) — a real runtime
+dependency, not a test-only or documentation reference.
+
+Retirement-safety re-verification (repository-wide grep, all of postgres/,
+scripts/, app/, grafana/, docs/): v_energy_semantic_rollup_5min is
+referenced only in its own definition (ddl/144, migrations/032) and by
+v_energy_reporting_5min (ddl/145, migrations/033) and test files
+(app/tests/test_energy_semantic_reporting_contract.py, test_validated_
+energy_semantic_rollups_contract.py — both assert migration-SQL shape, not
+runtime usage). No other real consumer. v_energy_semantic_rollup_15min has
+the same references PLUS the refresh_energy_consumption_15min() dependency
+above — this is the one material difference from the prior reconciliation's
+"no remaining consumer" assumption.
+
+===============================================================================
+3. EXACT ARCHITECTURAL GAP
+===============================================================================
+
+Not one gap but two independent ones, each individually sufficient to
+block the literally-scoped objective:
+
+Gap 1 (column/semantic-fidelity loss, 15min/hourly/daily tiers): the six
+per-flow columns cannot be sourced from the persisted tables. Concrete
+consequence for the one real consumer (asset-overview.json's "Total Energy
+vs previous period" panel, which filters `WHERE e.import_quality_code =
+'GOOD'`): today, an interval where only the EXPORT flow had a gap still
+shows import_quality_code = 'GOOD' and is correctly included in the "Total
+Energy" (import) sum. If quality_status were computed from the combined
+counters instead, that same interval would show import_quality_code =
+'GAPS_DETECTED' (because SOME flow gapped) and would be incorrectly
+excluded from the sum. This is not a hypothetical edge case; it is a
+direct, mechanical consequence of collapsing per-flow to combined counts,
+and it changes real dashboard output for the one confirmed live consumer.
+
+Gap 2 (conceptual mismatch, 5-minute tier only): v_energy_reporting_5min's
+"5-minute bucket of native data" concept has no persisted equivalent for
+1-minute-capture sites. energy_consumption_5min only has rows where a
+site's native capture interval is exactly 5 minutes. Retargeting would
+silently return zero rows for every other site.
+
+Gap 3 (retirement infeasibility, 15min tier only): even independent of
+Gaps 1/2, v_energy_semantic_rollup_15min cannot be retired while
+refresh_energy_consumption_15min() (explicitly protected) depends on it.
+
+===============================================================================
+4. CURRENT LINEAGE (both, confirmed unchanged from Phase 1D's finding)
+===============================================================================
+
+Shared native tier (real data, actively populated by 5 scheduled jobs,
+Phase 1B): energy_consumption_1min / energy_consumption_5min (mutually
+exclusive per site) -> analytics.v_energy_consumption_native (UNION ALL).
+
+Live/consumed lineage: v_energy_consumption_native -> v_energy_semantic_
+rollup_5min/15min (live GROUP BY, date_bin) -> v_energy_reporting_5min/
+15min (tenant-wrapped) -> v_energy_reporting_hourly/daily (live GROUP BY
+over the 15min view) -> get_canonical_energy_read -> get_grafana_asset_
+energy_intervals -> asset-overview.json.
+
+Persisted/unconsumed-for-reads lineage: v_energy_consumption_native (via
+v_energy_semantic_rollup_15min, shared with the line above) -> refresh_
+energy_consumption_15min() -> energy_consumption_15min (persisted) ->
+refresh_energy_consumption_hourly()/daily() -> energy_consumption_hourly/
+daily (persisted). Zero read consumers of the three rollup-tier persisted
+tables. energy_consumption_1min/5min themselves (native tier) are also
+unread by anything outside their own contract tests, despite being the
+same tables the live/consumed lineage reads through v_energy_consumption_
+native — i.e., the NATIVE data is real and shared; only the ROLLUP-TIER
+persisted tables (15min/hourly/daily) are genuinely unread duplicates.
+
+===============================================================================
+5. CONSUMER INVENTORY
+===============================================================================
+
+Direct consumers of v_energy_semantic_rollup_5min: v_energy_reporting_5min
+only (+ 2 test files asserting SQL text, not runtime behavior).
+Direct consumers of v_energy_semantic_rollup_15min: v_energy_reporting_
+15min AND analytics.refresh_energy_consumption_15min() (+ same 2 test
+files). The second is a real runtime dependency this investigation newly
+surfaced.
+Direct consumers of v_energy_reporting_5min/15min/hourly/daily: analytics.
+get_canonical_energy_read only (via the UNION ALL and the separate 1h/1d
+branches).
+Indirect consumer (via get_canonical_energy_read -> get_grafana_asset_
+energy_intervals): asset-overview.json, one panel.
+Test-only references: app/tests/test_energy_semantic_reporting_contract.py,
+test_validated_energy_semantic_rollups_contract.py, and this session's own
+scripts/test/assert_grafana_energy_routing_daily_tier.sql (comment only,
+not a query).
+No application code, no other dashboard, no other database object consumes
+any of these six views.
+
+===============================================================================
+6. VIEW-CONTRACT COMPARISON
+===============================================================================
+
+See §2 for the full column-by-column listing. Summary: source table/
+grouping semantics, timezone handling (daily: site-local via metadata.
+sites.timezone, unchanged concept in both lineages), tenant filtering
+(gom.grafana_org_id/is_active, device join for name/external_id) are
+IDENTICAL in shape between what a persisted-backed view would need and
+what the live view already provides for every column EXCEPT the six
+per-flow columns (Gap 1) and the 5-minute tier's fundamental source
+mismatch (Gap 2). NULL behavior, ordering, and grouping direction
+(additive, never re-classifying) are consistent with Phase 1B's own
+proven invariants in every column that DOES have a persisted equivalent.
+
+===============================================================================
+7. SECURITY/TENANT ANALYSIS
+===============================================================================
+
+No tenant-isolation weakening would result from a column-compatible
+retarget (none was found to test, since Gaps 1/2/3 block that path
+entirely as scoped). For the record: analytics.energy_consumption_* tables
+remain internal-only (ems_admin), confirmed unchanged; the reporting views
+remain the sole tenant boundary via their gom join; no new grant would be
+required for any variant of a future retarget that preserves the existing
+gom/devices join structure.
+
+===============================================================================
+8. PROPOSED TARGET ARCHITECTURE
+===============================================================================
+
+Not proposed this turn. Three non-exclusive resolution paths exist, each
+requiring a decision this document cannot make unilaterally:
+
+Path 1 — Extend the persisted schema first (a separate, prerequisite
+    phase, NOT Phase 1E as scoped): add import/export-split gap_intervals,
+    reset_intervals, rollover_intervals columns to energy_consumption_
+    {15min,hourly,daily}, update their refresh functions to populate them
+    from the already-per-flow-aware native tier. This directly requires
+    touching two objects on Phase 1E's explicit "DO NOT touch" list
+    (energy_consumption_* definitions and their refresh functions) — it
+    would have to be its own phase, upstream of any reporting-view
+    retarget, with its own Phase-1B-style contract test.
+Path 2 — Accept combined-only quality granularity for import_quality_
+    status/export_quality_status and document the behavior change,
+    explicitly confirming with the user whether the one real dashboard
+    consumer's "Total Energy" filter (WHERE import_quality_code='GOOD')
+    is acceptable to become slightly more conservative (excluding a few
+    additional GOOD-import-but-gapped-export intervals). This is a real,
+    user-visible change requiring explicit sign-off, not a safe default.
+Path 3 — Narrow Phase 1E to hourly/daily only, using energy_consumption_
+    hourly/daily (both structurally similar rollups of the same kind as
+    15min, so Gap 2 does not apply to them) while leaving 5min/15min on
+    the live path — still blocked by Gap 1 (identical missing columns at
+    hourly/daily) and Gap 3 (15min's refresh-function dependency, though
+    Gap 3 only blocks RETIRING v_energy_semantic_rollup_15min, not
+    retargeting v_energy_reporting_15min itself — retargeting is still
+    blocked by Gap 1 regardless).
+
+No path above can be selected without user input; none is "the smallest
+coherent next phase" implied by the original recommendation once Gaps 1-3
+are accounted for.
+
+===============================================================================
+9-19. (IMPLEMENTATION CHANGES / RETIREMENT / MIGRATION ORDERING / TEST
+STRATEGY / ROLLBACK / CI-CD / STAGING VERIFICATION / RISKS / OUT-OF-SCOPE /
+FILES / SEQUENCE)
+===============================================================================
+
+Not produced. Per the explicit critical stop condition ("If you discover a
+discrepancy... report it clearly before proposing the implementation"),
+detailing an implementation for an objective now known to be unsafe as
+literally scoped would misrepresent readiness. Once the user selects (or
+proposes) a resolution path in §8, these sections can be written precisely
+against that path using the same rigor as Phases 1A-1D (real fixtures
+seeded through the canonical calculation, executable-bit verification,
+full regression suite, staged diff review before commit).
+
+Stale DDL snapshot (postgres/ddl/141_asset_energy_persisted_read_path.sql):
+investigated as instructed. It is hygiene-only — a fresh ddl-only install
+would transiently install the pre-migration-044 get_grafana_asset_energy_
+intervals body, but every real deployment path (local test DB, CI,
+staging) applies the full forward-migration set afterward, and migration
+044 has genuinely executed (not silently baselined) on every environment
+checked this session. It does not participate in Phase 1E's objective at
+all (it concerns get_grafana_asset_energy_intervals, which Phase 1E must
+not touch) and is not included in this phase. Listed as a standing,
+separate hygiene follow-up, unchanged from Phase 1D's finding.
+
+===============================================================================
+20. FINAL RECOMMENDATION
+===============================================================================
+
+STOP — DISCREPANCY REQUIRES DECISION.
+
+Phase 1E as literally specified (retarget the four reporting views to the
+persisted tables, changing nothing else) is not safely implementable
+within its own stated boundaries: it would either require touching two
+explicitly protected objects (Path 1), silently change real dashboard
+output for the one live consumer (Path 2), or is conceptually incoherent
+for the 5-minute tier regardless of path (Gap 2), and cannot retire
+v_energy_semantic_rollup_15min under any variant while refresh_energy_
+consumption_15min() depends on it (Gap 3). Please indicate which
+resolution path (or a different one) to pursue; the corresponding
+sections 9-19 will then be produced with the same rigor applied throughout
+Phases 1A-1D before any implementation begins.

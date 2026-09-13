@@ -1,0 +1,303 @@
+EMS Analytics Platform — Staging Commissioning Investigation (Read-Only)
+
+Status: INVESTIGATION ONLY. No files modified. No staging mutation
+performed. All staging queries were read-only (SELECT only, via the
+established SSH read-only mechanism). Production was not accessed.
+
+===============================================================================
+A. CURRENT STAGING CATALOG/DROPDOWN STATE
+===============================================================================
+
+    metadata.device_models            0 rows   <- BLOCKS "Device Model" dropdown/creation
+    metadata.gateway_models           3 rows   (present, but NOT from any repo seed — see G)
+    config.device_categories         10 rows   (seeded; "Energy Meter" = 34b8f2e4-b2f7-4072-ab5a-3e4e531bc2be)
+    config.device_profiles            2 rows   (seeded; ENERGY_METER_ENISCOPE_V1 = 780c99c4-640b-409f-81d2-fcaf5765a42b, is_active=true)
+    config.device_profile_categories  0 rows   <- BLOCKS profile/category compatibility
+    config.profile_field_mapping     62 rows   (seeded)
+    metadata.organizations            2 rows   (MEENAXY_PHARMA already exists, c4bde6d1-6688-46f0-95df-cdc1a943d17b)
+    metadata.sites                    2 rows   (see E — a "Unit 2"/UNIT_2 site already exists under MEENAXY_PHARMA)
+    metadata.gateways                 3 rows   (see E — mis-modeled, see B/E)
+    metadata.devices                  0 rows   (confirmed, matches prior audits)
+    metadata.device_identifiers       0 rows   (the 3 real UIDs are NOT registered anywhere)
+    admin.portal_users                3 rows   (1 active: admin_avinash, portal_user_id=1)
+    telemetry.raw_messages            actively receiving (6,532 rows in the last hour, latest
+                                       2026-08-24 17:00:47+05:30) — real MQTT telemetry confirmed live.
+
+===============================================================================
+B. EXACT ROOT CAUSE OF THE EMPTY DROPDOWNS
+===============================================================================
+
+Traced the real application code (not assumed): app/src/onboarding/repository.py
+backs the onboarding UI's dropdowns via three read-only views:
+    list_device_categories() -> admin.v_device_categories   (config.device_categories — populated, fine)
+    list_gateway_models()    -> admin.v_gateway_models       (metadata.gateway_models — populated on staging, but NOT reproducible from any repo seed)
+    list_device_models()     -> admin.v_device_models        (metadata.device_models — EMPTY, root cause of the empty "Device Model" dropdown)
+    list_device_profiles()   -> admin.v_active_device_profiles (joins through config.device_profile_categories
+                                 to expose device_category_ids/device_category_names per profile — with
+                                 that join table empty, ENERGY_METER_ENISCOPE_V1 shows with no compatible
+                                 category, so admin.create_device's compatibility check always fails)
+
+app/src/device_management_service.py confirms the REAL "Create Device" action
+calls admin.create_device(...) directly (the granular API), NOT the wizard-
+style admin.onboard_energy_asset(...) — this rules out using the wizard
+function as a workaround; it is not what the actual UI/app uses.
+
+admin.create_device's own body (read in full, live) enforces both blockers
+explicitly:
+    IF NOT EXISTS (SELECT 1 FROM metadata.device_models dm
+                    WHERE dm.id=p_device_model_id AND dm.device_category_id=p_device_category_id)
+        THEN RAISE EXCEPTION 'Device model does not match the selected category.';
+    IF NOT EXISTS (SELECT 1 FROM config.device_profiles dp
+                    JOIN config.device_profile_categories dpc ON dpc.profile_id=dp.id
+                    WHERE dp.id=p_profile_id AND dp.is_active AND dpc.device_category_id=p_device_category_id)
+        THEN RAISE EXCEPTION 'Device profile is not compatible with the selected category.';
+
+Confirmed exactly as the user's prior audit stated: both are genuine,
+currently-blocking gaps for the real, actually-used commissioning path.
+
+NEW finding beyond the prior audit: admin.create_gateway(...) ALSO requires
+a valid p_gateway_model_id (IF p_gateway_model_id IS NULL OR NOT EXISTS
+(SELECT 1 FROM metadata.gateway_models WHERE id=p_gateway_model_id) THEN
+RAISE EXCEPTION 'Select a valid gateway model.'). metadata.gateway_models
+happens to have 3 rows on staging today, but — see G — this is NOT
+reproducible from the repository; a fresh/clean deployment would have 0
+rows here too, which is an equally real (if currently masked) repository
+gap.
+
+===============================================================================
+C. EXACT REFERENCE ROWS REQUIRED
+===============================================================================
+
+For metadata.device_models: one row —
+    vendor: 'Eniscope' (matches config.device_profiles.manufacturer for
+             ENERGY_METER_ENISCOPE_V1 exactly)
+    model: a real Eniscope meter model name
+    device_category_id: 34b8f2e4-b2f7-4072-ab5a-3e4e531bc2be ('Energy Meter')
+
+For config.device_profile_categories: one row —
+    profile_id: 780c99c4-640b-409f-81d2-fcaf5765a42b (ENERGY_METER_ENISCOPE_V1)
+    device_category_id: 34b8f2e4-b2f7-4072-ab5a-3e4e531bc2be ('Energy Meter')
+
+For metadata.gateway_models (repository-level gap, see G): at least one row
+for an Eniscope-compatible gateway concept.
+
+The exact model NAME to use for metadata.device_models is a genuine open
+question — see G for the evidence and the decision this requires.
+
+===============================================================================
+D. EXACT REAL MQTT DEVICES AVAILABLE
+===============================================================================
+
+Confirmed live and receiving (telemetry.raw_messages actively growing).
+Confirmed NOT already registered as any device_identifiers row (query
+returned 0 for all three UIDs, case-insensitive):
+    Eniscope_1_Meenaxy_Unit2   80:34:28:16:22:fe:00:01
+    Eniscope_2_Meenaxy_Unit2   80:34:28:16:0a:20:00:01
+    Eniscope_3_Meenaxy_Unit2   80:34:28:15:7a:c6:00:01
+All three match admin.create_device's required MQTT_UID format
+(^[0-9a-f]{2}(:[0-9a-f]{2}){7}$) exactly.
+
+===============================================================================
+E. EXISTING ORGANIZATION/SITE/GATEWAY STATE — IMPORTANT DISCREPANCY
+===============================================================================
+
+Organization MEENAXY_PHARMA already exists (c4bde6d1-6688-46f0-95df-
+cdc1a943d17b), ACTIVE — confirmed, matches the user's prior audit.
+
+A site ALREADY exists under it: "Unit 2" / code UNIT_2, id
+513296cc-ce25-4d2d-9b47-dc1f3bd0b0f3, timezone Asia/Kolkata, lifecycle
+ACTIVE. This appears to be exactly the correct, appropriate site for this
+work (its code matches the real MQTT topic segment UNIT_2 exactly) — not
+a production site that would be duplicated by creating a new one. Per the
+instruction not to create a duplicate when an appropriate site already
+exists, THIS site is the strong candidate to reuse, not a newly-named
+"MEENAXY Pharma Staging Validation" site — recommend confirming this
+before creating anything new.
+
+DISCREPANCY (not previously reported): three "gateway" rows already exist
+under this site, one per Eniscope unit:
+    Eniscope_1_Meenaxy_Unit2 (external_id ENISCOPE_1_MEENAXY_UNIT2)
+    Eniscope_2_Meenaxy_Unit2 (external_id ENISCOPE_2_MEENAXY_UNIT2)
+    Eniscope_3_Meenaxy_Unit2 (external_id ENISCOPE_3_MEENAXY_UNIT2)
+all lifecycle REGISTERED, all referencing gateway_model_id 99d83365-2fd9-
+4b3b-8617-f7f057703511 (vendor "Best Energy", model "Eniscope 8 Hybrid").
+
+This does not match the intended data model. Per the user's own stated
+target topology (ONE gateway representing UNIT_2, THREE devices beneath
+it) and per admin.create_device's schema (a device belongs to exactly one
+gateway; MQTT_UID identifiers belong to devices, not gateways), these
+three existing rows appear to be a prior, incorrect attempt that modeled
+each Eniscope meter as its own gateway rather than as a device under a
+shared gateway. They currently have no MQTT UID association at all
+(metadata.device_identifiers is empty; UIDs cannot attach to a gateway
+record in this schema regardless). They are inert — not wrong data that is
+actively causing harm — but they are not the correct foundation to build
+on, and reusing them as-is would not match the requested topology.
+
+This is reported as a decision point (see J/H), not resolved unilaterally:
+whether to leave these three mis-modeled gateway rows in place (untouched,
+inert) while creating one new, correctly-modeled gateway for the three
+devices, or to address them some other way. No gateway or site mutation is
+proposed without your explicit direction on this point.
+
+Note the two available gateway_models on staging: id 21973ffc-cbde-4228-
+8975-eabc85947c1a (vendor ENISCOPE, model "Eniscope Gateway") looks like
+the more semantically correct choice for a genuine GATEWAY record than
+99d83365 ("Best Energy" / "Eniscope 8 Hybrid", which reads like a meter/
+channel-count product name, better suited as the DEVICE model per C above).
+
+Portal user: only one active portal user exists, admin_avinash (portal_
+user_id=1, GLOBAL scope), confirmed to hold device.manage, gateway.manage,
+and site.manage permissions — this is the only viable p_actor_portal_
+user_id for any commissioning call.
+
+===============================================================================
+F. EXACT SUPPORTED ADMIN COMMISSIONING SEQUENCE (once reference data exists)
+===============================================================================
+
+Read live, exact signatures (not assumed):
+    admin.create_site(p_actor_portal_user_id bigint, p_organization_id uuid,
+        p_name text, p_code text, p_timezone text, p_lifecycle_status text)
+        — only needed if the existing UNIT_2 site is not reused.
+    admin.create_gateway(p_actor_portal_user_id bigint, p_organization_id uuid,
+        p_site_id uuid, p_name text, p_external_id text, p_gateway_model_id uuid,
+        p_lifecycle_status text, p_building_id uuid DEFAULT NULL,
+        p_floor_id uuid DEFAULT NULL, p_space_id uuid DEFAULT NULL)
+        — lifecycle must be one of REGISTERED/COMMISSIONING/INACTIVE/DECOMMISSIONED;
+        p_gateway_model_id is required and validated against metadata.gateway_models.
+    admin.create_device(p_actor_portal_user_id bigint, p_gateway_id uuid,
+        p_name text, p_external_id text, p_device_category_id uuid,
+        p_device_model_id uuid, p_profile_id uuid, p_protocol text,
+        p_lifecycle_status text, p_firmware_version text, p_serial_number text,
+        p_use_gateway_location boolean, p_building_id uuid, p_floor_id uuid,
+        p_space_id uuid, p_identifier_type text, p_identifier_value text,
+        p_operational_policy text)
+        — p_protocol must be 'MQTT'; p_lifecycle_status one of DISCOVERED/
+        REGISTERED/UNASSIGNED/COMMISSIONING/INACTIVE/DECOMMISSIONED;
+        p_operational_policy one of STANDALONE/ASSET_ASSIGNED; p_identifier_type
+        must be 'MQTT_UID'; p_identifier_value must match the hex:colon format
+        (all three real UIDs already match). Requires metadata.device_models
+        and config.device_profile_categories to be populated first (blockers).
+
+config.sync_device_points_after_profile_change() fires automatically (AFTER
+INSERT OR UPDATE OF profile_id ON metadata.devices trigger, confirmed live)
+— profile point enablement is automatic on device creation, exactly as
+expected; no separate manual call is needed.
+
+===============================================================================
+G. REPOSITORY REFERENCE-DATA CORRECTION REQUIRED
+===============================================================================
+
+Confirmed genuinely missing from the repository (checked every seed file
+under postgres/seeds/reference/, the full baseline migration, and the
+archive folder — every match for INSERT INTO metadata.device_models or
+config.device_profile_categories outside a disposable-DB test fixture was
+a function BODY doing a run-time upsert inside admin.onboard_energy_
+asset_legacy_upsert, a wizard-style function the real application does
+NOT call — never a seed):
+
+    No seed file populates metadata.device_models at all.
+    No seed file populates metadata.gateway_models at all.
+    postgres/ddl/80_device_profile_categories.sql defines config.device_
+    profile_categories's structure only (its own comment: "Compatibility
+    is explicit and declarative... Tenant-specific data is not stored in
+    this table" — confirming this is intentionally meant to hold reference
+    data, which was simply never seeded for ENERGY_METER_ENISCOPE_V1).
+
+This is a genuine repository gap, not a staging-specific misconfiguration
+— a clean install anywhere would have the same three empty tables. The
+canonical fix belongs alongside the existing pattern: postgres/seeds/
+reference/28_01_eniscope_energy_profile.sql already seeds config.device_
+profiles for ENERGY_METER_ENISCOPE_V1 idempotently (SELECT-then-INSERT-or-
+UPDATE, guarded by existence checks) — the missing device_models and
+device_profile_categories rows belong in a companion seed file following
+that exact idempotent pattern, e.g. postgres/seeds/reference/28_02_
+eniscope_device_model_and_category.sql, referencing config.device_
+categories by name ('Energy Meter', not a hardcoded UUID — the same
+pattern Phase 1A's own connectivity contract test already used
+successfully) and config.device_profiles by profile_code.
+
+The one open question is the exact vendor/model string for metadata.
+device_models. Two real candidates already exist informally on staging's
+(non-repo, out-of-band) gateway_models rows: "Best Energy" / "Eniscope 8
+Hybrid" and "ENISCOPE" / "Eniscope Gateway" — suggesting real operational
+knowledge already exists about this hardware but was only ever entered
+directly into staging, never captured as a repository seed. Recommend
+confirming the exact correct vendor/model pairing (likely "Eniscope" /
+an 8-channel meter model name, matching config.device_profiles.manufacturer
+='Eniscope' and .model='Virtual Gateway Energy Meter' already seeded for
+the profile) before writing this seed — this is a factual/domain
+question, not something to guess.
+
+This reference-data fix has NOT been made. No repository file has been
+modified in this investigation.
+
+===============================================================================
+H. CAN COMMISSIONING SAFELY PROCEED?
+===============================================================================
+
+Yes, in principle, once (1) the reference-data gap in G is resolved
+(either as a proper repository seed, committed and deployed through the
+normal pipeline, or — if you prefer to unblock staging validation
+immediately without waiting for a repo change — as a minimal, explicitly-
+scoped, reference-only staging insert matching exactly what the seed would
+contain, with the repo fix following separately) and (2) the site/gateway
+discrepancy in E is resolved by your decision. No blocker was found in the
+commissioning functions themselves, the portal user's permissions, or the
+MQTT UID data. Production is unaffected either way — nothing here touches
+any production object or credential.
+
+===============================================================================
+I. RISK: SHARED MQTT/STAGING/PRODUCTION IDENTITY
+===============================================================================
+
+Telegraf's MQTT connection is entirely environment-variable-driven
+(${MQTT_HOST}, ${MQTT_USERNAME}, etc. in telegraf/config/telegraf.conf) —
+actual broker/credential values live only in per-environment .env files,
+which are correctly excluded from the repository. I did not read staging's
+or production's actual .env contents (staging's per the production-safety
+principle of not casually retrieving credential values even for staging;
+production's because it is explicitly off-limits). I therefore cannot
+independently confirm from the repository alone whether staging's MQTT
+subscription is topic/tenant-isolated from production's. The topic
+namespace itself (wwems/v1/MEENAXY_PHARMA/UNIT_2/...) includes the real
+organization name, consistent with this being real client telemetry
+intentionally made available for staging validation, as you describe —
+but I recommend you confirm operationally (not via me reading credential
+files) that staging's HiveMQ subscription/credentials are the environment-
+appropriate ones before proceeding, simply because I cannot verify it
+read-only from the repository without touching a secrets file.
+
+===============================================================================
+J. EXACT CHANGES PROPOSED IN STAGING (NOT YET MADE — awaiting your approval)
+===============================================================================
+
+Pending your decision on the two open points (device-model vendor/model
+string in G; the mis-modeled gateway rows in E), the proposed sequence
+would be:
+    1. Apply the reference-data fix (metadata.device_models +
+       config.device_profile_categories, and metadata.gateway_models if
+       you want that captured as a repo seed too) — as a proper,
+       committed, reviewed migration/seed, deployed through the normal
+       pipeline before touching staging directly; OR, if you want to
+       unblock validation sooner, an explicitly-approved, minimal staging-
+       only insert of exactly those rows, with the repo seed following
+       separately under its own commit/review.
+    2. Reuse the existing MEENAXY_PHARMA / "Unit 2" (UNIT_2) site — no
+       new site created — unless you decide otherwise.
+    3. Create ONE new gateway (via admin.create_gateway, actor=admin_
+       avinash) representing UNIT_2, using gateway_model_id 21973ffc-...
+       ("Eniscope Gateway") — leaving the three existing mis-modeled
+       gateway rows untouched and inert, pending your decision on E.
+    4. Create three devices (via admin.create_device, actor=admin_
+       avinash) under the new gateway, each with p_device_category_id =
+       'Energy Meter', p_device_model_id = the new reference row from
+       step 1, p_profile_id = ENERGY_METER_ENISCOPE_V1, p_protocol='MQTT',
+       p_identifier_type='MQTT_UID', and the exact real UID for each of
+       the three Eniscope devices named in D.
+    5. Wait for the existing scheduled jobs (normalization, energy
+       routing) to process the already-arriving telemetry; then perform
+       the 19 read-only verification checks you listed.
+
+No mutation has been made. Awaiting your decision on E and G, and your
+explicit approval, before any staging write is performed.

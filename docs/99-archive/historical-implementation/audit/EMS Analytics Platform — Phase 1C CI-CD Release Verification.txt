@@ -1,0 +1,198 @@
+EMS Analytics Platform — Phase 1C CI/CD Release Verification
+Commit under verification: 4289b3919738d901c91dfc07975020fe141abcdb
+
+Method: read-only inspection via `gh` CLI (GitHub Actions run/job/log data)
+only. The live TimescaleDB job-schedule values (item 3) were obtained from
+the existing `scripts/verify/verify_jobs.sh` gate's own output, captured
+inside this deployment's "Post-deployment verification" job log — this
+script queries timescaledb_information.jobs directly against staging as
+part of the repository's own established, already-existing verification
+mechanism. No SSH was performed by this session; no fixtures were created;
+no migration was run manually; no container was restarted/recreated by this
+session.
+
+===============================================================================
+A. DEPLOYMENT IDENTITY — PASS
+===============================================================================
+
+CI run 32655355649: completed, conclusion success.
+Deploy to Staging run 32655355781: completed, conclusion success.
+    https://github.com/avinash-wisewatts/ems-platform/actions/runs/32655355781
+
+Deployed image (both services), confirmed from the deploy job's own log:
+    ghcr.io/***/ems-platform-app:4289b3919738d901c91dfc07975020fe141abcdb
+    ("App image: ghcr.io/***/ems-platform-app:4289b391...",
+     "Status: Downloaded newer image for ...:4289b391...")
+
+Container sequence: ems-admin-portal and ems-live-telemetry both Recreate ->
+Recreated -> Starting -> Started -> starting -> healthy ("All containers
+healthy after 5s."). No rollback log lines appeared.
+
+Result: PASS — staging is running the exact approved commit/image on both
+services, both healthy.
+
+===============================================================================
+B. MIGRATION 194 STATUS — PASS
+===============================================================================
+
+Deploy job log, migration-apply step (72 migrations selected, all prior
+SKIP as already-applied, this one genuinely executed):
+
+    APPLY 194_fix_job_schedule_drift
+    APPLIED 194_fix_job_schedule_drift
+    Migration operation completed successfully.
+
+This confirms migration 194 (whose sole content is the three alter_job
+corrections from commit 4289b391, "fix: correct canonical job schedules")
+was applied for real on staging in this deployment, not merely already
+present from a prior run.
+
+Result: PASS.
+
+===============================================================================
+C. THREE CORRECTED JOB CONFIGURATIONS — PASS (live runtime catalog)
+===============================================================================
+
+Live values, read directly from timescaledb_information.jobs via the
+Post-deployment verification job's own inventory query:
+
+    job_id | job_name                              | schedule_interval | scheduled | config
+    1000   | telemetry.run_normalization_job       | 00:01:00 (1 min)   | t         | {"overlap": "15 minutes"}
+    1001   | telemetry.run_energy_routing_job      | 00:01:00 (1 min)   | t         | {"overlap": "15 minutes"}
+    1012   | telemetry.run_environment_routing_job | 00:01:00 (1 min)   | t         | {"overlap": "15 minutes"}
+
+Per-job verify_jobs.sh check results, all PASS (not the prior FAIL/WARN):
+    Normalization job runs every 1 minute                    PASS
+    Normalization job has a 5-minute maximum runtime          PASS
+    Normalization job retry policy is configured              PASS
+    Normalization job uses the 15-minute late-data overlap     PASS
+    Energy routing job runs every 1 minute                    PASS
+    Energy routing job has a 5-minute maximum runtime          PASS
+    Energy routing job retry policy is configured              PASS
+    Energy routing job uses the 15-minute late-data overlap     PASS
+    Environment routing job runs every 1 minute                PASS
+    Environment routing job has a 5-minute maximum runtime      PASS
+    Environment routing job retry policy is configured          PASS
+    Environment routing job uses the 15-minute late-data overlap PASS
+
+("retry policy is configured" asserts max_retries=3 AND retry_period=1 minute
+together, per verify_jobs.sh's own query; both are therefore confirmed live,
+not inferred from migration 194's text.)
+
+Result for all three jobs, all six fields (schedule_interval, max_runtime,
+max_retries, retry_period, config.overlap, scheduled): PASS.
+
+===============================================================================
+D. UNRELATED-JOB INTEGRITY — PASS
+===============================================================================
+
+    Compression policies registered: 25   (unchanged vs. Phase 1B verification's 25)
+    Retention policies registered:    21   (unchanged vs. Phase 1B verification's 21)
+    Continuous aggregate refresh policies: 16 (unchanged vs. Phase 1B verification's 16)
+    All lifecycle and refresh policies are enabled: PASS
+    No duplicate telemetry routing jobs exist: PASS
+
+Identical counts to the pre-Phase-1C (Phase 1B) verification confirm no
+compression/retention/CAGG-refresh policy was added, removed, or altered.
+Two other pre-existing, unrelated jobs appear in the inventory
+(telemetry.run_raw_message_failure_capture_job,
+telemetry.run_raw_receipt_state_job) with their own distinct schedules,
+untouched by migration 194 (which targets only the three named jobs by
+proc_schema/proc_name).
+
+Result: PASS — no unrelated job or policy was altered.
+
+===============================================================================
+E. JOB RUNTIME HEALTH — PASS
+===============================================================================
+
+    No managed TimescaleDB job has a failed last-run status: PASS
+    All telemetry routing jobs have executed at least once: PASS
+
+Result: PASS.
+
+===============================================================================
+F. PREVIOUSLY OBSERVED DRIFT — RESOLVED (PASS)
+===============================================================================
+
+Phase 1B's CI/CD verification (commit 5510200) observed, in this exact gate:
+    FAIL  Normalization job does not have the expected 1-minute schedule
+    FAIL  Normalization/Energy/Environment routing job does not use the
+          expected 15-minute overlap
+
+This deployment's identical gate now shows PASS for every one of those same
+checks (Section C above). The gate's static advisory text ("Known: running
+job schedule/overlap has drifted from the canonical") still prints
+unconditionally as contextual commentary in the script output, but the
+actual measured PASS/FAIL results immediately following it confirm the
+drift is resolved, not merely unflagged.
+
+Result: PASS — the specifically diagnosed drift is resolved.
+
+===============================================================================
+G. PHASE 1A/1B REGRESSION CHECKS — PASS
+===============================================================================
+
+Re-executed in this exact commit's own CI run (32655355649, "Database /
+migration / repository integration tests" job log):
+
+    [connectivity-semantics] Running Phase 1A connectivity semantic contract assertions...
+     Connectivity semantic contract assertions passed.
+    [energy-consumption-semantics] Running Phase 1B energy consumption semantic contract assertions...
+     Energy consumption semantic contract assertions passed.
+    [job-schedule-canonical] Running Phase 1C job-schedule canonical contract assertions...
+     Job-schedule canonical contract assertions passed.
+
+This is disposable-database contract verification (the local integration
+suite, run as part of this commit's own CI), not staging behavioral
+verification — staging itself remains uncommissioned (0 devices/assets, per
+Section — WARN lines "No devices are configured" / "No assets are
+configured" still present, unrelated to Phase 1C), so no staging-side
+behavioral re-proof of Phase 1A/1B semantics was attempted or fabricated.
+
+Result: PASS (disposable-DB contract level) / NOT VERIFIED (staging
+behavioral level, unchanged limitation from Phase 1A/1B, not a Phase 1C
+regression).
+
+===============================================================================
+H. GRAFANA BOUNDARY — PASS
+===============================================================================
+
+`git show --name-only` against 4289b3919738d901c91dfc07975020fe141abcdb
+confirms zero files under any Grafana path (or any dashboard JSON) are part
+of this commit. The commit's five files are exactly:
+    postgres/migrations/194_fix_job_schedule_drift.sql
+    postgres/restructure_manifest.csv
+    scripts/test/assert_job_schedule_canonical.sh
+    scripts/test/assert_job_schedule_canonical.sql
+    scripts/test/run_integration_environment.sh
+
+Result: PASS — no Grafana object or dashboard was touched.
+
+===============================================================================
+I. DISCREPANCIES
+===============================================================================
+
+None found. Pre-existing, unrelated conditions observed in the same gate
+(WARN: no devices/assets configured; FAIL: normalized_points/energy_
+measurements/environment_measurements empty; FAIL: 2 pipeline stages not
+SUCCESS) are identical in nature to those already documented in the Phase
+1B CI/CD verification and are structurally independent of the three files
+Phase 1C touches (they relate to staging having zero commissioned telemetry
+sources, not to job scheduling). No new FAIL condition appeared that wasn't
+present, for the same unrelated reasons, in the prior verification.
+
+===============================================================================
+J. OVERALL PHASE 1C RELEASE VERDICT
+===============================================================================
+
+PASS. Staging is running the exact approved commit/image
+(4289b3919738d901c91dfc07975020fe141abcdb) on both services, both healthy.
+Migration 194 applied for real. All three targeted jobs now show the fully
+canonical live schedule (1-minute interval, 5-minute max runtime, 3 retries,
+1-minute retry period, 15-minute overlap, enabled) — the specific,
+previously-documented drift is resolved. No unrelated job or lifecycle
+policy was altered. No managed job shows a failed last-run status. Phase 1A
+and Phase 1B contract tests both re-passed under this exact commit's own
+CI run. No Grafana object was touched. No fixtures were created and no
+staging mutation was performed by this verification.

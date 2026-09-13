@@ -1,0 +1,954 @@
+EMS ANALYTICS PLATFORM — MIGRATION 210 PRE-IMPLEMENTATION AUDIT
+Demand Watermark + Demand Re-finalization
+Environment: STAGING | Mode: AUDIT / DESIGN ONLY — nothing modified | 2026-08-27
+
+Basis: repository + local disposable TimescaleDB 2.29.2/pg16 with migrations
+002..209 applied. Deployed function bodies are authoritative. Staging runtime
+(counts, durations, distributions) is [UNK] — read-only queries in §O.
+Tags: [FACT] verified in repo/local runtime; [INF] derived; [REC] proposal;
+[UNK] needs staging; [VERIFY] cheap check to run before coding.
+
+=====================================================================
+A. PRE-FLIGHT VERIFICATION
+=====================================================================
+
+A1. telemetry.pipeline_state semantics — [FACT] unchanged since 208/209.
+    Single row per pipeline_name; columns last_received_at / last_started_at /
+    last_completed_at / last_inserted_rows / last_status / last_error /
+    updated_at; status CHECK = {NEVER_RUN, RUNNING, SUCCESS, FAILED,
+    SKIPPED_LOCKED, NO_SOURCE_DATA}. Row 'demand_intervals' ALREADY EXISTS
+    (created by migration 208, last_received_at = NULL — no watermark yet).
+
+A2. analytics.run_demand_calculation_job(integer,jsonb) — [FACT] deployed body
+    (post-208, untouched by 209):
+      * v_pipeline_name = 'demand_intervals'; v_lookback default 3h, overridable
+        by config.lookback.
+      * pg_try_advisory_xact_lock(hashtextextended('analytics.run_demand_calculation_job',0))
+        -> on miss: pipeline_state last_status='SKIPPED_LOCKED', RETURN.
+      * UPDATE pipeline_state last_status='RUNNING'.
+      * CALL analytics.refresh_demand_analytics(clock_timestamp(), v_lookback);
+      * UPDATE pipeline_state last_status='SUCCESS', last_inserted_rows=0.
+      * EXCEPTION WHEN OTHERS -> last_status='FAILED', last_error, RAISE.
+    NO watermark read/advance. NO parent-availability logic. Window = fixed
+    now()-3h inside refresh_demand_analytics. SECURITY INVOKER (not DEFINER,
+    unlike the energy wrappers); search_path pg_catalog, analytics; job owner
+    ems_admin. Job: schedule 1m, max_runtime 10m, max_retries 3, retry_period
+    5m, check_config = config.assert_analytical_lookback_job_config,
+    config = {"lookback":"3 hours"}.
+
+A3. analytics.refresh_demand_analytics(timestamptz, interval) — [FACT] deployed
+    body. PROCEDURE, no return, no intermediate COMMIT. Structure:
+      FOR each non-DECOMMISSIONED site:
+        resolve site + asset demand policy (effective-dated at p_now).
+        DELETE stale demand_state: SITE if no/disabled site policy; ASSET if the
+          PRIMARY_METER relationship was removed.
+        FOR each scope (SITE if enabled  UNION ALL  one ASSET per PRIMARY_METER):
+          v_max_n := ceil(epoch(p_lookback)/demand_interval_seconds) + 2.
+          -- (a) LIVE / CURRENT bucket -> demand_state:
+             v_current := resolve_demand_interval(site, interval_sec, p_now);
+             IF v_current.interval_start within [effective_from, effective_to):
+               v_calc := calculate_demand_window(site, scope, asset,
+                           v_current.interval_start, v_current.interval_end,
+                           p_now, FALSE);          -- p_final = FALSE
+               IF v_calc.demand_policy_id IS NOT NULL:
+                 INSERT INTO analytics.demand_state(...) VALUES (...) ON CONFLICT DO NOTHING;
+                 IF SITE:  UPDATE demand_state ... WHERE site_id=X AND scope_type='SITE';
+                 ELSE:     UPDATE demand_state ... WHERE asset_id=X AND scope_type='ASSET';
+               (quality_status stored: NO_DATA/INVALID_SOURCE/INSUFFICIENT_SOURCE_RESOLUTION
+                pass through; anything else -> 'PROVISIONAL')
+          -- (b) FINALIZED / HISTORICAL loop -> demand_intervals:
+             FOR v_n IN 1..v_max_n:
+               v_interval := resolve_demand_interval(site, interval_sec,
+                               p_now - v_n*interval_sec);
+               EXIT WHEN v_interval.interval_end < p_now - p_lookback;
+               CONTINUE if v_interval.interval_start < effective_from;
+               CONTINUE if effective_to IS NOT NULL AND interval_end > effective_to;
+               CONTINUE if interval_end + late_arrival_tolerance + INTERVAL '5 minutes' > p_now;  -- GRACE, keyed to p_now
+               v_calc := calculate_demand_window(site, scope, asset,
+                           interval_start, interval_end, interval_end, TRUE);  -- p_final = TRUE
+               CONTINUE if v_calc.demand_policy_id IS NULL;      -- no resolvable capability -> NO ROW written
+               INSERT INTO analytics.demand_intervals(18 cols) VALUES (...,
+                   CASE WHEN v_calc.quality_status='PROVISIONAL' THEN 'INCOMPLETE'
+                        ELSE v_calc.quality_status END,
+                   clock_timestamp())               -- finalized_at
+               ON CONFLICT DO NOTHING;              <-- THE WRITE-ONCE DEFECT (line ~284)
+    Sole caller: run_demand_calculation_job. Sole writer of BOTH demand_intervals
+    and demand_state. [FACT — repo grep: only migrations 013/017/027 + ddl
+    132/136 define it; no app code; no other CALL site.]
+
+A4. analytics.calculate_demand_window(uuid,text,uuid,timestamptz,timestamptz,
+    timestamptz,boolean) — [FACT] STABLE, no writes, deterministic given source
+    + config. Reads config.* + metadata.* + telemetry.resolve_site_capture_bucket
+    and the ACTUAL SOURCE DATA:
+      METER_NATIVE      -> telemetry.normalized_points  (device_id, logical_point_id,
+                          event_time in (interval_start, effective_end],
+                          platform_received_at <= interval_end + late_arrival_tolerance)
+      ENERGY_COUNTER_DELTA / TIME_WEIGHTED_POWER
+                        -> telemetry.energy_measurements (device_id, bucket_start
+                          in [interval_start, effective_end],
+                          received_at <= interval_end + late_arrival_tolerance)
+    quality_status lattice (from the body):
+      demand_policy_id IS NULL (no capability)     -> INVALID_SOURCE + policy_id NULL
+                                                     => caller CONTINUEs, NO ROW.
+      NOT capability_ready                          -> INVALID_SOURCE (row written).
+      METER_NATIVE: observed=0 -> NO_DATA ; p_final -> VALID ; else PROVISIONAL.
+      ENERGY_COUNTER_DELTA: observed<2 or NULL bounds -> (observed=0 ? NO_DATA : INCOMPLETE);
+        rollover/reset/implausible-delta -> INVALID_SOURCE;
+        else p_final & coverage >= COALESCE(minimum_coverage_percent, 90) -> VALID else INCOMPLETE.
+      TIME_WEIGHTED_POWER: capture_seconds > interval/3 -> INSUFFICIENT_SOURCE_RESOLUTION;
+        observed=0 -> NO_DATA; else p_final & coverage>=min -> VALID else INCOMPLETE.
+    => quality only ever improves as more source data arrives (NO_DATA ->
+       INCOMPLETE -> VALID); a config change (minimum_coverage_percent,
+       capability) could re-classify. NOT p_final always yields PROVISIONAL
+       (never a persisted demand_intervals value — mapped to INCOMPLETE on write).
+
+A5. analytics.resolve_demand_interval(uuid,integer,timestamptz) — [FACT] STABLE,
+    SQL. Maps p_at to the site-local-aligned demand interval [interval_start,
+    interval_end) where interval_end = interval_start + interval_seconds.
+    Returns NO ROW unless p_interval_seconds IN (900, 1800). The DEMAND BUCKET
+    BOUNDARY is interval_start (it is the middle column of both unique indexes).
+
+A6. analytics.demand_intervals — [FACT] PLAIN TABLE (NOT a hypertable; no
+    retention/compression). Columns/constraints:
+      quality_status NOT NULL CHECK IN (VALID, INCOMPLETE, NO_DATA,
+        INVALID_SOURCE, INSUFFICIENT_SOURCE_RESOLUTION)
+      scope_chk: (SITE & asset_id NULL) OR (ASSET & asset_id NOT NULL)
+      window_chk: interval_end > interval_start
+      coverage 0..100 ; expected/observed >= 0 ;
+      source_method IN (METER_NATIVE, ENERGY_COUNTER_DELTA, TIME_WEIGHTED_POWER)
+      finalized_at NOT NULL DEFAULT now()
+    Partial unique indexes (THE ON CONFLICT TARGETS):
+      uq_demand_intervals_site_scope  UNIQUE (site_id, interval_start, demand_policy_id)  WHERE scope_type='SITE'
+      uq_demand_intervals_asset_scope UNIQUE (asset_id, interval_start, demand_policy_id) WHERE scope_type='ASSET'
+    Other indexes: (asset_id,interval_start DESC) WHERE asset_id NOT NULL;
+      (site_id,interval_start DESC); (site_id,scope_type,interval_start DESC)
+      WHERE quality_status='VALID'.
+    FKs: asset_id->metadata.assets (NO on-delete) ; demand_policy_id->
+      config.site_demand_policies ; organization_id->metadata.organizations ;
+      site_id->metadata.sites ; source_device_id->metadata.devices.
+
+A7. analytics.demand_state — [FACT] PLAIN TABLE. LIVE/current-bucket accumulator,
+    NOT keyed by interval_start:
+      uq_demand_state_site_scope  UNIQUE (site_id)  WHERE scope_type='SITE'
+      uq_demand_state_asset_scope UNIQUE (asset_id) WHERE scope_type='ASSET'
+    => at most (#sites + #PRIMARY_METER assets) rows total. quality_status CHECK
+    = {PROVISIONAL, INCOMPLETE, NO_DATA, INVALID_SOURCE,
+    INSUFFICIENT_SOURCE_RESOLUTION} (no VALID). FKs to sites/assets ON DELETE
+    CASCADE. Fully overwritten (not summed) each run for the current interval.
+
+A8. SITE vs ASSET insert path — [FACT] both go through the SAME single-row
+    INSERT ... ON CONFLICT DO NOTHING at line ~269-284; the loop variable
+    v_scope carries one scope per iteration. demand_state has a SITE branch and
+    an ASSET branch already (explicit UPDATE), demand_intervals does not.
+
+A9. Which timestamp is the bucket boundary — [FACT] interval_start (site-local
+    aligned, timestamptz). interval_end = interval_start + demand_interval_seconds.
+
+A10. demand_state for open vs finalized — [FACT] (a) = live, current interval
+     only, per (site|asset) scope; (b) = finalized closed intervals. They are
+     separate code blocks with separate targets. (a) uses p_now; (b) walks
+     [p_now-lookback, p_now).
+
+A11. Other writers of demand_intervals / demand_state — [FACT] NONE besides
+     refresh_demand_analytics. No triggers on either table (verified \d).
+
+A12. Migration 208 scaffolding preserved — [FACT] run_demand_calculation_job
+     still has the advisory lock, RUNNING transition, EXCEPTION->FAILED->RAISE,
+     and the job still has finite max_runtime 10m / retries 3 / retry_period 5m
+     / check_config wired.
+
+A13. Migration 209 effect on demand — [FACT] NONE. grep 'demand' in
+     209_energy_consumption_cascade_watermarks.sql = 0. The pipeline_state
+     'demand_intervals' row is still last_received_at = NULL. config.assert_
+     analytical_lookback_job_config was extended by 209 to accept
+     {lookback, max_catchup_window, overlap, reconcile_window} -> migration 210
+     does NOT need to touch the validator.
+
+A14. config.site_demand_policies constraints — [FACT]
+       demand_interval_seconds CHECK = ANY(ARRAY[900,1800])   (=> A5 always returns a row for a real policy)
+       late_arrival_tolerance_seconds CHECK 0..3600           (=> worst-case grace horizon = 3600 + 300 = 3900s)
+       minimum_coverage_percent 0..100.
+
+A15. finalized_at is exposed — [FACT] analytics.v_grafana_asset_demand_intervals
+     (the Grafana-facing view) SELECTs di.finalized_at as an output column
+     (ddl/133:107, migration 017:1356). => a repair that moves finalized_at is
+     visible to Grafana. (See §P R5.)
+
+A16. Legacy caller of the 2-arg signature — [FACT]
+     scripts/test/assert_asset_demand_automatic_decoupling.sh:189 does
+     `CALL analytics.refresh_demand_analytics(v_test_now, INTERVAL '1 hour')`.
+     Must keep working (via defaulted new params).
+
+=====================================================================
+B. CURRENT DEMAND EXECUTION MODEL
+=====================================================================
+
+Every 60s: run_demand_calculation_job -> CALL refresh_demand_analytics(now(), 3h).
+Per site x scope, per call:
+  * 2 x DELETE demand_state (stale-scope cleanup)              -- cheap
+  * 1 x calculate_demand_window(p_final=FALSE) + demand_state upsert  -- live
+  * ~ceil(3h/interval)+2 = 14 iterations of the finalize loop, of which
+    ~12 do real work (each: resolve_demand_interval + calculate_demand_window
+    (p_final=TRUE) + INSERT ON CONFLICT DO NOTHING).
+Defect: DO NOTHING => once a closed bucket has ANY row (typically NO_DATA
+written during an upstream stall), it is NEVER reconsidered; and anything older
+than 3h is never revisited even without a row.
+
+=====================================================================
+C. DEMAND PARENT-AVAILABILITY SEMANTICS
+=====================================================================
+
+[FACT] calculate_demand_window reads energy_measurements (by bucket_start) and
+normalized_points (by event_time). The routing pipeline_state checkpoints
+('energy_measurements', 'environment_measurements') are keyed on
+platform_received_at (INGEST time) — NOT comparable to a demand bucket time
+(readiness-audit C4). resolve_demand_capability reads only config/metadata (no
+source data) so it does not affect availability.
+
+[REC] parent_available_through(demand) =
+    LEAST(
+        (SELECT max(bucket_start) FROM telemetry.energy_measurements),
+        (SELECT max(event_time)   FROM telemetry.normalized_points)
+    )
+  Both are single-row reverse-index probes:
+    energy_measurements_bucket_start_idx (bucket_start DESC)
+    normalized_points_event_time_idx    (event_time DESC)
+  [INF] In a healthy pipeline normalized_points always leads energy_measurements
+  (routing reads normalized_points), so the LEAST resolves to
+  max(energy_measurements.bucket_start) in practice — the binding term and the
+  correct "closed-bucket data exists through here" signal. The normalized_points
+  term is kept for defensive explicitness of the dual source dependency; it is
+  cheap. Do NOT use a pipeline_state checkpoint here.
+
+  [FLAG R2] For a hypothetical pure-METER_NATIVE site (demand register that never
+  reaches energy_measurements) the LEAST would be gated by other sites'
+  energy_measurements progress. Non-issue on the current all-ENISCOPE fleet
+  (every site emits energy_measurements). Conservative direction (never
+  over-finalizes) => safe.
+
+=====================================================================
+D. DEMAND WATERMARK SEMANTICS
+=====================================================================
+
+pipeline_state('demand_intervals').last_received_at
+  = highest demand bucket boundary (interval_start-space, but stored as an
+    arbitrary timestamptz — see §E on alignment) THROUGH which a successful
+    watermark-driven run has finalized demand_intervals for the whole fleet.
+  It is NOT parent_available_through (an input), and NOT the live demand_state
+  position, and NOT per-site/scope.
+  Advanced ONLY as the last write of a successful run's single transaction.
+  A FAILED / cancelled / max_runtime-timed-out / exception run: the wrapper's
+  EXCEPTION handler sets FAILED and RAISEs; the TimescaleDB job runner aborts
+  the whole job transaction; RUNNING, all demand_intervals writes, and the
+  advance all roll back -> last_received_at unchanged. (Identical contract to
+  migration 209.)
+  First run (last_received_at IS NULL): v_start floor = clock_timestamp() -
+  config.lookback (default 3h) — lookback becomes a FIRST-RUN FLOOR only,
+  exactly as in 209.
+
+=====================================================================
+E. CATCH-UP WINDOW
+=====================================================================
+
+Per run, inside the 208 advisory lock, with v_ckpt read FOR UPDATE:
+
+  v_grace  := make_interval(secs =>
+                COALESCE((SELECT max(late_arrival_tolerance_seconds)
+                          FROM config.site_demand_policies WHERE is_enabled), 0)
+                + 300);                                  -- <= 3900s (A14 ceiling)
+  v_parent := LEAST( max(energy_measurements.bucket_start),
+                     max(normalized_points.event_time) );        -- §C
+  v_start  := COALESCE(v_ckpt, clock_timestamp() - v_lookback);   -- lookback = first-run floor
+  v_to     := date_bin(INTERVAL '15 minutes',
+                LEAST( clock_timestamp() - v_grace,
+                       v_parent,
+                       v_start + v_max_catchup_window ),
+                TIMESTAMPTZ '2000-01-01 00:00:00+00');
+  IF v_parent IS NULL OR v_to IS NULL OR v_to <= v_start:
+      pipeline_state -> NO_SOURCE_DATA (or SUCCESS if v_to = v_ckpt); DO NOT advance; RETURN.
+  v_from   := v_start - v_overlap;
+  CALL analytics.refresh_demand_analytics(clock_timestamp(), v_lookback, v_from, v_to);
+  -- on success:
+  UPDATE pipeline_state('demand_intervals') SET last_received_at = v_to, last_status = 'SUCCESS', ...
+
+WHY the grace clamp (v_to <= now - v_grace): the finalize loop's own grace
+check (interval_end + late_arrival_tolerance + 5min > p_now -> CONTINUE) would
+otherwise SKIP the newest intervals inside [v_from, v_to) while the checkpoint
+still advanced to v_to -> a permanent hole below the watermark. Clamping v_to to
+now - v_grace guarantees every interval in [v_from, v_to) is already past its
+grace, so the loop finalizes all of them and the checkpoint safely advances.
+Buckets in (v_to, now) are picked up on a later run once they age past the
+grace. The inner grace check stays as belt-and-braces.
+
+WHY date_bin to 15 minutes: keeps the checkpoint on a clean 15-minute boundary.
+For 30-minute-policy sites this can cause a <=15-minute over-reach on the last
+interval of a run (idempotent, past grace) — acceptable; documented.
+
+max_catchup_window: [REC] 6 hours. [FACT] Validated against cost — see §L. At
+6h/15min the finalize loop is bounded to ceil(6*3600/900)+2 = 26 iterations per
+scope per site. Do NOT exceed 6h without staging measurement (§O).
+
+overlap: [REC] 30 minutes (= 2 x 15-min interval). Re-finalizes the boundary
+interval(s) each run (idempotent via §F). Does NOT need to cover the grace
+(grace is handled by the v_to clamp).
+
+lookback: [REC] keep 3 hours (first-run floor only).
+
+reconcile_window: [REC] 6 hours. Stored in config now; CONSUMED BY MIGRATION 212
+only (not read by 210). Covers the common late-arrival horizon (job-1077 raw
+replay backoff is 1h+2h+6h; a demand-affecting late energy_measurements
+correction typically lands within a few hours). A very-late correction (>6h)
+needs a manual widened re-finalization (§F, §P R-late).
+
+=====================================================================
+F. DEMAND RE-FINALIZATION / ON CONFLICT DESIGN
+=====================================================================
+
+APPROACH [REC]: Option B — parameterize refresh_demand_analytics; do NOT split
+it, do NOT create a second finalizer, do NOT touch calculate_demand_window /
+resolve_demand_interval / the live demand_state block.
+
+F1. Signature change (migration-205 pattern — DROP the old arity first):
+      DROP PROCEDURE IF EXISTS analytics.refresh_demand_analytics(timestamptz, interval);
+      CREATE OR REPLACE PROCEDURE analytics.refresh_demand_analytics(
+          p_now           timestamptz DEFAULT clock_timestamp(),
+          p_lookback      interval    DEFAULT '03:00:00',
+          p_finalize_from timestamptz DEFAULT NULL,
+          p_finalize_to   timestamptz DEFAULT NULL)
+    Re-issue ownership/grants for the new signature (013 issued them for the
+    2-arg form): ALTER PROCEDURE ...(timestamptz,interval,timestamptz,timestamptz)
+    OWNER TO ems_admin; REVOKE ALL ... FROM PUBLIC; GRANT EXECUTE ... TO ems_admin.
+    Update COMMENT ON PROCEDURE ...(4-arg).
+
+F2. Finalize-loop bounds (the ONLY body change besides the INSERT):
+      v_win_from := COALESCE(p_finalize_from, p_now - p_lookback);
+      v_win_to   := COALESCE(p_finalize_to,   p_now);
+      -- (NULL/NULL  => byte-equivalent to the current (p_now-p_lookback, p_now) window)
+      v_max_n := ceil(extract(epoch FROM (v_win_to - v_win_from))
+                      / v_policy.demand_interval_seconds)::INTEGER + 2;
+      FOR v_n IN 1..v_max_n LOOP
+          v_interval := resolve_demand_interval(v_site.site_id,
+                          v_policy.demand_interval_seconds,
+                          v_win_to - make_interval(secs => v_n*v_policy.demand_interval_seconds));
+          EXIT WHEN v_interval.interval_end <= v_win_from;          -- was: < p_now - p_lookback
+          CONTINUE WHEN v_interval.interval_start IS NULL;          -- defensive (A5/A14 make this dead, keep anyway)
+          ... existing effective_from / effective_to / grace CONTINUE checks, UNCHANGED
+              (grace still keyed to p_now = real clock) ...
+          v_calc := calculate_demand_window(..., v_interval.interval_end, TRUE);  -- UNCHANGED
+          CONTINUE WHEN v_calc.demand_policy_id IS NULL;            -- UNCHANGED
+          <scope-branched status-guarded upsert — F3>
+      END LOOP;
+
+F3. The upsert (replaces the single INSERT ... ON CONFLICT DO NOTHING). One
+    row per iteration; branch on v_scope.scope_type:
+
+    IF v_scope.scope_type = 'SITE' THEN
+      INSERT INTO analytics.demand_intervals
+        (interval_start, interval_end, organization_id, site_id, scope_type,
+         asset_id, demand_policy_id, source_device_id, demand_kw, demand_kva,
+         peak_power_kw, energy_kwh, source_method, expected_observations,
+         observed_observations, coverage_percent, quality_status, finalized_at)
+      VALUES
+        (v_interval.interval_start, v_interval.interval_end, v_calc.organization_id,
+         v_calc.site_id, v_calc.scope_type, v_calc.asset_id, v_calc.demand_policy_id,
+         v_calc.source_device_id, v_calc.demand_kw, v_calc.demand_kva,
+         v_calc.peak_power_kw, v_calc.energy_kwh, v_calc.source_method,
+         v_calc.expected_observations, v_calc.observed_observations,
+         v_calc.coverage_percent,
+         CASE WHEN v_calc.quality_status='PROVISIONAL' THEN 'INCOMPLETE'
+              ELSE v_calc.quality_status END,
+         clock_timestamp())
+      ON CONFLICT (site_id, interval_start, demand_policy_id) WHERE scope_type = 'SITE'
+      DO UPDATE SET
+         organization_id       = EXCLUDED.organization_id,
+         source_device_id      = EXCLUDED.source_device_id,
+         demand_kw             = EXCLUDED.demand_kw,
+         demand_kva            = EXCLUDED.demand_kva,
+         peak_power_kw         = EXCLUDED.peak_power_kw,
+         energy_kwh            = EXCLUDED.energy_kwh,
+         source_method         = EXCLUDED.source_method,
+         expected_observations = EXCLUDED.expected_observations,
+         observed_observations = EXCLUDED.observed_observations,
+         coverage_percent      = EXCLUDED.coverage_percent,
+         quality_status        = EXCLUDED.quality_status,
+         finalized_at          = clock_timestamp()
+      WHERE analytics.demand_intervals.quality_status <> 'VALID'          -- never touch a finalized VALID row
+        AND ( EXCLUDED.quality_status        IS DISTINCT FROM analytics.demand_intervals.quality_status
+           OR EXCLUDED.demand_kw             IS DISTINCT FROM analytics.demand_intervals.demand_kw
+           OR EXCLUDED.demand_kva            IS DISTINCT FROM analytics.demand_intervals.demand_kva
+           OR EXCLUDED.coverage_percent      IS DISTINCT FROM analytics.demand_intervals.coverage_percent
+           OR EXCLUDED.observed_observations IS DISTINCT FROM analytics.demand_intervals.observed_observations );
+    ELSE  -- ASSET
+      <identical, but conflict target: (asset_id, interval_start, demand_policy_id) WHERE scope_type = 'ASSET'>
+    END IF;
+
+    [FACT — verified live on pg16] `ON CONFLICT (cols) WHERE <index predicate>
+    DO UPDATE SET ... WHERE <update filter>` correctly infers a partial unique
+    index and applies the update filter; NO_DATA->VALID repairs; an existing
+    VALID row is left untouched by an incoming INCOMPLETE.
+
+    Rationale for the two-part WHERE:
+      quality_status <> 'VALID'  -> Cases A / immutability: a finalized VALID
+        interval is frozen (deterministic, no rewrite).
+      IS DISTINCT FROM (...)     -> Case F/idempotency: a re-run over unchanged
+        source writes ZERO rows and does not move finalized_at.
+      Together: Case B (NO_DATA + source now exists -> VALID) writes;
+        Case C (INCOMPLETE + more data) writes and lands on VALID or stays
+        INCOMPLETE strictly per the EXISTING calculate_demand_window rules
+        (no new quality policy — coverage vs minimum_coverage_percent);
+        Case D (still NO_DATA) -> EXCLUDED = existing -> no write.
+
+    Columns intentionally NOT in the SET list: interval_start, interval_end,
+    site_id, asset_id, scope_type, demand_policy_id — they are the identity /
+    are immutable for a given key.
+
+F4. calculate_demand_window and resolve_demand_interval: UNCHANGED. The live
+    demand_state block (A3(a)): UNCHANGED. The two DELETE demand_state
+    statements: UNCHANGED.
+
+=====================================================================
+G. demand_state SAFETY
+=====================================================================
+
+[FACT] The wrapper ALWAYS passes p_now = clock_timestamp() (real wall clock).
+The new p_finalize_from / p_finalize_to control ONLY the finalize loop (block
+(b)). Block (a) — the live demand_state upsert — uses p_now and
+resolve_demand_interval(site, interval_sec, p_now) = the genuinely-current
+interval. Therefore:
+  * A 6-hour catch-up run does NOT push historical data into demand_state.
+  * demand_state is never keyed by a historical interval_start.
+  * No summation / accumulation exists in demand_state (it is fully overwritten
+    for the current interval), so "revisiting a bucket" cannot double-count.
+  * The historical re-finalization path (block (b) + §F) writes ONLY
+    demand_intervals, never demand_state.
+Architecture preserved: live current bucket -> demand_state ; closed buckets ->
+demand_intervals. Migration 210 does not blur this line.
+
+The two DELETE demand_state (stale scope cleanup) still run every call including
+catch-up runs — they are metadata-driven (policy disabled / PRIMARY_METER
+removed), idempotent, and unrelated to the time window. Safe.
+
+=====================================================================
+H. IDEMPOTENCY
+=====================================================================
+
+Case F: run the same [v_from, v_to) twice with unchanged source:
+  * Block (b): every iteration recomputes the same v_calc; the ON CONFLICT
+    DO UPDATE WHERE ... IS DISTINCT FROM (...) is FALSE for every already-
+    written row -> zero row writes, finalized_at unchanged.
+  * A bucket with no row yet + no source -> INSERT NO_DATA (first run);
+    second run -> ON CONFLICT, EXCLUDED = existing -> no write.
+  * Block (a) demand_state: idempotent overwrite of the current interval (same
+    as today).
+  * Checkpoint: advances to the same v_to (v_to is a pure function of
+    clock-ish inputs; a second immediate run computes v_start = v_ckpt (now =
+    v_to_prev), v_parent unchanged -> v_to' >= v_to_prev but only by real elapsed
+    time; re-running the SAME window (reset v_ckpt) -> same v_to). Proven by test.
+
+Idempotency does NOT rely on any new calculation logic — only on
+calculate_demand_window's existing determinism + the DISTINCT guard.
+
+=====================================================================
+I. FAILURE / RESTART SAFETY
+=====================================================================
+
+Single transaction per run, NO intermediate COMMIT (consistent with 209 R7).
+  Case G (exception after some calculations, before checkpoint advance):
+    refresh_demand_analytics raises -> wrapper EXCEPTION -> UPDATE
+    pipeline_state FAILED -> RAISE -> job runner AbortCurrentTransaction() ->
+    the RUNNING write, EVERY demand_intervals / demand_state write in that run,
+    the FAILED write, and the (not-yet-issued) checkpoint advance ALL roll back.
+    last_received_at is left exactly at its pre-run value. Retry (next schedule
+    slot, up to max_retries 3, retry_period 5m) reprocesses the identical
+    [v_from, v_to). No partial demand_intervals rows persist.
+  Job timeout (max_runtime 10m): identical rollback (statement cancel).
+    max_catchup_window 6h keeps a correctly-sized run well under 10m (§L), so a
+    timeout implies max_catchup_window is set too large for current scale ->
+    tune the config value, no code change.
+  Worker crash / DB restart mid-run: WAL recovery rolls the in-flight txn back;
+    bgw_job_stat.consecutive_crashes++; job rescheduled. Checkpoint unmoved.
+  Scheduler restart: no effect on committed state; job resumes on schedule.
+  Repeated failure: consecutive_failures climbs (visible in bgw_job_stat);
+    the checkpoint stays frozen at the last successful boundary (correct — the
+    backlog is preserved, not skipped). Alert threshold in §N.
+
+Invariant proven: a non-successful run advances NOTHING.
+
+=====================================================================
+J. CONCURRENCY SAFETY
+=====================================================================
+
+[FACT] run_demand_calculation_job keeps the migration-208
+pg_try_advisory_xact_lock(hashtextextended('analytics.run_demand_calculation_job',0)).
+A concurrently-scheduled invocation (the job runs every 60s; a catch-up run can
+exceed 60s) -> pg_try_* returns false -> pipeline_state last_status =
+'SKIPPED_LOCKED' -> RETURN, without reading/advancing the checkpoint, without
+touching demand_state or demand_intervals. The FOR UPDATE on the pipeline_state
+row is a second serialization point. Two demand workers cannot process the same
+(or any) demand window simultaneously -> no double-apply of demand_state, no
+demand_intervals row-lock deadlock. Behaviour identical to what
+scripts/test/assert_analytics_job_self_overlap.sh already proves for this job;
+§N adds a demand-window-specific assertion.
+
+=====================================================================
+K. TENANT ISOLATION
+=====================================================================
+
+[FACT] The watermark (pipeline_state 'demand_intervals') is a single global row
+— it bounds ONLY the time window. All per-tenant processing is unchanged:
+  * refresh_demand_analytics iterates sites individually; per site, scopes =
+    that site's SITE policy + that site's PRIMARY_METER assets.
+  * calculate_demand_window takes explicit p_site_id / p_asset_id, resolves
+    capability + policy for THAT site/asset, reads source filtered by
+    device_id = v_cap.source_device_id (the site's/asset's own meter).
+  * v_calc.organization_id is that site's org.
+  * The §F conflict targets are (site_id, interval_start, demand_policy_id) /
+    (asset_id, interval_start, demand_policy_id) — scoped; the DO UPDATE WHERE
+    references analytics.demand_intervals.<col> for the SAME conflicting row only.
+No path lets org A's data / late arrival / catch-up move org B's rows or
+watermark, or cross SITE<->ASSET scope (distinct partial indexes; scope_chk).
+[REC] Add an explicit cross-tenant test (org A VALID untouched while org B
+NO_DATA->VALID repaired in the same catch-up run; assert no row's
+organization_id/site_id/asset_id/scope_type mismatched) — §N T-K. The current
+suite (assert_asset_demand_automatic_decoupling) covers SITE/ASSET decoupling
+but not two orgs in one catch-up window.
+
+=====================================================================
+L. PERFORMANCE SIZING
+=====================================================================
+
+Cost of one refresh_demand_analytics call =
+  #sites x [ 2 DELETE demand_state
+           + #scopes_per_site x ( 1 calc(p_final=FALSE) + demand_state upsert          -- live block (a)
+                                + v_max_n x ( resolve_demand_interval
+                                            + calc(p_final=TRUE)
+                                            + 1 scope-branched upsert ) ) ]            -- finalize block (b)
+  #scopes_per_site = 1 (SITE, if enabled) + #PRIMARY_METER assets at that site.
+  calc() ~= resolve_demand_capability (config/metadata joins)
+          + resolve_*_demand_policy (effective-dated config lookup)
+          + resolve_site_capture_bucket (config lookup)
+          + 3-4 indexed range reads on energy_measurements
+            (device_id + bucket_start range, energy_measurements_device_bucket_start_idx;
+             ~15-30 rows per 15-min interval) OR normalized_points
+            (device_id + logical_point_id + event_time range).
+  => calc() ~ a handful of small indexed lookups. [INF ~0.2-1 ms warm.]
+
+Steady state (checkpoint at now - grace, parent not ahead):
+  v_win_to - v_win_from = overlap 30 min  ->  v_max_n = ceil(1800/900)+2 = 4.
+  => finalize block shrinks from today's ~12 iterations to ~4.
+  => Migration 210 REDUCES steady-state demand finalization cost ~3x.
+
+6-hour catch-up (one run, once, after an outage):
+  v_max_n = ceil(6*3600/900)+2 = 26.
+  Total finalize calc() calls = #sites x #scopes_per_site x 26.
+  [UNK staging scale — §O #6/#7. Meenaxy is small: ~few sites, ~20 devices.]
+  Estimate at 5 sites x 5 scopes: 5*5*26 = 650 calc() ~ 0.15-0.65 s + the
+  unchanged live block. At 10x scale (50 sites x 10 scopes): 13000 calc()
+  ~ 3-13 s. Both well inside max_runtime 10 min. If a real staging measurement
+  (§O #8) shows a single 6h catch-up > ~2-3 min, reduce max_catchup_window
+  (config, no code) — the backlog then drains over more, smaller runs.
+
+reconcile_window (migration 212) worst case = same as a 6h catch-up (26
+iterations x scopes x sites), run once per reconcile cadence (e.g. hourly) and
+NOT every minute. Bounded, off the hot path.
+
+Anti-pattern avoided: the finalize loop is bounded by
+(v_win_to - v_win_from) <= max_catchup_window <= 6h, NEVER by a growing history.
+The 1-minute steady-state run does ~4 finalize iterations/scope, not days.
+
+=====================================================================
+M. MIGRATION 210 EXACT CHANGE SET
+=====================================================================
+
+M1. analytics.refresh_demand_analytics — DROP the (timestamptz,interval)
+    signature; CREATE the (timestamptz,interval,timestamptz,timestamptz DEFAULT
+    NULL x2) signature. Body changes are EXACTLY:
+      (i)  add v_win_from / v_win_to derivation (F2);
+      (ii) change `v_max_n := ceil(epoch(p_lookback)/interval)+2`
+           -> `ceil(epoch(v_win_to - v_win_from)/interval)+2`;
+      (iii) change the loop step anchor `p_now - v_n*interval`
+            -> `v_win_to - v_n*interval`;
+      (iv) change `EXIT WHEN v_interval.interval_end < p_now - p_lookback`
+           -> `EXIT WHEN v_interval.interval_end <= v_win_from`;
+      (v)  add `CONTINUE WHEN v_interval.interval_start IS NULL;` (defensive);
+      (vi) replace the single `INSERT ... ON CONFLICT DO NOTHING` with the
+           IF SITE / ELSE ASSET status-guarded DO UPDATE (F3).
+    Everything else — the per-site loop, policy resolution, both DELETE
+    demand_state, the entire live demand_state block (a), the effective_from/to
+    and grace CONTINUE checks, calculate_demand_window / resolve_demand_interval
+    calls — is reproduced verbatim.
+    Re-issue: ALTER PROCEDURE (4-arg) OWNER TO ems_admin; REVOKE ALL (4-arg)
+    FROM PUBLIC; GRANT EXECUTE (4-arg) TO ems_admin; COMMENT ON PROCEDURE (4-arg).
+
+M2. analytics.run_demand_calculation_job — CREATE OR REPLACE. Keep the 208
+    scaffolding verbatim (advisory lock -> SKIPPED_LOCKED; RUNNING;
+    EXCEPTION->FAILED->RAISE; SECURITY INVOKER; search_path; owner). Insert
+    between RUNNING and the CALL:
+      * read config max_catchup_window / overlap (defaults 6h / 30 min);
+        keep reading lookback (default 3h, first-run floor).
+      * SELECT last_received_at INTO v_ckpt ... WHERE pipeline_name='demand_intervals' FOR UPDATE.
+      * compute v_grace, v_parent, v_start, v_to, v_from per §E.
+      * IF v_parent IS NULL OR v_to <= v_start -> pipeline_state NO_SOURCE_DATA
+        (or SUCCESS if v_to = v_ckpt), no advance, RETURN.
+      * CALL analytics.refresh_demand_analytics(clock_timestamp(), v_lookback, v_from, v_to);
+      * on success: UPDATE pipeline_state SET last_received_at = v_to,
+        last_status='SUCCESS', last_completed_at=clock_timestamp(),
+        last_inserted_rows=0 (demand has no meaningful single row count),
+        last_error=NULL.
+    Re-issue OWNER/REVOKE/GRANT for run_demand_calculation_job(integer,jsonb)
+    (unchanged arity, but re-assert like 209 did for the energy wrappers).
+
+M3. telemetry.pipeline_state — INSERT ('demand_intervals') ON CONFLICT DO
+    NOTHING (idempotent; row already exists from 208).
+
+M4. config validator — NO CHANGE (A13: already accepts all four keys).
+
+M5. Job config — alter_job(run_demand_calculation_job.job_id, config =>
+    existing || {"max_catchup_window":"6 hours","overlap":"30 minutes",
+    "reconcile_window":"6 hours"}). lookback preserved. schedule_interval /
+    max_runtime / max_retries / retry_period / check_config UNCHANGED.
+
+M6. NOT touched: calculate_demand_window, resolve_demand_interval,
+    resolve_demand_capability, demand_state schema, demand_intervals schema,
+    any CAGG / retention / compression / Grafana object / job schedule.
+
+M7. Manifest + integration runner: add migration 210 to
+    postgres/restructure_manifest.csv; add the new assert .sh to
+    scripts/test/run_integration_environment.sh.
+
+=====================================================================
+N. TEST PLAN
+=====================================================================
+
+New: scripts/test/assert_demand_watermark_refinalization.sql (+ .sh).
+Deterministic, rollback-only where possible; hold the demand job advisory lock
+at the top (like the 209 suite) so the scheduler cannot race the CALLs.
+Fixture: 1-2 synthetic sites with a SITE demand policy + 1 PRIMARY_METER asset,
+plus enough telemetry.energy_measurements rows for a couple of closed 15-min
+intervals; control parent_available_through by capping the fixture's max
+bucket_start; control the checkpoint via direct pipeline_state UPDATE.
+
+Watermark contract (mirror 209 A-J):
+  T-A  first run: checkpoint NULL, parent set -> advances to
+       LEAST(now - grace, parent, floor + max_catchup), 15-min aligned.
+  T-B  normal forward: parent a little ahead -> checkpoint advances to
+       LEAST(now - grace, parent).
+  T-C  parent far ahead (10h) -> advance bounded to checkpoint + max_catchup (6h), NOT parent.
+  T-D  parent unavailable (empty energy_measurements + normalized_points) ->
+       NO_SOURCE_DATA, no advance.
+  T-E  = T-C (per-run advance <= max_catchup_window), assert exact value.
+  T-F  three successive runs drain a 12h backlog: +6h, +12h (clamped by parent), stop.
+  T-G  inject failure (temp trigger raising on the checkpoint-advance write, or
+       a poisoned fixture) -> RAISE propagates -> checkpoint unchanged; no
+       demand_intervals rows from that run persist.
+  T-H  identical re-run of the same [from,to): same checkpoint, zero
+       demand_intervals row writes (GET DIAGNOSTICS after a manual
+       refresh_demand_analytics(now, 3h, from, to)), finalized_at unchanged.
+  T-J  self-overlap: hold the advisory lock in a second session (cross-session
+       .sh, reuse the assert_analytics_job_self_overlap.sh mechanism) -> the
+       foreground demand run returns SKIPPED_LOCKED, no state advance, no
+       demand_intervals / demand_state writes.
+
+Re-finalization (the demand-specific cases):
+  T-Refin-A  existing VALID / numeric; recompute VALID / (same or different)
+             numeric -> row UNCHANGED (quality_status guard); finalized_at
+             unchanged; GET DIAGNOSTICS = 0.
+  T-Refin-B  existing NO_DATA / NULL; add energy_measurements for that bucket;
+             bounded catch-up run -> row becomes VALID / numeric; finalized_at
+             moves to the repair time.
+  T-Refin-C  existing INCOMPLETE (coverage < minimum_coverage_percent); add
+             more energy_measurements: (c1) coverage now >= min -> VALID;
+             (c2) coverage still < min -> stays INCOMPLETE but demand_kw /
+             coverage_percent updated to the improved values. (Assert the
+             INCOMPLETE-vs-VALID decision matches calculate_demand_window's
+             existing rule, not a new policy.)
+  T-Refin-D  existing NO_DATA; still no source -> row UNCHANGED; GET DIAGNOSTICS
+             = 0; finalized_at unchanged.
+  T-Refin-E  finalize a bucket (NO_DATA), advance the checkpoint past it, THEN
+             insert late energy_measurements for that bucket; a
+             refresh_demand_analytics(now, 3h, <old_from>, <old_to>) call over
+             the trailing window (simulating migration 212's reconcile, WITHOUT
+             touching the watermark) -> the bucket becomes VALID; assert
+             pipeline_state('demand_intervals').last_received_at is UNCHANGED.
+  T-Refin-scope  both SITE and ASSET rows repaired independently in one run;
+             assert no "ON CONFLICT specification" error for either branch
+             (partial-index inference works) and neither scope's row leaked
+             into the other's conflict.
+
+Tenant isolation:
+  T-K  fixture: org A site (existing VALID row) + org B site (existing NO_DATA
+       row), both inside one catch-up window; source added only for org B ->
+       run -> org B NO_DATA->VALID; org A VALID row byte-identical (incl.
+       finalized_at); every written row's organization_id = its site's org;
+       no SITE row written under an ASSET conflict target or vice versa.
+
+demand_state safety:
+  T-DS  run a 6h catch-up (checkpoint 6h back, parent = now - grace); assert
+        analytics.demand_state contains ONLY current-interval rows (interval_end
+        > now - one interval), i.e. the historical catch-up did NOT write a
+        historical interval into demand_state; assert demand_state row count
+        unchanged from before the catch-up (still one per active scope).
+
+Existing suites that MUST stay green (re-run, expected pass):
+  * assert_asset_demand_automatic_decoupling.sh — its
+    `CALL refresh_demand_analytics(v_test_now, INTERVAL '1 hour')` now resolves
+    to the 4-arg proc with NULL finalize params => identical (p_now - 1h, p_now)
+    window; the only behaviour delta is DO NOTHING -> DO UPDATE, which for a
+    fresh VALID insert is identical and for a re-run is a no-op (guard). [VERIFY
+    the .sh does not assert "exactly one write" via a row-count that DO UPDATE
+    would change — inspection says it checks quality_status='VALID' and a kW
+    value, which are stable.]
+  * assert_demand_capability_resolution.sh — no refresh_demand_analytics call;
+    unaffected.
+  * assert_analytics_job_hardening.sql — line ~170 checks the demand wrapper
+    body contains `CALL analytics.refresh_demand_analytics(clock_timestamp(),
+    v_lookback);`. Migration 210 changes that CALL (adds v_from, v_to). This
+    check MUST be updated by 210 (exactly as 209 updated the energy-wrapper
+    checks): assert the new 4-arg CALL + the watermark markers
+    (pipeline_state ... 'demand_intervals' ... last_received_at = v_to;
+    LEAST(...); v_parent; SKIPPED_LOCKED; EXCEPTION->FAILED->RAISE). Also update
+    that test's TEST A/C "no watermark for demand_intervals" expectation (post-
+    210 demand_intervals IS watermark-driven) — leaving only environment_daily
+    as the not-yet-watermarked tier.
+  * assert_job_schedule_canonical.sql — asserts run_demand_calculation_job
+    config.lookback='3 hours' + schedule/runtime/retries/check_config. All
+    preserved. Adding config keys does not break it (checks lookback only).
+  * Full run_integration_environment.sh green with 207+208+209+210.
+
+=====================================================================
+O. STAGING VERIFICATION QUERIES (read-only — run before coding)
+=====================================================================
+
+ 1. Current demand job config + is 208/209 actually deployed:
+      SELECT proc_schema, proc_name, schedule_interval, max_runtime, max_retries,
+             retry_period, scheduled, config, check_schema, check_name
+      FROM timescaledb_information.jobs
+      WHERE proc_name='run_demand_calculation_job';
+ 2. Current demand checkpoint state:
+      SELECT * FROM telemetry.pipeline_state WHERE pipeline_name='demand_intervals';
+      -- expect last_received_at NULL, last_status one of SUCCESS/RUNNING/... .
+ 3. Demand job runtime / failures:
+      SELECT job_id, total_runs, total_successes, total_failures,
+             last_run_duration, last_run_status, last_successful_finish
+      FROM timescaledb_information.job_stats
+      WHERE job_id = (SELECT job_id FROM timescaledb_information.jobs
+                      WHERE proc_name='run_demand_calculation_job');
+      SELECT job_id, consecutive_failures, consecutive_crashes, total_crashes
+      FROM _timescaledb_internal.bgw_job_stat
+      WHERE job_id = (SELECT job_id FROM timescaledb_information.jobs
+                      WHERE proc_name='run_demand_calculation_job');
+ 4. Actual demand processing duration percentiles:
+      SELECT date_trunc('hour', pl_start) AS hr,
+             count(*), avg(pl_dur), max(pl_dur)
+      FROM (SELECT (h).execution_start AS pl_start,
+                   (h).execution_finish - (h).execution_start AS pl_dur
+            FROM timescaledb_information.job_history h
+            WHERE h.job_id=(SELECT job_id FROM timescaledb_information.jobs
+                            WHERE proc_name='run_demand_calculation_job')) t
+      GROUP BY 1 ORDER BY 1 DESC LIMIT 48;
+ 5. demand_intervals counts + quality distribution + age spread:
+      SELECT scope_type, quality_status, count(*),
+             min(interval_start), max(interval_start),
+             min(finalized_at), max(finalized_at)
+      FROM analytics.demand_intervals GROUP BY 1,2 ORDER BY 1,2;
+      SELECT count(*) FILTER (WHERE quality_status IN ('NO_DATA','INCOMPLETE')) AS repairable,
+             count(*) AS total
+      FROM analytics.demand_intervals;
+      SELECT count(*)                                              -- how many "old NO_DATA" would 210 auto-repair?
+      FROM analytics.demand_intervals di
+      WHERE di.quality_status IN ('NO_DATA','INCOMPLETE')
+        AND di.interval_start > now() - INTERVAL '6 hours';        -- within a 6h catch-up
+ 6. Per-site / per-asset scale (drives §L):
+      SELECT count(*) FROM metadata.sites
+        WHERE COALESCE(lifecycle_status,'ACTIVE') <> 'DECOMMISSIONED';
+      SELECT count(*) FROM config.site_demand_policies WHERE is_enabled AND policy_scope='SITE';
+      SELECT count(*) FROM metadata.asset_devices WHERE relationship_type='PRIMARY_METER';
+      SELECT s.id, count(ad.*) AS primary_meter_assets
+      FROM metadata.sites s
+      LEFT JOIN metadata.assets a ON a.site_id=s.id
+      LEFT JOIN metadata.asset_devices ad ON ad.asset_id=a.id AND ad.relationship_type='PRIMARY_METER'
+      GROUP BY s.id ORDER BY 2 DESC;
+ 7. Demand policy shape (grace sizing R1; interval mix for §E date_bin note):
+      SELECT demand_interval_seconds, count(*),
+             min(late_arrival_tolerance_seconds), max(late_arrival_tolerance_seconds),
+             min(minimum_coverage_percent), max(minimum_coverage_percent)
+      FROM config.site_demand_policies WHERE is_enabled GROUP BY 1;
+      -- max(late_arrival_tolerance_seconds): confirms v_grace <= that + 300 (<= 3900).
+ 8. Cost probe of one 6h finalize window, read-only in a ROLLBACK txn (do NOT
+    commit; refresh_demand_analytics has no internal COMMIT so this is safe):
+      BEGIN;
+        SET LOCAL statement_timeout = '120s';
+        \timing on
+        CALL analytics.refresh_demand_analytics(clock_timestamp(), INTERVAL '3 hours',
+              now() - INTERVAL '6 hours 30 minutes', now() - INTERVAL '65 minutes');
+      ROLLBACK;
+    -- (This exercises the PROPOSED 4-arg form; if the proc is still 2-arg on
+    --  staging, instead time `CALL refresh_demand_analytics(clock_timestamp(),
+    --  INTERVAL '6 hours');` and note it also runs the live block.)
+ 9. parent_available_through probe:
+      SELECT (SELECT max(bucket_start) FROM telemetry.energy_measurements) AS em_through,
+             (SELECT max(event_time)   FROM telemetry.normalized_points)   AS np_through,
+             now() - (SELECT max(bucket_start) FROM telemetry.energy_measurements) AS em_lag;
+10. finalized_at consumers (R5):
+      SELECT viewname FROM pg_views
+      WHERE schemaname='analytics' AND definition ILIKE '%demand_intervals%';
+      -- inspect each for `finalized_at` in a filter (WHERE/JOIN) vs just SELECT list.
+11. Any trigger on demand_intervals / demand_state (should be none):
+      SELECT tgname, tgrelid::regclass FROM pg_trigger
+      WHERE tgrelid IN ('analytics.demand_intervals'::regclass,'analytics.demand_state'::regclass)
+        AND NOT tgisinternal;
+12. Advisory-lock behaviour (safe): confirm the job's lock key is free at rest:
+      SELECT * FROM pg_locks WHERE locktype='advisory';
+
+=====================================================================
+P. RISKS / UNRESOLVED QUESTIONS
+=====================================================================
+
+R1  GRACE CLAMP CORRECTNESS. v_to MUST be <= now - (max late_arrival_tolerance
+    + 5min) or the checkpoint advances past grace-skipped intervals -> permanent
+    hole below the watermark. Mitigation in §E: v_grace computed at runtime from
+    max(config.site_demand_policies.late_arrival_tolerance_seconds) + 300,
+    bounded to <= 3900s by the A14 CHECK. RESIDUAL: none if that query is used;
+    if a fixed constant is preferred, it must be >= 65 min. [VERIFY §O #7.]
+    STATUS: resolved by design; verify the staging max tolerance.
+
+R2  PURE-METER_NATIVE SITE. parent_available_through gated by
+    max(energy_measurements.bucket_start) even for a site whose demand register
+    never reaches energy_measurements. Non-issue on the all-ENISCOPE fleet.
+    Conservative (never over-finalizes). STATUS: accepted; documented; revisit
+    if a pure-METER_NATIVE deployment appears.
+
+R3  demand_intervals UNBOUNDED GROWTH (plain table, no retention/compression;
+    readiness-audit C2). 210 does not change row cardinality (only INSERT of a
+    new interval adds a row; DO UPDATE never adds). But 210's self-healing plus
+    the DISTINCT guard means finalized_at churn on genuinely-repaired rows.
+    STATUS: pre-existing; NOT a 210 regression; recommend a separate migration
+    to set a retention policy (e.g. convert to hypertable + drop_after 3y).
+
+R4  LEGACY 2-ARG CALLERS now get DO UPDATE (status-guarded) instead of DO
+    NOTHING. This is the intended fix; VALID rows stay frozen; a fresh insert is
+    identical; a re-run is a guarded no-op. The DROP+recreate is explicit.
+    STATUS: acceptable; assert_asset_demand_automatic_decoupling.sh must be
+    re-run (expected green — §N). [VERIFY it does not row-count-assert.]
+
+R5  finalized_at SEMANTICS SHIFT — visible via
+    analytics.v_grafana_asset_demand_intervals (A15). Post-210, a repaired
+    row's finalized_at = repair time (which is arguably the correct "value
+    became trustworthy" semantic). The DISTINCT guard means stable rows keep
+    their original finalized_at — only genuinely-corrected rows move.
+    STATUS: low risk. [VERIFY §O #10 that no view/panel FILTERS on finalized_at
+    — e.g. `WHERE finalized_at > $__timeFrom` — which would then hide older
+    intervals that were recently repaired. If one does, either change the
+    filter or add a separate `first_finalized_at` column in a later migration.]
+    Doc note required.
+
+R6  NEGATIVE / EMPTY WINDOW (parent very stale on first run) -> v_to <= v_start
+    -> NO_SOURCE_DATA, no advance. Handled (same guard as 209). STATUS: resolved.
+
+R7  ON CONFLICT PARTIAL-INDEX INFERENCE — load-bearing. [FACT] verified working
+    on this pg16 (live scratch test: NO_DATA->VALID repaired, VALID frozen).
+    STATUS: resolved; §N T-Refin-scope re-asserts on the real table.
+
+R8  demand_policy_id CHANGE orphans the old-policy row (an old NO_DATA row under
+    a superseded demand_policy_id is never re-finalized because the conflict key
+    includes demand_policy_id). PRE-EXISTING behaviour; 210 does not change it;
+    out of scope. STATUS: documented; flag for a future cleanup.
+
+R9  resolve_demand_interval NULL for interval_seconds not in (900,1800) ->
+    NULL v_interval -> calculate_demand_window(NULL,...) RAISE -> run FAILS ->
+    checkpoint frozen -> retry loop. [FACT] A14: demand_interval_seconds is
+    CHECK-constrained to (900,1800) -> this path is DEAD for a real policy.
+    STATUS: resolved by the constraint; §M2 still adds
+    `CONTINUE WHEN v_interval.interval_start IS NULL` as free insurance.
+
+R10 SINGLE LONG TRANSACTION for a 6h catch-up holds the pipeline_state row lock
+    + advisory lock for the run duration (~seconds per §L). A max_runtime
+    cancel rolls it fully back. Consistent with 209's accepted R7. STATUS:
+    accepted; per-slice COMMIT is a possible Phase-1.5 option only if staging
+    shows demand catch-up runs approaching 10 min.
+
+R-late  A demand-affecting late correction landing > reconcile_window (6h) after
+    the bucket is repairable only by a MANUAL widened call
+    `CALL analytics.refresh_demand_analytics(clock_timestamp(), '3 hours',
+    <old_from>, <old_to>)`. Same class of documented limit as the energy tiers'
+    "outage > CAGG start_offset". STATUS: documented; not a blocker.
+
+R-B  refresh_demand_analytics is >200 lines; the migration must reproduce the
+    untouched ~85% verbatim. RISK of a transcription error. MITIGATION: generate
+    the migration by transforming the deployed pg_get_functiondef output with
+    the six mechanical edits in §M1 (exactly as migration 207/209 were built),
+    then diff the transformed body against the original to prove only those
+    edits changed. STATUS: process control; not a design flaw.
+
+UNRESOLVED (need §O answers before coding):
+  * U1  staging max(late_arrival_tolerance_seconds) — to finalise the v_grace
+        rule (fixed 65 min vs runtime max()+300).  [§O #7]
+  * U2  staging demand catch-up cost for a real 6h window — to confirm
+        max_catchup_window 6h (or reduce it).  [§O #8]
+  * U3  demand_interval_seconds mix (any 1800 sites?) — cosmetic (15-min
+        date_bin over-reach note).  [§O #7]
+  * U4  any view/panel that FILTERS on finalized_at.  [§O #10]
+  * U5  confirm assert_asset_demand_automatic_decoupling.sh has no exact-write-
+        count assertion that DO UPDATE would perturb.  [inspection]
+
+=====================================================================
+Q. GO / NO-GO RECOMMENDATION
+=====================================================================
+
+GO — with the four cheap pre-coding checks (U1, U3, U4, U5) and one measurement
+(U2) resolved first. None of them is expected to block; all have a safe default
+(v_grace = runtime max()+300 bounded to 3900s; max_catchup_window tunable via
+config; a doc note for finalized_at).
+
+WHY GO:
+  * The proposed architecture is the MINIMAL change: parameterize one procedure
+    with two optional NULL params (NULL = today's exact behaviour), swap one
+    write statement for a scope-branched status-guarded upsert, and make the
+    wrapper watermark-driven with the SAME pattern migration 209 already proved.
+    calculate_demand_window, resolve_demand_interval, and the entire live
+    demand_state path are untouched.
+  * It satisfies every stated safety property: bounded (max_catchup_window 6h,
+    v_max_n <= 26), idempotent (DISTINCT guard), tenant-safe (per-site/scope
+    processing unchanged; global watermark bounds time only), concurrency-safe
+    (208 advisory lock + FOR UPDATE), restart-safe (single txn, no false
+    advance), efficient under 1-min operation (steady-state finalize cost DROPS
+    ~3x), safe during multi-hour outages (bounded catch-up drains the backlog
+    over successive runs), safe on child failure / timeout (checkpoint frozen,
+    retry same window), safe on late data (forward window within grace +
+    migration 212's trailing reconcile for older), and safe on an internal hole
+    (migration 212 re-finalizes the trailing window WITHOUT moving the
+    watermark; calculate_demand_window is a pure STABLE function reusable by
+    reconciliation).
+  * demand_state cannot become a second accumulator: the wrapper always passes
+    p_now = clock_timestamp(); the finalize window is a separate parameter pair;
+    demand_state has no summation and is keyed to the current interval only.
+  * The write-once defect (ON CONFLICT DO NOTHING) is replaced by a design that
+    provably (live-tested on pg16) repairs NO_DATA/INCOMPLETE -> VALID when
+    source arrives, and provably never rewrites a finalized VALID row.
+
+BETTER/SIMPLER ALTERNATIVE CONSIDERED — "DO UPDATE + fixed 6h lookback, NO
+watermark": simpler wrapper (no pipeline_state read/advance), self-heals any
+outage <= 6h automatically. REJECTED because (a) it does NOT self-heal an
+outage > 6h without operator action, contradicting the stated objective and the
+Phase 2 cascade commitment; (b) it makes the 1-minute steady-state run scan 6h
+(~24 finalize iterations/scope) EVERY minute — the exact anti-pattern the brief
+forbids; the watermark approach shrinks steady state to ~4 iterations/scope.
+The watermark approach is both safer AND cheaper. Other alternatives (split
+finalizer procedure; trigger/queue on energy_measurements) add code, drift risk,
+or hot-path overhead for no benefit.
+
+NO-GO would apply only if §O reveals: a demand policy with
+late_arrival_tolerance approaching 3600s AND a business need for a demand
+freshness tighter than ~65 min (would force a config `grace` key + validator
+change — small, but out of the "consistent with 209's 4 keys" constraint); or a
+6h catch-up measured > ~5 min on staging (would require a materially smaller
+max_catchup_window and more runs to drain — still workable, just re-tune).
+Neither is likely.
+
+-------------------------------------------------------------------------------
+END — audit/design only. No migration 210 file created. No STAGING / production
+/ Grafana / CAGG / retention / compression / job-schedule /
+calculate_demand_window change made. Awaiting review of §M (change set), §E
+(catch-up + grace), §F (upsert), §P (risks), and the §O staging answers before
+migration 210 is written.
+-------------------------------------------------------------------------------

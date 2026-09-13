@@ -1,0 +1,149 @@
+EMS Analytics Platform — Phase 1B CI/CD Release Verification
+Commit under verification: 55102002e0b412c3b8eb298d21d5dd0ab413c206
+
+Method: read-only inspection via `gh` CLI (GitHub Actions run/job/log data) and
+CI-produced logs of the existing staging deployment's own post-deployment
+verification gate. No SSH was performed — the CI logs already contained the
+deployed image tag, container recreate/start/health sequence, and the
+verification gate's pass/fail output, so no additional read-only mechanism
+was needed. No modification of any kind was made to staging, production, or
+the repository.
+
+===============================================================================
+1. GITHUB ACTIONS RUNS FOR THIS COMMIT
+===============================================================================
+
+CI
+    Run ID:      32653922795
+    Status:      completed
+    Conclusion:  success
+    Started:     2026-08-23T17:09:22Z
+    Completed:   2026-08-23T17:11:42Z
+    URL:         https://github.com/avinash-wisewatts/ems-platform/actions/runs/32653922795
+
+Deploy to Staging
+    Run ID:      32653922951
+    Status:      completed
+    Conclusion:  success
+    Started:     2026-08-23T17:09:22Z
+    Completed:   2026-08-23T17:13:33Z
+    URL:         https://github.com/avinash-wisewatts/ems-platform/actions/runs/32653922951
+
+===============================================================================
+2. CI GATES (run 32653922795)
+===============================================================================
+
+    Configuration validation                              success
+    Docker build validation (application image)           success
+    Application test suite (pytest)                       success
+    Database / migration / repository integration tests   success
+    CI summary                                             success
+
+Phase 1B contract confirmed executing inside the integration-tests job log:
+    "[energy-consumption-semantics] Running Phase 1B energy consumption
+     semantic contract assertions..."
+    " Energy consumption semantic contract assertions passed."
+(immediately following the pre-existing Phase 1A
+"[connectivity-semantics] ... Connectivity semantic contract assertions
+passed." line, confirming both contracts ran in sequence as expected.)
+
+All CI gates PASSED. No failure to analyze.
+
+===============================================================================
+3. STAGING DEPLOYMENT (run 32653922951)
+===============================================================================
+
+Jobs (all success): CI gates re-run (5 jobs, identical results to Section 2)
+-> Build and push immutable artifact -> Deploy exact artifact to staging ->
+Post-deployment verification.
+
+Deployed image (both services), confirmed from the "Deploy over SSH" step log:
+    ghcr.io/***/ems-platform-app:55102002e0b412c3b8eb298d21d5dd0ab413c206
+    ("out: App image:     ghcr.io/***/ems-platform-app:5510200...",
+     "out: Status: Downloaded newer image for ...:5510200...")
+
+Container sequence (ems-admin-portal, ems-live-telemetry):
+    Recreate -> Recreated -> Starting -> Started -> starting -> healthy
+    (both containers reached "healthy" ~5 seconds after start; no rollback
+    log lines of any kind appeared in the deploy job log)
+
+No rollback occurred — the deploy proceeded to completion on the first
+attempt with both services healthy.
+
+===============================================================================
+4. POST-DEPLOYMENT VERIFICATION GATE (existing CI-run mechanism, read-only)
+===============================================================================
+
+The gate ran on staging via the existing `Post-deployment verification` job
+and produced its own PASS/WARN/FAIL output (this is the repository's existing
+mechanism, not an ad hoc check invented for this report).
+
+Directly relevant to Phase 1B: all schema/hypertable/continuous-aggregate/
+job-registration checks PASSED (9 hypertables, 16 continuous aggregates,
+25 compression policies, 21 retention policies all registered and enabled;
+no managed TimescaleDB job has a failed last-run status).
+
+Pre-existing, unrelated FAIL/WARN lines observed in this run (NOT introduced
+by Phase 1B — none touch the 3 files in this phase's scope, and all relate to
+telemetry/normalization/job-schedule state that was already documented as a
+known staging condition during the Phase 1A staging verification):
+    WARN  No devices are configured
+    WARN  No assets are configured
+    FAIL  normalized_points is empty / latest normalized event undeterminable
+    FAIL  energy_measurements is empty / latest energy measurement undeterminable
+    FAIL  environment_measurements is empty / latest environment measurement undeterminable
+    FAIL  Pipeline stages not reporting SUCCESS: 2
+    FAIL  Normalization job schedule/overlap drift (1-minute schedule, 15-minute overlap)
+    FAIL  Energy routing / Environment routing job 15-minute overlap drift
+    (log explicitly annotates: "Known: running job schedule/overlap has
+     drifted from the canonical")
+
+These conditions are consistent with staging having zero commissioned
+devices/assets (same root cause identified in the Phase 1A staging
+verification) and a pre-existing, already-known job-schedule drift unrelated
+to energy-consumption semantics. The overall job conclusion remained
+"success" — these are informational/non-blocking checks in the existing
+gate script, not gate failures caused by this deployment.
+
+===============================================================================
+5. PHASE 1B SCOPE INTEGRITY ON THE DEPLOYED COMMIT
+===============================================================================
+
+Confirmed via `git show --name-status` against 55102002e0b412c3b8eb298d21d5dd0ab413c206
+(same check performed pre-push): the commit contains EXACTLY —
+    A  scripts/test/assert_energy_consumption_semantic_contract.sh  (100755)
+    A  scripts/test/assert_energy_consumption_semantic_contract.sql (100644)
+    M  scripts/test/run_integration_environment.sh
+No production SQL, migration file, Grafana dashboard, or unrelated
+application path is part of this commit — confirmed both at commit time and
+reconfirmed here against the exact deployed SHA.
+
+===============================================================================
+6. NOT VERIFIED (explicitly, per instruction not to fabricate)
+===============================================================================
+
+- Behavioral confirmation of energy-consumption semantics (GOOD/GAP/RESET/
+  ROLLOVER classification, 15-min/hourly/daily rollup correctness) against
+  REAL staging telemetry: NOT VERIFIED. Staging has zero commissioned
+  devices/assets ("No devices are configured", "No assets are configured"),
+  so there is no real energy-register data to observe the pipeline against.
+  No fixtures were created on staging to force a result.
+- Whether the pre-existing job-schedule/overlap drift and empty-table FAIL
+  conditions predate this deployment (vs. being newly introduced): NOT
+  VERIFIED by direct before/after comparison in this session — inferred as
+  pre-existing from (a) their total independence from the 3 changed files,
+  and (b) the log's own "Known: ... has drifted from the canonical" framing,
+  but no prior run's log was diffed line-by-line to confirm identical FAIL
+  counts before this deploy.
+
+===============================================================================
+7. RESULT
+===============================================================================
+
+CI: PASSED (all 5 gates). Deploy to Staging: PASSED (build, push, deploy,
+post-deployment verification job all succeeded). Deployed SHA matches commit
+55102002e0b412c3b8eb298d21d5dd0ab413c206 exactly on both ems-admin-portal and
+ems-live-telemetry, both containers healthy, no rollback. No discrepancy
+attributable to Phase 1B was found. No code was modified, no fixture was
+created on staging, and no SSH access was performed as part of this
+verification.

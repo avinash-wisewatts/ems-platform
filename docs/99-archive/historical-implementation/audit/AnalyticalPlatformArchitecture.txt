@@ -1,0 +1,687 @@
+EMS Analytics Platform — Development Bible v1.0
+1. Product Vision
+
+We are building a multi-tenant EMS analytics product, not a Grafana replacement in the narrow sense.
+
+The customer-facing product will provide standard, purpose-built workflows and screens for:
+
+Executives
+Facility / Energy Managers
+Site Operators
+Service / Engineering teams
+
+There will be no customer-created dashboards in the initial product.
+
+The platform will eventually support:
+
+Energy analytics
+Demand analytics
+Asset performance
+Environmental analytics
+Data quality
+Alarms/events
+Benchmarking
+Cost/tariff analytics
+Baselines
+Anomaly detection
+Automated insights
+Recommendations
+Reporting
+
+The architecture must support all of these from day one, even where some capabilities are not initially exposed to customers.
+
+2. The Most Important Architectural Decision
+
+We are not replacing Grafana with another visualization tool.
+
+We are replacing the role Grafana currently plays as the customer-facing analytical application.
+
+The new architecture is:
+
+                    TELEMETRY
+                       │
+                       ▼
+                    TIMESCALE
+                       │
+              ┌────────┴────────┐
+              │                 │
+              ▼                 ▼
+        TELEMETRY MODEL    ANALYTICS MODEL
+              │                 │
+              └────────┬────────┘
+                       ▼
+              EMS SEMANTIC LAYER
+                       │
+                       ▼
+             ANALYTICS QUERY ENGINE
+                       │
+                       ▼
+                  API LAYER
+                       │
+                       ▼
+              EMS WEB APPLICATION
+                       │
+        ┌──────────────┼──────────────┐
+        ▼              ▼              ▼
+    Executive      Facility       Service
+      UX             UX             UX
+
+Grafana becomes:
+
+                    TIMESCALE
+                       │
+                       ▼
+                 OPS / ENGINEERING
+                       │
+                       ▼
+                    GRAFANA
+
+Grafana remains valuable, but it is no longer the product's analytical UX.
+
+3. Primary Technology Direction
+
+I recommend we standardize on:
+
+Backend
+
+Python
+
+API
+
+FastAPI
+
+Frontend
+
+React + TypeScript
+
+Database
+
+PostgreSQL + TimescaleDB
+
+Real-time
+
+Existing MQTT/live telemetry architecture, exposed through a controlled EMS API/WebSocket layer.
+
+Visualization
+
+Use a React-compatible charting library rather than Grafana panels.
+
+The specific visualization library should be selected during the UI architecture phase, based on:
+
+performance
+time-series capability
+interaction
+zooming
+annotations
+heatmaps
+responsive behavior
+licensing
+long-term maintainability
+
+We should not lock that library yet.
+
+4. Multi-Tenant SaaS Is a First-Class Requirement
+
+This changes the architecture significantly.
+
+The platform must understand:
+
+Platform
+ └── Organization
+      ├── Users
+      ├── Roles
+      ├── Sites
+      │    ├── Areas
+      │    │    └── Assets
+      │    │         └── Devices
+      │    │              └── Points
+      │    └── Energy configuration
+      │
+      └── Feature configuration
+
+Every analytics request must be evaluated in the context of:
+
+User
+ ↓
+Organization
+ ↓
+Permitted Site(s)
+ ↓
+Permitted Assets
+
+The browser must never be trusted to enforce tenant isolation.
+
+5. User Experience Model
+
+We should not build four completely separate applications.
+
+Instead, build one analytics platform with role-aware experiences.
+
+For example:
+
+Executive
+Organization Performance
+Energy Spend
+Consumption Trend
+Peak Demand
+Benchmark
+Major Exceptions
+Key Opportunities
+Facility Manager
+Site Performance
+Consumption
+Demand
+Load Profile
+Areas
+Assets
+Comparisons
+Alarms
+Data Quality
+Site Operator
+Current Status
+Live Demand
+Asset Status
+Alarms
+Equipment
+Communication
+Exceptions
+Service Engineer
+Device Diagnostics
+Telemetry Health
+Data Quality
+Communication
+Point-level telemetry
+Historical behavior
+Equipment anomalies
+
+Same platform.
+
+Different emphasis.
+
+6. Standard Workflow Philosophy
+
+Instead of:
+
+"Here is a dashboard. Configure it yourself."
+
+we provide:
+
+"Here is the answer to the question you came here to answer."
+
+Examples:
+
+"How is my site performing?"
+
+→ Site Overview
+
+"Where am I consuming energy?"
+
+→ Energy Breakdown
+
+"When am I consuming energy?"
+
+→ Load Profile
+
+"What is driving my peak demand?"
+
+→ Demand Analysis
+
+"Which equipment is behaving abnormally?"
+
+→ Asset Performance
+
+"Can I trust this data?"
+
+→ Data Quality
+
+"What needs attention?"
+
+→ Exceptions / Alerts
+
+"Why did energy increase?"
+
+→ Analysis / Insights
+
+This is one of the biggest opportunities over Grafana.
+
+7. Semantic Layer — Core of the Platform
+
+This becomes the heart of the architecture.
+
+The semantic layer defines what:
+
+"Energy consumption"
+
+actually means.
+
+It should understand:
+
+Metric
+Dimension
+Entity
+Unit
+Time
+Resolution
+Quality
+Calculation
+Aggregation
+Scope
+
+For example:
+
+Metric:
+    Energy Consumption
+
+Entity:
+    Site
+
+Unit:
+    kWh
+
+Native resolution:
+    1 minute
+
+Available:
+    1m / 5m / 15m / 1h / 1d
+
+Aggregation:
+    SUM
+
+Timezone:
+    Site timezone
+
+Quality:
+    Validated
+
+Scope:
+    Organization / Site / Area / Asset
+
+The frontend should never need to know which table contains this.
+
+8. Cost/Tariff Architecture
+
+This is an important decision from your answer.
+
+Build now. Expose later.
+
+Therefore the analytical model should already support:
+
+Tariff
+ ├── Energy rate
+ ├── Demand rate
+ ├── Time-of-use periods
+ ├── Peak periods
+ ├── Fixed charges
+ ├── Taxes
+ ├── Currency
+ └── Effective dates
+
+Then:
+
+Energy Consumption
+       +
+Tariff Model
+       ↓
+Energy Cost
+
+The UI can simply hide this capability initially.
+
+This avoids a major future data-model migration.
+
+9. Baselines and Intelligence
+
+Because you want automated insights eventually, we should design the analytical model to support:
+
+Actual
+   │
+   ├── Baseline
+   │
+   ├── Expected
+   │
+   └── Forecast
+
+Then the platform can eventually produce:
+
+Chiller 3 consumed 18% more energy than its expected baseline.
+
+That requires:
+
+historical context
+normalized metrics
+operating conditions
+baseline models
+data quality
+comparison periods
+anomaly scores
+confidence
+
+Therefore data quality is not an operational side feature.
+
+It becomes a prerequisite for intelligence.
+
+10. Analytics Layers
+
+I recommend formally separating the platform into these conceptual layers.
+
+L0  Raw Telemetry
+        ↓
+L1  Normalized Telemetry
+        ↓
+L2  Domain Measurements
+        ↓
+L3  Aggregated Measurements
+        ↓
+L4  Validated / Semantic Metrics
+        ↓
+L5  Analytical Features
+        ↓
+L6  Insights / Recommendations
+        ↓
+L7  Presentation
+
+This is important.
+
+We should not allow:
+
+React
+  ↓
+random SQL
+  ↓
+raw telemetry
+
+or:
+
+Grafana panel
+  ↓
+custom SQL calculation
+
+The calculation belongs in the analytical platform.
+
+11. Resolution Architecture
+
+The system should support:
+
+1 minute
+5 minute
+15 minute
+1 hour
+1 day
+
+But users should not select resolutions as a technical concept.
+
+They select:
+
+Today
+7 Days
+30 Days
+3 Months
+1 Year
+
+The analytics engine determines the appropriate physical resolution.
+
+For example:
+
+30-day chart
+       ↓
+analytics engine
+       ↓
+15-minute data
+
+rather than:
+
+User
+ ↓
+Choose 15-minute
+
+This is a key UX improvement.
+
+12. Analytics API
+
+The API should speak in EMS concepts.
+
+Not:
+
+/query?table=v_grafana_normalized_points
+
+Instead:
+
+/sites/{site_id}/energy/consumption
+/sites/{site_id}/energy/demand
+/sites/{site_id}/energy/load-profile
+/sites/{site_id}/assets
+/sites/{site_id}/alarms
+/sites/{site_id}/data-quality
+
+Eventually:
+
+/sites/{site_id}/insights
+/sites/{site_id}/benchmarks
+/sites/{site_id}/forecast
+/sites/{site_id}/cost
+
+This gives us a stable contract even if the database architecture changes.
+
+13. Database Architecture
+
+We should evolve the current system rather than blindly preserve it.
+
+The target conceptual structure is:
+
+metadata
+    │
+    ▼
+telemetry
+    │
+    ▼
+domain
+    │
+    ▼
+aggregates
+    │
+    ▼
+analytics
+    │
+    ▼
+insights
+
+Where appropriate, we can retain existing schemas and migrate incrementally.
+
+We do not need to redesign everything in one migration.
+
+14. Grafana Migration Strategy
+
+We should run both systems for a substantial period.
+
+                 Analytics Data
+                      │
+            ┌─────────┴─────────┐
+            │                   │
+            ▼                   ▼
+        Grafana              EMS App
+
+Then compare:
+
+numbers
+timestamps
+aggregation
+filtering
+tenant scope
+performance
+
+Grafana becomes our reference implementation during migration.
+
+That is actually useful.
+
+15. Development Phases
+
+I would now freeze the roadmap as:
+
+Phase 0 — Current-State Audit
+
+Understand everything we have.
+
+Phase 1 — Analytics Semantic Model
+
+Define what everything means.
+
+Phase 2 — Analytics Data Architecture
+
+Design the analytical storage and aggregation model.
+
+Phase 3 — Resolution & Performance Architecture
+
+Define how analytical queries are served efficiently.
+
+Phase 4 — Analytics API
+
+Create the backend analytical contract.
+
+Phase 5 — Frontend Foundation
+
+React/TypeScript application architecture.
+
+Phase 6 — Organization/Site Experience
+
+Core navigation and tenancy.
+
+Phase 7 — Energy Analytics
+
+Consumption, demand, load profiles, comparisons.
+
+Phase 8 — Asset Analytics
+
+Asset/device performance and diagnostics.
+
+Phase 9 — Real-Time Analytics
+
+Live status and telemetry.
+
+Phase 10 — Data Quality
+
+Completeness, freshness, validity, confidence.
+
+Phase 11 — Cost/Tariff Backend
+
+Foundation only; customer UI can remain hidden.
+
+Phase 12 — Benchmarking & Baselines
+
+Analytical intelligence foundation.
+
+Phase 13 — Insights & Recommendations
+
+Automated analytical reasoning.
+
+Phase 14 — Reporting
+
+PDF/Excel/scheduled reporting.
+
+Phase 15 — Hardening
+
+Performance, security, observability, scale.
+
+Phase 16 — Grafana Migration
+
+Move customer workflows.
+
+Phase 17 — Grafana Repositioning
+
+Keep Grafana for engineering/operations.
+
+16. Critical Gates
+
+We should explicitly prevent ourselves from rushing ahead.
+
+Gate 1
+
+Do not build React screens until the semantic model is approved.
+
+Gate 2
+
+Do not redesign database tables until the current analytics inventory is complete.
+
+Gate 3
+
+Do not build APIs around existing Grafana SQL.
+
+Gate 4
+
+Do not optimize queries before establishing representative workloads.
+
+Gate 5
+
+Do not build AI/insights until data quality is measurable.
+
+Gate 6
+
+Do not remove Grafana until the replacement has passed numerical parity testing.
+
+17. The First Actual Work Package
+
+Given everything we've established, I recommend we do not start implementation yet.
+
+Our immediate task should be:
+
+Analytics Platform Discovery — Phase 0
+
+We need Claude to perform another investigation-only audit, similar to the telemetry audit you just gave me.
+
+This one should answer:
+
+"What exactly is the current EMS analytics platform, from raw telemetry through database analytics tables/views/functions/jobs and finally every Grafana dashboard/panel/query?"
+
+The output should include:
+
+1. Complete database analytics inventory
+2. Complete Grafana inventory
+3. Every analytical metric currently implemented
+4. Every aggregation currently implemented
+5. Every calculation currently implemented
+6. Every Grafana query and its purpose
+7. Data lineage for every major dashboard
+8. Performance characteristics / known problematic queries
+9. Existing APIs that overlap with analytics
+10. Existing semantic concepts
+11. Existing tenant/security boundaries
+12. Existing data-quality mechanisms
+13. Existing energy/cost foundations
+14. Existing baseline/anomaly/insight capabilities
+15. Redundant/duplicate analytics logic
+16. Legacy analytics objects
+17. Candidate objects to retain
+18. Candidate objects to replace
+19. Gaps against our target architecture
+20. Unknowns requiring runtime verification
+
+And critically:
+
+No redesign recommendations in the audit. Facts first.
+
+Once we have that, we can design the target architecture from evidence rather than guessing.
+
+That audit should become Phase 0 of this Development Bible, and the telemetry ingestion audit you've just completed becomes the upstream dependency/reference architecture.
+
+This gives us a very clean sequence:
+
+             TELEMETRY
+                 │
+                 ▼
+       [Telemetry Audit ✓]
+                 │
+                 ▼
+       [Analytics Audit ← NEXT]
+                 │
+                 ▼
+        Semantic Architecture
+                 │
+                 ▼
+        Analytics Architecture
+                 │
+                 ▼
+            API Layer
+                 │
+                 ▼
+          React Application
+                 │
+                 ▼
+        Native EMS Analytics

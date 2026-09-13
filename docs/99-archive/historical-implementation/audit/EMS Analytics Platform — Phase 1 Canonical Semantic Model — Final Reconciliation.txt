@@ -1,0 +1,64 @@
+EMS Analytics Platform — Phase 1 Canonical Semantic Model — Final Reconciliation
+
+Method: targeted verification against source this turn — read postgres/ddl/98_telemetry_availability_validation.sql in full (resolves Task 3's previously-undiffed comparison), grepped for real consumers of the "orphaned" objects across app/ and postgres/ (resolves part of Decision 2), and confirmed the daily-consumption job's upsert/lookback mechanism (resolves part of Decision 5). Everything else below is reconciliation of the nine Phase 0 audits, the Gap Analysis, and the Phase 1 document already produced — not new discovery. No files changed.
+
+---
+
+1. Executive Summary
+
+The Phase 1 semantic model holds up well under verification, with one important correction and one important addition surfaced by this pass: (1) the "three connectivity classifiers have different thresholds" framing was imprecise — two of them read the same config table and, at its currently-seeded value, agree exactly; the real divergence is hardcoded-vs-configurable, not different-numbers; (2) a fourth connectivity object, analytics.v_device_telemetry_availability (feeding admin.list_accessible_device_telemetry_availability), was not previously catalogued by name — it shares v_grafana_devices.telemetry_state's exact architectural flaw (full-history scan, configuration-validity conflated with communication-freshness) and is a second instance of the problem Phase 1 flagged, not an independent one. Everything else — the energy-consumption 5-way duplication, the demand 3-method engine's legitimacy, the general-vs-validated aggregation split, the tenant-isolation gap, the two job-schedule drifts — is confirmed as stated, with evidence now attached per-item rather than asserted.
+
+---
+
+2. Confirmed Semantic Principles (unchanged from Phase 1, now with direct evidence attached)
+
+1. A metric's canonical definition is its calculation, not its name — VERIFIED, most strongly by the fact that admin.list_accessible_device_telemetry_availability and the two compact-state connectivity functions all use the word "connectivity"/"telemetry availability" while computing genuinely different things from genuinely different source tables.
+2. Validated metrics never re-derive from raw cumulative registers more than once — VERIFIED, explicit in postgres/migrations/181_persisted_energy_consumption_hourly.sql and 183_persisted_energy_consumption_daily.sql's own comments.
+3. Tenant scope is cross-cutting, not per-metric — VERIFIED for the Grafana/analytics path; PARTIALLY CORRECTED for the admin portal (see §14 — a DB-side function does exist, contrary to Phase 0's blanket "no DB backstop" framing).
+4. Quality is layered, not singular — VERIFIED, and this pass found a second object exhibiting the same category-D/E conflation Phase 1 flagged in one object.
+5. Resolution is metric-specific — VERIFIED, unchanged.
+
+---
+
+3. Canonical Metrics — validation per metric
+
+Energy Consumption: repository location confirmed (analytics.energy_consumption_{1min,5min} → energy_consumption_{15min,hourly,daily}, postgres/ddl/140,143 + postgres/migrations/179,181,183). Unit (Wh native/kWh display), time semantics (bucket_start, site-timezone at hourly/daily only), quality (classify_energy_register_delta), entity/scope (device→asset via PRIMARY_METER, org/site-tenant-mapped) — all VERIFIED, unchanged from Phase 1. New evidence this pass: app/tests/test_energy_semantic_reporting_contract.py::test_reporting_contract_is_not_yet_exposed_to_consumers explicitly, self-documentingly confirms that the pipeline's internal-only status is deliberate, not an oversight — strengthening rather than weakening its canonical-candidate status.
+
+Demand: repository location confirmed (analytics.demand_intervals/demand_state, postgres/ddl/130,131,132, postgres/migrations/012,017). Three-method resolution confirmed as legitimate polymorphism (unchanged). Nothing in this pass contradicts Phase 1's demand contract.
+
+Load Profile: confirmed defined only in postgres/ddl/58_peak_demand_load_profile_views.sql. New evidence this pass: grepping all of app/ and postgres/ for v_energy_load_profile* finds it only in its own defining DDL file and one test file (app/tests contract tests, which assert migration-SQL shape, not runtime usage — same pattern as the already-known test_telemetry_pipeline_performance_state_contract.py). No application code or Grafana dashboard consumer was found at all. This is stronger than Phase 1's "not confirmed consumed by the 7 core dashboards" — it is not consumed anywhere in the traced codebase.
+
+Energy Balance: confirmed defined in postgres/ddl/86_site_energy_balance_daily.sql, and referenced by exactly one test script, scripts/test/assert_site_energy_balance.sql (a migration-correctness assertion, not a runtime consumer) plus contract tests. Same finding as Load Profile: no real consumer found anywhere. Phase 1's claim that it is "built on Path A rather than the canonical lineage" is VERIFIED (confirmed from 86_site_energy_balance_daily.sql's own FROM analytics.v_energy_consumption_15min join).
+
+Connectivity/Device Status: see Task 3 below — substantially revised from Phase 1.
+
+Data Quality: unchanged, VERIFIED.
+
+---
+
+4–9. Per-Metric Contracts
+
+No changes to the Energy Consumption, Demand, Load Profile, or Energy Balance contracts as written in the Phase 1 document — this pass's evidence either confirmed them directly or (for Load Profile/Energy Balance) strengthened the "no real consumer" finding without altering the contract's substance. The Connectivity contract is revised below (§ replaces Phase 1 §8) and Data Quality is unchanged.
+
+Connectivity Contract (revised)
+
+Four objects exist, not three:
+
+Object: v_grafana_devices.telemetry_state
+Source table: telemetry.normalized_points, GROUP BY device_id, no time filter
+Full-history scan?: Yes — architecturally unsound
+Thresholds: Hardcoded literals 300/900/3600s in the view body                                                                                                                                                  Configuration-validity included?: Yes (INVALID_PROFILE, UNMAPPED) — conflates category D+
+
+─────────────────────────────────────────────────────────────────────────────────communication-freshness; the latter is a newly-identified second instance of the same problem, not previously catalogued by name. The two recommended_aggregation heuristics.
+
+C. WHAT REMAINS A PRODUCT/ARCHITECTURE DECISION
+Whether Energy Balance/Load Profile warrant additional resolutions (now known to be moot in practice — no current consumer exists). Whether energy-consumption buckets need a recompute mechanism beyond each tier's job lookback window. Whether the admin-portal and Grafana authorization systems should ever integrate. The precise consolidated shape for connectivity's configuration-validity states, given neither compact-state function currently carries them.
+
+D. WHAT MUST BE FIXED BEFORE METRIC CONSOLIDATION
+Nothing is a hard blocker — the job-schedule drift and the tenant-safety grant are independent of consolidation and can proceed in parallel or after. The one true precondition is Decision-1A (Energy Balance's fate), since consolidating Path A blind to that dependency would break it.
+
+E. FIRST IMPLEMENTATION TASK
+(Not performed, per instruction.)
+
+F. COMPLETE IMPLEMENTATION SEQUENCE
+Phase 1A (semantic decisions) → 1B (job-schedule correction, independent) → 1C (energy-consumption consolidation) → 1D (resolution routing) → 1E (quality model completion, incl. connectivity's configuration-validity shape) → 1F (Grafana migration to canonical objects) → 1G (staging commissioning) → Phase 2 (Analytics API).

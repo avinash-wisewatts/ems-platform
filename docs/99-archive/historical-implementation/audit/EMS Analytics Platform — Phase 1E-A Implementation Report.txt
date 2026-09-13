@@ -1,0 +1,237 @@
+EMS Analytics Platform — Phase 1E-A Implementation Report
+Persisted Per-Flow Quality Lineage Foundation
+
+Status: IMPLEMENTED, LOCALLY VALIDATED, COMMITTED, AND PUSHED TO
+origin/staging. NOT MANUALLY DEPLOYED (any deployment occurs only via the
+existing automatic CI/CD staging workflow). NO SSH ACCESS PERFORMED.
+
+Commit: 523ac5b4ce0a3bf0cd7c852f82500ac55a594173
+Subject: feat: persist per-flow energy quality semantics
+Branch: staging, pushed to origin/staging (ab3034e..523ac5b; 0 ahead / 0 behind)
+
+===============================================================================
+1. SCOPE (as authorized)
+===============================================================================
+
+Exactly Phase 1E-A per the approved "Phase 1E Architecture Resolution
+Plan": persist the six per-flow quality columns (import_gap_intervals,
+export_gap_intervals, import_reset_intervals, export_reset_intervals,
+import_rollover_intervals, export_rollover_intervals) that analytics.v_
+energy_semantic_rollup_15min already computes but analytics.refresh_
+energy_consumption_15min() previously discarded, and carry them forward
+additively through the hourly and daily tiers. No new classification
+logic. No consumer, reporting view, Grafana object, or unrelated migration
+touched. 1E-B (historical backfill), 1E-C (reporting-view retarget), and
+1E-D (documentation narrowing) were NOT performed — confirmed explicitly
+in §I below.
+
+===============================================================================
+A. EXACT FILES CHANGED
+===============================================================================
+
+    New:      postgres/migrations/196_persist_energy_consumption_per_flow_quality.sql
+    Modified: postgres/restructure_manifest.csv (+1 row registering migration 196)
+    New:      scripts/test/assert_energy_consumption_per_flow_quality_contract.sql
+    New:      scripts/test/assert_energy_consumption_per_flow_quality_contract.sh
+    Modified: scripts/test/run_integration_environment.sh (+4 lines, one new
+              invocation, same style as every prior phase)
+
+No other file touched. Confirmed via git diff HEAD --name-only: exactly
+these five files, plus the pre-existing unrelated .gitignore modification
+and untracked Audit/ (neither part of this change). Confirmed zero
+Grafana files in the diff.
+
+===============================================================================
+B. EXACT SCHEMA CHANGES
+===============================================================================
+
+Six new NULLABLE BIGINT columns added to each of the three persisted
+tables (18 columns total), via ALTER TABLE ... ADD COLUMN IF NOT EXISTS:
+    analytics.energy_consumption_15min
+    analytics.energy_consumption_hourly
+    analytics.energy_consumption_daily
+        + import_gap_intervals BIGINT
+        + export_gap_intervals BIGINT
+        + import_reset_intervals BIGINT
+        + export_reset_intervals BIGINT
+        + import_rollover_intervals BIGINT
+        + export_rollover_intervals BIGINT
+
+Nullable (no NOT NULL, no default) exactly per the approved architecture
+document's recommendation — historical rows (if any existed) keep NULL
+until Phase 1E-B's backfill, deliberately deferred. All existing columns
+on all three tables are completely unchanged; no column dropped, renamed,
+or retyped.
+
+===============================================================================
+C. EXACT LINEAGE CHANGES
+===============================================================================
+
+analytics.refresh_energy_consumption_15min(): CREATE OR REPLACE, same
+signature, same SECURITY DEFINER/owner/search_path. Its INSERT/SELECT/ON
+CONFLICT DO UPDATE lists extended to carry r.import_gap_intervals, r.
+export_gap_intervals, r.import_reset_intervals, r.export_reset_intervals,
+r.import_rollover_intervals, r.export_rollover_intervals straight through
+from analytics.v_energy_semantic_rollup_15min (the same source it already
+reads; no new source, no new calculation). All pre-existing columns'
+source expressions are byte-for-byte unchanged.
+
+analytics.refresh_energy_consumption_hourly(): CREATE OR REPLACE, same
+signature/posture. Extended to additionally SUM(...)::BIGINT the same six
+columns from analytics.energy_consumption_15min (the only source it reads,
+unchanged), grouped by the same date_bin('1 hour', ...) as before. No
+change to the source table, grouping expression, or any pre-existing
+column's formula.
+
+analytics.refresh_energy_consumption_daily(): CREATE OR REPLACE, same
+signature/posture. Extended identically — SUM(...)::BIGINT the six
+columns from the localized CTE over analytics.energy_consumption_15min
+(the only source it reads, unchanged). The site-local timezone/local-
+midnight bucketing logic (JOIN metadata.sites, AT TIME ZONE, local_day_
+start/local_day_end, the p_from - INTERVAL '1 day' lookback, the
+local_day_end > p_from AND <= p_to inclusion test) is completely
+unmodified — verified by diffing the new function body against the
+previously-captured live definition; only the six new SELECT/INSERT/ON
+CONFLICT list entries were added.
+
+===============================================================================
+D. TEST SCENARIOS
+===============================================================================
+
+scripts/test/assert_energy_consumption_per_flow_quality_contract.sql —
+fixture: two organizations/sites (Asia/Kolkata), two devices. Device A
+carries seven native 1-minute intervals (one per 15-minute bucket, 2026-
+01-01 09:00 through 10:30 UTC), each independently classified via a real
+call to analytics.classify_energy_register_delta() for both import and
+export, covering all seven required combinations: GOOD/GOOD, GAP/GOOD,
+GOOD/GAP, RESET/GOOD, GOOD/RESET, ROLLOVER/GOOD, GOOD/ROLLOVER. Device B
+(a different organization) carries one GOOD/GOOD interval only, used
+purely as a tenant-isolation control.
+
+Assertions (all against the real, unmodified refresh functions and real
+persisted tables — no fixture value copied from the implementation's own
+output):
+    1. Fixture sanity: classifier actually produced the seven distinct
+       import/export code combinations depended on.
+    2. 15-minute persistence: exact per-flow arrays (import/export gap,
+       reset, rollover interval counts) across all seven buckets, exact
+       combined-counter arrays (proving compatibility unchanged), exact
+       import/export_consumption_kwh arrays (proving GAP/ROLLOVER
+       contribute and RESET is excluded, per Phase 1B, unaffected by this
+       migration).
+    3. Tenant isolation at the 15-minute tier: device B's row shows the
+       correct organization_id and zero per-flow quality counters (no
+       cross-tenant contamination in the write path).
+    4. Hourly aggregation: two hourly buckets (09:00 covering GOOD/GOOD,
+       GAP/GOOD, GOOD/GAP, RESET/GOOD; 10:00 covering GOOD/RESET,
+       ROLLOVER/GOOD, GOOD/ROLLOVER), each asserted for exact per-flow
+       sums and exact import/export_consumption_kwh sums.
+    5. Daily aggregation: one row for device A with per-flow sums equal
+       to the total across all seven buckets (1 each for gap/reset/
+       rollover per flow), combined counters (2/2/2/2), consumption_kwh
+       (0.120/0.120), source_interval_count (7), and site_timezone
+       (Asia/Kolkata) — confirming site-local bucketing is unaffected.
+    6. Tenant isolation at the daily tier: device B's daily row, same
+       check as (3).
+
+One fixture bug was found and corrected during local validation (not an
+implementation defect): the test's expected hourly kWh values had import
+and export sums transposed for both hourly buckets (0.040/0.040 and
+0.080/0.080 were written where 0.040/0.050 and 0.080/0.070 were correct,
+since the RESET bucket differs by flow between the two hours). The
+database's actual output was correct on the first run; only the test's
+own expected-value arithmetic was wrong. Corrected and re-verified.
+
+===============================================================================
+E. FULL INTEGRATION-SUITE RESULT
+===============================================================================
+
+scripts/test/run_integration_environment.sh — full clean disposable-
+database reset and re-run (true exit code captured explicitly to avoid
+any pipe-masking ambiguity):
+
+    Exit code: 0 (confirmed via explicit `echo REAL_EXIT_CODE=$?` after
+    the un-piped invocation, following the one fixture-bug iteration)
+    ERROR lines: none
+    Migration 196 applied cleanly (BEGIN / 3x ALTER TABLE / 3x function
+    replacement / COMMIT)
+    New step output: "Energy consumption per-flow quality persistence
+        contract assertions passed."
+
+===============================================================================
+F. PHASE 1A–1D REGRESSION RESULTS
+===============================================================================
+
+All four re-ran, unchanged, in the same clean-reset run, all PASS:
+    "Connectivity semantic contract assertions passed."            (1A)
+    "Energy consumption semantic contract assertions passed."       (1B)
+    "Job-schedule canonical contract assertions passed."             (1C)
+    "Grafana energy resolution-routing contract assertions passed."  (1D)
+
+===============================================================================
+G. GIT DIFF / STAT / STATUS
+===============================================================================
+
+    git diff HEAD --stat:
+        .gitignore                                                       |  5 +
+        postgres/restructure_manifest.csv                                 |  1 +
+        scripts/test/assert_energy_consumption_per_flow_quality_contract.sh | 15 +
+        scripts/test/run_integration_environment.sh                       |  4 +
+        4 files changed, 25 insertions(+)
+    (the two new untracked files — migration 196 and the new .sql test —
+    are not shown by `git diff HEAD` since they are untracked; confirmed
+    present via `git status`.)
+
+    git diff --cached --summary: create mode 100755 scripts/test/
+        assert_energy_consumption_per_flow_quality_contract.sh (only
+        currently-staged file, staged solely to force/verify the
+        executable bit — not yet a commit).
+
+    git status: staged — the new .sh only (100755, verified via git
+        ls-files --stage: 100755 0ed3aebc...). Not staged/untracked —
+        migration 196, new .sql test, manifest change, runner change (all
+        present, none committed). Unrelated — .gitignore (pre-existing
+        modification), Audit/ (untracked, as always).
+
+===============================================================================
+H. DISCREPANCIES DISCOVERED
+===============================================================================
+
+None in the implementation or the approved architecture. One test-authoring
+arithmetic error was found and corrected during local validation (§D) —
+not a discrepancy between the approved plan and the repository/database,
+and not an implementation defect; the real refresh functions produced
+correct output on the very first run.
+
+===============================================================================
+I. EXPLICIT CONFIRMATION — 1E-B / 1E-C / 1E-D NOT PERFORMED
+===============================================================================
+
+No historical backfill was performed (1E-B) — the new columns remain NULL
+for any pre-existing row in any environment where such rows might exist;
+this disposable test database has none, by construction, since energy_
+consumption_{15min,hourly,daily} start empty on every clean reset.
+No reporting view (analytics.v_energy_reporting_5min/15min/hourly/daily)
+was read, modified, or retargeted (1E-C) — confirmed via git diff: no file
+under postgres/ddl/ or any reporting-view migration appears in this
+change.
+No documentation/comment narrowing of v_energy_semantic_rollup_15min/5min
+was performed (1E-D) — those views are entirely untouched.
+get_canonical_energy_read(), get_grafana_asset_energy_intervals(), get_
+grafana_assets_energy_intervals(), resolve_grafana_energy_routing_
+resolution(), analytics.v_energy_consumption_15min, v_site_energy_
+balance_daily, get_grafana_explorer_intervals(), v_grafana_energy_samples,
+and every Grafana dashboard file: confirmed untouched — none appears
+anywhere in this change's diff.
+
+===============================================================================
+COMMIT / PUSH STATUS
+===============================================================================
+
+Commit 523ac5b4ce0a3bf0cd7c852f82500ac55a594173 was created containing
+exactly the five approved files (1143 insertions, 0 deletions), then
+pushed to origin/staging (ab3034e..523ac5b). origin/staging now points at
+523ac5b4ce0a3bf0cd7c852f82500ac55a594173; local staging is 0 ahead / 0
+behind. No manual deployment or SSH access to staging/production occurred
+as part of this push. Any deployment beyond this point occurs only via
+the repository's existing automatic CI/CD staging workflow.

@@ -1,0 +1,403 @@
+EMS Analytics Pipeline — Self-Healing Architecture Investigation (STAGING, design only)
+
+1. Complete Persisted Analytical Data Flow (verified live, 2026-08-27)
+
+raw ingestion (MQTT/Telegraf)
+  → telemetry.raw_messages (hypertable, 48h retention)
+      → telemetry.raw_message_failures (job 1068, capture; job 1077, recovery — per-row retry state)
+      → telemetry.raw_receipt_state (job 1076 — pipeline_state watermark)
+  → telemetry.normalized_points (job 1000 — pipeline_state watermark, migration-205 bounded catch-up)
+      → telemetry.energy_measurements (job 1001 — pipeline_state watermark)
+      → telemetry.environment_measurements (job 1012 — pipeline_state watermark)
+  ├─ energy_measurements → ca_energy_1min/5min/15min/hourly/daily (TimescaleDB native continuous aggregates)
+  │     → analytics.energy_consumption_1min  (job 1079, fixed wall-clock lookback, from ca_energy_1min)
+  │     → analytics.energy_consumption_5min  (job 1080, fixed wall-clock lookback, from ca_energy_5min)
+  │         → analytics.v_energy_consumption_native (UNION ALL of the two above)
+  │            → analytics.v_energy_semantic_rollup_15min
+  │               → analytics.energy_consumption_15min (job 1099, fixed wall-clock lookback)
+  │                  → analytics.energy_consumption_hourly (job 1102, fixed wall-clock lookback)
+  │                  → analytics.energy_consumption_daily  (job 1105, fixed wall-clock lookback)
+  ├─ energy_measurements + normalized_points → analytics.demand_state (live accumulator) / analytics.demand_intervals (job 1078, finalize-once)
+  ├─ energy_measurements → ca_energy_phase_power_1min/5min/15min/hourly/daily (native CAggs, no custom downstream job found)
+  ├─ energy_measurements → ca_energy_electrical_ext_15min/hourly (native CAggs)
+  └─ environment_measurements → ca_environment_15min/hourly (native CAggs) → telemetry.environment_daily (job 1107, fixed wall-clock lookback)
+  → analytics.get_canonical_energy_read(...) / analytics.v_grafana_asset_demand_intervals (semantic layer)
+  → Grafana panels (Demand Profile, Energy Consumption Trend, and others sharing the same semantic objects)
+
+Also present but out of this investigation's direct scope (no custom downstream job reads them yet, per this pass): analytics.generic_telemetry_15m/1h (native CAggs). Flagged for completeness, not analyzed further.
+
+2. Inventory (verified against live timescaledb_information.jobs, 77 total scheduled jobs; table below is the subset with custom reprocessing logic — compression/retention policies excluded as standard, well-understood TimescaleDB behavior)
+
+Table: normalized_points
+Source: raw_messages
+Src ts: received_at
+Tgt ts: event_time
+Res.: event
+Job: 1000
+Reprocess mechanism: watermark (pipeline_state) + migration-205 p_max_window
+Write mode: insert/upsert
+Late-arrival safe?: Yes (self-catches-up)
+Empty-source behavior: Skips, watermark unmoved
+Can gap become permanent?: No (fixed)
+────────────────────────────────────────
+Table: energy_measurements
+Source: normalized_points
+Src ts: event_time
+Tgt ts: bucket_start
+Res.: 1min
+Job: 1001
+Reprocess mechanism: watermark (pipeline_state), 15min overlap
+Write mode: insert/upsert
+Late-arrival safe?: Yes
+Empty-source behavior: Skips
+Can gap become permanent?: No
+────────────────────────────────────────
+Table: environment_measurements
+Source: normalized_points
+Src ts: event_time
+Tgt ts: bucket_start
+Res.: 1min
+Job: 1012
+Reprocess mechanism: watermark (pipeline_state), 15min overlap
+Write mode: insert/upsert
+Late-arrival safe?: Yes
+Empty-source behavior: Skips
+Can gap become permanent?: No
+────────────────────────────────────────
+Table: ca_energy_1min/5min/15min/hourly/daily (native)
+Source: energy_measurements
+Src ts: —
+Tgt ts: bucket_start
+Res.: var
+Job: TS refresh policies 1060/1063/1004/1005/1006
+Reprocess mechanism: native CAgg refresh, start_offset 2d/7d/2d/7d/30d
+Write mode: native upsert
+Late-arrival safe?: Yes, within start_offset
+Empty-source behavior: Not refreshed until in-window
+Can gap become permanent?: Only if outage > start_offset (rare)
+────────────────────────────────────────
+Table: analytics.energy_consumption_1min
+Source: ca_energy_1min
+Src ts: bucket_start
+Tgt ts: bucket_start
+Res.: 1min
+Job: 1079
+Reprocess mechanism: fixed wall-clock lookback (30min), no watermark
+Write mode: ON CONFLICT DO UPDATE
+Late-arrival safe?: No
+Empty-source behavior: Silently produces nothing for that range
+Can gap become permanent?: Yes — confirmed, this is the outage we just repaired
+────────────────────────────────────────
+Table: analytics.energy_consumption_5min
+Source: ca_energy_5min
+Src ts: bucket_start
+Tgt ts: bucket_start
+Res.: 5min
+Job: 1080
+Reprocess mechanism: same as above
+Write mode: ON CONFLICT DO UPDATE
+Late-arrival safe?: No
+Empty-source behavior: same
+Can gap become permanent?: Yes (moot for current fleet — see §5 finding)
+────────────────────────────────────────
+Table: analytics.energy_consumption_15min
+Source: v_energy_consumption_native (= 1min∪5min)
+Src ts: bucket_start
+Tgt ts: bucket_start
+Res.: 15min
+Job: 1099
+Reprocess mechanism: fixed lookback (2h), no watermark, plus depends on 1min/5min already being correct
+Write mode: ON CONFLICT DO UPDATE
+Late-arrival safe?: No
+Empty-source behavior: same, and inherits any gap in its own source
+Can gap become permanent?: Yes
+────────────────────────────────────────
+Table: analytics.energy_consumption_hourly
+Source: energy_consumption_15min
+Src ts: bucket_start
+Tgt ts: bucket_start
+Res.: 1h
+Job: 1102
+Reprocess mechanism: fixed lookback (2d), no watermark, depends on 15min
+Write mode: ON CONFLICT DO UPDATE
+Late-arrival safe?: No
+Empty-source behavior: same
+Can gap become permanent?: Yes, but 2d lookback covers the outage we just saw
+────────────────────────────────────────
+Table: analytics.energy_consumption_daily
+Source: energy_consumption_15min
+Src ts: bucket_start
+Tgt ts: bucket_start
+Res.: 1d
+Job: 1105
+Reprocess mechanism: fixed lookback (8d), no watermark, depends on 15min
+Write mode: ON CONFLICT DO UPDATE
+Late-arrival safe?: No
+Empty-source behavior: same
+Can gap become permanent?: Unlikely at 8d, but same pattern
+────────────────────────────────────────
+Table: telemetry.environment_daily
+Source: (environment CAggs, presumed — not independently re-verified this pass)
+Src ts: —
+Tgt ts: —
+Res.: 1d
+Job: 1107
+Reprocess mechanism: fixed lookback (8d), no watermark
+Write mode: presumed DO UPDATE (not verified)
+Late-arrival safe?: No (presumed)
+Empty-source behavior: presumed same
+Can gap become permanent?: Unlikely at 8d
+────────────────────────────────────────
+Table: analytics.demand_intervals
+Source: normalized_points+energy_measurements (direct)
+Src ts: event_time/bucket_start
+Tgt ts: interval_end
+Res.: 15min
+Job: 1078
+Reprocess mechanism: fixed lookback (3h), no watermark
+Write mode: ON CONFLICT DO NOTHING
+Late-arrival safe?: No — worse than the others: even a re-run inside the lookback window can't fix an already-finalized row
+Empty-source behavior: Finalizes NO_DATA permanently
+Can gap become permanent?: Yes — confirmed, this is the second outage we just repaired
+────────────────────────────────────────
+Table: telemetry.raw_message_failures
+Source: (self, per-row)
+Src ts: raw_received_at
+Tgt ts: —
+Res.: n/a
+Job: 1077
+Reprocess mechanism: per-row retry state (resolution_status/replay_attempt_count/next_replay_at) — genuinely a bounded reconciliation queue already
+Write mode: in-place update
+Late-arrival safe?: Yes, by design
+Empty-source behavior: N/A (row exists until resolved/expired)
+Can gap become permanent?: No (bounded by retention-age classification, migration 206)
+
+3. Self-Healing Capability Matrix
+
+Layer: normalized_points/energy_measurements/environment_measurements (watermark tier)
+2h outage: Self-heals
+12h outage: Self-heals (needs migration-205-style bounded chunking to avoid one giant transaction — already fixed)
+2d outage: Self-heals (same)
+Burst MQTT after disconnect: Self-heals — watermark just advances further next run
+Downstream job fails, resumes later: Self-heals — watermark is durable, resumes exactly where it left off
+────────────────────────────────────────
+Layer: native CAggs (ca_energy_*, ca_environment_*)
+2h outage: Self-heals (well within start_offset)
+12h outage: Self-heals (well within start_offset)
+2d outage: Self-heals for 1min/15min/hourly (2-7d offsets); daily's 30d offset covers it too
+Burst MQTT after disconnect: Self-heals
+Downstream job fails, resumes later: N/A (TimescaleDB-managed, not a custom job)
+────────────────────────────────────────
+Layer: energy_consumption_1min/5min (job 1079/1080)
+2h outage: Permanent gap (outage > 30min lookback)
+12h outage: Permanent gap
+2d outage: Permanent gap
+Burst MQTT after disconnect: Permanent gap for the disconnected period, regardless of burst
+Downstream job fails, resumes later: Permanent gap if downstream was down > lookback when it resumes
+────────────────────────────────────────
+Layer: energy_consumption_15min (job 1099)
+2h outage: Gap if source (1min/5min) has a gap, regardless of its own 2h window
+12h outage: Permanent gap
+2d outage: Permanent gap
+Burst MQTT after disconnect: Permanent gap
+Downstream job fails, resumes later: Permanent gap
+────────────────────────────────────────
+Layer: energy_consumption_hourly/daily (1102/1105)
+2h outage: Self-heals (2d/8d lookback exceeds a 2h/12h outage)
+12h outage: Self-heals (2d covers 12h; 8d covers both)
+2d outage: Hourly: gap (2d < 2d outage borderline — fails if outage ≥ 2d); Daily: self-heals (8d)
+Burst MQTT after disconnect: Depends on outage length vs. lookback
+Downstream job fails, resumes later: Depends on how long downstream was down vs. lookback
+────────────────────────────────────────
+Layer: demand_intervals (job 1078)
+2h outage: Permanently finalized NO_DATA even after recovery — worse than a lookback problem, this is a finalize-once bug independent of window size
+12h outage: Same
+2d outage: Same
+Burst MQTT after disconnect: Same
+Downstream job fails, resumes later: Same
+────────────────────────────────────────
+Layer: raw_message_failures per-row recovery (job 1077)
+2h outage: Self-heals (per-row retry with backoff; migration 206 correctly retires only genuinely-expired rows)
+12h outage: Self-heals
+2d outage: Self-heals
+Burst MQTT after disconnect: Self-heals
+Downstream job fails, resumes later: Self-heals
+
+4. Failure-Mode Audit — concrete instances found in this platform
+
+#: 1
+Pattern (from your list): Finalized-once-forever rows
+Concrete instance: analytics.demand_intervals INSERT with ON CONFLICT DO NOTHING
+Classification: 1. CURRENT BUG / DATA LOSS RISK (data-loss in the sense of permanently-wrong analytics, not deleted data — already manifested once, repaired manually)
+────────────────────────────────────────
+#: 2
+Pattern (from your list): INSERT...ON CONFLICT DO NOTHING where source may arrive later
+Concrete instance: Same as above
+Classification: Same finding
+────────────────────────────────────────
+#: 3
+Pattern (from your list): Fixed wall-clock lookback shorter than plausible outage
+Concrete instance: Jobs 1079/1080 (30min), 1078 (3h), 1099 (2h)
+Classification: 1. CURRENT BUG — already manifested
+────────────────────────────────────────
+#: 4
+Pattern (from your list): Fixed wall-clock lookback, longer but still finite
+Concrete instance: Jobs 1102 (2d), 1105/1107 (8d)
+Classification: 2. CURRENTLY SAFE BUT FRAGILE — no known outage has exceeded these yet, but nothing prevents it, and no telemetry would alert before it silently produces a permanent gap
+────────────────────────────────────────
+#: 5
+Pattern (from your list): Parent-catches-up-but-child-stays-stale
+Concrete instance: energy_consumption_15min/hourly/daily all read from energy_consumption_1min/5min/15min respectively, not from raw data — a 1min/5min repair does not automatically propagate downstream; each
+tier needs its own independent repair
+Classification: 1. CURRENT BUG — directly relevant: our recent 1min repair alone would NOT have fixed 15min/hourly/daily if they'd had a large-enough gap (they didn't, because their lookback happened to exceed
+the outage — lucky, not designed)
+────────────────────────────────────────
+#: 6
+Pattern (from your list): Jobs depending on another job already having completed
+Concrete instance: Whole energy_consumption_* cascade (1min/5min → 15min → hourly/daily); no explicit dependency check exists — each job just trusts its lookback window contains complete upstream data
+Classification: 2. CURRENTLY SAFE BUT FRAGILE
+────────────────────────────────────────
+#: 7
+Pattern (from your list): Source/target watermark divergence
+Concrete instance: Not applicable to the analytics tier — there is no watermark there at all, which is actually a distinct, arguably worse pattern than divergence (divergence implies at least a target watermark
+exists to diverge from)
+Classification: 1. CURRENT BUG for tiers with lookback < plausible-outage; 3. ACCEPTABLE BY DESIGN for the telemetry-tier jobs that do have watermarks (1000/1001/1012), which is the pattern to extend, not fix
+────────────────────────────────────────
+#: 8
+Pattern (from your list): Jobs that skip locked work
+Concrete instance: recover_failed_raw_messages (job 1077) uses FOR UPDATE SKIP LOCKED deliberately, with per-row retry state to guarantee eventual pickup
+Classification: 3. ACCEPTABLE BY DESIGN — this is the one already-correct pattern in the codebase
+────────────────────────────────────────
+#: 9
+Pattern (from your list): Runtime limit terminating a range partway
+Concrete instance: max_runtime on 1000/1001/1012/1068/1077 (5-10min); analytics-tier jobs (1078-1107) all have max_runtime='00:00:00' (unlimited) in current config — a genuinely large backlog reprocessing on
+those could run indefinitely and contend for locks
+Classification: 2. CURRENTLY SAFE BUT FRAGILE — no observed incident yet, but a large-enough backfill window on an unlimited-runtime job is a real risk if this design is implemented carelessly
+────────────────────────────────────────
+#: 10
+Pattern (from your list): Partial-transaction behavior
+Concrete instance: Job 1000's pre-migration-205 unbounded single transaction — already fixed; job 1077 already has per-candidate commit (migration 203) — already fixed
+Classification: 3. ACCEPTABLE BY DESIGN, post-fix
+────────────────────────────────────────
+#: 11
+Pattern (from your list): Stale/incorrect checkpoint advancement
+Concrete instance: Not observed as a live bug; worth a specific test case in any new watermark implementation (advance checkpoint only after a batch's own transaction commits, never before)
+Classification: N/A — forward-looking test requirement
+────────────────────────────────────────
+#: 12
+Pattern (from your list): Source vs. received timestamp confusion
+Concrete instance: capture_bucket_samples/normalized_points already distinguish event_time (source) from platform_received_at/received_at (ingestion) correctly, and demand/energy jobs bucket by
+event_time/bucket_start, not receipt time — this part of the architecture is sound
+Classification: 3. ACCEPTABLE BY DESIGN
+────────────────────────────────────────
+#: 13
+Pattern (from your list): Retention deleting source before repair can occur
+Concrete instance: telemetry.raw_messages 48h retention vs. raw_message_failures 30d retention — already identified and handled by migration 206's dynamic retention-cutoff check; but note the same risk pattern
+exists one level up: energy_measurements has 90-day retention, normalized_points 90-day — if any analytics-tier job's backlog debt ever grew larger than 90 days (implausible today, but architecturally possible
+with a long enough undetected stall), the repair would become permanently impossible, matching exactly what we just saw with raw_messages
+Classification: 2. CURRENTLY SAFE BUT FRAGILE
+────────────────────────────────────────
+#: 14
+Pattern (from your list): Continuous aggregates whose refresh window can't cover late data
+Concrete instance: Every ca_* policy has a finite start_offset (2d-30d) — safe against everything we've seen, but not literally unbounded
+Classification: 2. CURRENTLY SAFE BUT FRAGILE
+────────────────────────────────────────
+#: 15
+Pattern (from your list): Semantic functions hiding missing data as NULL
+Concrete instance: get_canonical_energy_read's import_quality_status != 'GOOD' → NULL mapping is intentional and documented (this is correct quality signaling, not a bug) — but it does mean a Grafana line chart
+cannot visually distinguish "no row exists" from "row exists but low quality" without also plotting import_quality_status/coverage, which no panel currently does
+Classification: 3. ACCEPTABLE BY DESIGN, with a UX caveat worth noting, not fixing here
+────────────────────────────────────────
+#: 16
+Pattern (from your list): Tenant/org filtering masking real gaps
+Concrete instance: v_grafana_asset_demand_intervals filters on grafana_org_id/is_active — correct and necessary; not a bug, but worth remembering when diagnosing an apparent gap (always check whether it's
+org-scoping before assuming a pipeline problem)
+Classification: 3. ACCEPTABLE BY DESIGN
+────────────────────────────────────────
+#: 17
+Pattern (from your list): Out-of-order / late event-time arrival
+Concrete instance: The whole capture_bucket_samples/resolve_site_capture_bucket/late_arrival_tolerance_seconds mechanism, plus migration 201's bounded supersession window, are specifically designed for this at
+the raw→normalized layer
+Classification: 3. ACCEPTABLE BY DESIGN at that layer; not replicated at the analytics-aggregation layer, which has no equivalent late-arrival tolerance concept at all (a burst of very-late-arriving raw data that
+lands after an analytics-tier job's fixed lookback window has already "moved past" that time range would be silently missed even under a fixed-lookback-widened design — reinforcing why the fix should be
+source-aware, not just a bigger fixed number)
+
+5. Additional concrete finding (not in your list, discovered this pass)
+
+analytics.energy_consumption_5min is not just theoretically fragile — it is verified structurally empty for the entire current device fleet, because refresh_energy_consumption_5min only processes capture_interval_seconds=300 devices and every device here is configured at 60. This isn't a bug to fix; it means any self-healing design for the "5min tier" should not assume it ever has real traffic on this deployment — worth keeping in mind so a future engineer doesn't "fix" an empty table that was never supposed to have data.
+
+6. Options Considered
+
+┌─────────────────────────────────────────────────────┬────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                       Option                        │                                                                        Verdict                                                                         │
+├─────────────────────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ 1. Fixed wall-clock lookback (current               │ Reject as the sole mechanism — proven insufficient; this is the exact bug being fixed.                                                                 │
+│ analytics-tier state)                               │                                                                                                                                                        │
+├─────────────────────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ 2. Source-watermark-based catch-up (extend          │ Recommended, with bounded per-run catch-up (migration 205's p_max_window pattern) layered on top. Reuses two already-proven, already-existing          │
+│ telemetry.pipeline_state's existing pattern into    │ mechanisms verbatim.                                                                                                                                   │
+│ the analytics schema)                               │                                                                                                                                                        │
+├─────────────────────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ 3. Target-vs-source gap detection (compare target   │ Reject as the primary mechanism — expensive per-run (a full comparison scan), and unnecessary once a watermark exists: a correct watermark means you   │
+│ coverage to source coverage every run)              │ always know exactly what's unprocessed without comparing. Worth keeping as a lightweight periodic audit check (see below), not the steady-state        │
+│                                                     │ mechanism.                                                                                                                                             │
+├─────────────────────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                     │ Reject as unnecessary additional infrastructure — job 1077's per-row retry state already proves this pattern works well when the unit of work is       │
+│ 4. Reconciliation queue / range table (a new        │ naturally per-item (a failed message). The aggregation jobs' unit of work is naturally a time range, for which a watermark is the simpler,             │
+│ generic analytics.backfill_queue type mechanism)    │ already-proven fit. Recommending a new queue table here would violate "do not invent a parallel architecture" and add a table/schema surface with no   │
+│                                                     │ corresponding existing precedent to reuse.                                                                                                             │
+├─────────────────────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ 5. Hybrid                                           │ This is the recommendation: watermark (2) as the steady-state mechanism + a cheap periodic audit (3, run rarely, e.g. daily, not every minute) as a    │
+│                                                     │ safety net to catch anything the watermark mechanism itself might miss (e.g. a checkpoint written incorrectly).                                        │
+└─────────────────────────────────────────────────────┴────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+7. Recommended Architecture
+
+Extend the exact telemetry.pipeline_state shape and the exact migration-205 p_max_window bounded-catch-up pattern to every analytics-tier job that currently lacks a watermark (1078, 1079, 1080, 1099, 1102, 1105, 1107). Concretely:
+
+- Add rows to telemetry.pipeline_state (reuse the table as-is — it's schema-generic, not telemetry-specific despite its schema location) for each of these seven pipelines, or a lightweight analytics.pipeline_state mirror if schema ownership matters more than reuse (verify which before implementing — this is exactly the kind of decision that should be confirmed against repo convention, not assumed).
+- Each job wrapper changes from v_from := clock_timestamp() - v_lookback to v_from := GREATEST(v_checkpoint, v_to - v_max_catchup_window), where v_checkpoint comes from the pipeline's own pipeline_state.last_received_at and v_max_catchup_window is a new, separate config value bounding per-run work (distinct from the lookback/overlap value, exactly as migration 205 separates p_overlap from p_max_window). After a successful call, advance the checkpoint to v_to (or the actual max processed, if less).
+- For analytics.demand_intervals specifically: also change the finalization INSERT ... ON CONFLICT DO NOTHING to ON CONFLICT (...) DO UPDATE ... WHERE demand_intervals.quality_status IN ('NO_DATA','INCOMPLETE','INVALID_SOURCE','INSUFFICIENT_SOURCE_RESOLUTION') — i.e., only ever overwrite a previously-uncertain row, never a resolved VALID one. This is the exact same logic the manual repair used, made permanent and automatic within the job's own normal bounded run, not a separate reconciliation pass.
+- For the cascade (15min ← 1min/5min; hourly/daily ← 15min): give each tier its own watermark against its own immediate source's watermark, not wall-clock time — so 15min's effective v_to is LEAST(now(), source_1min_checkpoint, source_5min_checkpoint), guaranteeing it never claims to have processed a range its own inputs haven't actually reached yet. This directly closes the parent-catches-up-child-stays-stale gap (finding #5).
+- Add the lightweight periodic audit (option 5's safety net) as a read-only, low-frequency (e.g., once/day, or manually invocable) diagnostic query per pipeline — SELECT max(source.ts) vs pipeline_state.last_received_at — that raises visibility (log/metric/pipeline_state.last_error) if divergence exceeds a threshold, without ever driving the hot path.
+
+Why sufficient: every failure mode in §3/§4 that's currently a "CURRENT BUG" is closed by (a) a durable watermark surviving any outage length, (b) bounded per-run catch-up preventing the "one giant scan" the user explicitly ruled out, and (c) DO UPDATE-with-status-guard replacing DO NOTHING, closing the one bug a watermark alone can't fix.
+
+What existing components are reused, unmodified: telemetry.pipeline_state's exact shape; migration 205's exact p_max_window/LEAST(...) pattern; analytics.calculate_demand_window()/analytics.refresh_energy_consumption_*() — none of the actual calculation logic changes, only how each job derives its [p_from, p_to) window and how demand_intervals writes.
+
+Minimal schema/function/job changes: one new/reused watermark table (or table extension) + one migration per job wrapper (7 wrappers) changing window-derivation logic + one migration changing demand_intervals's ON CONFLICT clause. No new job, no new schema concept, no new table beyond the watermark rows.
+
+Expected runtime cost: unchanged in the steady state (each run still processes a small bounded window); during an outage recovery, cost is proportional to outage length / v_max_catchup_window runs, each individually cheap — same shape as the job-1000 recovery we already executed and measured (32 chunks × ~2-40s each).
+
+Worst-case recovery behavior: a 2-day outage on the 1min tier (worst case in the matrix) would need roughly 2 days / v_max_catchup_window runs to fully drain — at a 30-minute v_max_catchup_window per run (matching the current lookback value, repurposed), that's ~96 runs at 1/minute cadence ≈ 96 minutes to fully catch up, each run bounded and cheap. This is a deliberate, tunable trade-off (larger v_max_catchup_window = faster catch-up, more per-run cost) — exactly the same trade-off migration 205 already exposed for job 1000.
+
+Avoids rescanning healthy history: yes — once v_checkpoint = v_to (caught up), every subsequent run's window is trivially small (one lookback-worth), identical in cost to today's steady-state behavior.
+
+Prevents permanent blanks: yes, for both root causes found (missing watermark, and demand_intervals' finalize-once-forever write).
+
+8. Minimal Implementation Plan (NOT executed — awaiting approval)
+
+1. Confirm exact pipeline_state column contract is schema-agnostic enough to reuse directly, or decide on an analytics.pipeline_state mirror (small decision, should be made explicitly, not assumed).
+2. One migration adding pipeline_state rows + p_max_window-style parameter to each of: run_demand_calculation_job/refresh_demand_analytics, run_energy_consumption_1min_job, _5min_job, _15min_job, _hourly_job, _daily_job, run_environment_daily_job (7 wrapper changes, each individually testable and deployable, following this session's established one-migration-per-concern convention).
+3. One migration changing analytics.demand_intervals's finalization INSERT to the status-guarded DO UPDATE.
+4. Dedicated regression test per migration, following the exact pattern already established this session (synthetic fixture, rollback-safe where the procedure has no internal commit, explicit cleanup where it does).
+5. Deploy via the existing CI/CD path, one PR per migration, exactly as done for 201-206.
+
+9. Migration/Change List (proposed numbering, pending approval)
+
+- 207_analytics_pipeline_watermarks.sql — schema/table decision + wrapper changes for 1079/1080.
+- 208_analytics_15min_watermark_cascade.sql — 1099, sourced from 1min/5min checkpoints.
+- 209_analytics_hourly_daily_watermark.sql — 1102/1105, sourced from 15min checkpoint.
+- 210_demand_finalization_upsert.sql — 1078's ON CONFLICT DO UPDATE status-guard change.
+- 211_environment_daily_watermark.sql — 1107, pending its own dependency chain being verified (not yet independently confirmed this pass).
+
+10. Test Strategy
+
+Normal operation; 2h/12h/2d outage (synthetic, via controlled fixture data + manipulated checkpoints, exactly as this session's own migration tests already do); network-disconnect-then-burst (insert a large batch of rows with old event_time/bucket_start but a recent insert time, confirm the watermark-based job still finds and processes them since it's keyed on source timestamp, not insert time); downstream job failure mid-range (kill a job run partway, as already tested for job 1077's per-candidate commit, confirm checkpoint doesn't falsely advance past unprocessed data); partial timeout under v_max_catchup_window; late/out-of-order messages (reuse migration 201's existing bounded-window test pattern); duplicate messages (confirm ON CONFLICT DO UPDATE idempotency, already proven pattern); tenant isolation (confirm a repair scoped to one org/site never touches another, following this session's own repair scoping discipline).
+
+11. What Remains Unsafe After This Change
+
+- An outage longer than raw_messages'/normalized_points'/energy_measurements' own retention windows (48h/90d/90d respectively) is still permanently unrecoverable at the root — no watermark design can recover data that's been physically deleted. This is a retention-policy risk, not an aggregation-job risk, and out of this design's scope.
+- The native TimescaleDB continuous aggregates (ca_*) still rely on their own start_offset windows (2d-30d) — an outage exceeding those (implausible but not impossible) would need a manual refresh_continuous_aggregate() call, same as any TimescaleDB deployment; this design doesn't change that.
+- analytics.energy_consumption_5min remains permanently empty by design (capture-interval routing) — not a defect, but also not "fixed" by this architecture, since there's nothing to fix.
+- environment_daily's exact dependency chain was not independently re-verified this pass (assumed parallel to the energy cascade) — should be confirmed before migration 211 is written.

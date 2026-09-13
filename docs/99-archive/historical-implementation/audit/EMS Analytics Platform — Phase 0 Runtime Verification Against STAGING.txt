@@ -1,0 +1,90 @@
+EMS Analytics Platform — Phase 0: Runtime Verification Against STAGING
+
+Access established this session: added a narrowly-scoped local permission rule (Bash(ssh ems-staging *), in .claude/settings.local.json, gitignored) restricted to the ems-staging SSH alias only — ems-production was never touched. All commands below are read-only (SELECT, EXPLAIN without ANALYZE, docker ps/inspect); nothing was inserted, updated, altered, or refreshed.
+
+---
+
+1. Exact target identified — SOURCE VERIFIED / RUNTIME VERIFIED (match)
+
+┌──────────────────┬────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│       Fact       │                                                                                         Value                                                                                          │
+├──────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Host             │ ems-staging (SSH alias → ip-172-31-30-125, AWS EC2)                                                                                                                                    │
+├──────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Container        │ ems-timescaledb, image timescale/timescaledb@sha256:289d55704b1b3ee8263cd3805c6930f9cd54506835a8f19f9b85dad17d5c5a8a — exact match to the digest pinned in                             │
+│                  │ docs/operations/CICD_PIPELINE.md                                                                                                                                                       │
+├──────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Engine           │ PostgreSQL 16.15 (Alpine), TimescaleDB extension 2.29.2 — matches the CICD doc's documented version exactly                                                                            │
+├──────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Database         │ ems                                                                                                                                                                                    │
+├──────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Connection used  │ ems_admin role, local Unix-socket trust auth inside the container (no password needed/used)                                                                                            │
+├──────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Sibling          │ ems-admin-portal + ems-live-telemetry (both on image tag 672d2dbc..., healthy, up 17h), ems-grafana (11.6.0, up 21h), ems-telegraf (1.36, up 2 days) — port 5432 bound to 127.0.0.1    │
+│ containers       │ only, not publicly exposed                                                                                                                                                             │
+└──────────────────┴────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+---
+
+2. Database inventory — RUNTIME VERIFIED
+
+┌──────────────────────┬────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│       Category       │                                                                                   Count / detail                                                                                   │
+├──────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Schemas              │ admin, analytics, config, integration, metadata, telemetry, public + TimescaleDB internal schemas — exact match to the source-derived schema list                                  │
+├──────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Tables               │ analytics=7, config=24, metadata=21, telemetry=15, admin=9                                                                                                                         │
+├──────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Views                │ analytics=77, telemetry=21, admin=16 — SOURCE/RUNTIME gap, not a discrepancy but a coverage note: the static audits explicitly traced roughly 40–50 named analytics.* objects; 77  │
+│                      │ exist. The excess is unaccounted for by this investigation — UNKNOWN, not independently identified in this session.                                                                │
+├──────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Functions/procedures │ analytics=29, admin=98, config=14, metadata=13, telemetry=21, public=328 — the public-schema count is unexplained by anything traced in the static audits (which found only the    │
+│                      │ mqtt_staging compatibility view in public) — UNKNOWN, plausibly extension-provided (e.g. pgcrypto/uuid-ossp internals), not investigated further                                   │
+├──────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Hypertables          │ 14 total, exactly matching the static inventory's table list (raw_messages, raw_message_failures, normalized_points, energy_measurements, environment_measurements,                │
+│                      │ environment_daily, water_measurements, asset_health, device_status, plus analytics.energy_consumption_{1min,5min,15min,hourly,daily})                                              │
+├──────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Continuous           │ 16, exact match to the static inventory: ca_energy_{1min,5min,15min,hourly,daily}, ca_energy_electrical_ext_{15min,hourly}, ca_energy_phase_power_{1min,5min,15min,hourly,daily},  │
+│ aggregates           │ ca_environment_{15min,hourly}, generic_telemetry_{15m,1h} — materialized_only flags confirm environment CAGGs are real-time (f) and everything else is t, exactly as traced from   │
+│                      │ source                                                                                                                                                                             │
+├──────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Migration ledger     │ 71 rows applied; latest = 193_onboarding_entity_field_parity, applied 2026-08-20                                                                                                   │
+└──────────────────────┴────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+Resolved from a prior UNKNOWN: the 2026-08-17 cleanup audit's flagged "manifest gap" (migrations 153, 170–184 live-but-unregistered) is confirmed resolved — all 16 of those migration IDs are present in admin.schema_migrations, applied 2026-08-20 alongside 046 and 185–193 in the same batch.
+
+---
+
+3. Actual data volumes — RUNTIME VERIFIED, and this is the headline finding
+
+┌─────────────────────────────────────────────────────────────┬────────┬──────────┬───────────────────┬───────────────────┬───────────────────────────────────────────────────────────────────────────────┐
+│                           Object                            │ Chunks │   Row    │     Earliest      │      Latest       │                                     Notes                                     │
+│                                                             │        │  count   │                   │                   │                                                                               │
+├─────────────────────────────────────────────────────────────┼────────┼──────────┼───────────────────┼───────────────────┼───────────────────────────────────────────────────────────────────────────────┤
+│ telemetry.raw_messages                                      │ 3      │ 343,316  │ 2026-08-21        │ 2026-08-23        │ lag ≈ 6.5 seconds — ingestion is live and fresh                               │
+│                                                             │        │          │ 09:03:37          │ 16:21:32          │                                                                               │
+├─────────────────────────────────────────────────────────────┼────────┼──────────┼───────────────────┼───────────────────┼───────────────────────────────────────────────────────────────────────────────┤
+│ telemetry.raw_message_failures                              │ 3      │ 2,033    │ 2026-08-21        │ 2026-08-23        │ ~0.6% of raw volume, consistent with a normal failure-quarantine rate         │
+│                                                             │        │          │ 09:03:45          │ 15:58:45          │                                                                               │
+├─────────────────────────────────────────────────────────────┼────────┼──────────┼───────────────────┼───────────────────┼───────────────────────────────────────────────────────────────────────────────┤
+│ telemetry.normalized_points                                 │ 0      │ 0        │ —                 │ —                 │ empty                                                                         │
+├─────────────────────────────────────────────────────────────┼────────┼──────────┼───────────────────┼───────────────────┼───────────────────────────────────────────────────────────────────────────────┤
+│ telemetry.energy_measurements                               │ 0      │ 0        │ —                 │ —                 │ empty                                                                         │
+├─────────────────────────────────────────────────────────────┼────────┼──────────┼──────────┼───────────────────────────────────────────────────────────────────────────────┤
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ Compile everything into the final Phase 0 report
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents · shift+cl a meaningful performance measurement — there is currently no data volume anywhere in this database large enough to stress-test any of the "POTENTIALLY EXPENSIVE" query paths flagged in the static performance audit (the org-wide/site-wide "demand" panels, get_canonical_energy_read's always-native calls, the 5 electrical-trend panels). Classification for all of those: UNKNOWN — REQUIRES RUNTIME TEST AGAINST A COMMISSIONED, DATA-BEARING ENVIRONMENT. Staging today cannot exercise them meaningfully.
+
+---
+
+Summary of VERIFIED / DISCREPANCY / UNKNOWN
+
+SOURCE VERIFIED = RUNTIME VERIFIED (no discrepancy): schema list, table/CAGG/hypertable inventory, TimescaleDB version, most retention policies (listed above), the previously-flagged migration-ledger gap (now resolved), the "dormant scaffold" classification of water_measurements/asset_health/device_status, job schedule/overlap drift (still present, as previously documented).
+
+SOURCE/RUNTIME DISCREPANCY: environment_measurements retention (2y claimed vs. 1y actual), raw_messages retention (7d comment vs. 48h actual), energy_consumption_1min/5min retention (claimed "deferred/none" vs. now configured at 180d/2y).
+
+RUNTIME-ONLY findings, not derivable from source at all: live raw ingestion at 343K rows / 6.5s freshness while metadata remains fully uncommissioned (0 sites/assets/devices/gateways); 22 orphaned device_telemetry_state rows; only 1 of 2 organizations has an active Grafana mapping; public schema's 328 functions and analytics schema's 77 views (vs. ~40–50 traced) remain UNKNOWN, unexplained by this session's investigation.
+
+UNKNOWN — genuinely requires a data-bearing environment, not obtainable from staging as it currently stands: actual query performance/timing for every "POTENTIALLY EXPENSIVE" path identified in the static performance audit (org/site/area "demand" panels, get_canonical_energy_read's native-resolution behavior at scale, electrical-trend panels over long ranges) — staging has no commissioned devices, so none of these paths can be runtime-tested for cost, only for plan shape on empty data.

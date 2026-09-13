@@ -1,0 +1,290 @@
+EMS Analytics Platform — Post-1D Energy-Consumption Reconciliation
+and Next-Phase Recommendation
+
+Method: reconciliation of all Phase 0/1/1A-1D audit documents against direct
+inspection of the current repository and a fully-migrated local disposable
+database (pg_get_viewdef/pg_get_functiondef/timescaledb_information.jobs
+queried directly for ground truth, not assumed from possibly-stale files —
+the exact discipline Phase 1D's own investigation required twice this
+session). No files modified. No staging/production access.
+
+===============================================================================
+A. CURRENT STATE
+===============================================================================
+
+Three real implementations compute classified energy consumption today
+(register delta -> classify_energy_register_delta() -> valid-only sum).
+A fourth and fifth object are confirmed NOT to be duplicates (different
+metrics entirely) and must stay out of scope for any consolidation.
+
+A.1 Canonical (declared, Phase 1B) — analytics.energy_consumption_{1min,
+    5min,15min,hourly,daily}
+    Native tier classified once from telemetry.ca_energy_{1min,5min};
+    15min/hourly/daily persisted, additive-only rollups (Phase 1B-proven:
+    daily derives only from 15min, never hourly; site-local timezone
+    correct). CORRECTION to prior assumption, confirmed this session: this
+    lineage is NOT dormant on the write side. All five refresh functions
+    are live, scheduled=true TimescaleDB background jobs:
+        analytics.run_energy_consumption_1min_job    every 1 min
+        analytics.run_energy_consumption_5min_job    every 1 min
+        analytics.run_energy_consumption_15min_job   every 5 min
+        analytics.run_energy_consumption_hourly_job  every 15 min
+        analytics.run_energy_consumption_daily_job   every 1 hour
+    (registered in postgres/ddl/140,143 and postgres/migrations/179,181,183).
+    It IS actively computed and stored in any real deployment. It has ZERO
+    real READ consumers — confirmed again this session: only ems_admin has
+    any grant; no Grafana object, no application code, nothing but its own
+    contract tests (Phase 1B's, and this repository's own self-documenting
+    app/tests/test_energy_semantic_reporting_contract.py::
+    test_reporting_contract_is_not_yet_exposed_to_consumers) ever reads it.
+
+A.2 Live Grafana-facing lineage (ddl/147, predates Phase 1B) — actually
+    consumed today
+    analytics.v_energy_consumption_native (UNION of the SAME energy_
+    consumption_1min/5min tables as A.1 — native tier is shared) ->
+    v_energy_semantic_rollup_15min (live query-time GROUP BY, date_bin 15
+    minutes) -> v_energy_reporting_15min (tenant-wrapped) -> v_energy_
+    reporting_hourly / v_energy_reporting_daily (live query-time GROUP BY
+    over the 15-minute view — NOT the persisted A.1 hourly/daily tables).
+    This is what analytics.get_canonical_energy_read actually reads for
+    every tier, and therefore what analytics.get_grafana_asset_energy_
+    intervals (asset-overview.json's "Total Energy vs previous period"
+    panel — the only real Grafana consumer of classified consumption)
+    actually returns. Confirmed via pg_get_viewdef against the live local
+    database (Phase 1D's own finding, reconfirmed this session).
+
+A.3 Path A — analytics.v_energy_consumption_15min -> v_site_energy_
+    balance_daily
+    A genuine THIRD independent classification path: reads telemetry.
+    ca_energy_15min (the raw MAX/MIN register continuous aggregate)
+    directly, computes LAG()-based deltas at 15-minute granularity, and
+    calls the same real analytics.classify_energy_register_delta() —
+    reusing the canonical classifier but at a different resolution and
+    from a different raw source than either A.1 or A.2. Feeds v_site_
+    energy_balance_daily (the Energy Balance metric), tenant-scoped via
+    grafana_organization_map + config.site_energy_meter_roles joins,
+    grafana_reader-granted. Confirmed this session: NO dashboard (grepped
+    all 7) queries either object directly — only app/tests reference them.
+    Unchanged since the original Phase 0/1 Reconciliation's finding.
+
+A.4 NOT duplicates — confirmed out of scope
+    analytics.get_grafana_explorer_intervals (analytics-explorer.json):
+    a generic point-value trend explorer over telemetry.normalized_points/
+    generic CAGGs keyed by arbitrary logical_point name (AVG/MIN/MAX of
+    numeric_value) — no register-delta classification, no consumption_kwh
+    concept. A different metric family entirely, not energy consumption.
+    analytics.v_grafana_energy_samples (area-overview.json, organization-
+    overview.json, site-overview.json — 3 dashboards): raw per-sample
+    register/instantaneous-power display from telemetry.energy_
+    measurements directly — no delta, no classification. Confirmed still
+    accurate as "specialized, not a duplicate" (prior audits' finding
+    unchanged).
+
+A.5 Resolution routing (Phase 1D) — complete for its scoped objective
+    analytics.resolve_grafana_energy_routing_resolution correctly selects
+    native/15m/1h/1d for get_grafana_asset_energy_intervals -> get_
+    canonical_energy_read, verified live on staging this session. This is
+    DONE. It routes correctly across all four tiers of lineage A.2 — it
+    does not, and was never scoped to, redirect anything toward A.1.
+
+===============================================================================
+B. REMAINING GAPS
+===============================================================================
+
+    - Two live, correct, real implementations (A.1 persisted, A.2 live-
+      aggregated) compute the identical metric from the identical native
+      source, and only one of them (A.2, the less efficient, query-time
+      one) is ever read. A.1 is fully built, proven, populated, and idle.
+      This is the concrete remaining architectural inconsistency Phase 1D
+      surfaced and explicitly deferred.
+    - A.3 (Path A / v_energy_consumption_15min / v_site_energy_balance_
+      daily) has zero real consumer of either object, exactly as found in
+      the original Reconciliation. The Reconciliation document itself
+      named "Decision-1A (Energy Balance's fate)" as the one true
+      precondition before touching Path A — that product decision has
+      still not been made. Retiring or migrating Path A is therefore NOT
+      safe to bundle into the smallest next phase without first deciding
+      whether Energy Balance is kept, retired, or migrated.
+    - Stale documentation risk (already flagged, still unresolved, still
+      advisory-only): postgres/ddl/141_asset_energy_persisted_read_path.sql
+      contains a pre-migration-044 function body for get_grafana_asset_
+      energy_intervals that no longer matches live behavior. No live-
+      behavior impact on any checked environment (every real deploy path
+      applies forward migrations after it), but it will mislead the next
+      reader exactly as it misled this investigation twice before being
+      caught by direct live-DB verification.
+    - No tenant-isolation risk identified for a same-shape consolidation:
+      A.1's tables are internal-only (ems_admin); A.2's reporting views
+      already carry the gom/tenant join that would need to be preserved
+      when retargeted.
+
+===============================================================================
+C. PROPOSED NEXT PHASE
+===============================================================================
+
+PHASE 1E — ENERGY-CONSUMPTION REPORTING-LAYER CONSOLIDATION
+
+Objective: retarget the live Grafana-facing reporting views (A.2) to read
+from Phase 1B's already-proven, already-populated persisted tables (A.1)
+instead of live-re-aggregating from native data on every query — closing
+the gap Phase 1D discovered and explicitly deferred (Phase 1D Plan §19),
+without touching anything above the view layer.
+
+What gets consolidated: the SOURCE of analytics.v_energy_reporting_5min,
+v_energy_reporting_15min, v_energy_reporting_hourly, v_energy_reporting_
+daily — from v_energy_semantic_rollup_5min/15min (live GROUP BY) to
+analytics.energy_consumption_5min/15min/hourly/daily (persisted, Phase
+1B-proven) respectively, keeping each view's existing name, column list,
+tenant (gom) join, and device-name join structure identical.
+
+What gets migrated: nothing above the view layer needs migration — analytics
+.get_canonical_energy_read, analytics.get_grafana_asset_energy_intervals,
+analytics.get_grafana_assets_energy_intervals, analytics.resolve_grafana_
+energy_routing_resolution, and asset-overview.json all call/query these
+views by the same name and get the same column shape back; none require a
+code change.
+
+What gets retired: analytics.v_energy_semantic_rollup_5min/15min (the live
+GROUP BY views) once nothing reads them — retire only after confirming no
+other consumer exists (grep confirms none this session; re-verify at
+implementation time as a final check, not assumed).
+
+What must NOT be changed this phase: analytics.v_energy_consumption_15min
+/ v_site_energy_balance_daily (Path A — deferred pending the Energy
+Balance product decision, per §B); analytics.get_grafana_explorer_intervals
+/ v_grafana_energy_samples (confirmed different metrics, A.4); analytics.
+classify_energy_register_delta() and the native tier itself (already
+correct, Phase 1B-proven, unchanged); analytics.resolve_grafana_energy_
+routing_resolution and every Phase 1D object; any Grafana dashboard file;
+any Phase 1A connectivity object; the job schedules corrected in Phase 1C.
+
+Exact database objects/files expected to change:
+    New migration(s): CREATE OR REPLACE VIEW for v_energy_reporting_5min,
+    _15min, _hourly, _daily (repointing FROM clause only; same output
+    columns) — a small number of new migration files (one per view, or
+    combined, per implementation-time judgment), plus a manifest entry.
+    Retire (DROP) migration for v_energy_semantic_rollup_5min/15min, issued
+    only after the reporting views no longer reference them.
+    New test: a disposable-DB contract proving the retargeted views return
+    identical shape/values to what the native tier + real refresh functions
+    (A.1's own refresh_energy_consumption_15min/hourly/daily, already
+    proven in Phase 1B) produce, plus a re-run of Phase 1D's existing
+    routing contract to confirm end-to-end behavior is unchanged from the
+    Grafana caller's perspective.
+    No application code file, no Grafana dashboard file, no change to any
+    function signature or grant.
+
+Dependency/order of operations:
+    1. Confirm (at implementation time, not assumed) that v_energy_
+       semantic_rollup_5min/15min still have no consumer beyond the
+       reporting views being retargeted.
+    2. Retarget v_energy_reporting_15min first (it is what hourly/daily
+       are themselves built on within the SAME lineage today — but after
+       this phase, hourly/daily will read A.1's own persisted hourly/daily
+       tables directly, not through the 15min view, so this ordering risk
+       is limited to the transition window of a single migration file
+       applied atomically).
+    3. Retarget v_energy_reporting_5min, _hourly, _daily.
+    4. Confirm output equivalence via the new contract test before
+       retiring anything.
+    5. Retire v_energy_semantic_rollup_5min/15min only after step 4 passes.
+
+Tenant/security implications: none, provided each retargeted view
+preserves its existing JOIN to metadata.grafana_organization_map (and
+metadata.devices for the device-name column) exactly as today — this is a
+straightforward, verifiable structural requirement, not a design change.
+analytics.energy_consumption_* tables remain internal-only (ems_admin);
+the reporting views remain the only tenant-scoped boundary, unchanged.
+
+Grafana impact: none. asset-overview.json's panel call is unaffected —
+same function, same signature, same columns; only the data now comes from
+a persisted table instead of a live aggregation.
+
+Rollback considerations: each CREATE OR REPLACE VIEW is trivially
+reversible by a follow-up migration restoring the prior FROM clause; the
+DROP of v_energy_semantic_rollup_5min/15min should be deferred to a
+separate, later migration (not bundled with the retarget) specifically so
+a rollback of the retarget does not also require recreating a dropped view
+under time pressure.
+
+===============================================================================
+D. TEST STRATEGY
+===============================================================================
+
+    1. Canonical calculation correctness: already proven (Phase 1B contract,
+       re-run every CI cycle) — not re-tested, only re-confirmed still
+       passing.
+    2. GOOD/GAP/RESET/ROLLOVER semantics: already proven (Phase 1B) — same,
+       re-confirmed passing, not re-derived.
+    3. native -> 15m -> hourly -> daily behavior: already proven (Phase 1B)
+       for the PERSISTED chain. New: prove the RETARGETED reporting views
+       return the same values the persisted tables already contain (a
+       direct equality check between v_energy_reporting_15min/hourly/daily
+       and energy_consumption_15min/hourly/daily for the same device/
+       range, seeded via the real refresh functions, Phase 1B style).
+    4. Routing selects the correct tier: already proven (Phase 1D) — re-run
+       unchanged; additionally confirm get_grafana_asset_energy_intervals's
+       output is byte-identical before/after the retarget for a fixed
+       fixture (same values, now sourced differently).
+    5. Tenant isolation: re-run Phase 1A/1D's existing isolation assertions
+       against the retargeted views; add one assertion confirming the
+       retargeted view still returns zero rows for a mismatched grafana_
+       org_id.
+    6. All migrated consumers use the canonical path: since the only real
+       consumer (asset-overview.json via get_grafana_asset_energy_
+       intervals) requires no code change, this is verified by the
+       existing contract test continuing to pass unchanged plus a direct
+       check that v_energy_reporting_* no longer references v_energy_
+       semantic_rollup_* in pg_get_viewdef.
+    7. Retired implementations no longer referenced: a repository-wide
+       grep (part of the test/CI step, or a documented manual check) that
+       analytics.v_energy_semantic_rollup_5min/15min have zero remaining
+       callers before the DROP migration is written.
+    8. Phase 1A/1B/1C/1D contracts continue to pass: full local disposable-
+       DB suite re-run, exactly as after every prior phase.
+
+===============================================================================
+E. SCOPE BOUNDARY
+===============================================================================
+
+WILL change: analytics.v_energy_reporting_5min/15min/hourly/daily (FROM
+clause only); analytics.v_energy_semantic_rollup_5min/15min (retired, in a
+separate later migration); postgres/restructure_manifest.csv; scripts/
+test/run_integration_environment.sh; one or more new scripts/test/assert_*
+files.
+
+MUST NOT change: analytics.energy_consumption_{1min,5min,15min,hourly,
+daily} and their refresh functions/jobs (already correct); analytics.
+classify_energy_register_delta(); analytics.get_canonical_energy_read;
+analytics.get_grafana_asset_energy_intervals; analytics.get_grafana_assets_
+energy_intervals; analytics.resolve_grafana_energy_routing_resolution;
+analytics.v_energy_consumption_15min / v_site_energy_balance_daily (Path A
+— deferred); analytics.get_grafana_explorer_intervals; analytics.
+v_grafana_energy_samples; any Grafana dashboard file; any Phase 1A/1C
+object; job schedules.
+
+Grafana files required: NO.
+Migrations required: YES (view-source retarget; a separate later retirement
+migration for the now-unused live-aggregation views).
+Application code changes required: NO.
+
+===============================================================================
+F. IMPLEMENTATION RECOMMENDATION
+===============================================================================
+
+Proposed phase name: PHASE 1E — ENERGY-CONSUMPTION REPORTING-LAYER
+CONSOLIDATION
+
+Objective: retarget analytics.v_energy_reporting_{5min,15min,hourly,daily}
+to read from Phase 1B's already-proven, already-populated persisted
+energy_consumption_{5min,15min,hourly,daily} tables instead of live
+query-time re-aggregation, with zero change to any Grafana dashboard,
+function signature, or grant — then retire the now-unused live-aggregation
+views once confirmed unreferenced. Path A (v_energy_consumption_15min /
+v_site_energy_balance_daily) is explicitly deferred pending a separate
+product decision on Energy Balance's fate, per the original Reconciliation
+document's own stated precondition.
+
+This is investigation/reconciliation only. Nothing has been implemented,
+staged, committed, pushed, or deployed. Awaiting approval before any
+further action.

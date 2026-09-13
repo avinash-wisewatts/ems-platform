@@ -1,0 +1,194 @@
+EMS Analytics Platform — Phase 1D Investigation
+Resolution-Routing Consistency
+
+STATUS: STOP — DISCREPANCY REQUIRES DECISION.
+No implementation, staging, or database changes performed. Investigation
+only, against the local repository and a local disposable database already
+built during Phase 1C (read-only queries only: pg_get_functiondef against
+the fully deployed+migrated local test DB — the same container already up
+from the Phase 1C run, not staging).
+
+===============================================================================
+1. EXECUTIVE SUMMARY
+===============================================================================
+
+The Phase 1D objective as stated ("get_grafana_asset_energy_intervals lacks
+resolution/tier routing"; "get_canonical_energy_read is an orphaned
+implementation needing reconciliation") does NOT match the current
+repository state. Both claims trace back to the Architecture Gap Analysis
+and Final Reconciliation documents, which describe a state that migrations
+042-046 (already in the repository, already applied to staging) resolved.
+Specifically:
+
+    - analytics.get_grafana_asset_energy_intervals ALREADY routes by
+      resolution tier: it calls analytics.resolve_grafana_energy_routing_
+      resolution(p_from, p_to) to choose a tier, then delegates to
+      analytics.get_canonical_energy_read to fetch already-classified
+      energy at that tier. This was confirmed empirically by querying
+      pg_get_functiondef() against a fully deployed + migrated local
+      database (the exact mechanism CI and staging deployment both use),
+      not by reading a possibly-stale file.
+
+    - analytics.get_canonical_energy_read is NOT orphaned. It has a real
+      grafana_reader EXECUTE grant (migration 043, described in the
+      manifest as "for the Panel 13 pilot cutover") and IS the live
+      implementation actually backing get_grafana_asset_energy_intervals,
+      confirmed by the same empirical query.
+
+    - The dashboard contract (signature, column names) is completely
+      unchanged from the pre-routing version, so no dashboard update was
+      ever needed for this wiring — it already achieves exactly the
+      "preferred outcome" architecture this task described.
+
+One genuine, narrower gap remains and is still accurately described by the
+Architecture Gap Analysis: analytics.resolve_grafana_energy_routing_
+resolution (current, migration-045-corrected definition) never returns '1d'
+— its three branches are <=24h -> native, <=14d -> 15m, >14d -> 1h. Very
+long ranges (>14 days) are served at hourly resolution rather than daily,
+which is functionally correct but not maximally efficient for e.g.
+multi-year views. This is the one part of the original "resolution-routing
+consistency" gap that has NOT been closed.
+
+A second, separate, lower-severity discrepancy was found: postgres/ddl/141_
+asset_energy_persisted_read_path.sql (the fresh-install "canonical database"
+baseline snapshot for this specific function) still contains the OLD,
+pre-migration-044 direct-native-only function body. It never causes
+incorrect live behavior, because every real deployment path (local test DB,
+CI, staging) applies the full forward-migration set after the ddl/ baseline,
+and migration 044 has genuinely executed (not silently "baselined") on every
+environment checked. But the file is misleading to a reader (it misled this
+investigation initially) and is a latent documentation-consistency risk.
+
+===============================================================================
+2. WHY THIS IS A "STOP" PER THE TASK'S OWN CRITERIA
+===============================================================================
+
+This finding directly matches three of the explicitly named stop conditions:
+    - "get_canonical_energy_read is not actually orphaned" -- confirmed true.
+    - "get_grafana_asset_energy_intervals already implements the documented
+      routing" -- confirmed true.
+    - "the current repository differs materially from the source documents"
+      -- confirmed true (Gap Analysis/Reconciliation describe a still-open
+      gap that migrations 042-046 already closed).
+
+Per instruction, this is reported rather than silently reinterpreted, and no
+20-section "build resolution routing" implementation plan has been written,
+since that would presuppose a gap that mostly does not exist.
+
+===============================================================================
+3. EVIDENCE (CALL GRAPH, AS ACTUALLY LIVE)
+===============================================================================
+
+    Grafana (asset-overview.json, "Total Energy vs previous period" panel)
+        |  rawSql: CROSS JOIN LATERAL analytics.get_grafana_asset_energy_intervals(org_id, asset_id, from, to)
+        v
+    analytics.get_grafana_asset_energy_intervals(p_grafana_org_id, p_asset_id, p_from, p_to)
+        |  (unchanged signature/columns since before migration 044)
+        |  calls analytics.resolve_grafana_energy_routing_resolution(p_from, p_to)
+        |      -> 'native' if range <= 24h
+        |      -> '15m'    if range <= 14d
+        |      -> '1h'     otherwise   (never '1d')
+        v
+    analytics.get_canonical_energy_read(org_id, asset_id, from, to, <tier>, 'native')
+        |  tenant check: grafana_organization_map -> assets -> asset_devices
+        |      (PRIMARY_METER) -> devices -> gateways -> site  (zero rows on
+        |      any mismatch; identical pattern to the pre-existing contract)
+        |  capture-policy boundary safety check (rejects a range that spans
+        |      a genuine site capture-policy change; migrations 191/192
+        |      narrowed this check to capture_interval_seconds only)
+        v
+    Reads by actual_resolution (never by raw capture_interval_seconds):
+        native -> analytics.v_energy_consumption_native   (energy_consumption_1min/5min UNION ALL)
+        5m     -> analytics.v_energy_reporting_5min        (not reachable via the Grafana auto-router; only reachable by an explicit 'native' resolve when a site's real capture interval is 5 minutes)
+        15m    -> analytics.v_energy_reporting_15min
+        1h     -> analytics.v_energy_reporting_hourly      (migration 041; derived only from the 15-minute semantic contract)
+        1d     -> analytics.v_energy_reporting_daily       (derived only from the 15-minute semantic contract, site-local timezone -- NOT reachable via the Grafana auto-router today)
+
+    analytics.get_grafana_assets_energy_intervals (plural fan-out, migration
+    044, max 10 assets) -- exists, correctly delegates to the singular
+    function per-asset, but has ZERO dashboard consumers found (grep across
+    grafana/ found only the singular function referenced, in asset-
+    overview.json).
+
+===============================================================================
+4. RESOLUTION-ROUTING MATRIX
+===============================================================================
+
+    Tier | Canonical source                    | Site-tz aware | Hourly-first-daily risk | Reached via get_canonical_energy_read | Reached via the Grafana auto-router (resolve_grafana_energy_routing_resolution)
+    1m   | energy_consumption_1min (native)     | n/a            | n/a                      | yes ('native', 1-min-capture sites)   | yes, for ranges <=24h on a 1-min-capture site
+    5m   | energy_consumption_5min (native)     | n/a            | n/a                      | yes ('native', 5-min-capture sites)   | yes, for ranges <=24h on a 5-min-capture site (never via an explicit '5m' request)
+    15m  | energy_consumption_15min             | n/a (UTC bucket)| n/a (native-derived)    | yes                                    | yes, for ranges <=14 days
+    1h   | energy_consumption_hourly            | n/a (UTC bucket)| n/a (15min-derived, confirmed in Phase 1B) | yes                | yes, for ranges >14 days (also serves what should arguably be daily-tier long ranges)
+    1d   | energy_consumption_daily             | YES (site-local midnight, Phase 1B-proven 15min-only derivation) | not applicable -- correctly 15min-derived | yes | NO -- resolve_grafana_energy_routing_resolution never returns '1d'
+
+The Phase 1B invariant (daily must derive from 15-minute, never from hourly)
+is preserved throughout: v_energy_reporting_daily -> energy_consumption_daily
+-> refresh_energy_consumption_daily, which Phase 1B already proved reads
+only analytics.energy_consumption_15min. get_canonical_energy_read's '1d'
+branch reads v_energy_reporting_daily directly -- it never routes through
+the hourly tier. No violation found.
+
+===============================================================================
+5. GRAFANA BOUNDARY
+===============================================================================
+
+Only one Grafana object consumes either function: grafana/dashboards/core/
+asset-overview.json, calling analytics.get_grafana_asset_energy_intervals
+with the exact same 4-argument call it always used. No dashboard change is
+needed for anything in this investigation's findings -- the existing
+boundary already matches the task's "preferred outcome" diagram exactly.
+
+===============================================================================
+6. TENANT / SECURITY
+===============================================================================
+
+No weakening found. get_canonical_energy_read is SECURITY DEFINER, owned by
+ems_admin, pinned search_path, and re-derives tenant/asset/device/site
+identity independently via grafana_organization_map + PRIMARY_METER (same
+proven pattern as the pre-existing function it replaced), collapsing any
+tenant mismatch to zero rows without revealing why. grafana_reader's only
+grant is EXECUTE on this one fixed, non-dynamic function (migration 043's
+own comment: "grafana_reader does not receive any new table/view access").
+
+===============================================================================
+7. WHAT REMAINS GENUINELY OPEN (CANDIDATE PHASE 1D SCOPE, NOT YET IMPLEMENTED)
+===============================================================================
+
+A. Extend analytics.resolve_grafana_energy_routing_resolution so that very
+   long ranges (a threshold to be decided, e.g. >90 days or >180 days) route
+   to '1d' instead of always falling through to '1h' beyond 14 days. This is
+   a small, single-function change, does not touch get_canonical_energy_read
+   or get_grafana_asset_energy_intervals's own bodies, and preserves the
+   existing Grafana boundary exactly (same signature, same single consumer).
+
+B. (Optional, lower priority, hygiene-only) Correct the stale postgres/ddl/
+   141_asset_energy_persisted_read_path.sql baseline snapshot so a genuinely
+   from-scratch ddl-only install would not transiently expose the old
+   non-routed body before forward migrations apply. This does not currently
+   cause any incorrect live behavior on any checked environment (local, CI,
+   staging all apply forward migrations after the ddl baseline), so it is
+   advisory, not urgent.
+
+Neither of these matches the original Phase 1D framing ("reconcile an
+orphaned function", "get_grafana_asset_energy_intervals lacks routing") --
+both are much smaller than what was originally scoped.
+
+===============================================================================
+8. QUESTION FOR THE USER
+===============================================================================
+
+Given this correction, how should Phase 1D be redefined? Candidates:
+    1. Scope Phase 1D as item 7A only (extend the router to reach the daily
+       tier for long ranges) -- the one concretely remaining, narrow gap.
+    2. Scope Phase 1D as 7A + 7B (also correct the stale ddl/141 snapshot
+       for hygiene).
+    3. Treat resolution-routing consistency as effectively already
+       satisfied and move directly to planning the next phase (energy-
+       consumption consolidation, demand consolidation, or another item),
+       with this document serving as the closing verification for
+       resolution-routing.
+    4. Something else the user specifies.
+
+No implementation plan has been produced pending this decision, per the
+explicit instruction to stop and report rather than silently reinterpret
+the objective.

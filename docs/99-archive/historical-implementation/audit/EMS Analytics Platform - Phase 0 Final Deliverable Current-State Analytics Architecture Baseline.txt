@@ -1,0 +1,82 @@
+EMS Analytics Platform — Phase 0 Final Deliverable: Current-State Analytics Architecture Baseline
+
+Synthesis of the complete Phase 0 investigation (analytics inventory, metric lineage, Grafana consumption audit, query-performance audit, semantic-layer audit, tenant-isolation audit, API endpoint audit, and staging runtime verification). No new research performed in this turn — this is reconciliation only. No redesign.
+
+---
+
+PART A — The Layered Model, As It Actually Exists
+
+Layer 0: MQTT / Raw Telemetry
+
+- Authoritative objects: public.mqtt_staging (write-only INSTEAD OF INSERT adapter view, always returns 0 rows on SELECT by design) → telemetry.raw_messages (hypertable, durable raw JSON) → telemetry.raw_message_failures (quarantine).
+- Transformations: none — lossless JSON capture; malformed payloads preserved in an error envelope rather than rejected.
+- Metrics: none — pre-semantic.
+- Resolution: native receipt rate, unbucketed.
+- Quality handling: binary — valid JSON vs. quarantined failure; no numeric/business validation at this layer.
+- Tenant handling: none — no organization/site column at all; tenant is resolved downstream.
+- Jobs: none native to this layer (Telegraf writes continuously; ingestion is push-driven, not job-scheduled).
+- Dependencies: Telegraf, MQTT broker (HiveMQ), out of this audit's primary scope per the upstream telemetry-ingestion audit.
+- Consumers: telemetry.v_rtdata (Eniscope payload parser).
+- RUNTIME VERIFIED: 343,316 rows, earliest 2026-08-21, latest lag ≈6.5s (live), retention 48 hours (a discrepancy from the source comment's "~7 days" estimate). 2,033 quarantined failures (~0.6% of volume).
+
+Layer 1: Normalized Telemetry
+
+- Authoritative objects: telemetry.v_rtdata → telemetry.v_normalized_points (identity/profile resolution view) → telemetry.normalized_points (canonical hypertable, one row per logical point value) → compact state caches device_point_state, device_telemetry_state, device_live_point_state, pipeline_state, capture_bucket_samples, device_raw_receipt_state.
+- Transformations: MQTT UID → metadata.device_identifiers → metadata.devices → metadata.gateways (site) → field mapping (config.profile_field_mapping priority 1, metadata.device_field_mapping priority 2) → metadata.logical_points.
+- Metrics: none yet — this is identity resolution, not calculation.
+- Resolution: native event rate.
+- Quality handling: quality_code ∈ {MISSING, INVALID_NUMERIC, GOOD} — a small, distinct vocabulary from every downstream quality mechanism.
+- Tenant handling: resolved via device→gateway→site/org join; not yet Grafana-mapped at this layer.
+- Jobs: run_normalization_job — RUNTIME VERIFIED drift: canonical schedule 1min/15min-overlap, actually running 5min/20min-overlap.
+- Dependencies: metadata.device_identifiers, config.profile_field_mapping, metadata.device_field_mapping.
+- Consumers: all domain routing views; analytics.v_grafana_normalized_points/v_grafana_point_catalog; analytics.generic_telemetry_15m/1h (Analytics Explorer).
+- RUNTIME VERIFIED: 0 rows on staging (0 chunks) — normalization runs successfully every cycle but resolves 0 devices, because metadata.devices = 0 rows. Retention = 90 days (resolves a prior static UNKNOWN).
+
+Layer 2: Domain Measurements
+
+- Authoritative objects: telemetry.v_energy_measurements_route (3 generations, current = ddl 79, profile-aware scaling), telemetry.v_environment_measurements_route → telemetry.energy_measurements, environment_measurements, water_measurements, asset_health, device_status (hypertables).
+- Transformations: pivot normalized points into wide per-device rows; energy path applies config.energy_register_semantics.scale_to_normalized_unit; environment path applies none (hardcoded quality_code=NULL).
+- Metrics: raw instantaneous electrical values (power/voltage/current/PF/frequency/THD) and cumulative energy registers — not yet consumption.
+- Resolution: native.
+- Quality handling: energy path filters quality_code='GOOD'; environment path has no quality classification at all.
+- Tenant handling: organization_id/site_id/gateway_id/device_id/asset_id columns; asset_id set by trigger trg_set_energy_measurement_asset_id (tenant/site-validated resolution of PRIMARY_METER).
+- Jobs: run_energy_routing_job, run_environment_routing_job — RUNTIME VERIFIED drift: both canonical 1min/15min-overlap, actually running 1min/1min-overlap.
+- Dependencies: Layer 1, config.energy_register_semantics, metadata.asset_devices.
+- Consumers: all Layer 3 continuous aggregates; analytics.v_grafana_energy_samples, v_grafana_asset_electrical_samples, get_grafana_asset_energy_intervals().
+- RUNTIME VERIFIED: energy_measurements/environment_measurements = 0 rows (0 chunks); water_measurements/asset_health/device_status = 0 rows, confirmed genuinely dormant (no loader routes into them at all — water_measurements/device_status do have a retention policy configured despite being unused; asset_health has none at all). energy_measurements retention = 90 days confirmed; environment_measurements retention = 1 year (discrepancy — static trace said 2 years).
+
+Layer 3: Aggregation — TWO parallel families
+
+3a. Raw/general continuous aggregates (telemetry.ca_energy_{1min,5min,15min,hourly,daily}, ca_energy_electrical_ext_*, ca_energy_phase_power_*, ca_environment_{15min,hourly}): MAX/MIN of cumulative registers, AVG/MIN/MAX of instantaneous values. No quality logic. Compression/retention exactly as documented (1min=180d, 5min=2y, 15min=2y, hourly=5y, daily=indefinite; environment 15min=2y/hourly=5y). RUNTIME VERIFIED: all 16 CAGGs present, exact match to source; 0 rows currently materialized (empty source).
+
+3b. Validated/persisted "semantic" energy lineage (analytics.energy_consumption_{1min,5min} native → v_energy_semantic_rollup_* → v_energy_reporting_* → persisted energy_consumption_{15min,hourly,daily}): register-delta, classified once via analytics.classify_energy_register_delta() (single authoritative quality function, vocabulary GOOD/GAP/RESET/ROLLOVER/...), never reclassified in rollups. RUNTIME/SOURCE DISCREPANCY confirmed: the 1min/5min tables' source-code comment explicitly deferred adding retention ("do NOT add a retention policy yet"), but staging now has 180-day/2-year retention configured on them — the deferral was reversed by a change not captured in the files traced.
+
+- Jobs (Layer 3): ~50+ TimescaleDB jobs (CAGG refresh + columnstore compression + retention), each individually confirmed present and running with <0.2% failure rate at runtime; no jobs in a stuck/failed state.
+- Consumers of 3a: v_energy_demand_15min, peak-demand/load-profile family, v_site_energy_balance_daily — confirmed by the Grafana audit to have no dashboard consumer today.
+- Consumers of 3b: v_energy_consumption_15min (Path A, direct-classifier, Grafana-granted but no direct dashboard consumer found either) and the reporting pipeline feeding get_canonical_energy_read().
+
+Layer 4: Analytics (semantic/Grafana-exposure layer)
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents · sh
+Status: NOT FOUND
+────────────────────────────────────────
+Target capability: Data-quality-as-prerequisite-for-intelligence
+Current implementation: Data quality itself is partial/inconsistent (see row above); no intelligence layer exists to be a prerequisite for
+Evidence: Semantic-layer + metric-lineage audits
+Status: NOT FOUND (prerequisite condition not yet met)
+────────────────────────────────────────
+Target capability: L0–L7 layer separation (raw→normalized→domain→aggregate→semantic→features→insights→presentation)
+Current implementation: L0–L4 exist in the codebase (with the duplication/legacy issues above); L5 (analytical features), L6 (insights/recommendations) do not exist; L7 (presentation) exists only as Grafana,
+with confirmed instances of panels computing business logic that arguably belongs at L4/L5
+Evidence: This document, Part A + C
+Status: PARTIAL
+────────────────────────────────────────
+Target capability: Gate 2 precondition ("current analytics inventory complete" before redesigning tables)
+Current implementation: This Phase 0 investigation is that inventory
+Evidence: This document
+Status: EXISTS (the audit itself satisfies this gate)
+
+Legacy-status items surfaced by the matrix, not fitting a target-capability row directly: config.site_sectors, telemetry.v_energy_meter, superseded generations of v_energy_measurements_route/v_energy_consumption_15min/get_canonical_energy_read/resolve_grafana_energy_routing_resolution/get_grafana_short_history/resolve_demand_capability, LOAD_SUBMETER role, the pre-baseline archive tree — status: LEGACY throughout, none blocking current operation, all confirmed superseded-in-place rather than removed.

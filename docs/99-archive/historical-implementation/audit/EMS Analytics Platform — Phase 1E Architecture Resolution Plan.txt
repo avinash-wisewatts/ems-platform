@@ -1,0 +1,708 @@
+EMS Analytics Platform — Phase 1E Architecture Resolution Plan
+
+STATUS: ARCHITECTURE RESOLUTION ONLY. No files modified other than this
+document. No SQL written. No migrations, tests, staging, commits, or
+deployment. All facts below are re-derived from the current repository and
+a fully-migrated local disposable database, not assumed from prior audit
+documents.
+
+===============================================================================
+1. CURRENT CANONICAL LINEAGE
+===============================================================================
+
+Raw/native telemetry: HiveMQ -> Telegraf -> mqtt_staging -> raw_messages ->
+normalized_points -> telemetry.energy_measurements -> telemetry.ca_energy_
+{1min,5min} (raw MAX/MIN register continuous aggregates, unclassified) ->
+analytics.refresh_energy_consumption_1min()/_5min() -> analytics.
+classify_energy_register_delta() (THE single classification point; called
+once per flow, per native interval; never called again at any coarser
+tier) -> analytics.energy_consumption_1min / energy_consumption_5min
+(persisted, mutually exclusive per site by capture policy; PER-FLOW
+already: import_quality_code, import_is_valid, import_reset_detected,
+import_rollover_detected and the export equivalents are already fully
+independent at this tier).
+
+From here, native rows are additively rolled up. Two lineages currently
+exist for the 15-minute-and-above tiers, and this investigation's job is
+to determine which parts of each are canonical, which are duplicate, and
+which are neither:
+
+    analytics.v_energy_consumption_native (UNION ALL of energy_
+    consumption_1min/5min; no aggregation; pass-through)
+        |
+        +-- analytics.v_energy_semantic_rollup_5min / _15min
+        |   (LIVE, query-time GROUP BY date_bin; computes BOTH combined
+        |    AND per-flow gap/reset/rollover counts, per-flow valid/
+        |    invalid counts, wh/kwh sums, register snapshots, quality
+        |    codes arrays, quality_status -- this view already has every
+        |    column the reporting layer needs, per flow)
+        |       |
+        |       +-- v_energy_reporting_5min/15min (tenant-wrapped,
+        |       |   passes every column of the semantic rollup straight
+        |       |   through) -- LIVE READ PATH, actually consumed
+        |       |       |
+        |       |       +-- v_energy_reporting_hourly/daily (LIVE GROUP
+        |       |       |   BY over v_energy_reporting_15min)
+        |       |       |       |
+        |       |       |       +-- get_canonical_energy_read() -- reads
+        |       |       |           v_energy_reporting_{5min,15min,
+        |       |       |           hourly,daily} by tier
+        |       |       |               |
+        |       |       |               +-- get_grafana_asset_energy_
+        |       |       |                   intervals() -- SAME
+        |       |       |                   signature throughout
+        |       |       |                       |
+        |       |       |                       +-- asset-overview.json
+        |       |       |                           ("Total Energy vs
+        |       |       |                           previous period")
+        |       |
+        |       +-- analytics.refresh_energy_consumption_15min() -- reads
+        |           v_energy_semantic_rollup_15min but WRITES ONLY the
+        |           COMBINED gap/reset/rollover counters (discards the
+        |           per-flow columns the view already computed) into
+        |           analytics.energy_consumption_15min (persisted)
+        |               |
+        |               +-- refresh_energy_consumption_hourly()/daily()
+        |                   -- read ONLY the persisted 15min table (never
+        |                   the live view), sum the same combined-only
+        |                   columns additively -> energy_consumption_
+        |                   hourly / energy_consumption_daily (persisted)
+        |                       |
+        |                       +-- ZERO real read consumers (confirmed
+        |                           again this session)
+
+Classification of every object in this lineage:
+    Canonical calculation logic: analytics.classify_energy_register_delta()
+        -- correct, single source of truth, untouched by anything below.
+    Persisted semantic tables (native): energy_consumption_1min/5min --
+        canonical, correct, actively populated, fully per-flow already.
+    Persisted semantic tables (rollup): energy_consumption_15min/hourly/
+        daily -- correct additive math (Phase 1B-proven), but INCOMPLETE
+        relative to the reporting contract (missing 6 per-flow columns) --
+        not a duplicate implementation, a genuinely incomplete one.
+    Supporting/write-path view: v_energy_semantic_rollup_15min -- NOT a
+        duplicate. It is required, real infrastructure: the sole source
+        analytics.refresh_energy_consumption_15min() reads from. Cannot be
+        retired regardless of what happens to the reporting layer.
+    Supporting view (5min): v_energy_semantic_rollup_5min -- feeds ONLY
+        v_energy_reporting_5min today; not read by any refresh function
+        (energy_consumption_5min is a native table, populated directly
+        from telemetry.ca_energy_5min, not from this view).
+    Reporting/presentation views: v_energy_reporting_5min/15min/hourly/
+        daily -- the actual duplicate-in-effect: they recompute (5min/
+        15min tiers) or re-aggregate (hourly/daily tiers) from native data
+        at query time, when a schema-complete persisted equivalent could
+        serve the identical contract for 15min/hourly/daily. For 5min,
+        see §3 -- no persisted equivalent should be built for it.
+    Incorrectly-classified-as-duplicate (must NOT be touched by this
+        architecture): analytics.v_energy_consumption_15min (Path A) and
+        v_site_energy_balance_daily -- a genuinely separate, third
+        classification path (own LAG()-based delta over raw ca_energy_
+        15min), feeding a different metric (Energy Balance), with its own
+        deferred product decision. Not part of this resolution.
+        analytics.get_grafana_explorer_intervals / v_grafana_energy_
+        samples -- different metrics entirely (generic point telemetry;
+        raw register/instantaneous display), confirmed again not
+        duplicates of classified consumption.
+
+===============================================================================
+2. CANONICAL DATA CONTRACT
+===============================================================================
+
+The complete persisted contract required for the reporting layer, column
+by column, with justification:
+
+    bucket_start / consumption_date+site_timezone (daily) -- EXISTS
+        (all tiers). Required by every consumer for time axis.
+    organization_id, site_id, device_id -- EXISTS (all tiers). Required
+        for tenant join (gom) and device join (name/external_id).
+    source_interval_count -- EXISTS (all tiers). Consumed by get_
+        canonical_energy_read for coverage_ratio and is_partial_bucket.
+    import_consumption_kwh, export_consumption_kwh -- EXISTS (all tiers).
+        The metric itself. Directly consumed.
+    valid_import_intervals, invalid_import_intervals, valid_export_
+        intervals, invalid_export_intervals -- EXISTS (all tiers,
+        ALREADY per-flow). Directly consumed for the INVALID_INTERVALS
+        branch of quality_status and for the *_intervals counters in
+        get_canonical_energy_read's own RETURN QUERY.
+    import_gap_intervals, export_gap_intervals -- MISSING (rollup tiers).
+        Currently supplied only by the live v_energy_semantic_rollup_15min/
+        5min view. Consumed by get_canonical_energy_read's per-flow
+        quality_status CASE (GAPS_DETECTED branch). MUST be persisted --
+        this is exactly the information that would otherwise be lost.
+    import_reset_intervals, export_reset_intervals -- MISSING (rollup
+        tiers). Same justification, RESET_DETECTED branch. MUST be
+        persisted.
+    import_rollover_intervals, export_rollover_intervals -- MISSING
+        (rollup tiers). Same justification, ROLLOVER_DETECTED branch.
+        MUST be persisted.
+    gap_interval_count, reset_interval_count, rollover_interval_count,
+        invalid_interval_count (COMBINED) -- EXISTS (all tiers). Still
+        needed: get_canonical_energy_read's RETURN QUERY exposes these
+        combined counters directly as their own output columns (gap_
+        interval_count etc. in its RETURNS TABLE), independent of the
+        per-flow quality_status computation. Both combined AND per-flow
+        forms are required -- they answer different questions (combined:
+        "did anything happen in this bucket", per-flow: "which side").
+    first_source_bucket/last_source_bucket (persisted) vs first_native_
+        bucket_start/last_native_bucket_start (live view) -- same
+        semantic, different name. A renaming/aliasing detail only, not a
+        data gap; consumed by get_canonical_energy_read for first/last_
+        native_bucket_start in its RETURN QUERY.
+    external_id, device_name -- supplied by a JOIN to metadata.devices in
+        the reporting view today, not a table column. Can remain a join;
+        does not require persisting.
+    quality_status (the view's own precomputed CASE column) -- NOT
+        consumed by get_canonical_energy_read (it computes its own
+        per-flow versions independently) -- can safely be dropped from
+        the persisted contract; no consumer requires it as a stored value.
+    source_sample_count, import_consumption_wh/export_consumption_wh,
+        first_previous_bucket_start, previous/current register wh values,
+        import_quality_codes/export_quality_codes (plural arrays),
+        minimum/maximum_native_resolution_seconds -- NOT consumed by
+        get_canonical_energy_read (confirmed by direct inspection of its
+        SELECT list at every tier). These exist in the live view purely
+        as by-products of the live GROUP BY and are not part of the
+        required canonical contract. They do not need to be persisted.
+
+Conclusion: the canonical persisted contract needs exactly six additional
+per-flow columns at the 15min/hourly/daily tiers (import_gap_intervals,
+export_gap_intervals, import_reset_intervals, export_reset_intervals,
+import_rollover_intervals, export_rollover_intervals) beyond what already
+exists. No other column is missing. This is a narrow, well-defined schema
+extension, not a schema redesign.
+
+===============================================================================
+3. RESOLUTION SEMANTICS
+===============================================================================
+
+native: whatever a site's actual capture_interval_seconds is (10/30/60/
+    300/900 per the config.telemetry_capture_policies CHECK constraint),
+    served from v_energy_consumption_native. Currently, the ENERGY domain's
+    persisted native tier only has physical tables for 60s (1-minute) and
+    300s (5-minute) capture (energy_consumption_1min/5min) -- a site
+    configured at 10s/30s/900s capture would have no native energy row at
+    all today. This is a pre-existing architectural boundary, orthogonal
+    to Phase 1E's reporting-duplication concern, and is noted here as an
+    assumption, not solved by this plan.
+
+1m / 5m (native, as request parameters to get_canonical_energy_read):
+    resolve directly to whichever of energy_consumption_1min/5min exists
+    for that site via v_energy_consumption_native. Unambiguous, already
+    correct, untouched.
+
+5m (AS A REPORTING TIER, i.e. what v_energy_reporting_5min/get_canonical_
+    energy_read's '5m' branch means): RESOLVED as "a fixed 5-minute-wide
+    additive rollup bucket, built from whichever native resolution a site
+    actually has" -- the SAME kind of fixed-width reporting tier that 15m/
+    1h/1d already are (each fixed-width regardless of native capture).
+    This is NOT the same concept as energy_consumption_5min (which is
+    Phase 1B's NATIVE tier, populated only for 5-minute-capture sites).
+    The two objects sharing the string "5min" in their names is a naming
+    collision, not a semantic identity -- this is the exact root cause of
+    Gap 2 identified in the prior discrepancy report. Resolution:
+    energy_consumption_5min is correctly named for what it is (native
+    tier) and must NOT be reinterpreted or repointed to serve the
+    reporting-tier meaning.
+    Whether a PERSISTED 5-minute reporting-rollup table should be built at
+    all is answered in §5/§9/§18: NO, not in this phase -- confirmed
+    empirically this session that '5m' is never requested by resolve_
+    grafana_energy_routing_resolution (native/15m/1h/1d only) and has no
+    real caller anywhere in app/ or Grafana. Building a persisted 5-minute
+    reporting tier now would be speculative engineering for a tier nothing
+    exercises. v_energy_reporting_5min (and its live source v_energy_
+    semantic_rollup_5min) remain exactly as they are, unmodified, still
+    live-computed -- a deliberate decision, not a deferred gap.
+
+15m / 1h / 1d (reporting tiers): fixed-width additive rollups, correctly
+    already derived only from native/15-minute data respectively (never
+    hourly-from-daily inversions, never re-classification). This
+    architecture is retained and extended (§5/§6), not replaced.
+
+===============================================================================
+4. NATIVE-TIER DESIGN
+===============================================================================
+
+Retain separate native tiers (energy_consumption_1min, energy_consumption_
+5min) exactly as Phase 1B built them. They are mutually exclusive per site
+by capture policy, already fully per-flow, already correctly classified,
+already actively populated by real scheduled jobs, and have zero
+consumers of their own only because nothing above them in the reporting
+layer is complete yet -- not because their design is wrong. Normalizing
+1-minute and 5-minute native data into one physical table was considered
+and rejected: it would require either padding 1-minute rows to a
+5-minute-shaped schema (meaningless placeholder rows) or vice versa
+(losing real 1-minute granularity), for zero benefit -- v_energy_
+consumption_native (a plain UNION ALL, not a table) already provides the
+"one semantic native representation" a caller needs without forcing a
+physical merge. No change to the native tier.
+
+===============================================================================
+5. 15-MINUTE LINEAGE
+===============================================================================
+
+v_energy_semantic_rollup_15min REMAINS as canonical write-path
+infrastructure -- it cannot be retired or replaced while analytics.
+refresh_energy_consumption_15min() depends on it, and this plan does not
+propose changing that function's data source. What changes is its ROLE:
+today it serves BOTH the write path (feeding the persisted table) AND the
+live read path (feeding v_energy_reporting_15min directly). After this
+architecture is implemented, it serves ONLY the write path -- v_energy_
+reporting_15min will read the (now schema-complete) persisted energy_
+consumption_15min table instead. This is a narrowing of scope, not a
+retirement: the view keeps existing, keeps being queried (by the refresh
+function), and should be re-commented to reflect its narrower, internal,
+write-side-only purpose so a future reader does not mistake it for
+retireable duplicate code.
+
+The six missing per-flow columns are NOT new calculations -- v_energy_
+semantic_rollup_15min already computes them (confirmed: its own column
+list includes import_gap_intervals, export_gap_intervals, import_reset_
+intervals, export_reset_intervals, import_rollover_intervals, export_
+rollover_intervals). refresh_energy_consumption_15min() simply never
+carries them into its INSERT list. The correction is a write-path
+extension: add the six columns to energy_consumption_15min's schema, and
+extend the refresh function's INSERT to populate them from the exact same
+already-computed source columns it already reads. No new aggregation
+logic; no change to classify_energy_register_delta(); no change to what
+counts as valid/invalid/gap/reset/rollover.
+
+===============================================================================
+6. HOURLY AND DAILY LINEAGE
+===============================================================================
+
+Retain the current deterministic chain exactly: refresh_energy_
+consumption_hourly() sums ONLY from the persisted 15-minute table;
+refresh_energy_consumption_daily() sums ONLY from the persisted 15-minute
+table (never from hourly) -- both Phase 1B invariants, proven correct,
+unchanged. Site-local timezone / local-midnight bucketing at the daily
+tier is unaffected: consumption_date/site_timezone/bucket_start-as-local-
+midnight are already correctly computed from metadata.sites.timezone and
+remain so. DST is not separately handled today (documented limitation,
+unchanged, out of scope for this phase -- fixed-offset zones only, per
+the existing Metric Lineage Catalogue finding). The only change at
+hourly/daily is additive: extend both refresh functions to also SUM the
+six new per-flow columns from the (now-extended) 15-minute table, using
+the exact same SUM-and-group pattern they already use for the combined
+counters. No new aggregation direction, no new source, no timezone change.
+
+===============================================================================
+7. QUALITY SEMANTICS (import/export independence)
+===============================================================================
+
+Each flow (import, export) is classified independently by its own call to
+classify_energy_register_delta() at the native tier -- this already
+guarantees the two flows can differ. The per-flow rollup columns (§2)
+preserve that independence through every coarser tier. Required behavior,
+with the mechanism that guarantees it:
+
+    import GOOD / export GOOD -> both quality_status = GOOD. Per-flow
+        gap/reset/rollover/invalid counts are all zero for the bucket on
+        both sides.
+    import GAP / export GOOD -> import_quality_status = GAPS_DETECTED
+        (import_gap_intervals > 0), export_quality_status = GOOD
+        (export_gap_intervals = 0). Requires the per-flow column; a
+        combined-only counter would incorrectly mark export as degraded
+        too (or, going the other direction as in the next case, mark
+        import as degraded when only export gapped).
+    import GOOD / export GAP -> import_quality_status = GOOD (import_
+        gap_intervals = 0), export_quality_status = GAPS_DETECTED. This
+        is the exact case the discrepancy report flagged: a combined-only
+        gap_interval_count would be > 0 (since export gapped) and would
+        incorrectly flip import's status too under any CASE that reads
+        the combined column for both flows. The per-flow column set is
+        the only correct fix.
+    import RESET / export GOOD -> import_quality_status = RESET_DETECTED
+        (import_reset_intervals > 0), export unaffected. Same mechanism.
+    import GOOD / export RESET -> mirror of the above; import stays GOOD.
+    import ROLLOVER / export GOOD, import GOOD / export ROLLOVER ->
+        symmetric, same mechanism via import_rollover_intervals/export_
+        rollover_intervals.
+    both flows degraded (any combination of GAP/RESET/ROLLOVER/invalid on
+        both sides) -> each side's own quality_status reflects its own
+        condition independently; the combined counters (gap_interval_
+        count etc.) are simply the OR of both sides, used only for the
+        bucket-level counters get_canonical_energy_read also exposes
+        (gap_interval_count, reset_interval_count, etc. in its own
+        RETURNS TABLE) -- these are informational aggregates, never used
+        to compute either flow's own quality_status.
+
+"Total Energy" consumer correctness: asset-overview.json filters WHERE
+import_quality_code = 'GOOD'. With per-flow columns persisted and carried
+through correctly, an interval where only export gapped correctly
+continues to show import as GOOD and correctly continues to be included
+in the sum -- exactly today's live-path behavior, preserved rather than
+degraded.
+
+===============================================================================
+8. CONSUMPTION SEMANTICS (reconciled with Phase 1B)
+===============================================================================
+
+Unchanged, reconfirmed, not renegotiated: GOOD -> is_valid=TRUE, delta
+contributes to the consumption sum. GAP -> is_valid=TRUE, delta
+contributes to the consumption sum (Phase 1B's corrected finding; GAP is
+informational/counted separately via gap_interval_count and the per-flow
+gap columns, never excluded from the sum). RESET (REJECT_DELTA/FLAG_ONLY)
+-> is_valid=FALSE, delta=NULL, excluded from the sum. RESET_FROM_ZERO and
+ROLLOVER (FIXED_MODULUS) -> is_valid=TRUE, delta preserved, contributes.
+This governs the *_consumption_kwh sums at every tier and is completely
+independent of the per-flow quality-status display fix in §7 -- §7 is
+about which STATUS LABEL a bucket shows, not about which deltas get
+summed. Both are already correctly implemented at the native tier and
+require no change; only the DISPLAY (status label) requires the schema
+extension.
+
+===============================================================================
+9. CANONICAL WRITE PATH
+===============================================================================
+
+One authoritative calculation, unchanged: classify_energy_register_
+delta() at the native tier only. One authoritative persisted lineage,
+extended not replaced: energy_consumption_1min/5min (native) ->
+energy_consumption_15min (extended with 6 per-flow columns, still sourced
+from v_energy_semantic_rollup_15min) -> energy_consumption_hourly/daily
+(extended with the same 6 columns, still summed only from the 15-minute
+persisted table). No second competing calculation is introduced. v_energy_
+semantic_rollup_15min/5min remain as internal aggregation infrastructure
+(the former feeding the canonical write path; the latter feeding the
+still-live 5-minute reporting tier, §3) -- both are aggregation, not
+calculation, and neither reclassifies anything.
+
+===============================================================================
+10. CONSUMER MIGRATION (inventory only -- no change performed)
+===============================================================================
+
+    Consumer: get_canonical_energy_read() (5m/15m/1h/1d branches)
+    Current object: v_energy_reporting_5min/15min/hourly/daily (live)
+    Required contract: the 39/32-column shape in §2, all columns present
+    Target canonical object: v_energy_reporting_15min/hourly/daily
+        retargeted to persisted tables (5min stays live, §3)
+    Migration dependency: schema extension (§2) must complete and be
+        backfilled (§13) before retarget; 5min branch has no migration
+        (stays as-is)
+    Equivalence provable before switching: YES -- a disposable-DB fixture
+        comparing old-live-view output to new-persisted-view output for
+        an identical native seed, byte-for-byte, before any cutover
+        (§16).
+
+    Consumer: get_grafana_asset_energy_intervals() / get_grafana_assets_
+        energy_intervals()
+    Current object: get_canonical_energy_read() (unchanged signature)
+    Required contract: unchanged 10-column public contract
+    Target: no change required -- both call get_canonical_energy_read()
+        by reference; the retarget is fully absorbed one layer below.
+
+    Consumer: asset-overview.json ("Total Energy vs previous period")
+    Current object: get_grafana_asset_energy_intervals()
+    Required contract: unchanged; filters on import_quality_code
+    Target: no change required.
+
+    Consumer: analytics.refresh_energy_consumption_15min()
+    Current object: v_energy_semantic_rollup_15min
+    Required contract: the six per-flow columns it already reads but
+        currently discards
+    Target: same object, extended INSERT list only.
+
+No other real consumer exists (re-confirmed this session: only test files
+reference v_energy_semantic_rollup_5min/15min or v_energy_reporting_* by
+name beyond the objects above).
+
+===============================================================================
+11. DUPLICATE RETIREMENT
+===============================================================================
+
+Honest conclusion: almost nothing is retireable as a DROPPED object. The
+duplication being eliminated is computation (live query-time re-
+aggregation replaced by persisted-table reads for 15m/hourly/daily), not
+distinct database objects that can be deleted.
+
+    v_energy_reporting_15min/hourly/daily: NOT retired -- retargeted
+        (FROM clause changes; view itself remains, same name, same
+        columns, same tenant join).
+    v_energy_reporting_5min: NOT retired, NOT retargeted -- stays exactly
+        as-is by deliberate decision (§3).
+    v_energy_semantic_rollup_15min: NOT retireable -- required by
+        refresh_energy_consumption_15min() permanently. Re-scope its
+        COMMENT to reflect write-path-only usage once v_energy_reporting_
+        15min no longer reads it directly.
+    v_energy_semantic_rollup_5min: NOT retireable -- still feeds v_energy_
+        reporting_5min, which is staying live (§3).
+    get_canonical_energy_read / get_grafana_asset_energy_intervals /
+        get_grafana_assets_energy_intervals / resolve_grafana_energy_
+        routing_resolution: NOT touched at all -- confirmed no code
+        change is required anywhere in this call chain.
+    energy_consumption_{1min,5min,15min,hourly,daily}: NOT retired --
+        extended (15min/hourly/daily gain 6 columns each) and, for the
+        first time, actually read.
+    Path A (v_energy_consumption_15min / v_site_energy_balance_daily),
+        get_grafana_explorer_intervals, v_grafana_energy_samples: NOT
+        part of this resolution at all (confirmed different concerns).
+
+===============================================================================
+12. MIGRATION STRATEGY (no big bang)
+===============================================================================
+
+Four ordered stages, each independently valid and independently
+rollback-safe, matching the phase breakdown in §18:
+    1. Schema evolution first: add six nullable per-flow columns to
+       energy_consumption_15min/hourly/daily; extend the three refresh
+       functions to populate them GOING FORWARD only. No reader is
+       affected yet (nothing reads these tables today).
+    2. Historical backfill: a separate, explicitly reviewed one-time
+       recomputation of the six new columns for existing historical rows,
+       sourced from the same native data the live view already reads (no
+       new calculation, same formulas, applied retroactively). Additive-
+       only (UPDATE of previously-NULL columns), never touches the
+       existing combined counters or consumption_kwh values.
+    3. Parallel validation: with both the live path and the extended
+       persisted path available, run the equivalence contract test (§16)
+       comparing them directly, still with zero consumer cutover.
+    4. Consumer cutover only after equivalence is proven: retarget
+       v_energy_reporting_15min/hourly/daily's FROM clause in one
+       migration; full regression suite (Phase 1A/1B/1C/1D contracts +
+       new equivalence test) must pass before this is ever proposed for
+       commit.
+Retirement (re-commenting v_energy_semantic_rollup_15min's role) happens
+only after step 4 is deployed and verified, as its own minimal, documentation-
+only change -- no object is dropped at any stage in this plan.
+
+===============================================================================
+13. HISTORICAL DATA
+===============================================================================
+
+Backfill is required, not optional, if the retarget (§12 step 4) is to be
+correct for any historical Grafana query (e.g., a dashboard view of last
+month's data would otherwise show NULL/incorrect quality_status for rows
+persisted before the schema extension). The backfill must recompute
+exactly the same six columns using the same source (native data via the
+same aggregation the live view already performs), and must not alter
+existing consumption_kwh or combined-counter values in any row -- it is
+additive-column-only. Because energy_consumption_15min/hourly/daily
+currently have no real consumer, the backfill carries no live-traffic
+risk; it should still be tested on the same scale of fixture data Phase
+1B used, plus a dedicated check that no existing column's value changes
+during the backfill (only the six new columns move from NULL to a real
+value).
+
+===============================================================================
+14. PERFORMANCE
+===============================================================================
+
+After this architecture: native and 15m/1h/1d all read persisted, indexed
+tables (energy_consumption_1min/5min already indexed by device+time;
+15min/hourly/daily gain no new index requirement beyond what they already
+have, since the new columns are not used in any WHERE/JOIN, only SELECTed).
+5m remains a live aggregation, by deliberate decision, since nothing
+exercises it in practice today -- if a real 5m consumer ever appears, this
+plan's §18 recommends revisiting persisting it then, not preemptively now.
+No semantic correctness is traded for performance anywhere in this design.
+
+===============================================================================
+15. TENANT AND SECURITY BOUNDARIES
+===============================================================================
+
+Every retargeted view must preserve its existing JOIN to metadata.
+grafana_organization_map (gom.organization_id = r.organization_id AND
+gom.is_active) and metadata.devices (for external_id/device_name) exactly
+as today -- verifiable structurally (the persisted tables already carry
+organization_id/site_id/device_id, so the same join predicate applies
+unchanged). analytics.energy_consumption_* tables remain internal-only
+(ems_admin grant only); no new grant is introduced anywhere in this plan.
+get_canonical_energy_read/get_grafana_asset_energy_intervals's SECURITY
+DEFINER posture, owner, and grants are untouched, since neither function's
+code changes. No security implication was found in any part of this
+resolution.
+
+===============================================================================
+16. TEST STRATEGY (what must exist, not written yet)
+===============================================================================
+
+    - Semantic contract tests: re-run Phase 1B's existing classifier and
+      rollup-chain tests unchanged (proves classify_energy_register_
+      delta() and the additive rollup math are untouched).
+    - Import/export quality tests: construct fixtures for every case in
+      §7's table (GOOD/GOOD, GAP/GOOD, GOOD/GAP, RESET/GOOD, GOOD/RESET,
+      ROLLOVER/GOOD, GOOD/ROLLOVER, both-degraded) at the native tier via
+      real classify_energy_register_delta() calls (Phase 1B discipline),
+      roll up through the extended refresh functions, and assert each
+      flow's persisted per-flow columns AND the resulting quality_status
+      from get_canonical_energy_read match the table in §7 exactly.
+    - GAP/RESET/ROLLOVER consumption tests: assert GAP and ROLLOVER
+      deltas are included in *_consumption_kwh and RESET is excluded,
+      reconfirming §8 at every tier after the schema change.
+    - 1m/5m native-site tests: one fixture site on 1-minute capture, one
+      on 5-minute capture; confirm 'native' resolves correctly for both
+      and that the 5m REPORTING tier (still live) continues to correctly
+      roll up 1-minute-capture data into 5-minute buckets (regression
+      guard proving §3's decision didn't silently break anything).
+    - 15m/1h/1d aggregation tests: extend Phase 1B's existing tests to
+      also assert the six new per-flow columns roll up correctly hourly-
+      from-15min and daily-from-15min-never-hourly (reusing Phase 1B's
+      exact discriminating UTC/site-local-midnight fixture design).
+    - Timezone/local-midnight tests: reuse Phase 1B's exact daily-tier
+      discriminating fixture (already proven); no new timezone logic is
+      introduced, only new columns riding the same bucket.
+    - Tenant-isolation tests: confirm the retargeted views still return
+      zero rows for a mismatched grafana_org_id (mirrors every prior
+      phase's tenant guard).
+    - Equivalence tests (old live path vs new persisted path): THE central
+      new test -- for one fixture with a rich mix of GOOD/GAP/RESET/
+      ROLLOVER on both flows, assert v_energy_reporting_15min/hourly/
+      daily's output is IDENTICAL whether sourced from the live view or
+      the retargeted persisted table, run BEFORE the retarget is proposed
+      for commit (i.e., temporarily query both sources side by side in
+      the test, not merely trust the retarget after the fact).
+    - Consumer regression tests: re-run Phase 1A/1B/1C/1D's existing
+      contract tests unchanged, plus Phase 1D's own routing contract, to
+      prove get_grafana_asset_energy_intervals's output is unaffected.
+    - Performance/query-shape tests: confirm (via EXPLAIN or row-count
+      assertions in the disposable DB) that the retargeted views no
+      longer reference v_energy_semantic_rollup_15min in their query
+      plan, and that 5min's plan is unchanged (still references the live
+      rollup, confirming §3's decision was actually implemented as
+      intended, not accidentally dropped).
+Every assertion above proves a specific semantic requirement named in
+this document (§2 or §7 or §8); none are included merely to raise a test
+count.
+
+===============================================================================
+17. ROLLBACK STRATEGY
+===============================================================================
+
+Stage 1 (schema extension): purely additive nullable columns; rollback is
+DROP COLUMN or simply leaving them unpopulated -- no consumer reads them
+yet, zero risk.
+Stage 2 (backfill): additive UPDATE only; rollback is re-nulling the six
+columns for the backfilled range (a scoped, reversible operation, since no
+other column is touched).
+Stage 3 (parallel validation): read-only, no rollback needed by
+definition.
+Stage 4 (retarget): a single CREATE OR REPLACE VIEW per reporting object;
+rollback is a follow-up migration restoring the prior FROM clause
+(v_energy_semantic_rollup_15min/hourly-over-15min), exactly as every prior
+phase's rollback pattern. Because v_energy_semantic_rollup_15min is never
+dropped (§11), a rollback of stage 4 requires no data recreation -- the
+old live path remains fully intact and query-able throughout, since
+nothing about it is ever removed by this plan.
+
+===============================================================================
+18. PHASE BREAKDOWN
+===============================================================================
+
+Recommended, in this order, each independently shippable and independently
+verifiable:
+
+    Phase 1E-A -- Persisted Schema Extension: add the six per-flow
+        columns to energy_consumption_15min/hourly/daily; extend the
+        three refresh functions to populate them going forward; new
+        Phase-1B-style contract tests for §7/§8's per-flow cases at the
+        native-to-persisted-table level only. No reporting-view change,
+        no consumer-visible change at all.
+    Phase 1E-B -- Historical Backfill: one-time, carefully tested
+        recomputation of the six columns for existing rows; its own
+        dedicated safety test proving no other column changes.
+    Phase 1E-C -- Reporting-Layer Retarget and Equivalence Proof: the
+        old-vs-new equivalence test runs FIRST (against both sources);
+        only once it passes does the actual CREATE OR REPLACE VIEW
+        retarget for v_energy_reporting_15min/hourly/daily get proposed;
+        v_energy_reporting_5min explicitly excluded per §3; full Phase
+        1A/1B/1C/1D regression suite re-run.
+    Phase 1E-D -- Documentation-Only Narrowing: re-comment v_energy_
+        semantic_rollup_15min/5min to reflect their post-1E-C roles
+        (write-path-only for 15min; still-live-reporting for 5min); no
+        object dropped, no further behavior change.
+
+This is the smallest SAFE sequence: each phase is independently valuable,
+independently testable, and independently reversible; none requires the
+next to be safe on its own.
+
+===============================================================================
+19. HARD GATES
+===============================================================================
+
+Before 1E-A is committed: schema-extension contract test passes; existing
+Phase 1B contracts still pass unchanged; no column removed or renamed,
+only added.
+Before 1E-B is committed: backfill safety test proves zero change to any
+pre-existing column value; backfill tested at a representative data
+volume in the disposable DB.
+Before 1E-C is committed: the equivalence test (old live path vs new
+persisted path) passes for a fixture covering every case in §7's table;
+full Phase 1A/1B/1C/1D regression suite passes; a repository-wide grep
+confirms v_energy_reporting_5min's FROM clause is unchanged (still live)
+and v_energy_reporting_15min/hourly/daily's FROM clause no longer
+references v_energy_semantic_rollup_15min directly (post-retarget check).
+Before 1E-D is committed: 1E-C has been deployed and staging-verified
+read-only (matching every prior phase's post-deployment verification
+pattern) with no regression.
+No stage proceeds to the next until its own gate passes; no stage is
+combined with another to reduce the number of commits.
+
+===============================================================================
+20. FINAL RECOMMENDATION
+===============================================================================
+
+DECISION RULE APPLIED: the existing persisted schema (energy_consumption_
+15min/hourly/daily) CANNOT safely become canonical for the reporting layer
+without a structural change -- it is missing six per-flow columns the live
+path currently provides and the one real consumer's behavior depends on.
+This is stated plainly, per instruction, rather than worked around.
+Combined-only semantics are explicitly rejected as a resolution (per the
+user's own directive and per §7's demonstrated behavior change). No
+protected object is modified casually -- the schema extension in 1E-A is
+the one place this plan touches energy_consumption_15min/hourly/daily's
+definitions and their refresh functions, done deliberately, as its own
+governed, tested, reversible phase, not folded silently into a "simple
+retarget."
+
+A. Recommended target architecture: extend the persisted 15min/hourly/
+   daily schema with the six already-computed-but-discarded per-flow
+   columns; retarget only the 15min/hourly/daily reporting views to the
+   (now-complete) persisted tables; deliberately keep the 5-minute
+   reporting tier live (no real consumer justifies persisting it); keep
+   v_energy_semantic_rollup_15min/5min as permanent aggregation
+   infrastructure, re-scoped in documentation only.
+B. Current -> target lineage: see §1's diagram; only the FROM clause of
+   v_energy_reporting_15min/hourly/daily and the column/INSERT list of
+   energy_consumption_15min/hourly/daily and their refresh functions
+   change. Everything above get_canonical_energy_read is untouched.
+C. Required schema changes: six new nullable columns each on energy_
+   consumption_15min/hourly/daily (18 columns total across three tables).
+D. Required object/function changes: refresh_energy_consumption_15min()/
+   _hourly()/_daily() INSERT lists extended; v_energy_reporting_15min/
+   hourly/daily FROM clauses retargeted (Phase 1E-C only, after
+   equivalence proof).
+E. Consumer migration sequence: none required for any real consumer --
+   get_canonical_energy_read, get_grafana_asset_energy_intervals, and
+   asset-overview.json all continue to call the same objects by the same
+   name; the retarget is fully absorbed at the view layer.
+F. Retirement sequence: none -- no object is dropped (§11); only comments
+   are updated in 1E-D.
+G. Test gates: per §19, one gate per phase, no phase skipped or merged.
+H. Rollback strategy: per §17, each phase independently reversible; the
+   live path is never removed, so 1E-C's retarget can always be reverted
+   without any data loss.
+I. Recommended phase breakdown: 1E-A (schema) -> 1E-B (backfill) -> 1E-C
+   (retarget + equivalence proof) -> 1E-D (documentation narrowing), per
+   §18.
+J. Explicit decisions requiring your approval before any implementation:
+    1. Approve extending energy_consumption_15min/hourly/daily's schema
+       and their refresh functions (a deliberate, scoped exception to the
+       original Phase 1E "do not touch" boundary, now explicitly
+       requested by this broader architecture-resolution task).
+    2. Approve keeping the 5-minute reporting tier live (no new persisted
+       5m rollup table), per §3's reasoning.
+    3. Approve the four-phase breakdown (1E-A/B/C/D) rather than a single
+       combined change.
+    4. Approve that historical backfill (1E-B) is required before any
+       consumer-visible retarget (1E-C), given zero current consumers
+       make this low-risk but still necessary for correctness once the
+       retarget happens.
+    5. Confirm which phase (1E-A) to authorize first -- this document
+       recommends starting there, following the same investigate ->
+       plan -> approve -> implement -> test -> stage -> commit -> push ->
+       verify discipline used in Phases 1A-1D.
+
+Nothing has been implemented, staged, committed, pushed, or deployed.
+Awaiting your decision on the five items above before any Phase 1E-A
+implementation plan is written.

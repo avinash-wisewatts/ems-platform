@@ -1,0 +1,22 @@
+# Decision Log
+
+Status: CURRENT · Last reviewed: 2026-09-13 · Owner: Product + Engineering
+
+One-line index of every decision record in [decisions/](decisions/). See
+each ADR for full context, rationale, and evidence.
+
+| ADR | Status | Date | Decision |
+|---|---|---|---|
+| [ADR-001](decisions/ADR-001-product-vision-and-principles.md) | Decided | 2026-09-10/11 | WiseWatts EMS is "an Energy Management System that happens to contain dashboards"; ten product principles govern requirement/design decisions. |
+| [ADR-002](decisions/ADR-002-hierarchy-model.md) | Decided | 2026-09-11 | Customer hierarchy is Organisation/Portfolio → Site → Space → Asset; context changes metric meaning at each level. |
+| [ADR-003](decisions/ADR-003-mvp-information-model.md) | Decided | 2026-09-11 | MVP information model: Where (Portfolio→Site→Space→Asset) × What (Overview→Energy→Demand→PQ→Performance→Attention). |
+| [ADR-004](decisions/ADR-004-site-overview-primary-destination.md) | Decided | 2026-09-11 | Site Overview / Energy Health is the MVP landing destination; Site is the primary customer context. |
+| [ADR-005](decisions/ADR-005-energy-demand-pq-contextual-nav.md) | Decided (noted tension) | 2026-09-11 | Energy/Demand/PQ are analytical areas reached through Site context, not independent unrelated top-level navigation. |
+| [ADR-006](decisions/ADR-006-ems-web-app-vs-admin-portal.md) | Decided | 2026-09-10 | Customer EMS Web Application is separate from, and independently deployable from, the Administration App. |
+| [ADR-007](decisions/ADR-007-analytics-api-boundary.md) | Decided | 2026-09-10 | The Analytics API (Phase 7) is the sole customer-facing semantic read boundary. |
+| [ADR-008](decisions/ADR-008-grafana-ops-role.md) | Decided | 2026-09-10 | Grafana remains the OPS/engineering surface indefinitely; customer workflows migrate only via Phase 17 parity. |
+| [ADR-009](decisions/ADR-009-slice-c-historical-reference-methodology.md) | Decided; implemented | 2026-09-13 | Slice C: median-of-up-to-8-comparable-historical-windows (≥70% coverage each) replaces the never-shipped N=4 rolling average, per the (uncommitted) "Slice C Historical Comparison decision pack." |
+| [ADR-010](decisions/ADR-010-mvp3-attention-materiality-policy.md) | Decided; implemented | 2026-09-13 | Energy Attention materiality threshold = ±15% deviation from the Slice C typical reference, per the (uncommitted) "MVP-3 Implementation Decision Pack." |
+| [ADR-011](decisions/ADR-011-insufficient-data-not-healthy.md) | Decided | 2026-09-11 | Insufficient Data is a distinct site state, never collapsed into Healthy. |
+| [ADR-012](decisions/ADR-012-deferred-ai-recommendation-functionality.md) | Decided | 2026-09-10/11 | AI/recommendation/anomaly functionality deferred to its designated later phase; MVP Attention is analytical, not intelligent. |
+| [ADR-013](decisions/ADR-013-deferred-asset-component-tree.md) | Decided | 2026-09-10/11 | Full navigable asset component-tree UI deferred (`SHOULD`, Post-MVP); underlying read objects still land in MVP-1. |
