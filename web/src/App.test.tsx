@@ -8,11 +8,70 @@ import {
   renderWithProviders,
   SITES_ONE,
   SITES_TWO_ORGS,
+  stubFetch,
   VIEWER_USER,
 } from "./test-utils";
 
+/**
+ * MVP-3: `/home` is now SiteOverview, which fetches Energy/Demand/Power
+ * Quality data on mount (unlike the old, static ShellHome placeholder).
+ * Tests below that reach `/home` while authenticated with shell access stub
+ * every request to an honest "no data" response -- these tests assert on
+ * shell/nav/identity, not on SiteOverview's own content (that is covered by
+ * SiteOverview.test.tsx), so the exact response shape doesn't matter here,
+ * only that every request resolves deterministically.
+ */
+function stubHomeNoDataFetch() {
+  return stubFetch((url) => {
+    if (url.includes("/energy/consumption/evidence")) {
+      return { jsonBody: { site_id: "x", resolution: "1h", from: "", to: "", no_data: true, series: [] } };
+    }
+    if (url.includes("/energy/consumption/typical-reference")) {
+      return {
+        jsonBody: {
+          site_id: "x",
+          period_length_days: 7,
+          from: "",
+          to: "",
+          typical_kwh: null,
+          requested_period_count: 8,
+          windows_with_data_count: 0,
+          eligible_period_count: 0,
+          sufficient: false,
+          windows: [],
+        },
+      };
+    }
+    if (url.includes("/energy/consumption")) {
+      return { jsonBody: { site_id: "x", resolution: "1h", from: "", to: "", no_data: true, series: [] } };
+    }
+    if (url.includes("/demand/current")) {
+      return {
+        jsonBody: {
+          site_id: "x",
+          has_data: false,
+          interval_start: null,
+          interval_end: null,
+          current_demand_kw: null,
+          current_demand_kva: null,
+          quality_status: null,
+          coverage_percent: null,
+        },
+      };
+    }
+    if (url.includes("/demand")) {
+      return { jsonBody: { site_id: "x", from: "", to: "", no_data: true, series: [] } };
+    }
+    if (url.includes("/power-quality")) {
+      return { jsonBody: { site_id: "x", resolution: "1h", from: "", to: "", no_data: true, series: [] } };
+    }
+    return { status: 404, jsonBody: { error: "not_found", detail: "unexpected" } };
+  });
+}
+
 describe("application shell -- foundation routing, auth and tenant context", () => {
   it("renders the empty shell for an authenticated user with one accessible site", async () => {
+    stubHomeNoDataFetch();
     renderWithProviders(<AppRoutes />, {
       session: () => Promise.resolve(ADMIN_USER),
       sites: () => Promise.resolve(SITES_ONE),
@@ -64,6 +123,7 @@ describe("application shell -- foundation routing, auth and tenant context", () 
   });
 
   it("permission-gates navigation: a VIEWER sees fewer nav items than an ADMIN", async () => {
+    stubHomeNoDataFetch();
     renderWithProviders(<AppRoutes />, {
       session: () => Promise.resolve(VIEWER_USER),
       sites: () => Promise.resolve(SITES_ONE),

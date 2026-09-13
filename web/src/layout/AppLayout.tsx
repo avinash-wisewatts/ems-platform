@@ -3,11 +3,17 @@ import { NavLink } from "react-router-dom";
 import { useSession } from "../auth/SessionProvider";
 import { useTenant } from "../tenant/TenantProvider";
 import { logout } from "../api/client";
-import { PRIMARY_NAV, SECONDARY_NAV, visibleNav } from "./navigation";
+import { NAV_GROUP_LABELS, PRIMARY_NAV, SECONDARY_NAV, groupNav, visibleNav } from "./navigation";
 
 /**
  * The shell chrome: header (identity, org/site, logout) + permission-gated
  * left navigation + a content outlet. Navigation gating is UX only.
+ *
+ * MVP-1 closeout: the primary nav is rendered in IA-labelled sections --
+ * "Site" (Energy / Demand / Power Quality, i.e. capabilities of the current
+ * site) and "Spaces & Assets" (the Site -> Space -> Asset drill-down) --
+ * instead of one flat list, so Energy/Demand/PQ read as site-context
+ * capabilities rather than unrelated global destinations. No route changed.
  */
 export function AppLayout({ children }: { children: ReactNode }) {
   const { user } = useSession();
@@ -16,6 +22,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
 
   const primary = visibleNav(PRIMARY_NAV, permissions);
   const secondary = visibleNav(SECONDARY_NAV, permissions);
+  const primarySections = groupNav(primary);
 
   return (
     <div className="app-shell" data-testid="app-shell">
@@ -46,15 +53,20 @@ export function AppLayout({ children }: { children: ReactNode }) {
 
       <div className="app-shell__body">
         <nav className="app-shell__nav" aria-label="Primary">
-          <ul>
-            {primary.map((item) => (
-              <li key={item.key}>
-                <NavLink to={item.to} data-testid={`nav-${item.key}`}>
-                  {item.label}
-                </NavLink>
-              </li>
-            ))}
-          </ul>
+          {primarySections.map((section, index) => (
+            <ul key={section.group ?? `ungrouped-${index}`} className="app-shell__nav-section">
+              {section.group ? (
+                <li className="app-shell__nav-section-label">{NAV_GROUP_LABELS[section.group]}</li>
+              ) : null}
+              {section.items.map((item) => (
+                <li key={item.key}>
+                  <NavLink to={item.to} data-testid={`nav-${item.key}`}>
+                    {item.label}
+                  </NavLink>
+                </li>
+              ))}
+            </ul>
+          ))}
           {secondary.length > 0 ? (
             <ul className="app-shell__nav-secondary">
               {secondary.map((item) => (

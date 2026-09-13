@@ -47,8 +47,10 @@ function toChartPoints(series: DemandIntervalPoint[]): ChartPoint[] {
 }
 
 /** Peak demand + when it occurred, derived client-side -- no backend
- *  aggregation beyond the raw interval series. */
-function findPeak(series: DemandIntervalPoint[]): { kw: number; at: string } | null {
+ *  aggregation beyond the raw interval series. Exported (MVP-3) so
+ *  SiteOverview's Demand summary reuses this exact calculation instead of
+ *  duplicating it -- no change to its behavior or this screen's contract. */
+export function findPeak(series: DemandIntervalPoint[]): { kw: number; at: string } | null {
   let best: { kw: number; at: string } | null = null;
   for (const point of series) {
     if (point.peak_power_kw !== null && (best === null || point.peak_power_kw > best.kw)) {
@@ -59,7 +61,7 @@ function findPeak(series: DemandIntervalPoint[]): { kw: number; at: string } | n
 }
 
 export function DemandOverview() {
-  const { selectedSite } = useTenant();
+  const { selectedSite, sites } = useTenant();
   const [preset, setPreset] = useState<TimeRangePreset>("7D");
   const [status, setStatus] = useState<LoadStatus>("loading");
   const [error, setError] = useState<unknown>(null);
@@ -117,7 +119,7 @@ export function DemandOverview() {
 
   return (
     <div className="page page--demand-overview" data-testid="page-demand-overview">
-      <HierarchyCrumb siteName={selectedSite.site_name} leaf={{ label: "Demand" }} />
+      <HierarchyCrumb siteName={selectedSite.site_name} multiSite={sites.length > 1} leaf={{ label: "Demand" }} />
       <h1>Maximum demand</h1>
 
       <TimeRangePicker value={preset} onChange={setPreset} dataKind="demand" />

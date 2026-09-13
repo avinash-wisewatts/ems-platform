@@ -40,12 +40,14 @@ function toPowerFactorChartPoints(series: PowerQualityPoint[]): ChartPoint[] {
   return series.map((point) => ({ t: Date.parse(point.bucket_start), value: point.power_factor_avg }));
 }
 
-function latest(series: PowerQualityPoint[]): PowerQualityPoint | null {
+/** Exported (MVP-3) so SiteOverview's Power Quality summary reuses this
+ *  exact "current = latest point" convention instead of duplicating it. */
+export function latestPowerQualityPoint(series: PowerQualityPoint[]): PowerQualityPoint | null {
   return series.length ? series[series.length - 1]! : null;
 }
 
 export function PowerQualityOverview() {
-  const { selectedSite } = useTenant();
+  const { selectedSite, sites } = useTenant();
   const [preset, setPreset] = useState<TimeRangePreset>("7D");
   const [status, setStatus] = useState<LoadStatus>("loading");
   const [error, setError] = useState<unknown>(null);
@@ -93,11 +95,15 @@ export function PowerQualityOverview() {
     );
   }
 
-  const current = data ? latest(data.series) : null;
+  const current = data ? latestPowerQualityPoint(data.series) : null;
 
   return (
     <div className="page page--power-quality-overview" data-testid="page-power-quality-overview">
-      <HierarchyCrumb siteName={selectedSite.site_name} leaf={{ label: "Power Quality" }} />
+      <HierarchyCrumb
+        siteName={selectedSite.site_name}
+        multiSite={sites.length > 1}
+        leaf={{ label: "Power Quality" }}
+      />
       <h1>Power quality</h1>
       <p className="hint">
         Power Factor measures how efficiently electrical power is used. Total Harmonic Distortion (THD)

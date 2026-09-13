@@ -20,7 +20,7 @@ type LoadStatus = "loading" | "ready" | "error";
 
 export function AssetDetail() {
   const { assetId } = useParams<{ assetId: string }>();
-  const { selectedSite } = useTenant();
+  const { selectedSite, sites } = useTenant();
   const [status, setStatus] = useState<LoadStatus>("loading");
   const [error, setError] = useState<unknown>(null);
   const [asset, setAsset] = useState<AssetSummary | null>(null);
@@ -61,7 +61,7 @@ export function AssetDetail() {
 
   return (
     <div className="page page--asset-detail" data-testid="page-asset-detail">
-      <HierarchyCrumb siteName={selectedSite.site_name} leaf={crumbLeaf} />
+      <HierarchyCrumb siteName={selectedSite.site_name} multiSite={sites.length > 1} leaf={crumbLeaf} />
 
       {status === "loading" ? <Loading label="Loading asset…" /> : null}
       {status === "error" ? <ErrorState error={error} /> : null}

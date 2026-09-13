@@ -19,7 +19,7 @@ import { EmptyState } from "../../components/states/EmptyState";
 type LoadStatus = "loading" | "ready" | "error";
 
 export function AssetsList() {
-  const { selectedSite } = useTenant();
+  const { selectedSite, sites } = useTenant();
   const [status, setStatus] = useState<LoadStatus>("loading");
   const [error, setError] = useState<unknown>(null);
   const [assets, setAssets] = useState<AssetSummary[]>([]);
@@ -56,7 +56,7 @@ export function AssetsList() {
 
   return (
     <div className="page page--assets-list" data-testid="page-assets-list">
-      <HierarchyCrumb siteName={selectedSite.site_name} />
+      <HierarchyCrumb siteName={selectedSite.site_name} multiSite={sites.length > 1} />
       <h1>Assets</h1>
 
       {status === "loading" ? <Loading label="Loading assets…" /> : null}

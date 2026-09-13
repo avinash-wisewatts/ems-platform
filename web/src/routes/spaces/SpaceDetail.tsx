@@ -27,7 +27,7 @@ function latestPoint(points: MeasurementPoint[]): MeasurementPoint | null {
 
 export function SpaceDetail() {
   const { spaceId } = useParams<{ spaceId: string }>();
-  const { selectedSite } = useTenant();
+  const { selectedSite, sites } = useTenant();
   const [status, setStatus] = useState<LoadStatus>("loading");
   const [error, setError] = useState<unknown>(null);
   const [space, setSpace] = useState<SpaceSummary | null>(null);
@@ -84,7 +84,7 @@ export function SpaceDetail() {
 
   return (
     <div className="page page--space-detail" data-testid="page-space-detail">
-      <HierarchyCrumb siteName={selectedSite.site_name} leaf={crumbLeaf} />
+      <HierarchyCrumb siteName={selectedSite.site_name} multiSite={sites.length > 1} leaf={crumbLeaf} />
 
       {status === "loading" ? <Loading label="Loading space…" /> : null}
       {status === "error" ? <ErrorState error={error} /> : null}
