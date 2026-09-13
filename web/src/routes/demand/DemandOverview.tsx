@@ -29,12 +29,18 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useTenant } from "../../tenant/TenantProvider";
-import { getSiteCurrentDemand, getSiteDemandSeries } from "../../api/endpoints";
-import type { CurrentDemandResponse, DemandIntervalPoint, DemandSeriesResponse } from "../../api/types";
+import { getSiteCurrentDemand, getSiteDemandSeries, getSiteTelemetryFreshness } from "../../api/endpoints";
+import type {
+  CurrentDemandResponse,
+  DemandIntervalPoint,
+  DemandSeriesResponse,
+  SiteTelemetryFreshnessResponse,
+} from "../../api/types";
 import { planDemandRequest, type TimeRangePreset } from "../../time/ranges";
 import { HierarchyCrumb } from "../../components/HierarchyCrumb";
 import { TimeRangePicker } from "../../components/TimeRangePicker";
 import { ChartFrame, type ChartPoint } from "../../components/ChartFrame";
+import { FreshnessIndicator } from "../../components/FreshnessIndicator";
 import { Loading } from "../../components/states/Loading";
 import { ErrorState } from "../../components/states/ErrorState";
 import { NoDataYet } from "../../components/states/NoDataYet";
@@ -69,6 +75,10 @@ export function DemandOverview() {
   const [current, setCurrent] = useState<CurrentDemandResponse | null>(null);
   const [series, setSeries] = useState<DemandSeriesResponse | null>(null);
   const [nonce, setNonce] = useState(0);
+  // MVP-4 -- device freshness. Independent of quality_status/coverage_percent
+  // above (decision pack Sec 5); a failure here leaves this null, rendered
+  // as nothing, never blocking the Current/Peak/Trend/Status sections.
+  const [freshness, setFreshness] = useState<SiteTelemetryFreshnessResponse | null>(null);
 
   useEffect(() => {
     if (!selectedSite) return;
@@ -106,6 +116,21 @@ export function DemandOverview() {
       active = false;
     };
   }, [selectedSite, preset, nonce]);
+
+  useEffect(() => {
+    if (!selectedSite) return;
+    let active = true;
+    getSiteTelemetryFreshness(selectedSite.site_id)
+      .then((data) => {
+        if (active) setFreshness(data);
+      })
+      .catch(() => {
+        if (active) setFreshness(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [selectedSite]);
 
   const peak = useMemo(() => (series ? findPeak(series.series) : null), [series]);
 
@@ -166,6 +191,14 @@ export function DemandOverview() {
           <section className="demand-status" data-testid="demand-status">
             <h2>Status</h2>
             <p>{current.has_data ? current.quality_status : "Unknown"}</p>
+          </section>
+
+          {/* MVP-4 -- device freshness: a separate question ("is the meter
+              communicating") from Status above ("was this calculation
+              valid") -- kept visibly distinct, not merged into it. */}
+          <section className="demand-freshness" data-testid="demand-freshness">
+            <h2>Freshness</h2>
+            <FreshnessIndicator state={freshness?.demand.state} />
           </section>
 
           {/* Evidence / Data Quality -- real fields, not invented */}

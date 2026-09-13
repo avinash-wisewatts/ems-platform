@@ -58,6 +58,15 @@ function seriesResponse(noData = false) {
   };
 }
 
+function freshnessResponse(state = "FRESH") {
+  return {
+    site_id: SITE_ID,
+    energy: { state: "FRESH", as_of: "2026-09-13T09:58:00Z" },
+    demand: { state, as_of: "2026-09-13T09:58:00Z" },
+    power_quality: { state: "FRESH", as_of: "2026-09-13T09:58:00Z" },
+  };
+}
+
 describe("DemandOverview (Slice B)", () => {
   it("composes Current Value -> Peak -> Trend -> Status -> Data quality from the two verified endpoints", async () => {
     stubFetch((url) => {
@@ -114,5 +123,47 @@ describe("DemandOverview (Slice B)", () => {
     expect(screen.queryByText(/contract/i)).toBeNull();
     expect(screen.queryByText(/utilization/i)).toBeNull();
     expect(screen.queryByText(/target/i)).toBeNull();
+  });
+
+  it("MVP-4: shows device freshness next to, not merged into, the existing Status (quality_status) text", async () => {
+    stubFetch((url) => {
+      if (url.includes(`/api/v1/sites/${SITE_ID}/telemetry-freshness`)) {
+        return { jsonBody: freshnessResponse("STALE") };
+      }
+      if (url.includes(`/api/v1/sites/${SITE_ID}/demand/current`)) {
+        return { jsonBody: currentDemandResponse(true) };
+      }
+      if (url.includes(`/api/v1/sites/${SITE_ID}/demand`)) {
+        return { jsonBody: seriesResponse() };
+      }
+      return { status: 404, jsonBody: { error: "not_found", detail: "unexpected" } };
+    });
+
+    renderWithProviders(<DemandOverview />, { sites: () => Promise.resolve(SITES_ONE) });
+
+    await waitFor(() => expect(screen.getByTestId("demand-freshness")).toHaveTextContent("STALE"));
+    // The existing Status paragraph (quality_status) is unchanged.
+    expect(screen.getByTestId("demand-status")).toHaveTextContent("VALID");
+  });
+
+  it("MVP-4: a freshness fetch failure is non-blocking -- Current/Peak/Trend/Status still render", async () => {
+    stubFetch((url) => {
+      if (url.includes(`/api/v1/sites/${SITE_ID}/telemetry-freshness`)) {
+        return { status: 500, jsonBody: { error: "server_error" } };
+      }
+      if (url.includes(`/api/v1/sites/${SITE_ID}/demand/current`)) {
+        return { jsonBody: currentDemandResponse(true) };
+      }
+      if (url.includes(`/api/v1/sites/${SITE_ID}/demand`)) {
+        return { jsonBody: seriesResponse() };
+      }
+      return { status: 404, jsonBody: { error: "not_found", detail: "unexpected" } };
+    });
+
+    renderWithProviders(<DemandOverview />, { sites: () => Promise.resolve(SITES_ONE) });
+
+    await waitFor(() => expect(screen.getByTestId("demand-current-value")).toHaveTextContent("60.5 kW"));
+    expect(screen.getByTestId("demand-status")).toHaveTextContent("VALID");
+    expect(screen.queryByTestId("freshness-indicator")).toBeNull();
   });
 });

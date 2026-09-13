@@ -115,6 +115,17 @@ function isConsumptionUrl(url: string): boolean {
     url.includes(`/api/v1/sites/${SITE_ID}/energy/consumption`)
   );
 }
+function isFreshnessUrl(url: string): boolean {
+  return url.includes(`/api/v1/sites/${SITE_ID}/telemetry-freshness`);
+}
+function freshnessResponse(state = "FRESH") {
+  return {
+    site_id: SITE_ID,
+    energy: { state, as_of: "2026-09-13T09:58:00Z" },
+    demand: { state: "FRESH", as_of: "2026-09-13T09:58:00Z" },
+    power_quality: { state: "FRESH", as_of: "2026-09-13T09:58:00Z" },
+  };
+}
 
 describe("EnergyOverview (Slice A/C -- Energy Performance)", () => {
   it("composes Current Value -> Comparison -> Trend -> Status -> Evidence from the unmodified consumption endpoint plus the additive evidence endpoint", async () => {
@@ -308,5 +319,36 @@ describe("EnergyOverview (Slice A/C -- Energy Performance)", () => {
     expect(screen.getByTestId("energy-evidence-rollovers")).toHaveTextContent("1 interval");
     // Never renders through the unrelated five-value QualityIndicator lattice.
     expect(screen.queryByTestId("quality-indicator")).toBeNull();
+  });
+
+  it("MVP-4: shows device freshness in the Evidence section, additive to the existing evidence content", async () => {
+    stubFetch((url) => {
+      if (isFreshnessUrl(url)) return { jsonBody: freshnessResponse("STALE") };
+      if (isEvidenceUrl(url)) return { jsonBody: evidenceResponse() };
+      if (isConsumptionUrl(url)) return { jsonBody: energyResponse(120) };
+      return { status: 404, jsonBody: { error: "not_found", detail: "unexpected" } };
+    });
+
+    renderWithProviders(<EnergyOverview />, { sites: () => Promise.resolve(SITES_ONE) });
+
+    await waitFor(() => expect(screen.getByTestId("energy-current-value")).toHaveTextContent("120.0 kWh"));
+    await waitFor(() => expect(screen.getByTestId("energy-freshness")).toHaveTextContent("STALE"));
+    // Additive, not a replacement -- the existing evidence content is unchanged.
+    expect(screen.getByTestId("energy-evidence-coverage")).toHaveTextContent("100.0%");
+  });
+
+  it("MVP-4: a freshness fetch failure is non-blocking -- Current/Comparison/Trend/Evidence still render", async () => {
+    stubFetch((url) => {
+      if (isFreshnessUrl(url)) return { status: 500, jsonBody: { error: "server_error" } };
+      if (isEvidenceUrl(url)) return { jsonBody: evidenceResponse() };
+      if (isConsumptionUrl(url)) return { jsonBody: energyResponse(120) };
+      return { status: 404, jsonBody: { error: "not_found", detail: "unexpected" } };
+    });
+
+    renderWithProviders(<EnergyOverview />, { sites: () => Promise.resolve(SITES_ONE) });
+
+    await waitFor(() => expect(screen.getByTestId("energy-current-value")).toHaveTextContent("120.0 kWh"));
+    expect(screen.getByTestId("energy-evidence-coverage")).toHaveTextContent("100.0%");
+    expect(screen.queryByTestId("freshness-indicator")).toBeNull();
   });
 });

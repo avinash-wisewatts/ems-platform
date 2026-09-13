@@ -34,6 +34,16 @@
  * no materiality rule exists for either (no contract-demand or PF/THD
  * threshold is configured anywhere in the schema), so neither card carries
  * a status/attention treatment.
+ *
+ * MVP-4 -- Data Quality & Freshness: each of the three cards additionally
+ * shows its own device connectivity/freshness state (GET .../telemetry-
+ * freshness, one bounded call for all three domains -- decision pack Sec
+ * 7). This is a signal separate from, and never merged into, Site
+ * Health/Attention above, or the measurement-quality lattice, or Demand's
+ * quality_status/coverage_percent -- see FreshnessIndicator.tsx. The
+ * freshness fetch is additive UI, not a hard dependency of the page: on
+ * loading or failure it renders nothing, never blocking the primary
+ * metric values fetched above, and never fabricating a state.
  */
 
 import { useEffect, useState } from "react";
@@ -46,6 +56,7 @@ import {
   getSiteEnergyConsumptionEvidence,
   getSiteEnergyTypicalReference,
   getSitePowerQuality,
+  getSiteTelemetryFreshness,
 } from "../api/endpoints";
 import type {
   CurrentDemandResponse,
@@ -54,6 +65,7 @@ import type {
   EnergyConsumptionResponse,
   EnergyTypicalReferenceResponse,
   PowerQualityResponse,
+  SiteTelemetryFreshnessResponse,
 } from "../api/types";
 import {
   planDemandRequest,
@@ -74,6 +86,7 @@ import { HierarchyCrumb } from "../components/HierarchyCrumb";
 import { TimeRangePicker } from "../components/TimeRangePicker";
 import { SiteHealthBanner } from "../components/SiteHealthBanner";
 import { AttentionList } from "../components/AttentionList";
+import { FreshnessIndicator } from "../components/FreshnessIndicator";
 import { Loading } from "../components/states/Loading";
 import { ErrorState } from "../components/states/ErrorState";
 import { NoDataYet } from "../components/states/NoDataYet";
@@ -106,6 +119,14 @@ type PowerQualitySection = {
   data: PowerQualityResponse | null;
 };
 
+/** MVP-4 -- no unsupportedReason: this is always a "right now" read, not a
+ *  time-range request that can be out of the supported window. */
+type FreshnessSection = {
+  status: SectionStatus;
+  error: unknown;
+  data: SiteTelemetryFreshnessResponse | null;
+};
+
 const ENERGY_INITIAL: EnergySection = {
   status: "loading",
   error: null,
@@ -123,6 +144,7 @@ const DEMAND_INITIAL: DemandSection = {
   series: null,
 };
 const PQ_INITIAL: PowerQualitySection = { status: "loading", error: null, unsupportedReason: null, data: null };
+const FRESHNESS_INITIAL: FreshnessSection = { status: "loading", error: null, data: null };
 
 export function SiteOverview() {
   const { selectedSite, sites } = useTenant();
@@ -134,6 +156,7 @@ export function SiteOverview() {
   const [demandNonce, setDemandNonce] = useState(0);
   const [pq, setPq] = useState<PowerQualitySection>(PQ_INITIAL);
   const [pqNonce, setPqNonce] = useState(0);
+  const [freshness, setFreshness] = useState<FreshnessSection>(FRESHNESS_INITIAL);
 
   useEffect(() => {
     if (!selectedSite) return;
@@ -236,6 +259,30 @@ export function SiteOverview() {
     };
   }, [selectedSite, preset, pqNonce]);
 
+  // MVP-4 -- device freshness, per domain. A "right now" read: no time
+  // range dependency. Additive UI only -- a failure here leaves `data`
+  // null (rendered as nothing by FreshnessIndicator), never blocking the
+  // primary Energy/Demand/Power Quality values fetched above.
+  useEffect(() => {
+    if (!selectedSite) return;
+    let active = true;
+    setFreshness((s) => ({ ...s, status: "loading", error: null }));
+
+    getSiteTelemetryFreshness(selectedSite.site_id)
+      .then((data) => {
+        if (!active) return;
+        setFreshness({ status: "ready", error: null, data });
+      })
+      .catch((err: unknown) => {
+        if (!active) return;
+        setFreshness({ status: "error", error: err, data: null });
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [selectedSite]);
+
   if (!selectedSite) {
     return (
       <EmptyState title="No site selected">
@@ -330,7 +377,8 @@ export function SiteOverview() {
                   ({comparisonResult.deltaPercent >= 0 ? "+" : ""}
                   {comparisonResult.deltaPercent.toFixed(1)}% vs. typical)
                 </span>
-              ) : null}
+              ) : null}{" "}
+              <FreshnessIndicator state={freshness.data?.energy.state} />
             </p>
           )
         ) : null}
@@ -351,7 +399,8 @@ export function SiteOverview() {
               {demand.current.current_demand_kw?.toFixed(1) ?? "—"} kW
               {demandPeak ? (
                 <span data-testid="site-overview-demand-peak"> — peak {demandPeak.kw.toFixed(1)} kW</span>
-              ) : null}
+              ) : null}{" "}
+              <FreshnessIndicator state={freshness.data?.demand.state} />
             </p>
           ) : (
             <NoDataYet />
@@ -370,7 +419,9 @@ export function SiteOverview() {
           pq.data.no_data || !pqCurrent || pqCurrent.power_factor_avg === null ? (
             <NoDataYet />
           ) : (
-            <p data-testid="site-overview-pq-value">PF {pqCurrent.power_factor_avg.toFixed(2)}</p>
+            <p data-testid="site-overview-pq-value">
+              PF {pqCurrent.power_factor_avg.toFixed(2)} <FreshnessIndicator state={freshness.data?.power_quality.state} />
+            </p>
           )
         ) : null}
         <Link to="/features/power-quality">See Power Quality details →</Link>
