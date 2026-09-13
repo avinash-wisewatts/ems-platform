@@ -45,7 +45,7 @@ function latest(series: PowerQualityPoint[]): PowerQualityPoint | null {
 }
 
 export function PowerQualityOverview() {
-  const { selectedSite } = useTenant();
+  const { selectedSite, sites } = useTenant();
   const [preset, setPreset] = useState<TimeRangePreset>("7D");
   const [status, setStatus] = useState<LoadStatus>("loading");
   const [error, setError] = useState<unknown>(null);
@@ -97,7 +97,11 @@ export function PowerQualityOverview() {
 
   return (
     <div className="page page--power-quality-overview" data-testid="page-power-quality-overview">
-      <HierarchyCrumb siteName={selectedSite.site_name} leaf={{ label: "Power Quality" }} />
+      <HierarchyCrumb
+        siteName={selectedSite.site_name}
+        multiSite={sites.length > 1}
+        leaf={{ label: "Power Quality" }}
+      />
       <h1>Power quality</h1>
       <p className="hint">
         Power Factor measures how efficiently electrical power is used. Total Harmonic Distortion (THD)

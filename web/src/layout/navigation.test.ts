@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PRIMARY_NAV, SECONDARY_NAV, visibleNav } from "./navigation";
+import { PRIMARY_NAV, SECONDARY_NAV, groupNav, visibleNav } from "./navigation";
 import { ADMIN_USER, VIEWER_USER } from "../test-utils";
 
 describe("navigation model -- permission gates VISIBILITY only", () => {
@@ -27,5 +27,32 @@ describe("navigation model -- permission gates VISIBILITY only", () => {
     for (const item of [...PRIMARY_NAV, ...SECONDARY_NAV]) {
       expect(item.to === "/home" || item.to.startsWith("/features")).toBe(true);
     }
+  });
+});
+
+describe("navigation IA -- MVP-1 closeout: Energy/Demand/PQ are Site capabilities, Spaces/Assets are the hierarchy drill-down", () => {
+  it("groups Home/Energy/Demand/Power Quality under 'site' and Spaces/Assets under 'hierarchy', not as flat unrelated siblings", () => {
+    const byKey = Object.fromEntries(PRIMARY_NAV.map((item) => [item.key, item.group]));
+    expect(byKey["home"]).toBe("site");
+    expect(byKey["energy"]).toBe("site");
+    expect(byKey["demand"]).toBe("site");
+    expect(byKey["power-quality"]).toBe("site");
+    expect(byKey["spaces"]).toBe("hierarchy");
+    expect(byKey["assets"]).toBe("hierarchy");
+    // The later-phases catch-all is deliberately not yet part of the agreed IA.
+    expect(byKey["features"]).toBeUndefined();
+  });
+
+  it("groupNav partitions the visible list into contiguous IA sections without reordering or dropping items", () => {
+    const primary = visibleNav(PRIMARY_NAV, VIEWER_USER.permissions);
+    const sections = groupNav(primary);
+
+    expect(sections.map((s) => s.group)).toEqual(["site", "hierarchy", undefined]);
+    expect(sections[0]!.items.map((i) => i.key)).toEqual(["home", "energy", "demand", "power-quality"]);
+    expect(sections[1]!.items.map((i) => i.key)).toEqual(["spaces", "assets"]);
+    expect(sections[2]!.items.map((i) => i.key)).toEqual(["features"]);
+
+    // Every visible item still appears exactly once -- grouping is a pure split.
+    expect(sections.flatMap((s) => s.items.map((i) => i.key))).toEqual(primary.map((i) => i.key));
   });
 });

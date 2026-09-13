@@ -19,7 +19,7 @@ import { EmptyState } from "../../components/states/EmptyState";
 type LoadStatus = "loading" | "ready" | "error";
 
 export function SpacesList() {
-  const { selectedSite } = useTenant();
+  const { selectedSite, sites } = useTenant();
   const [status, setStatus] = useState<LoadStatus>("loading");
   const [error, setError] = useState<unknown>(null);
   const [spaces, setSpaces] = useState<SpaceSummary[]>([]);
@@ -56,7 +56,7 @@ export function SpacesList() {
 
   return (
     <div className="page page--spaces-list" data-testid="page-spaces-list">
-      <HierarchyCrumb siteName={selectedSite.site_name} />
+      <HierarchyCrumb siteName={selectedSite.site_name} multiSite={sites.length > 1} />
       <h1>Spaces</h1>
 
       {status === "loading" ? <Loading label="Loading spaces…" /> : null}

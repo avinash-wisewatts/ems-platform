@@ -101,7 +101,7 @@ function countEligibleWindowsWithFlag(
 }
 
 export function EnergyOverview() {
-  const { selectedSite } = useTenant();
+  const { selectedSite, sites } = useTenant();
   const [preset, setPreset] = useState<TimeRangePreset>("7D");
   const [basis, setBasis] = useState<ComparisonBasis>("PREVIOUS_PERIOD");
   const [status, setStatus] = useState<LoadStatus>("loading");
@@ -230,7 +230,7 @@ export function EnergyOverview() {
 
   return (
     <div className="page page--energy-overview" data-testid="page-energy-overview">
-      <HierarchyCrumb siteName={selectedSite.site_name} leaf={{ label: "Energy" }} />
+      <HierarchyCrumb siteName={selectedSite.site_name} multiSite={sites.length > 1} leaf={{ label: "Energy" }} />
       <h1>Energy consumption</h1>
 
       <div className="energy-controls">

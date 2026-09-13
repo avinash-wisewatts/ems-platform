@@ -59,7 +59,7 @@ function findPeak(series: DemandIntervalPoint[]): { kw: number; at: string } | n
 }
 
 export function DemandOverview() {
-  const { selectedSite } = useTenant();
+  const { selectedSite, sites } = useTenant();
   const [preset, setPreset] = useState<TimeRangePreset>("7D");
   const [status, setStatus] = useState<LoadStatus>("loading");
   const [error, setError] = useState<unknown>(null);
@@ -117,7 +117,7 @@ export function DemandOverview() {
 
   return (
     <div className="page page--demand-overview" data-testid="page-demand-overview">
-      <HierarchyCrumb siteName={selectedSite.site_name} leaf={{ label: "Demand" }} />
+      <HierarchyCrumb siteName={selectedSite.site_name} multiSite={sites.length > 1} leaf={{ label: "Demand" }} />
       <h1>Maximum demand</h1>
 
       <TimeRangePicker value={preset} onChange={setPreset} dataKind="demand" />

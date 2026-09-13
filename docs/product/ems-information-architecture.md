@@ -1,6 +1,6 @@
 # WiseWatts EMS — Information Architecture / UX Blueprint
 
-> **Status:** WORKING DRAFT  ·  **Version:** 0.1.1  ·  **Owner:** Product  ·  **Last updated:** 2026-09-11 (§6 status pointers only — see Version History; no product decision altered)
+> **Status:** WORKING DRAFT  ·  **Version:** 0.1.2  ·  **Owner:** Product  ·  **Last updated:** 2026-09-12 (§4.5/§4.7 data-model correction only — see Version History; no product decision altered)
 >
 > **Source basis:** product-owner brief (§5–§8, §13, §16), `ems-product-definition.md`, DDS §F / §F.0 / §B.2–B.5 / §E, roadmap Phases 7–17, ZeroWatt technical overview (reference only).
 >
@@ -165,7 +165,7 @@ Each screen: **Purpose · Customer question · Primary information · Secondary 
 - **Purpose:** understand one space's environmental behaviour.
 - **Customer question:** "What is the temperature/humidity/dew point in Banquet Hall 2, and how has it behaved?"
 - **Primary information:** current values with quality; trend chart per parameter over the selected range; comfort band overlay where a target exists (`direction_of_good` / target metadata).
-- **Secondary information:** assets serving the space (from `asset_space_relationships`, reverse direction); min/max/avg for the range.
+- **Secondary information:** assets serving the space; min/max/avg for the range. `asset_space_relationships` (an M:N "AHU serves 3 rooms" model) is a DDS future-state design, not yet migrated — verified during MVP-1 closeout (2026-09-12) that no such table exists today. The only implemented, live relationship is `metadata.assets.space_id`, a single nullable FK (1:1), exposed read-only via `GET /api/v1/sites/{site_id}/assets` (Slice 0, migration 232). "Assets serving this space" is achievable today only as that FK's reverse lookup (`assets WHERE space_id = this space`), not a true M:N traversal.
 - **Filters:** parameter (Temperature / Humidity / Dew Point / others as wired); resolution (clamped: `raw`, `1h`).
 - **Time context:** shared control; `raw` for short ranges, `1h` for longer.
 - **Drill-down:** a point on the trend → that timestamp's context; "assets serving this space" → Asset detail.
@@ -196,7 +196,7 @@ Each screen: **Purpose · Customer question · Primary information · Secondary 
 **Asset Overview**
 - **Purpose:** one asset's current picture and its place in the system.
 - **Customer question:** "How is this chiller doing, and what's it connected to?"
-- **Primary information:** operating status; key parameters (temperatures, power, runtime) with quality; the **component tree** (`asset_relationships`: "AHU-01 → Fan → Motor") and **spaces served** (`asset_space_relationships`).
+- **Primary information:** operating status; key parameters (temperatures, power, runtime) with quality; the **component tree** (`asset_relationships`: "AHU-01 → Fan → Motor") and **spaces served**. Both remain explicitly deferred/Post-MVP (see MVP-1 closeout decision below) — `metadata.asset_relationships` exists (migration 225) but is empty and has no read path; `asset_space_relationships` (an M:N "serves" model) has no table at all today, only the DDS's future-state design for one. The one live relationship is `metadata.assets.space_id`, a single nullable FK (1:1) — one asset placed in at most one space, not an M:N "serves" set.
 - **Secondary information:** recent notable events; energy contribution; nameplate/context metadata (non-identifying).
 - **Filters:** which parameters to show.
 - **Time context:** "current" = latest; mini-trends use the shared range.
@@ -469,3 +469,4 @@ Each screen: **Purpose · Customer question · Primary information · Secondary 
 |---|---|---|
 | 0.1 | 2026-09-10 | Initial working draft. Navigation hypothesis, cross-cutting UX, ~21 screen breakdowns with 12-field template + API-dependency status, journey-stage map, open IA decisions. |
 | 0.1.1 | 2026-09-11 | **IMPLEMENTATION STATUS UPDATE.** §6 open-decision items marked resolved/still-open against `ems-product-owner-workshop-baseline.md` Q49–Q101. No screen definition or IA decision was altered. |
+| 0.1.2 | 2026-09-12 | **DATA-MODEL CORRECTION (MVP-1 closeout).** §4.5 (Space detail) and §4.7 (Asset Overview) corrected: `asset_space_relationships` does not exist as an implemented table — it is a DDS future-state design only. Today's only live asset↔space relationship is `metadata.assets.space_id`, a single nullable FK (1:1), read-only via `GET /api/v1/sites/{site_id}/assets` (Slice 0, migration 232). Component-tree (`asset_relationships`) and the M:N "serves" model both remain explicitly deferred/Post-MVP — no table was created, no schema changed. Screen intent/scope unaltered. |
