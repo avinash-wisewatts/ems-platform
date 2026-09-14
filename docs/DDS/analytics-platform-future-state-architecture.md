@@ -41,9 +41,20 @@ included or implied to have happened as a result of writing it.
    also the stress-test document's §5 for the reasoning).
 3. **The conceptual model is now frozen.** Organization, Site, Building,
    Floor, Space, Asset, AssetRelationship, AssetSpaceRelationship, Device,
-   Point, Parameter, AssetPoint, SpacePoint, ParameterCalculation, and the
-   hybrid domain/generic measurement storage layer are the complete set of
-   core concepts. No additional core entity is authorized by this document.
+   Point, Parameter, AssetPoint, SpacePoint, ParameterCalculation, the
+   hybrid domain/generic measurement storage layer, and — as of the
+   amendment below — **Alert**, are the complete set of core concepts. No
+   additional core entity is authorized by this document beyond these.
+
+   > **Amendment (2026-09-14, [ADR-017](../00-governance/decisions/ADR-017-mvp7-alert-architecture.md)):**
+   > `Alert` was added as an eleventh core concept via the change-control
+   > process this document itself defines below — all five criteria were
+   > tested and passed (see ADR-017 for the full, evidenced application of
+   > each criterion). This is the first use of that process since the
+   > original freeze. The original ten-concept freeze and its stress-test
+   > evidentiary record (point 1 above) are preserved unchanged, not
+   > rewritten — this is a documented addition, not a retroactive
+   > correction. See §B.2a below for `Alert`'s conceptual shape.
 4. **Further work should not introduce new core entities or abstractions
    unless implementation reveals a genuine contradiction** — not a
    convenience, not a symmetry argument, not a legacy-schema quirk. See
@@ -387,6 +398,59 @@ Measurement storage (unchanged shape, extended coverage):
                                          zone for a parameter before its domain
                                          has earned a dedicated wide table
 ```
+
+### B.2a Alert (NEW, 2026-09-14 — 11th core concept, added via Architecture change control)
+
+Added by [ADR-017](../00-governance/decisions/ADR-017-mvp7-alert-architecture.md)
+to satisfy MVP-7 Basic Alerts
+([ADR-016](../00-governance/decisions/ADR-016-q77-mvp7-basic-alerts.md)),
+after the five-criteria test in §"Architecture change control" was applied
+and passed. Conceptual shape only — no DDL, table name, or migration is
+finalized; that is implementation work.
+
+```
+Alert (NEW analytics-layer concept)
+   ── organization_id (NOT NULL — universal tenant-scoping convention, unchanged)
+   ── site_id (NOT NULL); space_id, asset_id (nullable — reserved; not
+        populated by any condition that exists today, see below)
+   ── condition_key: stable identity over {parameter/metric,
+        threshold/reference, scope/context} — changes exactly when the
+        underlying configuration changes (drives recurrence grouping)
+   ── state: ACTIVE | RESOLVED | ENDED
+   ── triggered_at, trigger_value
+   ── resolved_at, resolved_value (null until Resolved)
+   ── ended_at, ended_reason (null until Ended)
+   ── last_evaluated_at
+   ── retention: Resolved/Ended purge 90 days after resolved_at/ended_at;
+        Active retained indefinitely while true (reuses the platform's
+        existing TimescaleDB retention-policy mechanism, not a new one)
+```
+
+**Not part of this concept**: recurrence counts are derived at read time
+from prior `Alert` rows sharing the same `condition_key`, never stored as a
+redundant counter. A separate, internal-only candidate/pending-
+qualification tracking structure (5-minute/1-minute timer state between
+job runs) is required by the evaluation mechanism but is deliberately
+**not** part of this customer-facing concept — see ADR-017.
+
+**Deliberately excluded, per explicit ratification**: no generic
+event/notification framework, no generalized polymorphic Subject
+abstraction (Alert's `site_id`/`space_id`/`asset_id` follow the same
+optional-subject-binding pattern already established for Point via
+AssetPoint/SpacePoint — see §B.3 — not a new binding mechanism), and no
+customer-facing severity taxonomy (`analytics.insights`'s `severity`
+field, considered as a reuse candidate, is exactly why that table was
+rejected as a substitute — see ADR-017). `Alert` and `analytics.insights`
+(§Phase 14 of the implementation roadmap) remain distinct concepts for
+distinct purposes, as already stated in this repository's Attention
+feature documentation before this amendment.
+
+**Scope note**: the only condition that exists anywhere in this repository
+today is Site-level Energy Attention (±15%, [ADR-010](../00-governance/decisions/ADR-010-mvp3-attention-materiality-policy.md)).
+`Alert.space_id`/`asset_id` are reserved in the shape above for if/when a
+Space- or Asset-level Attention condition is separately decided and
+built — ADR-010 explicitly places per-space/per-asset Attention out of
+MVP-3 scope, so no `Alert` row will populate those fields today.
 
 **"System"/"Plant"/"Zone"/"Process" are not new entity types.** A Chiller
 Plant, an HVAC System, or any other composite piece of infrastructure a

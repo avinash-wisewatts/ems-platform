@@ -38,7 +38,7 @@ CUSTOMER EMS
 │   ├── Trends
 │   ├── Comparisons
 │   └── Correlations             ← curated only, never a free-form query builder
-├── Alerts                        ← SHOULD; appearance & config resolved (Q77/Q78/Q67)
+├── Alerts                        ← SHOULD/MVP-7; fully decided 2026-09-14 (ADR-016), not implemented; in-product only (header indicator + this area); config stays in Administration App (Q67)
 ├── Export                        ← MVP-6; decided 2026-09-14 (ADR-014), not implemented; also reachable contextually from Energy/Demand/Power Quality screens, not only here
 └── Reports                       ← MVP-6; Site Performance Report decided + implemented 2026-09-14 (ADR-015), not yet deployed; Reports-area-only (no contextual access, unlike Export); rest of Q76 remains open
 
@@ -56,7 +56,7 @@ Future areas (record only; NOT approved MVP features):
 | 1 | First landing page | **Resolved:** Site Overview / Energy Health (Workshop Q61, Q88). |
 | 2 | Portfolio-first vs. site-first | **Resolved:** Site is primary (Q62, Q63). |
 | 4 | How a customer selects among multiple sites | Touched by Q90 (search/quick nav); exact selection pattern still an interaction-design detail. |
-| 6 | How Alerts appear and where configured | **Resolved:** in-product + email (Q77/Q78); configuration stays in the Administration App (Q67). |
+| 6 | How Alerts appear and where configured | **Resolved, in full detail (2026-09-14):** in-product only — header Active-alert-count indicator + dedicated Alerts area; no email/SMS/WhatsApp/sharing, correcting the archived Q78 "in-product + email" statement; configuration stays in the Administration App (Q67). See [ADR-016](../00-governance/decisions/ADR-016-q77-mvp7-basic-alerts.md). |
 | 11 | Space: primary nav or drill-down | **Resolved:** drill-down (Q51, Q99) — see [ADR-002](../00-governance/decisions/ADR-002-hierarchy-model.md). |
 | 12 | How functional categories slot into navigation | **Still genuinely open** — not addressed by Q49–Q101. |
 

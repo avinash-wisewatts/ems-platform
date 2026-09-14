@@ -11,8 +11,17 @@ everything that changed" (Workshop Q72).
 ## Requirements
 
 [EMS-REQ-080](../../02-requirements/functional-requirements.md) and
-related alert requirements (which share the same predefined-condition
-logic, delivered as a notification rather than a screen state — MVP-7).
+related alert requirements (`EMS-REQ-117`–`127`) — MVP-7 Basic Alerts
+notify the customer of the same predefined Attention conditions computed
+here, delivered as a notification rather than a screen state. Fully
+decided at the product/UX level ([ADR-016](../../00-governance/decisions/ADR-016-q77-mvp7-basic-alerts.md))
+and, as of 2026-09-14, at the architecture level too — see
+[ADR-017](../../00-governance/decisions/ADR-017-mvp7-alert-architecture.md):
+evaluation will run as an extended TimescaleDB background job, and a new
+canonical SQL function becomes the source of truth for the ±15% rule below
+for the alerting concern, with this feature's existing client-side
+implementation tracked for future migration (not changed by this
+decision). Not implemented — no code or schema exists yet.
 
 ## User experience
 

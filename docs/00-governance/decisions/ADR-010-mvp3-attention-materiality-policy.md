@@ -33,6 +33,15 @@ threshold is:
   scattered through components, so it can evolve to metric-specific,
   site-specific, or variability-based policies later without redesigning
   the Attention/Site-Health architecture.
+  > **Qualified, not superseded (2026-09-14,
+  > [ADR-017](ADR-017-mvp7-alert-architecture.md)):** MVP-7 Basic Alerts
+  > requires a second, server-side implementation of this exact rule (no
+  > server-side evaluation mechanism existed before ADR-017). This
+  > principle is upheld, not abandoned — the new SQL function becomes the
+  > canonical implementation going forward, with a tracked follow-on to
+  > migrate this client-side code to consume the server-computed result,
+  > gated by a mandatory parity test in the interim. See ADR-017
+  > §"A1 — Single-source-of-truth arrangement."
 - **No configuration UI** — for MVP-3 the policy is a plain, centrally-
   defined constant, per the decision pack's own instruction: "Do NOT build
   configuration UI now."

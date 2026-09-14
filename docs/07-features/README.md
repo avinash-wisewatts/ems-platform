@@ -25,7 +25,9 @@ Evaluated but not given a dedicated document here because it would only
 duplicate [02-requirements/](../02-requirements/) and
 [03-ux-and-design/](../03-ux-and-design/) without adding a distinct
 architecture/validation chain yet: Portfolio (MVP-8, lowest priority),
-Alerts (MVP-7), Export (MVP-6, decided per ADR-014 but not implemented).
-These get their own feature document once their underlying capability
-exists to document. Reporting (Q76) beyond the Site Performance Report
-above remains in the same position.
+Alerts (MVP-7, decided in full detail per [ADR-016](../00-governance/decisions/ADR-016-q77-mvp7-basic-alerts.md)
+but not implemented — 2 architecture questions open), Export (MVP-6,
+decided per ADR-014 but not implemented). These get their own feature
+document once their underlying capability exists to document. Reporting
+(Q76) beyond the Site Performance Report above remains in the same
+position.

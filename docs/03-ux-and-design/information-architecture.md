@@ -110,12 +110,61 @@ and [ADR-004](../00-governance/decisions/ADR-004-site-overview-primary-destinati
 - **Comparisons:** periods, sites, spaces, or same-type assets — fairness rule: asset comparisons only within one `asset_type_id`. `PLANNED (Post-MVP)`.
 - **Correlations:** curated pairs only (e.g. energy vs. outside temperature) — never arbitrary metric-vs-metric. `MISSING`/`PLANNED (Post-MVP)`.
 
-## Alerts  *(SHOULD)*
+## Alerts  *(SHOULD — MVP-7, fully decided 2026-09-14, not yet implemented)*
 
-- **Purpose:** surface conditions that need attention.
-- **Primary:** active alerts list (severity, semantic subject, time raised, value vs. threshold).
-- **Empty state (good):** "no active alerts" is a *good* empty state, distinct from no rules configured.
-- **API dependency:** `MISSING` — no alert model/endpoint defined. Scope resolved (Workshop Q77/Q78 — basic, measurable-condition alerts, in-product + email delivery); shape/schema still `PLANNED (MVP-7)`.
+- **Purpose:** notify the customer of existing, already-computed Attention
+  conditions — not a new detection mechanism. Every qualifying Attention
+  condition auto-generates an alert per affected context; there is no
+  customer-facing alert-rule-authoring layer.
+- **Delivery — in-product only.** A header notification indicator (count of
+  currently Active alerts, scoped to the selected Site/context) and a
+  dedicated Alerts area in main navigation. **No email, SMS, WhatsApp, or
+  sharing** — this corrects the archived Workshop Q78 statement that email
+  was included; see
+  [ADR-016](../00-governance/decisions/ADR-016-q77-mvp7-basic-alerts.md)
+  "Source-of-truth correction."
+- **Lifecycle:** a condition must be continuously true for 5 minutes
+  (gap-resetting) before an alert qualifies. Active while the condition
+  remains true; Resolved after 1 minute continuously false (gap-resetting);
+  Ended if the underlying Attention configuration is disabled or changed
+  while Active (Ended is never presented as Resolved). Configuration
+  changes create a new alert identity and require fresh qualification.
+- **Data-unavailable-while-Active:** the alert stays Active
+  ("Unable to evaluate — data unavailable"); on recovery, a still-true
+  condition requires fresh 5-minute qualification before a new alert is
+  generated — the prior alert is not silently continued.
+- **Content:** existing EMS terminology, thresholds, and number formatting
+  only — no alert-specific vocabulary and no new severity taxonomy. List
+  shows condition + context + triggered time; detail adds hierarchy
+  context, current state, trigger/latest/resolution values,
+  threshold/reference, and a recurrence summary ("Previous occurrences: N"
+  / "Most recent: <time>"); Ended alerts add ended time + reason. No
+  analytical deep links to other screens in MVP-7, and no internal
+  identifiers (device/point IDs) are ever exposed.
+- **History and retention:** historical records are immutable. Resolved and
+  Ended alerts remain visible for 90 days from resolution/ending; Active
+  alerts remain visible indefinitely while true.
+- **Filtering/ordering:** cascading Site→Space→Asset filters, a
+  single-select Condition/Metric filter, status-appropriate date filtering
+  (90-day defaults), infinite scroll. Ordered by existing Attention
+  materiality, then recency — materiality is used for ordering only, never
+  shown as a customer-facing severity label.
+- **Empty state (good):** "no active alerts" is a *good* empty state,
+  distinct from no conditions configured.
+- **Authorization:** follows existing EMS authorization; no alert-specific
+  recipient/permission model. Configuration remains exclusively in the
+  Administration App (Q67).
+- **Full decision record:**
+  [ADR-016](../00-governance/decisions/ADR-016-q77-mvp7-basic-alerts.md);
+  requirements:
+  [functional-requirements.md §Alerts](../02-requirements/functional-requirements.md#alerts)
+  (`EMS-REQ-080`–`084`, `EMS-REQ-117`–`127`).
+- **API dependency:** `MISSING` — no alert model/endpoint defined, and two
+  genuine architecture questions are open (ADR-016): no server-side
+  Attention/alert evaluation mechanism exists in any form (Attention is a
+  stateless client-side computation today), and no `Alert` entity exists in
+  the frozen DDS conceptual model. Shape/schema `PLANNED (MVP-7)` at the
+  product level; implementation blocked on those two questions.
 
 ## Export  *(MVP-6 — decided 2026-09-14, not yet implemented)*
 

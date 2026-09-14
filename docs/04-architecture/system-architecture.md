@@ -9,9 +9,12 @@ not a replacement.**
 
 ## What is frozen
 
-Ten concepts form the complete future-state conceptual model. No additional
-core entity is authorized without meeting the five-criteria change-control
-test (see [README.md](README.md)):
+**Eleven** concepts form the complete future-state conceptual model — ten
+from the original freeze, plus `Alert` (added 2026-09-14, the first
+entity added under the change-control process below — see
+[ADR-017](../00-governance/decisions/ADR-017-mvp7-alert-architecture.md)).
+No additional core entity is authorized without meeting the five-criteria
+change-control test (see [README.md](README.md)):
 
 - **Organization / Site / Building / Floor / Space** — the physical
   hierarchy, unchanged from today's schema. `organization_id` is `NOT NULL`
@@ -48,6 +51,13 @@ test (see [README.md](README.md)):
 - **ParameterCalculation** (new) — derived parameters, three input-
   resolution modes only (`SELF`, `RELATED(relationship_type, direction)`,
   `AGGREGATE_CHILDREN(relationship_type)`), no general-purpose formula DSL.
+- **Alert** (new, 2026-09-14) — an immutable, dated occurrence record with
+  an Active/Resolved/Ended lifecycle, notifying the customer of an existing
+  Attention condition (MVP-7 Basic Alerts). Added via the five-criteria
+  change-control test, not as an instance of a generic event framework;
+  distinct from the separate, Post-MVP `analytics.insights` concept. See
+  [ADR-017](../00-governance/decisions/ADR-017-mvp7-alert-architecture.md)
+  and the DDS §B.2a.
 
 **Energy accounting stays deliberately independent of physical asset
 topology** — `config.site_energy_meter_roles` (grid import/export, on-site
@@ -87,6 +97,7 @@ relationship foundation, domain measurement wiring, routing architecture,
 derived calculations) are not started. Phases 7 (Analytics API) and 8
 (Frontend Foundation) — which sit on top of, but do not require, this
 frozen model's newer concepts — are independently **DONE**, verified on
-`origin/staging`. See
+`origin/staging`. `Alert` (added 2026-09-14) has no migration or code yet —
+architecture only. See
 [../01-product/roadmap.md](../01-product/roadmap.md) for the customer-
 facing sequencing of this work.

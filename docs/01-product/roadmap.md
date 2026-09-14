@@ -159,10 +159,38 @@ matches the DDS roadmap's own Phase 8 exit criterion ("empty shell").
 
 ### MVP-7 (DDS Phase 10, deferred sub-scope) — Basic Alerts
 
-- **Decisions served**: Q77 (basic alerts on measurable conditions), Q78
-  (in-product + email delivery), Q67 (configuration stays in the
-  Administration App).
-- **Depends on**: MVP-3's Attention thresholds.
+- **Decisions served**: Q77 (basic alerts on measurable conditions,
+  full lifecycle/state model), Q67 (configuration stays in the
+  Administration App). **Q78 is superseded** — delivery is now decided as
+  **in-product only**, not in-product + email; see
+  [ADR-016](../00-governance/decisions/ADR-016-q77-mvp7-basic-alerts.md).
+- **Decided 2026-09-14, not implemented**: the full alert
+  trigger/qualification/resolution lifecycle, Active/Resolved/Ended states
+  and configuration-change transitions, persistence-failure handling,
+  90-day retention, recurrence tracking, content/detail structure,
+  filtering/ordering, and authorization are now specified in detail — see
+  [ADR-016](../00-governance/decisions/ADR-016-q77-mvp7-basic-alerts.md)
+  and [02-requirements/functional-requirements.md §Alerts](../02-requirements/functional-requirements.md#alerts)
+  (`EMS-REQ-117`–`EMS-REQ-127`).
+- **Architecture decided 2026-09-14, not implemented**: both open
+  architecture questions from ADR-016 are now resolved — see
+  [ADR-017](../00-governance/decisions/ADR-017-mvp7-alert-architecture.md).
+  Evaluation runs as an extension of the existing TimescaleDB-native
+  background-job mechanism (A1), with a new canonical SQL function
+  becoming the single source of truth for the ±15% materiality rule
+  (tracked follow-on: migrate the client display to consume it, gated by a
+  parity test — ADR-010 is qualified, not superseded). `Alert` is added as
+  a minimal, dedicated domain concept — the DDS's 11th core concept (B1),
+  formally amended via its own five-criteria change-control test.
+  `analytics.insights` is explicitly not reused; no generic event
+  framework, generalized Subject abstraction, or severity taxonomy is
+  introduced.
+- **Depends on**: MVP-3's Attention thresholds. **Still genuinely open**:
+  Space/Asset-level Attention does not exist (ADR-010 places it out of
+  MVP-3 scope) — MVP-7 alerts can only be generated from the one existing
+  Site-level Energy condition until/unless that is separately decided;
+  candidate/pending-qualification tracking design and persistence-retry
+  semantics remain implementation-design questions (ADR-017).
 
 ### MVP-8 (DDS Phase 9/13, narrowed) — Portfolio Experience
 
@@ -186,8 +214,11 @@ matches the DDS roadmap's own Phase 8 exit criterion ("empty shell").
 Recommendations, root-cause intelligence, adaptive/predictive baselines,
 action logging/verification workflows, AI, automation, sophisticated
 benchmarking (Q1–Q48 long-term direction); a dedicated connectivity/ops-style
-Data Quality screen beyond freshness visibility; multi-channel alert
-delivery beyond in-product+email; DDS Phase 11 (Asset Performance / motor
+Data Quality screen beyond freshness visibility; any alert delivery channel
+beyond in-product (email, SMS, WhatsApp, sharing — all removed from MVP-7
+scope, not merely deferred beyond an in-product+email baseline; see
+[ADR-016](../00-governance/decisions/ADR-016-q77-mvp7-basic-alerts.md));
+alert acknowledgement workflows; DDS Phase 11 (Asset Performance / motor
 condition monitoring), Phase 13 (baseline overlays, cross-asset league
 tables), Phase 14 (cost/benchmarking/insights foundations), Phase 16
 (hardening/scale) — real technical phases, not cancelled, simply not
@@ -209,7 +240,7 @@ are parity-proven against Grafana.
 | Metric grammar/definitions/units | MVP-5 | Content only, no platform dependency |
 | Export | MVP-6 | MISSING (code); **decision DECIDED 2026-09-14, see ADR-014**; depends on MVP-2/3 |
 | Basic reporting | MVP-6 | Site Performance Report **implemented 2026-09-14, not yet deployed**, see ADR-015; broader Reporting scope still MISSING; depends on MVP-3 |
-| Basic alerts | MVP-7 | MISSING; depends on MVP-3's Attention logic |
+| Basic alerts | MVP-7 | MISSING (code); **product decision DECIDED 2026-09-14 (ADR-016), architecture DECIDED 2026-09-14 (ADR-017)**; delivery corrected to in-product only (email removed); depends on MVP-3's Attention logic; Space/Asset-level Attention doesn't exist yet |
 | Portfolio | MVP-8 | MISSING; lowest MVP priority by decision |
 | Financial visibility | Cross-cutting | No tariff/cost data exists anywhere |
 
