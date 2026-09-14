@@ -28,6 +28,29 @@ ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_MIGRATION = ROOT / "postgres/migrations/238_mvp7_alert_evaluation.sql"
 FUNCTIONS_MIGRATION = ROOT / "postgres/migrations/239_mvp7_alert_evaluation_functions.sql"
 JOB_REGISTRATION = ROOT / "postgres/jobs/238_alert_evaluation_job.sql"
+MANIFEST = ROOT / "postgres/restructure_manifest.csv"
+
+
+def test_migrations_are_registered_in_the_deploy_manifest():
+    """Regression guard for a real, silent deployment gap caught during
+    this implementation: scripts/apply_migrations.sh (the incremental
+    staging/production deploy path) selects migration files EXCLUSIVELY
+    from postgres/restructure_manifest.csv's target_category=migration
+    rows -- not by listing postgres/migrations/ directly. A migration file
+    that exists on disk but is missing from the manifest is silently
+    skipped by every real deploy (confirmed: migrations 238/239 were
+    absent from the very first staging deploy's migration list, which
+    still reported success, because the manifest was never updated in the
+    same commit). CI's database/migration integration test job does not
+    catch this -- it exercises the SQL files directly, not this manifest-
+    driven selection path."""
+    manifest_text = MANIFEST.read_text()
+    for source_file in (
+        "238_mvp7_alert_evaluation.sql",
+        "239_mvp7_alert_evaluation_functions.sql",
+    ):
+        assert f"{source_file},migration," in manifest_text
+    assert "238_alert_evaluation_job.sql,jobs," in manifest_text
 
 
 def _schema_sql() -> str:

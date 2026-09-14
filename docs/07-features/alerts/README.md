@@ -98,6 +98,27 @@ staging validation.
 - **Header indicator count is capped at 200** (a single list call)
   rather than an exact unbounded count — immaterial given MVP-7 has only
   one possible alert per site today, but not exact in principle.
+- **The TimescaleDB job itself requires a separate, manual application on
+  staging/production** — `scripts/apply_migrations.sh` (the incremental
+  deploy pipeline) selects files exclusively from
+  `postgres/restructure_manifest.csv`'s `target_category=migration` rows,
+  never by listing `postgres/migrations/` directly; `postgres/jobs/*.sql`
+  registrations are a `target_category=jobs` row, applied only by
+  `scripts/deploy_database.sh` (fresh-bootstrap only), the same as every
+  other existing job file. **A genuine deployment gap was caught after
+  the first staging deploy**: migrations 238/239 were entirely absent
+  from that deploy's own migration list (not SKIP, not APPLY — silently
+  never selected) because they had not yet been added to the manifest;
+  fixed in a follow-up commit, regression-guarded by
+  `test_migrations_are_registered_in_the_deploy_manifest`. Migrations
+  238/239 (schema, functions) are applied by the normal pipeline once
+  registered; **the job registration
+  (`postgres/jobs/238_alert_evaluation_job.sql`) itself still requires a
+  separate, explicitly-authorized manual step against the live database**
+  — not performed in this pass, consistent with this repository's
+  staging-safety practice (`CLAUDE.md` §4) and prior precedent in this
+  project. **Alerts will not actually be evaluated on staging until that
+  step runs.**
 - **No live database available in this environment** — the SQL migration's
   correctness (beyond static/structural checks and manual review, which
   did catch and fix two real bugs in the lifecycle procedure — a `FOUND`-
