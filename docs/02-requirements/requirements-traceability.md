@@ -227,3 +227,39 @@ rewrite rule. §4 line 189's "Q73–Q78... remain as classified in §2" is
 superseded for Q75 specifically by this section — Q75's *decision* status
 has changed; its *implementation* status has not, and §4's statement
 remains accurate for Q76-Q78, Q73, Q74.
+
+## 7. Status update (2026-09-14) — Q76 Site Performance Report decided and implemented, not yet deployed
+
+The Q76 Reporting Product Decision Workshop (2026-09-14) resolved a
+narrow subset of Q76's open questions — enough to define and implement
+one report type, the Site Performance Report. Full record:
+[ADR-015](../00-governance/decisions/ADR-015-q76-site-performance-report.md).
+New requirements: [functional-requirements.md §Site Performance Report](functional-requirements.md#site-performance-report)
+(`EMS-REQ-110`–`EMS-REQ-116`).
+
+| Item | 2026-09-11 status (§2) | 2026-09-14 status |
+|---|---|---|
+| Q76 (MVP reporting) | `C — NOT LANDED` ("No reporting capability exists.") | **Partially decided and implemented, not yet deployed** — catalogue (one type), configuration, generation, structure, PDF, and error handling are decided AND built for the Site Performance Report specifically (ADR-015; `web/src/routes/reports/`). Verified this session: full frontend suite (209 tests), `tsc --noEmit`, `eslint --max-warnings 0`, `vite build` all pass. No staging/production deployment has occurred. **Report catalogue breadth, non-PDF format questions (e.g. Excel), scheduled/automated variants, and any report type beyond Site Performance remain exactly as open as the 2026-09-14 Q76 workshop brief left them.** This is not a full resolution of Q76. |
+
+**This section does not resolve Q75/Export** (already recorded in §6) **or
+the general Q76 questions this workshop did not touch** (report-definition
+storage as a general mechanism, Excel format, multi-report catalogues,
+Space/Asset-scoped analytical content, a real data-availability API). Two
+genuine architecture/data gaps were identified during this work, not
+silently resolved — recorded in full in ADR-015's "Decision — gap
+resolutions" section:
+
+1. **No Space/Asset-scoped Energy/Demand/Power-Quality/Attention/Health
+   capability exists anywhere in the platform.** The Site Performance
+   Report's hierarchy-context selector (Site/Space/Asset) therefore
+   changes only the report's title and Investigation-section target — its
+   analytical content is always the selected Site's own data. This is a
+   genuine capability gap, not a design choice; closing it requires new
+   API surface.
+2. **No endpoint or mechanism exposes a site's actual data-available date
+   range.** The same gap already recorded against Export (§6, ADR-014
+   decision 9). The Site Performance Report's Custom period picker does
+   not enforce a fabricated bound as a result.
+
+Both gaps apply equally to Export (§6) and to any future Q76 report type
+— they are platform-level gaps, not specific to this one report.

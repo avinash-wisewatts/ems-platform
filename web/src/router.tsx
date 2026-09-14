@@ -18,6 +18,7 @@ import { AssetDetail } from "./routes/assets/AssetDetail";
 import { EnergyOverview } from "./routes/energy/EnergyOverview";
 import { DemandOverview } from "./routes/demand/DemandOverview";
 import { PowerQualityOverview } from "./routes/power-quality/PowerQualityOverview";
+import { SitePerformanceReport } from "./routes/reports/SitePerformanceReport";
 
 /**
  * Foundation routes:
@@ -37,6 +38,7 @@ import { PowerQualityOverview } from "./routes/power-quality/PowerQualityOvervie
  *   /features/energy               Energy Overview (Slice A)
  *   /features/demand               Demand Overview (Slice B)
  *   /features/power-quality        Power Quality Overview (Slice B)
+ *   /features/reports              Site Performance Report (MVP-6, Q76, ADR-015)
  * Specific routes are matched before the /features/* catch-all regardless
  * of declaration order (React Router v6 ranking); everything else under
  * /features/* still falls through to PlaceholderArea, honestly.
@@ -125,6 +127,14 @@ export function AppRoutes() {
         element={
           <ShellGate>
             <PowerQualityOverview />
+          </ShellGate>
+        }
+      />
+      <Route
+        path="/features/reports"
+        element={
+          <ShellGate>
+            <SitePerformanceReport />
           </ShellGate>
         }
       />

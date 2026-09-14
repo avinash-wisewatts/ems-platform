@@ -11,7 +11,7 @@ different directories. Each feature document links out to
 [08-verification/](../08-verification/) rather than duplicating their
 content.
 
-| Feature | MVP stage | Status (2026-09-13, commit `ddbe5a4`) |
+| Feature | MVP stage | Status (2026-09-13, commit `ddbe5a4`, unless noted) |
 |---|---|---|
 | [hierarchy/](hierarchy/README.md) | MVP-1 | **DONE** |
 | [energy/](energy/README.md) | MVP-2 | **DONE** |
@@ -19,10 +19,13 @@ content.
 | [power-quality/](power-quality/README.md) | MVP-2 | **DONE** |
 | [site-overview/](site-overview/README.md) | MVP-3 | **DONE** |
 | [attention/](attention/README.md) | MVP-3 | **DONE** (Energy only; Demand/PQ informational, by decision) |
+| [site-performance-report/](site-performance-report/README.md) | MVP-6 | **IMPLEMENTED, not deployed** (2026-09-14, ADR-015) — the one decided Q76 report type; broader Reporting scope remains undecided |
 
 Evaluated but not given a dedicated document here because it would only
 duplicate [02-requirements/](../02-requirements/) and
 [03-ux-and-design/](../03-ux-and-design/) without adding a distinct
 architecture/validation chain yet: Portfolio (MVP-8, lowest priority),
-Alerts (MVP-7), Export/Reporting (MVP-6). These get their own feature
-document once their underlying capability exists to document.
+Alerts (MVP-7), Export (MVP-6, decided per ADR-014 but not implemented).
+These get their own feature document once their underlying capability
+exists to document. Reporting (Q76) beyond the Site Performance Report
+above remains in the same position.

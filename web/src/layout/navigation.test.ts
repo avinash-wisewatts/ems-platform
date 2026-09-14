@@ -11,6 +11,7 @@ describe("navigation model -- permission gates VISIBILITY only", () => {
       "energy",
       "demand",
       "power-quality",
+      "reports",
       "spaces",
       "assets",
       "features",
@@ -31,12 +32,13 @@ describe("navigation model -- permission gates VISIBILITY only", () => {
 });
 
 describe("navigation IA -- MVP-1 closeout: Energy/Demand/PQ are Site capabilities, Spaces/Assets are the hierarchy drill-down", () => {
-  it("groups Home/Energy/Demand/Power Quality under 'site' and Spaces/Assets under 'hierarchy', not as flat unrelated siblings", () => {
+  it("groups Home/Energy/Demand/Power Quality/Reports under 'site' and Spaces/Assets under 'hierarchy', not as flat unrelated siblings", () => {
     const byKey = Object.fromEntries(PRIMARY_NAV.map((item) => [item.key, item.group]));
     expect(byKey["home"]).toBe("site");
     expect(byKey["energy"]).toBe("site");
     expect(byKey["demand"]).toBe("site");
     expect(byKey["power-quality"]).toBe("site");
+    expect(byKey["reports"]).toBe("site");
     expect(byKey["spaces"]).toBe("hierarchy");
     expect(byKey["assets"]).toBe("hierarchy");
     // The later-phases catch-all is deliberately not yet part of the agreed IA.
@@ -48,7 +50,7 @@ describe("navigation IA -- MVP-1 closeout: Energy/Demand/PQ are Site capabilitie
     const sections = groupNav(primary);
 
     expect(sections.map((s) => s.group)).toEqual(["site", "hierarchy", undefined]);
-    expect(sections[0]!.items.map((i) => i.key)).toEqual(["home", "energy", "demand", "power-quality"]);
+    expect(sections[0]!.items.map((i) => i.key)).toEqual(["home", "energy", "demand", "power-quality", "reports"]);
     expect(sections[1]!.items.map((i) => i.key)).toEqual(["spaces", "assets"]);
     expect(sections[2]!.items.map((i) => i.key)).toEqual(["features"]);
 

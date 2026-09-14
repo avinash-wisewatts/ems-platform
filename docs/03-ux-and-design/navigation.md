@@ -40,7 +40,7 @@ CUSTOMER EMS
 │   └── Correlations             ← curated only, never a free-form query builder
 ├── Alerts                        ← SHOULD; appearance & config resolved (Q77/Q78/Q67)
 ├── Export                        ← MVP-6; decided 2026-09-14 (ADR-014), not implemented; also reachable contextually from Energy/Demand/Power Quality screens, not only here
-└── Reports                       ← MVP-6; Q76 remains open
+└── Reports                       ← MVP-6; Site Performance Report decided + implemented 2026-09-14 (ADR-015), not yet deployed; Reports-area-only (no contextual access, unlike Export); rest of Q76 remains open
 
 Future areas (record only; NOT approved MVP features):
 ├── Insights                      (Post-MVP — analytics.insights event log)
