@@ -7,9 +7,14 @@ registered (a separate, explicitly-authorized manual step, deliberately
 withheld — see [alerts/README.md](../../07-features/alerts/README.md)),
 and the deployed frontend detail view omitted hierarchy context and
 threshold/reference and showed resolved fields in the wrong order versus
-decision 11 below. A same-day corrective pass fixed the frontend gaps and
-a latent job-registration-script defect and added deployment-verification
-coverage for the job's registration state; **the job itself remains
+decision 11 below; the date-range filter (decision 48) was also found to
+key on triggered time unconditionally instead of per-tab. A same-day
+corrective pass fixed the frontend gaps and a latent job-registration-
+script defect and added deployment-verification coverage for the job's
+registration state; a **second** same-day corrective migration (240)
+then fixed decision 48's date-range keying, verified functionally
+against a disposable local TimescaleDB container. **The job itself
+remains
 unregistered on staging pending separate authorization and a follow-up
 validation pass** — see
 [alerts/README.md](../../07-features/alerts/README.md) for current status.

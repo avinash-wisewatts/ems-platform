@@ -35,7 +35,8 @@ time from the condition's stable identity, never a stored counter.
 ## Data / API dependencies
 
 `GET /api/v1/sites/{site_id}/alerts`, `GET /api/v1/alerts/{alert_id}`
-(migration 239). Backed by `analytics.alerts` + the internal
+(migration 239; `get_portal_site_alerts`'s date-range filter corrected by
+migration 240 — see "Known limitations" below). Backed by `analytics.alerts` + the internal
 `analytics.alert_evaluation_candidates` qualification/resolution scratch
 table (migration 238), populated by `analytics.run_alert_evaluation_job` —
 a TimescaleDB-native background job (ADR-017, A1), the same mechanism
@@ -80,7 +81,8 @@ reserves `space_id`/`asset_id` columns; nothing populates them today.
 Backend: `app/tests/test_analytics_api_v1_alerts_routes.py` (route
 contract), `app/tests/test_alert_evaluation_contract.py` (static SQL
 contract — the lifecycle procedure cannot be exercised without a live
-database in this environment). Frontend:
+database in this environment), `app/tests/test_alert_date_filter_state_keying_contract.py`
+(migration 240's static SQL contract). Frontend:
 `web/src/routes/alerts/AlertsArea.test.tsx`.
 
 **Staging post-deploy validation (2026-09-14): FAIL.** Live, read-only
@@ -113,6 +115,22 @@ fixes were verified by `npx tsc --noEmit` (clean), `npx eslint . --max-warnings 
 `test_analytics_api_v1_alerts_routes.py` (28/28) unaffected and still
 passing (no backend Python code changed this pass).
 
+**Second same-day corrective fix — migration 240 (date-range state
+keying).** `app/tests/test_alert_date_filter_state_keying_contract.py`
+(9/9 passed) plus the unaffected 28/28 above (38/38 total). Also verified
+functionally against a disposable local TimescaleDB container (not
+staging): migrations 238, 239, and 240 applied cleanly in sequence
+against stub `metadata.sites`/`spaces`/`assets` tables and an
+`admin.portal_user_can_access_site` stub; three fixture alerts (Active
+triggered January 2026, Resolved and Ended both triggered in 2025 but
+resolved/ended in January 2026) were inserted directly, then
+`get_portal_site_alerts` was called with a January-2026 `from`/`to`
+range per state — the Resolved and Ended rows were correctly returned
+(found via `resolved_at`/`ended_at`, not `triggered_at`), and a control
+query with a 2025 range for the Resolved state correctly returned zero
+rows (proving the old unconditional-`triggered_at` bug is gone, not just
+that the new code compiles).
+
 ## Known limitations / deviations (this implementation pass)
 
 - **No executable cross-language parity harness** between the SQL
@@ -128,15 +146,25 @@ passing (no backend Python code changed this pass).
   34) — only persisted trigger/resolved values are shown.
 - **Space/Asset cascading filters are not implemented** — no Space/Asset
   condition exists yet to filter by.
-- **The date-range filter (`from`/`to`) is keyed to triggered time for all
-  three tabs.** ADR-016 decision 48 specifies resolved time for the
-  Resolved tab and ended time for the Ended tab;
-  `analytics.get_portal_site_alerts`/`get_portal_alert_detail` (migration
-  239) filter `triggered_at` unconditionally regardless of `p_state`.
-  Discovered during the 2026-09-14 corrective pass; not fixed there because
-  it requires a new migration to an already-applied SQL function (a
-  backend/schema change, not a frontend one) — flagged for separate
-  authorization, not silently left inconsistent with ADR-016.
+- ~~The date-range filter (`from`/`to`) was keyed to triggered time for all
+  three tabs.~~ **Fixed by migration 240 (2026-09-14).** ADR-016 decision 48
+  specifies resolved time for the Resolved tab and ended time for the Ended
+  tab; `analytics.get_portal_site_alerts` (migration 239) filtered
+  `triggered_at` unconditionally regardless of `p_state`. Discovered during
+  the same-day corrective pass, deliberately deferred rather than editing
+  already-applied migration 239. Migration 240 `CREATE OR REPLACE`s the
+  function with the same signature/return shape, now keying `p_from`/`p_to`
+  on each row's own state (`triggered_at` for ACTIVE, `resolved_at` for
+  RESOLVED, `ended_at` for ENDED); the infinite-scroll cursor (`p_before`)
+  and ordering remain `triggered_at`-based (a pagination concern, not the
+  date-range filter). `analytics.get_portal_alert_detail` was never
+  affected — it takes no `p_from`/`p_to` (single-row lookup by
+  `alert_id`). Verified functionally against a disposable local
+  TimescaleDB container (not staging): a Resolved alert triggered in 2025
+  but resolved in January 2026 is correctly returned by a January-2026
+  query and correctly absent from a 2025 query — see
+  `app/tests/test_alert_date_filter_state_keying_contract.py` for the
+  static contract and this session's report for the live local evidence.
 - **"Load more" is button-triggered, not scroll-triggered** — the
   no-traditional-pagination substance of ADR-016 decision 47 is preserved;
   the trigger mechanism is simplified.
@@ -206,9 +234,10 @@ passing (no backend Python code changed this pass).
   integration tests" job to validate at the SQL execution level before
   this is considered fully proven. (The 2026-09-14 corrective pass did
   exercise `postgres/jobs/238_alert_evaluation_job.sql`'s registration
-  mechanics specifically against a disposable local TimescaleDB container —
-  see "Validation" above — but this covers only `add_job`/`alter_job`
-  behavior, not `analytics.evaluate_alerts()`'s lifecycle logic.)
+  mechanics, and separately migration 240's `get_portal_site_alerts`
+  redefinition with fixture data, against disposable local TimescaleDB
+  containers — see "Validation" above — but neither covers
+  `analytics.evaluate_alerts()`'s lifecycle logic itself.)
 
 ## Release status
 
@@ -218,14 +247,17 @@ Root cause: the alert-evaluation TimescaleDB job was never registered
 limitations"), so no alert has ever been generated on staging; the
 deployed frontend also had real gaps against ADR-016 decision 11/48
 (missing hierarchy context and threshold/reference, reversed Resolved
-field order, no Condition/Metric/date-range/Apply-Clear filtering UI). A
-same-day corrective pass (branch
+field order, no Condition/Metric/date-range/Apply-Clear filtering UI;
+the date-range filter was also found, separately, to key on
+`triggered_at` unconditionally instead of per-tab per ADR-016 decision
+48). A same-day corrective pass (branch
 `fix/mvp7-alert-job-config-and-adr016-corrections`) fixed the frontend
-gaps and the job-registration script's first-registration config defect,
-and added deployment-verification coverage
-(`scripts/verify/verify_jobs.sh`) so the job's registration state is
-detected automatically on every future deployment. **Not yet
-re-validated**: the job registration step itself and a follow-up staging
-validation pass both remain outstanding, each requiring separate explicit
-authorization before this feature can be considered functional on
-staging. MVP-7 must not be represented as functional until both have run.
+gaps, the job-registration script's first-registration config defect,
+and (migration 240) the date-range keying defect, and added
+deployment-verification coverage (`scripts/verify/verify_jobs.sh`) so the
+job's registration state is detected automatically on every future
+deployment. **Not yet re-validated**: the job registration step itself
+and a follow-up staging validation pass both remain outstanding, each
+requiring separate explicit authorization before this feature can be
+considered functional on staging. MVP-7 must not be represented as
+functional until both have run.
