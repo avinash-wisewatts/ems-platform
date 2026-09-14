@@ -20,14 +20,38 @@
  * the API's own explicit "UNKNOWN" value, which means something different
  * (a real answer: no device could be resolved) and always renders.
  *
- * Text content is the raw API state string, unstyled and unworded --
- * placeholder-only. Final customer-facing wording is explicitly MVP-5's
- * scope (decision pack Sec 13, Q1), not decided here.
+ * MVP-5 -- Content & Metric Grammar (approved Product decision): the raw
+ * API state is translated to a customer-facing label here, in ONE place,
+ * via FRESHNESS_LABELS below. NO_DATA and UNKNOWN intentionally share the
+ * "Data unavailable" label even though they remain technically distinct --
+ * `data-freshness`/the `freshness--*` class still carry the real, distinct
+ * API value (for styling/tests/analytics), only the visible text and the
+ * accessible name collapse the two. The technical state name is never
+ * rendered as visible or accessible text -- see InfoDisclosure for the
+ * paired "what does this mean" explanation.
  */
 
 import type { FreshnessState } from "../api/types";
+import { InfoDisclosure } from "./InfoDisclosure";
 
 export type { FreshnessState };
+
+const FRESHNESS_LABELS: Record<FreshnessState, string> = {
+  FRESH: "Current",
+  STALE: "Outdated",
+  NO_DATA: "Data unavailable",
+  UNKNOWN: "Data unavailable",
+};
+
+/** DRAFT wording -- Product approved the underlying meaning, not this exact
+ *  copy (see MVP-5 decision record). NO_DATA and UNKNOWN deliberately share
+ *  the same explanation, matching their shared customer label. */
+const FRESHNESS_EXPLANATIONS: Record<FreshnessState, string> = {
+  FRESH: "This data is being received recently enough to reflect current conditions.",
+  STALE: "The latest available data is older than expected and may not reflect current conditions.",
+  NO_DATA: "We can't currently provide usable data for this metric.",
+  UNKNOWN: "We can't currently provide usable data for this metric.",
+};
 
 export function FreshnessIndicator({
   state,
@@ -38,15 +62,16 @@ export function FreshnessIndicator({
 }) {
   if (!state) return null;
 
+  const label = FRESHNESS_LABELS[state];
+
   return (
     <span
       className={`freshness freshness--${state.toLowerCase()}`}
       data-testid="freshness-indicator"
       data-freshness={state}
-      title={`Freshness: ${state}`}
-      aria-label={`Freshness: ${state}`}
     >
-      {state}
+      {label}
+      <InfoDisclosure label={label} explanation={FRESHNESS_EXPLANATIONS[state]} testId="freshness" />
     </span>
   );
 }

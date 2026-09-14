@@ -332,7 +332,7 @@ describe("EnergyOverview (Slice A/C -- Energy Performance)", () => {
     renderWithProviders(<EnergyOverview />, { sites: () => Promise.resolve(SITES_ONE) });
 
     await waitFor(() => expect(screen.getByTestId("energy-current-value")).toHaveTextContent("120.0 kWh"));
-    await waitFor(() => expect(screen.getByTestId("energy-freshness")).toHaveTextContent("STALE"));
+    await waitFor(() => expect(screen.getByTestId("energy-freshness")).toHaveTextContent("Outdated"));
     // Additive, not a replacement -- the existing evidence content is unchanged.
     expect(screen.getByTestId("energy-evidence-coverage")).toHaveTextContent("100.0%");
   });

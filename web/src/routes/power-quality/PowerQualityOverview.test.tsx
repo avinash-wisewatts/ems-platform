@@ -118,7 +118,7 @@ describe("PowerQualityOverview (Slice B)", () => {
 
     renderWithProviders(<PowerQualityOverview />, { sites: () => Promise.resolve(SITES_ONE) });
 
-    await waitFor(() => expect(screen.getByTestId("pq-freshness")).toHaveTextContent("UNKNOWN"));
+    await waitFor(() => expect(screen.getByTestId("pq-freshness")).toHaveTextContent("Data unavailable"));
     // Reading-level PF/THD quality disclaimer stays -- freshness does not
     // fabricate a reading-level verdict.
     expect(screen.getByTestId("pq-evidence")).toHaveTextContent("not yet available");
