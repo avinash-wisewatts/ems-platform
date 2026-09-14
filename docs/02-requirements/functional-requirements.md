@@ -128,10 +128,82 @@ See [README.md](README.md) for conventions (`Priority`, `Status`, `Source`).
 
 | ID | Title / description | Customer question | Priority | Source | Phase | Status | Dependencies | Notes |
 |---|---|---|---|---|---|---|---|---|
-| EMS-REQ-090 | **Report catalogue + viewer.** Templated reports with preview. | "Give me the monthly energy report." | SHOULD | ROADMAP, ZEROWATT_TECHNICAL_REFERENCE | MVP-6 | DRAFT | report-definition storage; reads only via Phase 7 | |
-| EMS-REQ-091 | **Familiar export formats.** PDF and Excel. | "In the format finance expects." | SHOULD | ZEROWATT_TECHNICAL_REFERENCE, PRODUCT_OWNER | MVP-6 | BLOCKED | specific formats undecided (Q76 gives shape only) | |
-| EMS-REQ-092 | **Scheduled report generation & delivery.** Runs unattended on a schedule. | "Send it automatically every month." | SHOULD | ROADMAP | MVP-6/Post-MVP | DRAFT | existing job-scheduling conventions | Not MVP per Q76 (no scheduling in MVP). |
-| EMS-REQ-093 | **Report figures traceable to on-screen numbers.** Matches Phase 10 parity. | "Does the report match the dashboard?" | MUST (of reporting) | ROADMAP | MVP-6 | DRAFT | Phase 10 parity | |
+| EMS-REQ-090 | **Report catalogue + viewer.** Templated reports with preview. | "Give me the monthly energy report." | SHOULD | ROADMAP, ZEROWATT_TECHNICAL_REFERENCE | MVP-6 | READY-FOR-DESIGN | report-definition storage; reads only via Phase 7 | 2026-09-14: catalogue decided as exactly one report type (Site Performance Report) — see [EMS-REQ-110](#site-performance-report)/[ADR-015](../00-governance/decisions/ADR-015-q76-site-performance-report.md). "Report-definition storage" dependency does not apply to this report — it is composed live from existing endpoints, not stored. |
+| EMS-REQ-091 | **Familiar report formats.** PDF and Excel. | "In the format finance expects." | SHOULD | ZEROWATT_TECHNICAL_REFERENCE, PRODUCT_OWNER | MVP-6 | PARTIALLY READY-FOR-DESIGN | PDF decided 2026-09-14 for the Site Performance Report ([EMS-REQ-114](#site-performance-report)); Excel remains undecided | Report (Q76) output format. PDF is now decided, for this one report type only — see [ADR-015](../00-governance/decisions/ADR-015-q76-site-performance-report.md). Excel is not addressed by that decision and stays `BLOCKED`. See the contradiction record below for why this row's title changed, and `EMS-REQ-096`/[ADR-014](../00-governance/decisions/ADR-014-q75-export-scope-and-behavior.md) for the distinct Export (Q75) format (CSV). |
+| EMS-REQ-092 | **Scheduled report generation & delivery.** Runs unattended on a schedule. | "Send it automatically every month." | SHOULD | ROADMAP | MVP-6/Post-MVP | DRAFT | existing job-scheduling conventions | Not MVP per Q76 (no scheduling in MVP). Confirmed unaffected 2026-09-14 — the Site Performance Report has no scheduling/email/history ([EMS-REQ-115](#site-performance-report)). |
+| EMS-REQ-093 | **Report figures traceable to on-screen numbers.** Matches Phase 10 parity. | "Does the report match the dashboard?" | MUST (of reporting) | ROADMAP | MVP-6 | READY-FOR-DESIGN | Phase 10 parity | 2026-09-14: satisfied by construction for the Site Performance Report — it reuses `SiteOverview.tsx`'s own data-fetching functions rather than a second computation path. See [ADR-015](../00-governance/decisions/ADR-015-q76-site-performance-report.md) Rationale. |
+
+> **Contradiction resolved (2026-09-14)** — `EMS-REQ-091`'s title, per
+> [source-of-truth.md](../00-governance/source-of-truth.md)'s recording
+> format:
+>
+> **CURRENT IMPLEMENTATION:** `EMS-REQ-091`'s title reads "Familiar report
+> formats" and its row describes Q76's (Reporting) output format only,
+> which remains `BLOCKED`/undecided.
+>
+> **HISTORICAL / DOCUMENTED EXPECTATION:** this row was originally titled
+> "Familiar export formats" — wording that, read on its own, could be
+> mistaken for specifying Q75's (Export) raw-data file format, even though
+> the row's own Notes column already said "Q76 gives shape only" and the
+> row sits under the "Reporting" heading, not a separate Export one (which
+> did not yet exist).
+>
+> **CHANGE:** the MVP-6 Product Decision Workshop (2026-09-14) decided
+> Q75's Export format is CSV (`EMS-REQ-096`,
+> [ADR-014](../00-governance/decisions/ADR-014-q75-export-scope-and-behavior.md)).
+> Because that is a different, now-decided format from Q76's still-open
+> Report format, `EMS-REQ-091`'s title was corrected from "export" to
+> "report" so it no longer reads as if it named the Export format. No
+> status, priority, or decision content in the row changed — only the two
+> words in its title.
+>
+> **VERIFICATION:** confirmed by re-reading `EMS-REQ-091`'s own
+> pre-existing Notes column ("specific formats undecided (Q76 gives shape
+> only)") and Workshop baseline §108
+> (`docs/99-archive/superseded-product/ems-product-owner-workshop-baseline.md`):
+> *"Report = communicate the important story; Export = provide the
+> underlying data"* — both already establish this row was always about
+> Reporting, not Export; the title alone was misleading.
+
+## Export
+
+Decided by the MVP-6 Product Decision Workshop (2026-09-14) — see
+[ADR-014](../00-governance/decisions/ADR-014-q75-export-scope-and-behavior.md)
+for full context, rationale, and evidence. Distinct from Reporting above
+per Q76's own framing: *"Report = communicate the important story; Export
+= provide the underlying data."* **`READY-FOR-DESIGN`, not implemented** —
+per this document's own Status convention (`READY-FOR-DESIGN` = "agreed
+enough to design against", [README.md](README.md#conventions)), which is
+exactly Export's current state: no code exists for any row below.
+
+| ID | Title / description | Customer question | Priority | Source | Phase | Status | Dependencies | Notes |
+|---|---|---|---|---|---|---|---|---|
+| EMS-REQ-094 | **Export content — aggregated figures, not raw series.** The on-screen aggregated analytical figure (e.g. period total, peak demand, PF/THD summary), not the underlying raw time-series. | "Give me the numbers I'm looking at." | SHOULD | PRODUCT_OWNER | MVP-6 | READY-FOR-DESIGN | Q75; ADR-014 decision 1 | Narrows Q75's original "relevant measurements" wording — see ADR-014 Rationale. |
+| EMS-REQ-095 | **Export context fields.** Site/hierarchy context, selected time range, comparison/baseline basis (where the metric has one), metric name and unit, and data-quality/freshness information where relevant to interpreting the figure. | "What am I looking at, and can I trust it?" | SHOULD | PRODUCT_OWNER | MVP-6 | READY-FOR-DESIGN | Q75; ADR-014 decisions 2-3, 8 | Comparison/baseline fields mirror exactly what's shown on-screen, including any displayed difference — not a separately-computed comparison. |
+| EMS-REQ-096 | **Export format — CSV.** | "What file do I get?" | SHOULD | PRODUCT_OWNER | MVP-6 | READY-FOR-DESIGN | Q75; ADR-014 decision 4 | Distinct from Report format (EMS-REQ-091), which remains `BLOCKED`/undecided. |
+| EMS-REQ-097 | **Export delivery — size-tiered.** Immediate download for smaller exports; background generation for larger exports. | "How do I get a big export?" | SHOULD | PRODUCT_OWNER | MVP-6 | READY-FOR-DESIGN | Q75; ADR-014 decision 5 | The two-tier delivery *model* is agreed enough to design against; the specific size/row/byte threshold between the tiers is not decided — deliberately not invented (see ADR-014 decision 5). |
+| EMS-REQ-098 | **Export availability — contextual and dedicated.** Available from relevant analytical screens (Energy, Demand, Power Quality, etc.) in context, and through a dedicated Export area. The dedicated area supports multi-metric export across Energy, Demand, and Power Quality together; the contextual path is single-screen. | "Where do I export from?" | SHOULD | PRODUCT_OWNER | MVP-6 | READY-FOR-DESIGN | Q75; ADR-014 decisions 6-7 | |
+| EMS-REQ-099 | **Export time range, hierarchy scoping, and data completeness.** Selectable time range is bounded by the site's actual min/max data-available dates. Contextual export follows the hierarchy level currently being viewed (Site/Space/Asset); the dedicated Export area lets the customer select the desired hierarchy level. Data gaps within the range retain their applicable data-quality/freshness state rather than being omitted; a metric with no usable data is still represented, with its applicable data-quality state and no fabricated value. | "Can I trust the range, and what happens with gaps?" | SHOULD | PRODUCT_OWNER | MVP-6 | READY-FOR-DESIGN | Q75; ADR-014 decisions 9-12; ADR-011 (no-data ≠ fabricated value, same discipline extended here) | |
+
+## Site Performance Report
+
+Decided and implemented, not yet deployed, per the Q76 Product Decision
+Workshop (2026-09-14) — see
+[ADR-015](../00-governance/decisions/ADR-015-q76-site-performance-report.md)
+for full context, rationale, gap resolutions, and evidence. IDs start at
+`110`, not `100`, because `100`–`109` belong to
+[non-functional-requirements.md](non-functional-requirements.md) in this
+shared `EMS-REQ` numbering space.
+
+| ID | Title / description | Customer question | Priority | Source | Phase | Status | Dependencies | Notes |
+|---|---|---|---|---|---|---|---|---|
+| EMS-REQ-110 | **Report catalogue — one type.** Exactly one report type for MVP-6: the Site Performance Report. Reports area only — no contextual generation from other screens. | "What reports can I generate?" | SHOULD | PRODUCT_OWNER | MVP-6 | READY-FOR-DESIGN | Q76; ADR-015 Decision (catalogue, access) | |
+| EMS-REQ-111 | **Report configuration.** Hierarchy context (Site/Space/Asset) and reporting period: predefined current-calendar Weekly/Monthly/Quarterly/Yearly, or Custom (any dates). | "Which site/space/asset, and what period?" | SHOULD | PRODUCT_OWNER | MVP-6 | READY-FOR-DESIGN | Q76; ADR-015 Decision (configuration inputs); ADR-015 gap resolutions 1-3 | Custom period does not enforce a data-availability bound — no such API exists (ADR-015 gap resolution 2). Predefined periods are a new calendar-aligned concept, distinct from the existing `TimeRangePicker` rolling-window presets (ADR-015 gap resolution 3). |
+| EMS-REQ-112 | **In-app generation.** Generated on demand, in-app. Title: "Performance Report — [context name]". | "Show me the report." | SHOULD | PRODUCT_OWNER | MVP-6 | READY-FOR-DESIGN | Q76; ADR-015 Decision (generation, title) | |
+| EMS-REQ-113 | **Report structure.** Overall Site Health/Status → Attention/Exceptions → Energy Performance → Maximum Demand → Power Quality → Investigation paths, in that order — the same structure and order as `SiteOverview.tsx` (ADR-003/ADR-004). Only existing EMS metrics, comparisons/baselines, and deterministic rules — no new analytics, thresholds, metrics, or AI/LLM narrative reasoning. Per-domain `Data unavailable` states are preserved; one domain's absence never blocks the others. No overall report status beyond the existing three-state Site Health signal. | "What does the report contain, and can I trust it?" | MUST (of this report) | PRODUCT_OWNER | MVP-6 | READY-FOR-DESIGN | Q76; ADR-015 Decision (report structure, data rules, no overall status); ADR-015 gap resolutions 1, 6 | Report content is always the selected Site's own data — Space/Asset hierarchy selection changes the title and Investigation-section target only, never the Health/Attention/Energy/Demand/PQ figures, because no Space/Asset-scoped equivalent of those analytics exists anywhere in the platform (ADR-015 gap resolution 1). Site Health/Attention require the Slice C typical-reference endpoint's exact whole-day window (1/7/30/90/365 days) and so are legitimately unavailable for most calendar-to-date periods (ADR-015 gap resolution 6) — Energy's current value and Previous-Period comparison remain available regardless. Structure is the **implemented baseline, not frozen** — a later UX/design refinement may change presentation without a new product decision, provided the six-section composition and existing-metrics-only rule are preserved. |
+| EMS-REQ-114 | **Optional PDF.** Generated from the already-rendered in-app report; same underlying content, PDF-specific layout. Immediate where practical; background-generated for larger reports (no size/row/byte threshold invented). | "Can I get a PDF?" | SHOULD | PRODUCT_OWNER | MVP-6 | READY-FOR-DESIGN | Q76; ADR-015 Decision (PDF); ADR-015 gap resolutions 4-5 | No server-side report-generation job/queue exists anywhere in the repository and none is invented here; PDF is generated client-side. "Background-generated for larger reports" is therefore approximated (never blocks the in-app report), not a literal separate job state — see ADR-015 gap resolutions 4-5 for the full, explicit limitation. |
+| EMS-REQ-115 | **No history, email, or sharing.** No report history is retained; no email delivery; no share links. "Change" (return to configuration) and "Generate another report" controls exist. | "Can I go back and try a different report?" | SHOULD | PRODUCT_OWNER | MVP-6 | READY-FOR-DESIGN | Q76; ADR-015 Decision (controls, non-goals) | |
+| EMS-REQ-116 | **Error handling.** A clear generation-error state with retry. A PDF-generation failure leaves the already-generated in-app report intact — it is never discarded or invalidated by a failed PDF attempt. | "What happens if generation fails?" | MUST (of this report) | PRODUCT_OWNER | MVP-6 | READY-FOR-DESIGN | Q76; ADR-015 Decision (error handling); ADR-011 (no-data/error discipline extended here) | |
 
 ## Priority summary
 
@@ -142,7 +214,7 @@ demand-endpoint schedule.) See
 cross-cutting MUST set (100–105, 109).
 
 **SHOULD:** 016–019, 025, 026, 028, 032, 033, 035, 036, 038, 041–043, 052,
-054, 061–064, 072, 073, 080, 081, 090–093.
+054, 061–064, 072, 073, 080, 081, 090–093, 094–099, 110–116.
 
 **COULD:** 053, 065, 083, 106 (see non-functional).
 

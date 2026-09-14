@@ -56,3 +56,5 @@ ADR with its status and date.
 | [ADR-011](ADR-011-insufficient-data-not-healthy.md) | Insufficient Data must never be represented as Healthy |
 | [ADR-012](ADR-012-deferred-ai-recommendation-functionality.md) | Deferred AI / anomaly / recommendation functionality |
 | [ADR-013](ADR-013-deferred-asset-component-tree.md) | Deferred asset component-tree functionality |
+| [ADR-014](ADR-014-q75-export-scope-and-behavior.md) | MVP-6 Export scope, content, format, and behavior (Q75) — decided; not implemented |
+| [ADR-015](ADR-015-q76-site-performance-report.md) | MVP-6 Site Performance Report (Q76) — decided; implemented, not deployed |

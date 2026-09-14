@@ -65,19 +65,23 @@ export function resolveRange(preset: TimeRangePreset, now: Date = new Date()): A
 }
 
 // Phase 7 caps (seconds). Kept in sync with analytics_api_service.py.
-const MEASUREMENT_MAX_WINDOW_S: Record<MeasurementResolution, number> = {
+// Exported (MVP-6, Site Performance Report) so the report's own
+// arbitrary-range planning (sitePerformanceReportRanges.ts) can reuse the
+// exact same, already-enforced caps instead of duplicating the numbers --
+// no new threshold is introduced by exporting these unchanged constants.
+export const MEASUREMENT_MAX_WINDOW_S: Record<MeasurementResolution, number> = {
   raw: 24 * 3600,
   "1h": 31 * 86400,
 };
-const ENERGY_MAX_WINDOW_S: Record<EnergyResolution, number> = {
+export const ENERGY_MAX_WINDOW_S: Record<EnergyResolution, number> = {
   "1h": 31 * 86400,
   "1d": 366 * 86400,
 };
 
 // Slice B caps -- kept in sync with analytics_api_service.py's
 // DEMAND_MAX_WINDOW / POWER_QUALITY_RESOLUTION_MAX_WINDOW.
-const DEMAND_MAX_WINDOW_S = 31 * 86400;
-const POWER_QUALITY_MAX_WINDOW_S: Record<PowerQualityResolution, number> = {
+export const DEMAND_MAX_WINDOW_S = 31 * 86400;
+export const POWER_QUALITY_MAX_WINDOW_S: Record<PowerQualityResolution, number> = {
   "15min": 7 * 86400,
   "1h": 31 * 86400,
   "1d": 366 * 86400,
@@ -109,7 +113,9 @@ export type UnsupportedPlan = {
   reason: string;
 };
 
-function windowSeconds(range: AbsoluteRange): number {
+/** Exported (MVP-6) for reuse by sitePerformanceReportRanges.ts's
+ *  arbitrary-range planning -- unchanged behavior for every existing caller. */
+export function windowSeconds(range: AbsoluteRange): number {
   return (Date.parse(range.to) - Date.parse(range.from)) / 1000;
 }
 

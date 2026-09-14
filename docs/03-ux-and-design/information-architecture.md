@@ -117,12 +117,72 @@ and [ADR-004](../00-governance/decisions/ADR-004-site-overview-primary-destinati
 - **Empty state (good):** "no active alerts" is a *good* empty state, distinct from no rules configured.
 - **API dependency:** `MISSING` — no alert model/endpoint defined. Scope resolved (Workshop Q77/Q78 — basic, measurable-condition alerts, in-product + email delivery); shape/schema still `PLANNED (MVP-7)`.
 
-## Reports  *(MVP-6)*
+## Export  *(MVP-6 — decided 2026-09-14, not yet implemented)*
+
+- **Purpose:** provide the underlying data behind an on-screen figure, for use outside WiseWatts — distinct from Reports below (Workshop Q76: "Report = communicate the important story; Export = provide the underlying data").
+- **Content:** the aggregated analytical figure already shown on screen (e.g. a period's total consumption, peak demand, PF/THD summary) — not raw/underlying time-series measurements.
+- **Context fields:** Site/hierarchy context, selected time range, comparison/baseline basis (mirroring exactly what's displayed on screen, including any shown difference), metric name and unit, and data-quality/freshness information where relevant to interpreting the figure.
+- **Format:** CSV.
+- **Delivery:** immediate download for smaller exports; background generation for larger exports. No specific size threshold between the two is decided.
+- **Availability:** contextually, from the relevant analytical screen (Energy, Demand, Power Quality, etc.), scoped to whatever hierarchy level (Site/Space/Asset) is currently being viewed; and through a dedicated Export area, which additionally supports multi-metric export across Energy, Demand, and Power Quality together and lets the customer select the desired hierarchy level directly.
+- **Time range:** selectable range is bounded by the specific site's actual minimum/maximum data-available dates.
+- **Data completeness:** gaps within the selected range retain their applicable data-quality/freshness state rather than being silently omitted; a selected metric with no usable data is still represented, with its applicable data-quality state and no fabricated value.
+- **Full decision record:** [ADR-014](../00-governance/decisions/ADR-014-q75-export-scope-and-behavior.md); requirements: [functional-requirements.md §Export](../02-requirements/functional-requirements.md#export) (`EMS-REQ-094`–`EMS-REQ-099`).
+- **API dependency:** `PLANNED (MVP-6)` — no endpoint exists yet; shape is now fully specified (see ADR-014) but unbuilt.
+
+## Reports  *(MVP-6 — one report type decided and implemented 2026-09-14, not yet deployed)*
 
 - **Purpose:** produce the documents customers must send to others.
-- **Primary:** report catalogue (templates); a viewer/preview; export; the exact source metrics traceable to what the customer sees on screen (parity discipline).
+- **Primary:** report catalogue (templates); a viewer/preview; the exact source metrics traceable to what the customer sees on screen (parity discipline).
 - **MVP scope (Workshop Q76):** deliberately simple — no scheduling, no report builder, no automated narratives.
-- **API dependency:** `PLANNED (MVP-6)` — report-definition storage + generation reading only through Phase 7.
+- **API dependency:** `PLANNED (MVP-6)` — no new API; the decided report type composes existing, already-live endpoints (see below), not a new report-generation backend.
+- **Status (2026-09-14):** one report type is decided and being implemented — the **Site Performance Report**. See `EMS-REQ-090`–`EMS-REQ-093` and `EMS-REQ-110`–`EMS-REQ-116` (`READY-FOR-DESIGN`), and
+  [ADR-015](../00-governance/decisions/ADR-015-q76-site-performance-report.md).
+  The rest of Q76 (Excel format, any additional report type, a general
+  report-definition storage mechanism) remains undecided.
+
+### Site Performance Report  *(the one decided and implemented MVP-6 report type, not yet deployed)*
+
+- **Access:** Reports area only — not reachable contextually from other screens (unlike Export).
+- **Configuration:** hierarchy context (Site/Space/Asset) + reporting period (current-calendar Weekly/Monthly/Quarterly/Yearly, or Custom — no data-availability bound enforced; see ADR-015 gap resolution 2).
+- **Generation:** in-app, on demand. Title: "Performance Report — [context name]".
+- **Structure**, reusing `SiteOverview.tsx`'s own Q70 order (ADR-003/ADR-004) and data — **not a new computation path**: Overall Site Health/Status → Attention/Exceptions → Energy Performance → Maximum Demand → Power Quality → Investigation paths. Existing metrics/comparisons/deterministic rules only; no new analytics, thresholds, or AI/LLM narrative reasoning; per-domain `Data unavailable` preserved; no new overall report status beyond the existing three-state Site Health signal.
+- **Hierarchy scope caveat:** selecting a Space or Asset changes the title and the Investigation-section target only — report content is always the selected Site's own data, because no Space/Asset-scoped equivalent of Energy/Demand/PQ/Attention/Health exists anywhere in the platform (ADR-015 gap resolution 1 — a genuine capability gap, not a design choice).
+- **Site Health/Attention availability caveat:** these two lead sections require the Slice C typical-reference endpoint's exact whole-day window (1/7/30/90/365 days, enforced server-side); a current-calendar to-date period essentially never satisfies this, so Site Health and Attention legitimately read "unavailable" for most generated reports. Energy's own current value and a Previous-Period comparison remain available regardless (ADR-015 gap resolution 6 — a genuine platform limitation, verified at the backend source of truth, not a defect).
+- **PDF:** optional, generated client-side from the rendered in-app report; same content, PDF-specific layout. No server-side report-generation job exists or is introduced — see ADR-015 gap resolutions 4-5 for the explicit "immediate where practical" interpretation.
+- **Not included:** report history, email delivery, share links, scheduling.
+- **Extensibility:** this structure is the implemented baseline for a later UX/design refinement, not frozen — see ADR-015 Consequences.
+
+> **Contradiction resolved (2026-09-14)** — this section's "Primary"
+> bullet, per [source-of-truth.md](../00-governance/source-of-truth.md)'s
+> recording format:
+>
+> **CURRENT IMPLEMENTATION:** the "Primary" bullet above lists report
+> catalogue, viewer/preview, and on-screen-parity traceability only. Export
+> of underlying data is documented separately, in the "Export" section
+> above this one.
+>
+> **HISTORICAL / DOCUMENTED EXPECTATION:** this bullet previously read
+> "report catalogue (templates); a viewer/preview; export; the exact
+> source metrics traceable..." — bundling "export" into Reports' own
+> primary content, with no separate Export section existing anywhere in
+> this document at that time.
+>
+> **CHANGE:** the MVP-6 Product Decision Workshop (2026-09-14) resolved
+> Export (Q75) as its own, fully specified capability — see the "Export"
+> section above and [ADR-014](../00-governance/decisions/ADR-014-q75-export-scope-and-behavior.md).
+> Per Q76's own text, *"Report = communicate the important story; Export =
+> provide the underlying data,"* the two were always meant to be distinct;
+> this document simply hadn't reflected that split before Export had its
+> own decision record to document. The word "export" was removed from this
+> bullet accordingly — no other change was made to Reports' content or
+> status.
+>
+> **VERIFICATION:** confirmed by re-reading Workshop baseline §108
+> (`docs/99-archive/superseded-product/ems-product-owner-workshop-baseline.md`)
+> for the Report-vs-Export distinction, and by confirming Reports' own
+> decided scope (catalogue, viewer/preview, parity) makes no independent
+> claim about export behavior beyond that one now-removed word.
 
 ## Future areas (record only — not MVP features)
 

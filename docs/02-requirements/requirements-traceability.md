@@ -200,3 +200,66 @@ so no `/attention` endpoint exists or is planned to exist for this rule.
 
 See [scope-and-deferred-functionality.md](scope-and-deferred-functionality.md)
 §"Anti-pattern guardrails."
+
+## 6. Status update (2026-09-14) — Q75 Export decisions resolved
+
+The MVP-6 Product Decision Workshop (2026-09-14) resolved every
+previously open Export (Q75) question identified by that day's MVP-6
+discovery pass. Full record: [ADR-014](../00-governance/decisions/ADR-014-q75-export-scope-and-behavior.md).
+New requirements: [functional-requirements.md §Export](functional-requirements.md#export)
+(`EMS-REQ-094`–`EMS-REQ-099`).
+
+| Item | 2026-09-11 status (§1/§2) | 2026-09-14 status |
+|---|---|---|
+| Q75 (MVP export) | `C — NOT LANDED` (§2, "No export capability exists.") | **Decision resolved** — content, context fields, format, delivery model, availability, comparison/baseline behavior, time-range bounds, gap/no-data handling, and hierarchy scoping are all now decided (ADR-014). **Implementation status is unchanged: still no export capability exists anywhere in the codebase.** The `C` capability classification is accurate for "landed"; what changed is that the decision blocker referenced by the discovery pass's Decision Status Table is now closed for every Export question raised there. |
+| `API.export` (§1 shorthand) | `MISSING`; `PLANNED (MVP-6)` | **Unchanged as a code fact** — still `MISSING`, still `PLANNED (MVP-6)`. The *shape* is now fully specified (ADR-014) rather than merely "additive and understood in outline," per the `PLANNED (MVP-n)` legend definition. No endpoint, view, or function exists. |
+
+**Q76 (Reporting) is explicitly unaffected by this update** — its format,
+catalogue-contents, and report-definition-storage questions remain exactly
+as classified in §2 (`C`) and in `functional-requirements.md`
+(`EMS-REQ-090`–`EMS-REQ-093`, `DRAFT`/`BLOCKED`). Do not read this section
+as resolving Reporting; only Export (Q75) was decided in this workshop.
+
+This does not alter §2's 2026-09-11 classification row for Q75, which
+remains the preserved historical record of that date per
+[source-of-truth.md](../00-governance/source-of-truth.md)'s no-silent-
+rewrite rule. §4 line 189's "Q73–Q78... remain as classified in §2" is
+superseded for Q75 specifically by this section — Q75's *decision* status
+has changed; its *implementation* status has not, and §4's statement
+remains accurate for Q76-Q78, Q73, Q74.
+
+## 7. Status update (2026-09-14) — Q76 Site Performance Report decided and implemented, not yet deployed
+
+The Q76 Reporting Product Decision Workshop (2026-09-14) resolved a
+narrow subset of Q76's open questions — enough to define and implement
+one report type, the Site Performance Report. Full record:
+[ADR-015](../00-governance/decisions/ADR-015-q76-site-performance-report.md).
+New requirements: [functional-requirements.md §Site Performance Report](functional-requirements.md#site-performance-report)
+(`EMS-REQ-110`–`EMS-REQ-116`).
+
+| Item | 2026-09-11 status (§2) | 2026-09-14 status |
+|---|---|---|
+| Q76 (MVP reporting) | `C — NOT LANDED` ("No reporting capability exists.") | **Partially decided and implemented, not yet deployed** — catalogue (one type), configuration, generation, structure, PDF, and error handling are decided AND built for the Site Performance Report specifically (ADR-015; `web/src/routes/reports/`). Verified this session: full frontend suite (209 tests), `tsc --noEmit`, `eslint --max-warnings 0`, `vite build` all pass. No staging/production deployment has occurred. **Report catalogue breadth, non-PDF format questions (e.g. Excel), scheduled/automated variants, and any report type beyond Site Performance remain exactly as open as the 2026-09-14 Q76 workshop brief left them.** This is not a full resolution of Q76. |
+
+**This section does not resolve Q75/Export** (already recorded in §6) **or
+the general Q76 questions this workshop did not touch** (report-definition
+storage as a general mechanism, Excel format, multi-report catalogues,
+Space/Asset-scoped analytical content, a real data-availability API). Two
+genuine architecture/data gaps were identified during this work, not
+silently resolved — recorded in full in ADR-015's "Decision — gap
+resolutions" section:
+
+1. **No Space/Asset-scoped Energy/Demand/Power-Quality/Attention/Health
+   capability exists anywhere in the platform.** The Site Performance
+   Report's hierarchy-context selector (Site/Space/Asset) therefore
+   changes only the report's title and Investigation-section target — its
+   analytical content is always the selected Site's own data. This is a
+   genuine capability gap, not a design choice; closing it requires new
+   API surface.
+2. **No endpoint or mechanism exposes a site's actual data-available date
+   range.** The same gap already recorded against Export (§6, ADR-014
+   decision 9). The Site Performance Report's Custom period picker does
+   not enforce a fabricated bound as a result.
+
+Both gaps apply equally to Export (§6) and to any future Q76 report type
+— they are platform-level gaps, not specific to this one report.

@@ -46,6 +46,13 @@ export const PRIMARY_NAV: readonly NavItem[] = [
     requiresAnyOf: ["dashboard.view"],
     group: "site",
   },
+  {
+    key: "reports",
+    label: "Reports",
+    to: "/features/reports",
+    requiresAnyOf: ["dashboard.view"],
+    group: "site",
+  },
   { key: "spaces", label: "Spaces", to: "/features/spaces", requiresAnyOf: ["dashboard.view"], group: "hierarchy" },
   { key: "assets", label: "Assets", to: "/features/assets", requiresAnyOf: ["dashboard.view"], group: "hierarchy" },
   { key: "features", label: "Other feature areas (later phases)", to: "/features", requiresAnyOf: ["dashboard.view"] },
