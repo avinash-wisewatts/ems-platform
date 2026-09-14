@@ -416,9 +416,9 @@ describe("SiteOverview (MVP-3 -- Site Health & Attention)", () => {
     await waitFor(() => expect(screen.getByTestId("site-overview-energy-value")).toHaveTextContent("105.0 kWh"));
     const indicators = await screen.findAllByTestId("freshness-indicator");
     expect(indicators).toHaveLength(3);
-    expect(screen.getByTestId("site-overview-energy-freshness")).toHaveTextContent("FRESH");
-    expect(screen.getByTestId("site-overview-demand-freshness")).toHaveTextContent("STALE");
-    expect(screen.getByTestId("site-overview-pq-freshness")).toHaveTextContent("NO_DATA");
+    expect(screen.getByTestId("site-overview-energy-freshness")).toHaveTextContent("Current");
+    expect(screen.getByTestId("site-overview-demand-freshness")).toHaveTextContent("Outdated");
+    expect(screen.getByTestId("site-overview-pq-freshness")).toHaveTextContent("Data unavailable");
   });
 
   it("MVP-4 fix: Demand and Power Quality freshness render even when their primary sections have no data -- previously suppressed alongside the missing value", async () => {
@@ -441,12 +441,23 @@ describe("SiteOverview (MVP-3 -- Site Health & Attention)", () => {
     expect(screen.queryByTestId("site-overview-demand-value")).toBeNull();
     expect(screen.queryByTestId("site-overview-pq-value")).toBeNull();
 
-    // Freshness still renders for all three, including the real UNKNOWN value.
+    // Freshness still renders for all three. Energy's underlying state is
+    // the real UNKNOWN value -- it shares "Data unavailable" with NO_DATA
+    // at the label level (MVP-5), but the two remain distinct technically;
+    // confirmed via data-freshness below.
     const indicators = await screen.findAllByTestId("freshness-indicator");
     expect(indicators).toHaveLength(3);
-    expect(screen.getByTestId("site-overview-energy-freshness")).toHaveTextContent("UNKNOWN");
-    expect(screen.getByTestId("site-overview-demand-freshness")).toHaveTextContent("STALE");
-    expect(screen.getByTestId("site-overview-pq-freshness")).toHaveTextContent("NO_DATA");
+    expect(screen.getByTestId("site-overview-energy-freshness")).toHaveTextContent("Data unavailable");
+    expect(screen.getByTestId("site-overview-energy-freshness").querySelector("[data-freshness]")).toHaveAttribute(
+      "data-freshness",
+      "UNKNOWN",
+    );
+    expect(screen.getByTestId("site-overview-demand-freshness")).toHaveTextContent("Outdated");
+    expect(screen.getByTestId("site-overview-pq-freshness")).toHaveTextContent("Data unavailable");
+    expect(screen.getByTestId("site-overview-pq-freshness").querySelector("[data-freshness]")).toHaveAttribute(
+      "data-freshness",
+      "NO_DATA",
+    );
   });
 
   it("MVP-4: a freshness fetch failure is non-blocking -- Energy, Demand, and Power Quality values still render, with no freshness indicator shown", async () => {

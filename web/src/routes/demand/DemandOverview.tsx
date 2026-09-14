@@ -13,8 +13,9 @@
  *                     from the returned series (max of peak_power_kw),
  *                     the same client-side-derivation pattern Slice A uses
  *                     for its comparison -- no new backend aggregation.
- *   Status         -- quality_status, shown as plain text. NOT a
- *                     StatusBadge: StatusBadge represents comparison
+ *   Status         -- quality_status, translated to an approved MVP-5
+ *                     customer label (see DEMAND_STATUS_LABELS below). NOT
+ *                     a StatusBadge: StatusBadge represents comparison
  *                     direction, and there is no comparison here.
  *   Evidence/Data Quality -- quality_status + coverage_percent, both real,
  *                     already-computed fields from demand_intervals/
@@ -24,6 +25,19 @@
  * No contract-demand, target, threshold, or utilization figure is shown --
  * none is configured anywhere in the schema (verified in the Slice B
  * decision pack).
+ *
+ * MVP-5 -- Content & Metric Grammar (approved Product decision): the raw
+ * quality_status value (PROVISIONAL/NO_DATA/INVALID_SOURCE/
+ * INSUFFICIENT_SOURCE_RESOLUTION) is translated to a customer label here,
+ * in ONE place. NO_DATA/INVALID_SOURCE/INSUFFICIENT_SOURCE_RESOLUTION all
+ * share "Data unavailable" -- Product decided a customer cannot act
+ * differently on any of the three, so no distinction is drawn for them.
+ * The underlying six-value technical vocabulary and the API contract are
+ * unchanged; only this screen's rendering of it changes. The pre-existing
+ * "no current-demand row at all" case (previously hardcoded to the literal
+ * word "Unknown") now also reads "Data unavailable", per the same Product
+ * decision -- it was never one of the six technical values and is not a
+ * new customer-facing state.
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -41,12 +55,51 @@ import { HierarchyCrumb } from "../../components/HierarchyCrumb";
 import { TimeRangePicker } from "../../components/TimeRangePicker";
 import { ChartFrame, type ChartPoint } from "../../components/ChartFrame";
 import { FreshnessIndicator } from "../../components/FreshnessIndicator";
+import { InfoDisclosure } from "../../components/InfoDisclosure";
 import { Loading } from "../../components/states/Loading";
 import { ErrorState } from "../../components/states/ErrorState";
 import { NoDataYet } from "../../components/states/NoDataYet";
 import { EmptyState } from "../../components/states/EmptyState";
 
 type LoadStatus = "loading" | "ready" | "error";
+
+/** The four live values `analytics.demand_state` can actually produce
+ *  (VALID/INCOMPLETE are interval-level-only -- see demand/README.md and
+ *  the MVP-5 evidence trace; they never appear as the "current" value this
+ *  screen renders here, so no label is defined for them). */
+const DEMAND_STATUS_LABELS: Record<string, string> = {
+  PROVISIONAL: "Calculating",
+  NO_DATA: "Data unavailable",
+  INVALID_SOURCE: "Data unavailable",
+  INSUFFICIENT_SOURCE_RESOLUTION: "Data unavailable",
+};
+
+/** DRAFT wording -- Product approved the underlying meaning, not this exact
+ *  copy. NO_DATA/INVALID_SOURCE/INSUFFICIENT_SOURCE_RESOLUTION deliberately
+ *  share one explanation, matching their shared customer label. */
+const DEMAND_STATUS_EXPLANATIONS: Record<string, string> = {
+  PROVISIONAL: "This Demand value is still being calculated and hasn't been finalized yet.",
+  NO_DATA: "We can't currently provide a usable Demand value for this metric.",
+  INVALID_SOURCE: "We can't currently provide a usable Demand value for this metric.",
+  INSUFFICIENT_SOURCE_RESOLUTION: "We can't currently provide a usable Demand value for this metric.",
+};
+
+const DEMAND_STATUS_FALLBACK_LABEL = "Data unavailable";
+const DEMAND_STATUS_FALLBACK_EXPLANATION = "We can't currently provide a usable Demand value for this metric.";
+
+/** Translates quality_status (or its absence -- no current-demand row at
+ *  all) into the approved MVP-5 customer label. An unrecognized value
+ *  defensively falls back to "Data unavailable" rather than ever leaking
+ *  the raw technical string. */
+function demandStatusLabel(qualityStatus: string | null): string {
+  if (qualityStatus === null) return DEMAND_STATUS_FALLBACK_LABEL;
+  return DEMAND_STATUS_LABELS[qualityStatus] ?? DEMAND_STATUS_FALLBACK_LABEL;
+}
+
+function demandStatusExplanation(qualityStatus: string | null): string {
+  if (qualityStatus === null) return DEMAND_STATUS_FALLBACK_EXPLANATION;
+  return DEMAND_STATUS_EXPLANATIONS[qualityStatus] ?? DEMAND_STATUS_FALLBACK_EXPLANATION;
+}
 
 function toChartPoints(series: DemandIntervalPoint[]): ChartPoint[] {
   return series.map((point) => ({ t: Date.parse(point.interval_start), value: point.demand_kw }));
@@ -133,6 +186,7 @@ export function DemandOverview() {
   }, [selectedSite]);
 
   const peak = useMemo(() => (series ? findPeak(series.series) : null), [series]);
+  const demandQualityStatus = current?.has_data ? current.quality_status : null;
 
   if (!selectedSite) {
     return (
@@ -187,10 +241,18 @@ export function DemandOverview() {
             )}
           </section>
 
-          {/* Status -- plain text, not StatusBadge (no comparison here) */}
+          {/* Status -- customer label, not StatusBadge (no comparison here).
+              MVP-5: quality_status is translated, never rendered raw. */}
           <section className="demand-status" data-testid="demand-status">
             <h2>Status</h2>
-            <p>{current.has_data ? current.quality_status : "Unknown"}</p>
+            <p>
+              {demandStatusLabel(demandQualityStatus)}
+              <InfoDisclosure
+                label={demandStatusLabel(demandQualityStatus)}
+                explanation={demandStatusExplanation(demandQualityStatus)}
+                testId="demand-status"
+              />
+            </p>
           </section>
 
           {/* MVP-4 -- device freshness: a separate question ("is the meter

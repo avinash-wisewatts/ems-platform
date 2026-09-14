@@ -5,7 +5,18 @@ import { renderWithProviders, stubFetch, SITES_ONE } from "../../test-utils";
 
 const SITE_ID = SITES_ONE.sites[0]!.site_id;
 
-function currentDemandResponse(hasData: boolean, kw = 60.5) {
+/**
+ * MVP-5 fixture-correctness fix: `analytics.demand_state` -- the table this
+ * endpoint reads -- always computes `calculate_demand_window(..., p_final =
+ * FALSE)`, which can never resolve to `VALID` (that value only exists on
+ * the finalized, interval-level `analytics.demand_intervals` path). The
+ * realistic "has a current reading, still live" value is `PROVISIONAL`,
+ * matching the backend's own test suite
+ * (app/tests/test_analytics_api_v1_demand_routes.py::test_current_demand_returns_the_live_reading).
+ * Default here corrected accordingly; callers needing a different one of
+ * the four real quality_status values pass it explicitly.
+ */
+function currentDemandResponse(hasData: boolean, kw = 60.5, qualityStatus = "PROVISIONAL") {
   return hasData
     ? {
         site_id: SITE_ID,
@@ -14,7 +25,7 @@ function currentDemandResponse(hasData: boolean, kw = 60.5) {
         interval_end: "2026-09-08T11:30:00Z",
         current_demand_kw: kw,
         current_demand_kva: kw + 2,
-        quality_status: "VALID",
+        quality_status: qualityStatus,
         coverage_percent: 96,
       }
     : {
@@ -51,7 +62,7 @@ function seriesResponse(noData = false) {
             interval_end: "2026-09-02T00:15:00Z",
             demand_kw: 55.0,
             peak_power_kw: 70.0,
-            quality_status: "GOOD",
+            quality_status: "VALID",
             coverage_percent: 90,
           },
         ],
@@ -65,6 +76,22 @@ function freshnessResponse(state = "FRESH") {
     demand: { state, as_of: "2026-09-13T09:58:00Z" },
     power_quality: { state: "FRESH", as_of: "2026-09-13T09:58:00Z" },
   };
+}
+
+function stubDemand(qualityStatus: string, opts: { hasData?: boolean; freshness?: string } = {}) {
+  const hasData = opts.hasData ?? true;
+  stubFetch((url) => {
+    if (url.includes(`/api/v1/sites/${SITE_ID}/telemetry-freshness`)) {
+      return { jsonBody: freshnessResponse(opts.freshness ?? "FRESH") };
+    }
+    if (url.includes(`/api/v1/sites/${SITE_ID}/demand/current`)) {
+      return { jsonBody: currentDemandResponse(hasData, 60.5, qualityStatus) };
+    }
+    if (url.includes(`/api/v1/sites/${SITE_ID}/demand`)) {
+      return { jsonBody: seriesResponse() };
+    }
+    return { status: 404, jsonBody: { error: "not_found", detail: "unexpected" } };
+  });
 }
 
 describe("DemandOverview (Slice B)", () => {
@@ -84,7 +111,7 @@ describe("DemandOverview (Slice B)", () => {
     await waitFor(() => expect(screen.getByTestId("demand-current-value")).toHaveTextContent("60.5 kW"));
     expect(screen.getByTestId("demand-peak")).toHaveTextContent("70.0 kW");
     expect(screen.getByTestId("chart-frame")).toBeTruthy();
-    expect(screen.getByTestId("demand-status")).toHaveTextContent("VALID");
+    expect(screen.getByTestId("demand-status")).toHaveTextContent("Calculating");
     expect(screen.getByTestId("demand-evidence")).toHaveTextContent("96%");
     // Never a StatusBadge here -- no comparison exists for Demand.
     expect(screen.queryByTestId("status-badge")).toBeNull();
@@ -125,25 +152,14 @@ describe("DemandOverview (Slice B)", () => {
     expect(screen.queryByText(/target/i)).toBeNull();
   });
 
-  it("MVP-4: shows device freshness next to, not merged into, the existing Status (quality_status) text", async () => {
-    stubFetch((url) => {
-      if (url.includes(`/api/v1/sites/${SITE_ID}/telemetry-freshness`)) {
-        return { jsonBody: freshnessResponse("STALE") };
-      }
-      if (url.includes(`/api/v1/sites/${SITE_ID}/demand/current`)) {
-        return { jsonBody: currentDemandResponse(true) };
-      }
-      if (url.includes(`/api/v1/sites/${SITE_ID}/demand`)) {
-        return { jsonBody: seriesResponse() };
-      }
-      return { status: 404, jsonBody: { error: "not_found", detail: "unexpected" } };
-    });
+  it("MVP-4: shows device freshness next to, not merged into, the Status (quality_status) label", async () => {
+    stubDemand("PROVISIONAL", { freshness: "STALE" });
 
     renderWithProviders(<DemandOverview />, { sites: () => Promise.resolve(SITES_ONE) });
 
-    await waitFor(() => expect(screen.getByTestId("demand-freshness")).toHaveTextContent("STALE"));
-    // The existing Status paragraph (quality_status) is unchanged.
-    expect(screen.getByTestId("demand-status")).toHaveTextContent("VALID");
+    await waitFor(() => expect(screen.getByTestId("demand-freshness")).toHaveTextContent("Outdated"));
+    // The Status paragraph is a distinct signal, not merged with freshness.
+    expect(screen.getByTestId("demand-status")).toHaveTextContent("Calculating");
   });
 
   it("MVP-4: a freshness fetch failure is non-blocking -- Current/Peak/Trend/Status still render", async () => {
@@ -163,7 +179,55 @@ describe("DemandOverview (Slice B)", () => {
     renderWithProviders(<DemandOverview />, { sites: () => Promise.resolve(SITES_ONE) });
 
     await waitFor(() => expect(screen.getByTestId("demand-current-value")).toHaveTextContent("60.5 kW"));
-    expect(screen.getByTestId("demand-status")).toHaveTextContent("VALID");
+    expect(screen.getByTestId("demand-status")).toHaveTextContent("Calculating");
     expect(screen.queryByTestId("freshness-indicator")).toBeNull();
+  });
+
+  describe("MVP-5: Demand Status customer labels", () => {
+    it.each([
+      ["PROVISIONAL", "Calculating"],
+      ["NO_DATA", "Data unavailable"],
+      ["INVALID_SOURCE", "Data unavailable"],
+      ["INSUFFICIENT_SOURCE_RESOLUTION", "Data unavailable"],
+    ])("%s -> %s", async (qualityStatus, label) => {
+      stubDemand(qualityStatus);
+      renderWithProviders(<DemandOverview />, { sites: () => Promise.resolve(SITES_ONE) });
+
+      await waitFor(() => expect(screen.getByTestId("demand-status")).toHaveTextContent(label));
+      // The raw technical value is never leaked into the visible label text.
+      expect(screen.getByTestId("demand-status").textContent).not.toContain(qualityStatus);
+    });
+
+    it("no current-demand row at all (has_data: false) also reads 'Data unavailable', per Product decision", async () => {
+      stubFetch((url) => {
+        if (url.includes(`/api/v1/sites/${SITE_ID}/telemetry-freshness`)) {
+          return { jsonBody: freshnessResponse() };
+        }
+        if (url.includes(`/api/v1/sites/${SITE_ID}/demand/current`)) {
+          return { jsonBody: currentDemandResponse(false) };
+        }
+        if (url.includes(`/api/v1/sites/${SITE_ID}/demand`)) {
+          return { jsonBody: seriesResponse() };
+        }
+        return { status: 404, jsonBody: { error: "not_found", detail: "unexpected" } };
+      });
+
+      renderWithProviders(<DemandOverview />, { sites: () => Promise.resolve(SITES_ONE) });
+
+      await waitFor(() => expect(screen.getByTestId("demand-status")).toHaveTextContent("Data unavailable"));
+      expect(screen.getByTestId("demand-status")).not.toHaveTextContent("Unknown");
+    });
+
+    it("pairs the Status label with an accessible info explanation", async () => {
+      stubDemand("PROVISIONAL");
+      renderWithProviders(<DemandOverview />, { sites: () => Promise.resolve(SITES_ONE) });
+
+      await waitFor(() => expect(screen.getByTestId("demand-status")).toHaveTextContent("Calculating"));
+      expect(screen.getByTestId("demand-status-info")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: 'What does "Calculating" mean?' })).toBeInTheDocument();
+      expect(screen.getByTestId("demand-status-explanation")).toHaveTextContent(
+        "This Demand value is still being calculated and hasn't been finalized yet.",
+      );
+    });
   });
 });

@@ -90,3 +90,21 @@ a { color: var(--accent); }
 .quality--invalid { color: var(--invalid); }
 .quality--partial { color: var(--partial); }
 .quality--unknown { color: var(--muted); }
+
+.freshness { font-size: 12px; color: var(--muted); }
+
+.info-disclosure { display: inline-block; margin-left: 4px; vertical-align: middle; }
+.info-disclosure__trigger {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; padding: 0; border-radius: 50%; cursor: pointer;
+  background: transparent; border: 1px solid var(--line);
+  color: var(--muted); font-size: 11px; line-height: 1;
+}
+.info-disclosure__trigger:hover,
+.info-disclosure__trigger:focus-visible,
+.info-disclosure__trigger[aria-expanded="true"] { color: var(--text); border-color: var(--muted); }
+.info-disclosure__explanation {
+  display: block; margin-top: 4px; max-width: 320px;
+  font-size: 12px; color: var(--muted);
+}
+.info-disclosure__explanation[hidden] { display: none; }

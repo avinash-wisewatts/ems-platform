@@ -11,10 +11,15 @@
  *   6. Investigation paths into Space -> Asset
  *
  * "Tell the customer the story first; provide analytical depth afterwards"
- * (Q70): each summary card is compact (value + status + a link into the
- * existing, unmodified full screen for that metric) -- the trend charts and
- * full comparison-basis pickers stay on EnergyOverview/DemandOverview/
- * PowerQualityOverview, not duplicated here.
+ * (Q70): each summary card is compact (value + freshness + a link into the
+ * existing, unmodified full screen for that metric) -- the trend charts,
+ * full comparison-basis pickers, and Demand's own Status step stay on
+ * EnergyOverview/DemandOverview/PowerQualityOverview, not duplicated here.
+ * (MVP-5 code-comment correction: no card here renders a StatusBadge or
+ * equivalent Status element -- confirmed by SiteOverview.test.tsx's own
+ * page-wide `queryByTestId("status-badge")` assertion. This was always the
+ * implementation's actual, tested behavior; only this comment previously
+ * overstated it.)
  *
  * Every data point comes from ALREADY-LIVE endpoints, fetched in parallel
  * (no new API surface, per the approved MVP-3 decision pack):
