@@ -98,6 +98,39 @@ staging validation.
 - **Header indicator count is capped at 200** (a single list call)
   rather than an exact unbounded count — immaterial given MVP-7 has only
   one possible alert per site today, but not exact in principle.
+- **The TimescaleDB job itself requires a separate, manual application on
+  staging/production** — `scripts/apply_migrations.sh` (the incremental
+  deploy pipeline) selects files exclusively from
+  `postgres/restructure_manifest.csv`'s `target_category=migration` rows,
+  never by listing `postgres/migrations/` directly, and never reads
+  `target_category=jobs` rows at all; `postgres/jobs/*.sql` registrations
+  are applied only by `scripts/deploy_database.sh` (fresh-bootstrap only —
+  used both for a real fresh install and by CI's disposable test
+  database), the same as every other existing job file. **Two genuine
+  deployment gaps were caught in this pass, in opposite directions**: (1)
+  migrations 238/239 were entirely absent from the first staging deploy's
+  own migration list (not SKIP, not APPLY — silently never selected)
+  because they had not yet been added to the manifest — fixed by adding
+  `migration`-category rows, regression-guarded by
+  `test_migrations_are_registered_in_the_deploy_manifest`; (2) a
+  `jobs`-category manifest row was then added for the job registration
+  file and immediately broke CI — the fresh-bootstrap phase
+  (`scripts/deploy_database.sh`) runs BEFORE the migration-application
+  phase and builds from `postgres/ddl/`'s periodically-consolidated
+  snapshot, which has never been updated past migration ~237, so
+  registering a job whose function only migration 239 creates failed with
+  "function ... does not exist" — fixed by removing that row (it has zero
+  effect on real deployment either way, since `apply_migrations.sh` never
+  reads it), regression-guarded by
+  `test_job_registration_is_deliberately_not_in_the_manifest`. Migrations
+  238/239 (schema, functions) are applied by the normal pipeline once
+  registered; **the job registration
+  (`postgres/jobs/238_alert_evaluation_job.sql`) itself still requires a
+  separate, explicitly-authorized manual step against the live database**
+  — not performed in this pass, consistent with this repository's
+  staging-safety practice (`CLAUDE.md` §4) and prior precedent in this
+  project. **Alerts will not actually be evaluated on staging until that
+  step runs.**
 - **No live database available in this environment** — the SQL migration's
   correctness (beyond static/structural checks and manual review, which
   did catch and fix two real bugs in the lifecycle procedure — a `FOUND`-
