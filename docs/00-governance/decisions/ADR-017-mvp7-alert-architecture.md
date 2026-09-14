@@ -14,10 +14,18 @@ then fixed `get_portal_site_alerts`'s date-range filter, which had keyed
 (ADR-016 decision 48) — `CREATE OR REPLACE FUNCTION` with the same
 signature, verified functionally against a disposable local TimescaleDB
 container rather than by editing already-applied migration 239. **The
-job registration step itself remains
-deliberately not performed** pending separate explicit authorization — see
+job was then explicitly authorized and registered on staging
+(2026-09-14, job_id 1127) with correct config, but its first execution
+FAILED** with `invalid transaction termination` — PostgreSQL forbids the
+`COMMIT` statements inside `analytics.evaluate_alerts()` (migration 239)
+when that procedure is invoked via a **nested** `CALL` (from inside
+`run_alert_evaluation_job()`, itself called by the TimescaleDB job
+executor) rather than at the top level. Confirmed via
+`timescaledb_information.job_errors` on staging and reproduced locally.
+Deterministic — every future run fails identically until fixed by a new
+corrective migration (not yet authorized). See
 [07-features/alerts/README.md](../../07-features/alerts/README.md) for
-current status and evidence.
+full detail and current status.
 Date: 2026-09-14
 Decision owners: Product/Architecture (ratification of the two options
 identified in this session's architecture investigation brief)
