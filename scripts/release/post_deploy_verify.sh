@@ -37,6 +37,19 @@ set -uo pipefail
 #                                 excludes modifying the running database).
 #                                 Tracked separately for remediation.
 #
+#                                 Additionally reports the MVP-7 alert
+#                                 evaluation job (ADR-016/ADR-017,
+#                                 postgres/jobs/238_alert_evaluation_job.sql)
+#                                 as NOT REGISTERED until that job's own
+#                                 separate, explicitly authorized manual
+#                                 registration step is run -- this is
+#                                 expected, deliberate, and not a deployment
+#                                 defect (see docs/07-features/alerts/README.md).
+#                                 Once that step has been run on a given
+#                                 environment, this same check confirms the
+#                                 job stays registered, enabled, and healthy
+#                                 on every subsequent deployment.
+#
 # This split is deliberate: treating advisory failures as blocking would make
 # every staging deployment report red for reasons unrelated to whether the
 # deployment itself succeeded, which teaches operators to ignore the gate.
