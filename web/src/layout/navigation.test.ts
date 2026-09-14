@@ -12,6 +12,7 @@ describe("navigation model -- permission gates VISIBILITY only", () => {
       "demand",
       "power-quality",
       "reports",
+      "alerts",
       "spaces",
       "assets",
       "features",
@@ -39,6 +40,7 @@ describe("navigation IA -- MVP-1 closeout: Energy/Demand/PQ are Site capabilitie
     expect(byKey["demand"]).toBe("site");
     expect(byKey["power-quality"]).toBe("site");
     expect(byKey["reports"]).toBe("site");
+    expect(byKey["alerts"]).toBe("site");
     expect(byKey["spaces"]).toBe("hierarchy");
     expect(byKey["assets"]).toBe("hierarchy");
     // The later-phases catch-all is deliberately not yet part of the agreed IA.
@@ -50,7 +52,14 @@ describe("navigation IA -- MVP-1 closeout: Energy/Demand/PQ are Site capabilitie
     const sections = groupNav(primary);
 
     expect(sections.map((s) => s.group)).toEqual(["site", "hierarchy", undefined]);
-    expect(sections[0]!.items.map((i) => i.key)).toEqual(["home", "energy", "demand", "power-quality", "reports"]);
+    expect(sections[0]!.items.map((i) => i.key)).toEqual([
+      "home",
+      "energy",
+      "demand",
+      "power-quality",
+      "reports",
+      "alerts",
+    ]);
     expect(sections[1]!.items.map((i) => i.key)).toEqual(["spaces", "assets"]);
     expect(sections[2]!.items.map((i) => i.key)).toEqual(["features"]);
 

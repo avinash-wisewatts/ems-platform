@@ -58,3 +58,5 @@ ADR with its status and date.
 | [ADR-013](ADR-013-deferred-asset-component-tree.md) | Deferred asset component-tree functionality |
 | [ADR-014](ADR-014-q75-export-scope-and-behavior.md) | MVP-6 Export scope, content, format, and behavior (Q75) — decided; not implemented |
 | [ADR-015](ADR-015-q76-site-performance-report.md) | MVP-6 Site Performance Report (Q76) — decided; implemented, not deployed |
+| [ADR-016](ADR-016-q77-mvp7-basic-alerts.md) | MVP-7 Basic Alerts (Q77) — decided in full detail; implemented, not yet deployed |
+| [ADR-017](ADR-017-mvp7-alert-architecture.md) | MVP-7 Alert architecture — evaluation mechanism (TimescaleDB job) and domain concept (Alert, DDS 10→11) decided; implemented, not yet deployed |

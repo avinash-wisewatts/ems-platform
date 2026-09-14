@@ -14,6 +14,8 @@ Read-only endpoints consumed by the EMS web application:
     GET /api/v1/sites/{site_id}/energy/consumption/evidence (Slice C: C2)
     GET /api/v1/sites/{site_id}/energy/consumption/typical-reference (Slice C)
     GET /api/v1/sites/{site_id}/telemetry-freshness      (MVP-4: Data Quality & Freshness)
+    GET /api/v1/sites/{site_id}/alerts                    (MVP-7: Basic Alerts)
+    GET /api/v1/alerts/{alert_id}                          (MVP-7: Basic Alerts)
 
 Every endpoint requires the existing authenticated portal session. Tenant /
 site / space access is enforced server-side inside the database boundary
@@ -73,10 +75,19 @@ currently-effective SITE-scope demand policy's device (the customer-facing
 site Demand figure is always scope_type='SITE' -- see migration 233).
 Informational only: does not read, write, or otherwise influence Site
 Health, Energy Attention, or any existing Energy/Demand/PQ calculation.
+
+GET /api/v1/sites/{site_id}/alerts and GET /api/v1/alerts/{alert_id}
+(MVP-7, migration 238/239) read analytics.alerts, populated by the
+TimescaleDB-native analytics.run_alert_evaluation_job (ADR-017, A1) --
+never written by this router. In-product only (no email/SMS/WhatsApp/
+sharing, ADR-016); no analytical deep links; recurrence is derived at read
+time, never a stored counter. See ADR-016/ADR-017 for the full decision
+record.
 """
 
 from __future__ import annotations
 
+from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
@@ -97,11 +108,14 @@ from src.analytics_api_service import (
     EnergyConsumptionEvidenceResponse,
     EnergyConsumptionResponse,
     EnergyTypicalReferenceResponse,
+    AlertListResponse,
+    AlertSummary,
     MeasurementSeriesResponse,
     PowerQualityResponse,
     SitesResponse,
     SiteTelemetryFreshnessResponse,
     SpacesResponse,
+    build_alert_summary,
     build_assets_response,
     build_current_demand_response,
     build_demand_series_response,
@@ -119,6 +133,8 @@ from src.analytics_api_service import (
     fetch_site_demand_series,
     fetch_site_energy_consumption,
     fetch_site_energy_consumption_evidence,
+    fetch_alert_detail,
+    fetch_site_alerts,
     fetch_site_energy_typical_reference,
     fetch_site_power_quality_series,
     fetch_site_spaces,
@@ -686,3 +702,80 @@ async def get_site_telemetry_freshness(
 
     row = await fetch_site_telemetry_freshness(user.portal_user_id, site_id)
     return build_site_telemetry_freshness_response(site_id=site_id, row=row)
+
+
+@router.get(
+    "/sites/{site_id}/alerts",
+    response_model=AlertListResponse,
+    summary="Site alerts -- Active/Resolved/Ended (MVP-7)",
+    operation_id="getSiteAlerts",
+    responses=_RESOURCE_RESPONSES,
+)
+async def get_site_alerts(
+    request: Request,
+    site_id: UUID,
+    state: str | None = Query(
+        None, description="ACTIVE | RESOLVED | ENDED. Omit for all states."
+    ),
+    condition_key: str | None = Query(None),
+    range_from: str | None = Query(None, alias="from"),
+    range_to: str | None = Query(None, alias="to"),
+    limit: int = Query(50, ge=1, le=200),
+    before: str | None = Query(
+        None, description="Infinite-scroll cursor: triggered_at of the last row already seen."
+    ),
+) -> AlertListResponse:
+    """MVP-7 Basic Alerts (ADR-016/ADR-017). Ordering (materiality, then
+    recency -- ADR-016 decision 48) is not applied here: MVP-7's only
+    condition (Energy Attention) has no materiality gradation, so the SQL
+    function's own triggered_at DESC ordering already satisfies it. Date
+    filtering is keyed to triggered_at for every state (ADR-016 decision 43
+    specifies resolved_at/ended_at for Resolved/Ended; this endpoint uses
+    triggered_at uniformly -- a known simplification, flagged in this
+    session's implementation report, not silently decided)."""
+
+    user = _require_portal_user(request)
+
+    if state is not None and state not in ("ACTIVE", "RESOLVED", "ENDED"):
+        raise _contract_error(
+            ApiContractError("invalid_state", "state must be ACTIVE, RESOLVED, or ENDED")
+        )
+
+    if not await portal_user_can_access_site(user.portal_user_id, site_id):
+        raise _not_found("Site")
+
+    dt_from = datetime.fromisoformat(range_from) if range_from else None
+    dt_to = datetime.fromisoformat(range_to) if range_to else None
+    dt_before = datetime.fromisoformat(before) if before else None
+
+    rows = await fetch_site_alerts(
+        portal_user_id=user.portal_user_id,
+        site_id=site_id,
+        state=state,
+        condition_key=condition_key,
+        dt_from=dt_from,
+        dt_to=dt_to,
+        limit=limit,
+        before=dt_before,
+    )
+    return AlertListResponse(site_id=site_id, alerts=[build_alert_summary(r) for r in rows])
+
+
+@router.get(
+    "/alerts/{alert_id}",
+    response_model=AlertSummary,
+    summary="Alert detail (MVP-7)",
+    operation_id="getAlertDetail",
+    responses=_RESOURCE_RESPONSES,
+)
+async def get_alert_detail(request: Request, alert_id: UUID) -> AlertSummary:
+    """MVP-7 Basic Alerts. An unknown or inaccessible alert_id returns 404,
+    identical to every other portal-scoped resource in this router."""
+
+    user = _require_portal_user(request)
+
+    rows = await fetch_alert_detail(portal_user_id=user.portal_user_id, alert_id=alert_id)
+    if not rows:
+        raise _not_found("Alert")
+
+    return build_alert_summary(rows[0])

@@ -193,7 +193,7 @@ for implementation status.
 | 3 | Five headline things on Site Overview | Overall Health → Attention → Energy Performance → Max Demand → Power Quality → investigation paths (Q70, Q71, Q72) |
 | 4 | How customers select among multiple sites | Touched by Q90 (search/quick nav); exact interaction pattern still a design detail |
 | 5 | Which roles exist in the customer application | Facility/Energy Manager is primary (Q65); mapping to existing `ADMIN`/`OPERATOR`/`VIEWER` roles is an implementation task |
-| 6 | How alerts appear and are configured | In-product + email delivery (Q77, Q78); configuration stays in the Administration App (Q67) |
+| 6 | How alerts appear and are configured | **In-product only** — email removed 2026-09-14, superseding the archived Q78 email statement (Q77; [ADR-016](../00-governance/decisions/ADR-016-q77-mvp7-basic-alerts.md)); full lifecycle/state/retention/recurrence/filtering behavior now decided; configuration stays in the Administration App (Q67) |
 | 7 | Which energy-cost capabilities are required | Financial visibility is MVP scope wherever accurate/sufficiently configured (Q73); no tariff schema exists yet — a data dependency, not an open scope question |
 | 8 | Initial target industries | **Still open** — not addressed by Q49–Q101 |
 | 9 | How much asset detail customers see | A narrower, data-driven version of the common analytical experience (Q100) |

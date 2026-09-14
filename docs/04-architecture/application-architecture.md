@@ -108,7 +108,7 @@ routing/deployment detail, not the application's architectural identity.
 See [deployment-architecture.md](deployment-architecture.md) for the
 current delivery mechanism and [../05-applications/ems-web/README.md](../05-applications/ems-web/README.md).
 
-## Known product-architecture gaps (PA-1 through PA-6)
+## Known product-architecture gaps (PA-1 through PA-7)
 
 For product-owner and architecture-review attention. None blocks the
 documentation set itself; several block specific screens — cross-referenced
@@ -123,3 +123,4 @@ throughout [02-requirements/](../02-requirements/) and
 | PA-4 | No frontend customer-write path exists; configuration lives in the Administration App. | Near-term product is read-only. | Resolved by Q67 — configuration stays in the Administration App. |
 | PA-5 | "Correlations" imply multi-parameter alignment, edging toward a query builder — a non-goal. | Correlations must be curated, never free-form. | Not required by Q49–Q101; Post-MVP. |
 | PA-6 | Portfolio/corporate consolidated views need a cross-site aggregation surface the API doesn't define. | Portfolio depth resolved at scope/priority level (Q63/Q64); shape still not landed. | MVP-8, lowest priority. |
+| PA-7 | No server-side Attention/alert evaluation mechanism or persisted `Alert` entity exists (MVP-7 Basic Alerts). | Blocks any Alerts implementation. | **Architecture decided 2026-09-14** — [ADR-017](../00-governance/decisions/ADR-017-mvp7-alert-architecture.md): evaluation via an extended TimescaleDB background job (A1); `Alert` added as the DDS's 11th core concept (B1). Code/schema still `MISSING`; candidate-tracking design and persistence-retry semantics remain open implementation questions. |

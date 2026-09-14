@@ -116,13 +116,67 @@ See [README.md](README.md) for conventions (`Priority`, `Status`, `Source`).
 
 ## Alerts
 
+Fully specified at the product/UX level by the Q77/MVP-7 Product Decision
+handoff (2026-09-14) — see
+[ADR-016](../00-governance/decisions/ADR-016-q77-mvp7-basic-alerts.md).
+Architecture decided 2026-09-14 — see
+[ADR-017](../00-governance/decisions/ADR-017-mvp7-alert-architecture.md)
+(evaluation mechanism, `Alert` domain model, single-source-of-truth
+arrangement for the materiality rule). **`READY-FOR-DESIGN` where noted,
+implemented 2026-09-14, staging validation pending** — see
+[requirements-traceability.md §10](requirements-traceability.md) and
+[docs/07-features/alerts/README.md](../07-features/alerts/README.md) for
+exact status; Site-level Energy Attention only, Space/Asset alerts await a
+separate condition decision.
+
 | ID | Title / description | Customer question | Priority | Source | Phase | Status | Dependencies | Notes |
 |---|---|---|---|---|---|---|---|---|
-| EMS-REQ-080 | **View active & historical alerts.** Semantic subject, severity, value vs. threshold, time, status. | "What's wrong right now?" | SHOULD | PRODUCT_OWNER, ZEROWATT_TECHNICAL_REFERENCE | MVP-7 | Resolved (scope) — Q77/Q78 | no alert model/endpoint defined | Alerts ≠ insights conceptually. |
-| EMS-REQ-081 | **Alert → context navigation.** Jump to the metric's screen at the relevant time. | "Show me what triggered this." | SHOULD | INFERENCE | MVP-7 | DRAFT | EMS-REQ-080, EMS-REQ-030 | |
-| EMS-REQ-082 | **Self-configurable alert rules.** Customers/plant users define alert rules. | "Alert me if the freezer goes above −18 °C." | LATER | ZEROWATT_TECHNICAL_REFERENCE | Post-MVP | BLOCKED | PA-4; config stays in Administration App per Q67 | |
-| EMS-REQ-083 | **Demand-approaching alerts.** Warn when demand nears the contracted limit. | "Are we about to exceed contracted demand?" | COULD | ZEROWATT_TECHNICAL_REFERENCE, INFERENCE | MVP-7 | DRAFT | EMS-REQ-022, EMS-REQ-080 | |
-| EMS-REQ-084 | **Multi-channel notification.** Email / mobile / messaging delivery. | "Text me when it happens." | LATER | ZEROWATT_TECHNICAL_REFERENCE | Post-MVP | DRAFT | Email is MVP (Q78); other channels deferred | |
+| EMS-REQ-080 | **View active & historical alerts.** Semantic subject, value vs. threshold, time, status. | "What's wrong right now?" | SHOULD | PRODUCT_OWNER, ZEROWATT_TECHNICAL_REFERENCE | MVP-7 | READY-FOR-DESIGN | no alert model/endpoint defined; ADR-016 | Alerts ≠ insights conceptually. "Severity" removed from this row's description 2026-09-14 — see the contradiction record below. Full lifecycle/state/content detail: `EMS-REQ-117`–`127`. |
+| EMS-REQ-081 | **Alert list/detail (no analytical deep link in MVP-7).** Alert detail shows full context (hierarchy, values, threshold) in place; it does not jump to the metric's own analytical screen. | "Show me what triggered this." | SHOULD | INFERENCE | MVP-7 | READY-FOR-DESIGN | EMS-REQ-080, EMS-REQ-124 | 2026-09-14: narrowed from the original "jump to the metric's screen" framing — ADR-016 decision 12 explicitly excludes analytical deep links from MVP-7 alerts. See the contradiction record below. |
+| EMS-REQ-082 | **Self-configurable alert rules.** Customers/plant users define alert rules. | "Alert me if the freezer goes above −18 °C." | LATER | ZEROWATT_TECHNICAL_REFERENCE | Post-MVP | BLOCKED | PA-4; config stays in Administration App per Q67 | Unaffected by ADR-016 — MVP-7 alerts are generated automatically from existing Attention conditions with no customer-facing rule-authoring layer (ADR-016 decision 2). |
+| EMS-REQ-083 | **Demand-approaching alerts.** Warn when demand nears the contracted limit. | "Are we about to exceed contracted demand?" | COULD | ZEROWATT_TECHNICAL_REFERENCE, INFERENCE | MVP-7 | BLOCKED | EMS-REQ-022, EMS-REQ-080; no contracted-demand threshold exists anywhere in the schema | Unaffected by ADR-016 — MVP-7 alerts fire only from Attention conditions that already exist (currently Energy only, ADR-010); a demand-proximity condition would need its own threshold/materiality decision first, then would flow through the same ADR-016 lifecycle. |
+| EMS-REQ-084 | **Multi-channel notification.** Mobile / messaging / email delivery. | "Text me when it happens." | LATER | ZEROWATT_TECHNICAL_REFERENCE | Post-MVP | DRAFT | ADR-016 (email removed from MVP-7) | 2026-09-14: **email is no longer MVP scope** — ADR-016 supersedes the archived Q78 "email is turned on for MVP" statement; all channels (email included) are now deferred alongside SMS/WhatsApp/sharing, not partially landed. See the contradiction record below. |
+| EMS-REQ-117 | **Alert generation from Attention conditions.** Every qualifying Attention condition auto-generates an alert per affected context; no separate rule-selection layer; qualifies after 5 minutes continuously true, timed from first true observation, reset by any evaluation/data gap. | "Tell me when something needs attention, automatically." | SHOULD | PRODUCT_OWNER | MVP-7 | READY-FOR-DESIGN | ADR-016 decision 2; depends on Architecture Question A (no evaluation mechanism exists) | No customer-visible pending state before qualification. |
+| EMS-REQ-118 | **Alert lifecycle states.** Active (condition true) → Resolved (continuously false for 1 minute, gap-reset) or Ended (configuration disabled/changed) — Ended is never presented as Resolved. | "Is this still a problem?" | SHOULD | PRODUCT_OWNER | MVP-7 | READY-FOR-DESIGN | EMS-REQ-117; ADR-016 decisions 3, 7 | |
+| EMS-REQ-119 | **Data-gap handling.** An Active alert whose data becomes unavailable stays Active ("Unable to evaluate — data unavailable"), not auto-resolved; on data recovery, a still-true condition requires a fresh 5-minute qualification before a new alert is generated. | "What happens if the sensor drops out?" | SHOULD | PRODUCT_OWNER | MVP-7 | READY-FOR-DESIGN | EMS-REQ-118; ADR-016 decision 4 | |
+| EMS-REQ-120 | **Configuration-change transitions.** Disabling a condition Ends its Active alert; changing threshold/scope Ends the existing alert and requires fresh 5-minute qualification under the new configuration with a new alert identity; simultaneous clear+change classifies as Ended, not Resolved; a change with no Active alert takes effect immediately with no transition record. | "What happens to an active alert if the admin changes the rule?" | SHOULD | PRODUCT_OWNER | MVP-7 | READY-FOR-DESIGN | EMS-REQ-118; ADR-016 decision 8; config stays in Administration App per Q67 | |
+| EMS-REQ-121 | **Restart and persistence-failure resilience.** Active/Resolved/Ended records survive restart/deployment without loss or duplication (in-progress timers reset); a persistence failure at qualification retries for up to 30 minutes preserving original trigger info, then discards with an operational record if still unsuccessful — never exposed as a customer-visible alert. | "Will I lose alert history if the system restarts?" | SHOULD | PRODUCT_OWNER | MVP-7 | READY-FOR-DESIGN | EMS-REQ-117; ADR-016 decisions 5-6; ADR-017 (evaluation mechanism) | 2026-09-14: mechanism decided (TimescaleDB background job, ADR-017) — restart-survival follows from the job pattern's own persistence. Exact candidate-tracking design and how the 30-minute per-occurrence retry composes with the job's own retry semantics remain implementation-design questions (ADR-017 "Remaining unresolved"). |
+| EMS-REQ-122 | **Historical immutability and retention.** Historical alert records never change after the fact; Resolved/Ended alerts remain customer-visible for 90 days from resolution/ending; Active alerts remain visible indefinitely while true. | "How long can I see past alerts?" | SHOULD | PRODUCT_OWNER | MVP-7 | READY-FOR-DESIGN | EMS-REQ-118; ADR-016 decision 9; depends on Architecture Question B (no Alert entity exists) | |
+| EMS-REQ-123 | **Recurrence tracking.** A recurrence shares exact context + condition/metric + threshold/reference identity (a configuration change creates a new identity); alert detail shows "Previous occurrences: N" / "Most recent: <time>" (by triggered time), limited to the 90-day retained window, unvaried by status, no per-occurrence list. | "Has this happened before?" | SHOULD | PRODUCT_OWNER | MVP-7 | READY-FOR-DESIGN | EMS-REQ-122; ADR-016 decision 10 | |
+| EMS-REQ-124 | **Alert content and detail view.** Existing EMS terminology/number formatting only; list shows condition + context + triggered time; detail adds hierarchy context, current state, trigger/latest/resolution values, threshold/reference, previous occurrences (Ended alerts add ended time + reason); never exposes device IDs, point IDs, or other internal identifiers. | "What exactly triggered, and where?" | SHOULD | PRODUCT_OWNER | MVP-7 | READY-FOR-DESIGN | EMS-REQ-118, EMS-REQ-123; ADR-016 decision 11 | |
+| EMS-REQ-125 | **Alert navigation and delivery — in-product only.** Header indicator shows the count of currently Active alerts scoped to the selected Site/context (visible with no number at zero; no count with no context selected); dedicated Alerts area lists Active/Resolved/Ended; no email/SMS/WhatsApp/sharing; no analytical deep links. | "Where do I see my alerts?" | SHOULD | PRODUCT_OWNER | MVP-7 | READY-FOR-DESIGN | EMS-REQ-080; ADR-016 decisions 1, 12 | Supersedes the archived Q78 "in-product + email" statement — see the contradiction record below. |
+| EMS-REQ-126 | **Filtering and ordering.** Cascading Site→Space→Asset filters; single-select Condition/Metric filter; date filter keyed to the status-appropriate timestamp with 90-day defaults; explicit "Apply filters"/"Clear filters"; infinite scroll; ordering by existing Attention materiality then recency, unchanged by filters, never exposed as a new severity taxonomy. | "Can I find the alert I'm looking for?" | SHOULD | PRODUCT_OWNER | MVP-7 | READY-FOR-DESIGN | EMS-REQ-080; ADR-016 decision 13 | |
+| EMS-REQ-127 | **Authorization.** Alert visibility follows existing EMS authorization; no alert-specific recipient/permission configuration or new Admin role; configuration remains exclusively in the Administration App. | "Who can see or configure alerts?" | SHOULD | PRODUCT_OWNER | MVP-7 | READY-FOR-DESIGN | Q67; ADR-016 decision 14; ADR-017 (verified against `_require_portal_user`/three-role scope model) | Space/Asset-level Attention is product-specified (Q99/Q100, "where supported") but not yet built — MVP-3 explicitly narrowed its own increment to Site-level Energy only (commit `19c09d7`). A sequencing dependency, not a contradiction: MVP-7 alerts are Site-level-Energy-only until that extension is built. See `requirements-traceability.md` §3/§9. |
+
+> **Contradiction resolved (2026-09-14)** — three Alerts rows corrected per
+> [source-of-truth.md](../00-governance/source-of-truth.md)'s recording
+> format, following the Q77/MVP-7 discovery handoff and
+> [ADR-016](../00-governance/decisions/ADR-016-q77-mvp7-basic-alerts.md):
+>
+> **CURRENT IMPLEMENTATION:** no code exists for any Alerts row; this is a
+> documentation-only correction of decided scope.
+>
+> **HISTORICAL / DOCUMENTED EXPECTATION:**
+> 1. `EMS-REQ-080` described alerts as showing "severity."
+> 2. `EMS-REQ-081` described "alert → context navigation... jump to the
+>    metric's screen at the relevant time."
+> 3. `EMS-REQ-084`'s Notes read "Email is MVP (Q78); other channels
+>    deferred."
+>
+> **CHANGE:** (1) ADR-016 decision 13 uses Attention materiality for
+> ordering only and explicitly rejects exposing it as a new
+> High/Medium/Low severity taxonomy — "severity" removed from
+> `EMS-REQ-080`'s description. (2) ADR-016 decision 12 explicitly excludes
+> analytical deep links from an alert to other screens in MVP-7 —
+> `EMS-REQ-081` retitled to describe in-place detail content instead of
+> navigation to the metric's own screen. (3) ADR-016's source-of-truth
+> correction supersedes the archived Q78 "email notifications are turned on
+> for MVP" statement — email is now fully out of MVP-7 scope, not partially
+> landed; `EMS-REQ-084`'s Notes corrected accordingly.
+>
+> **VERIFICATION:** confirmed directly against the Q77/MVP-7 discovery
+> handoff text (§1, §12/§36, §48 in ADR-016's Decision section) transferred
+> into this session 2026-09-14; no inference was required.
 
 ## Reporting
 

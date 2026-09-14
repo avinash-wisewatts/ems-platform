@@ -289,3 +289,34 @@ export type SiteTelemetryFreshnessResponse = {
   demand: DomainFreshness;
   power_quality: DomainFreshness;
 };
+
+// ---- GET /api/v1/sites/{site_id}/alerts, GET /api/v1/alerts/{alert_id} (MVP-7) --
+// In-product only, ADR-016/ADR-017. No analytical deep links, no internal
+// identifiers (device_id/point_id), no customer-facing severity taxonomy.
+// previous_occurrence_count / most_recent_previous_occurrence_at are
+// derived server-side at read time -- never fetched separately.
+
+export type AlertState = "ACTIVE" | "RESOLVED" | "ENDED";
+
+export type Alert = {
+  alert_id: string;
+  site_id: string;
+  space_id: string | null;
+  asset_id: string | null;
+  condition_key: string;
+  metric: string;
+  state: AlertState;
+  triggered_at: string;
+  trigger_value: number;
+  resolved_at: string | null;
+  resolved_value: number | null;
+  ended_at: string | null;
+  ended_reason: string | null;
+  previous_occurrence_count: number;
+  most_recent_previous_occurrence_at: string | null;
+};
+
+export type AlertListResponse = {
+  site_id: string;
+  alerts: Alert[];
+};

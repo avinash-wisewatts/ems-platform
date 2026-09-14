@@ -164,7 +164,8 @@ the dependency graph (see [../01-product/roadmap.md](../01-product/roadmap.md), 
 | `PA-5` correlations edge toward a query builder | Curated correlations | Not required by Q49–Q101; **Post-MVP**. | — |
 | `PA-6` no cross-site aggregation surface | Portfolio | **Resolved at scope/priority level** by Q63/Q64 (in scope, lowest priority). API shape still `C — NOT LANDED`. | Architecture (when scheduled) |
 | Customer roles undefined | Role-specific overviews | **Partially resolved** by Q65 (Facility/Energy Manager is primary) — no explicit mapping to `ADMIN`/`OPERATOR`/`VIEWER` yet. | Product (light) → Engineering |
-| Alert model undefined | Alerts | **Resolved at scope level** by Q77/Q78. Shape/schema still `C — NOT LANDED`. | Engineering |
+| Alert model undefined | Alerts | **Product/UX fully decided 2026-09-14** ([ADR-016](../00-governance/decisions/ADR-016-q77-mvp7-basic-alerts.md)) and **architecture fully decided 2026-09-14** ([ADR-017](../00-governance/decisions/ADR-017-mvp7-alert-architecture.md)) — evaluation mechanism (extended TimescaleDB background job) and domain model (`Alert`, DDS 11th concept) both resolved. Shape/schema still `C — NOT LANDED` — no code/migration exists. Remaining: candidate-tracking design, persistence-retry semantics, and the MVP-3 client-migration follow-on are implementation-design tasks, not open architecture decisions. | Product (done) → Architecture (done) → Engineering |
+| Space/Asset-level Attention not yet built | Alerts (MVP-7) hierarchy scoping | **Reconciled 2026-09-14** ([ADR-017](../00-governance/decisions/ADR-017-mvp7-alert-architecture.md)): a sequencing dependency, not a contradiction. The original workshop (Q99, Q100) specifies Attention as part of the Space/Asset experience "where supported"; MVP-3's implementation (commit `19c09d7`) explicitly narrowed its own build increment to Site-level Energy only, deferring Space/Asset Attention the same way it deferred Demand/PQ thresholds. MVP-7 alerts can only be generated from the one condition that exists today (Site-level Energy) until a Space/Asset materiality rule is separately built — engineering sequencing, not a new product/architecture decision. | Engineering (MVP-3 scope extension, not yet scheduled) |
 | Shift-context model missing | Shift analysis | Not addressed; **Post-MVP**. | — |
 | Production-quantity source missing | Process KPIs | Not addressed; **Post-MVP**. | — |
 | Action log missing | "Did the action work" (MEASURE stage) | Explicitly Post-MVP. | — |
@@ -263,3 +264,113 @@ resolutions" section:
 
 Both gaps apply equally to Export (§6) and to any future Q76 report type
 — they are platform-level gaps, not specific to this one report.
+
+## 8. Status update (2026-09-14) — Q77/MVP-7 Basic Alerts fully scoped, not implemented; 2 architecture questions open
+
+A Q77/MVP-7 discovery conversation, conducted in ChatGPT and transferred
+into this session as a structured handoff, resolved Q77/MVP-7 Basic Alerts
+to full product/UX detail — trigger/qualification, Active/Resolved/Ended
+lifecycle, configuration-change transitions, persistence-failure handling,
+retention, recurrence, content/detail structure, navigation, filtering/
+ordering, and authorization. Full record:
+[ADR-016](../00-governance/decisions/ADR-016-q77-mvp7-basic-alerts.md).
+New requirements: [functional-requirements.md §Alerts](functional-requirements.md#alerts)
+(`EMS-REQ-117`–`EMS-REQ-127`); `EMS-REQ-080`/`081`/`084` corrected.
+
+| Item | 2026-09-11 status (§2) | 2026-09-14 status |
+|---|---|---|
+| Q77 (MVP alerts) | `C — NOT LANDED` ("No alert model/endpoint exists.") | **Fully decided at product/UX level, not implemented.** Every behavioral question the archived baseline left open (lifecycle, states, retention, recurrence, content, filtering, authorization) is now specified (ADR-016). **Implementation status is unchanged: no alert model, endpoint, evaluation mechanism, or UI exists anywhere in the codebase.** The `C` capability classification remains accurate for "landed"; what changed is that the decision blocker is now closed, and two specific architecture blockers are now named instead of a generic "no alert model" gap. |
+| Q78 (MVP alert delivery) | `C — NOT LANDED` ("Same as Q77.") | **Decision superseded, not merely resolved**: the archived baseline's "in-product + email" is corrected to **in-product only** — email is fully removed from MVP-7 scope, not deferred alongside a landed email channel. Implementation status unchanged (`C`). |
+| `API.alerts` (§1 shorthand) | `MISSING`; `PLANNED (MVP-7)` | **Unchanged as a code fact** — still `MISSING`, still `PLANNED (MVP-7)`. The *shape* is now fully specified at the product level (ADR-016), but two architecture questions (no evaluation mechanism, no Alert entity in the frozen DDS model) must be resolved before an endpoint can be designed, let alone built. |
+
+**Two genuine architecture questions were identified during this
+documentation pass, not silently resolved** — recorded in full in
+ADR-016's "Architecture questions identified" section:
+
+1. **No server-side Attention/alert evaluation mechanism exists in any
+   form.** Attention today (`web/src/attention/energyAttention.ts`) is a
+   stateless client-side computation re-run at render time — there is no
+   scheduler, job, or persisted evaluation state anywhere in `app/src`
+   (verified by `grep`). The handoff's qualification/resolution-timer
+   model (gap-resetting 5-minute/1-minute windows, restart-survival,
+   30-minute persistence retry) presupposes a continuous, stateful,
+   server-side evaluation process that does not exist today in any form,
+   not even a stub to extend.
+2. **No `Alert` entity exists in the frozen DDS ten-concept model**
+   ([system-architecture.md](../04-architecture/system-architecture.md))
+   and none exists in `postgres/` (verified by `grep`). A persisted,
+   immutable, stateful Alert record is a new core entity requiring the
+   DDS's five-criteria change-control test — not yet run.
+
+This does not alter §2's 2026-09-11 classification rows for Q77/Q78, which
+remain the preserved historical record per
+[source-of-truth.md](../00-governance/source-of-truth.md)'s no-silent-
+rewrite rule. §4 line 189's "Q63, Q64, Q73–Q78... remain as classified in
+§2" is superseded for Q77/Q78 specifically by this section — their
+*decision* status has changed (fully, for Q77; by correction, for Q78);
+their *implementation* status has not, and §4's statement remains accurate
+for Q63, Q64, Q73–Q76, Q82, Q91, Q93.
+
+## 9. Status update (2026-09-14) — Q77/MVP-7 alert architecture decided (A1+B1); not implemented
+
+Following §8's product/UX capture, an architecture investigation brief
+identified two open questions (server-side evaluation mechanism; Alert
+domain concept), and Product/Architecture ratified both — **A1** (extend
+the existing TimescaleDB-native background-job mechanism) and **B1**
+(introduce a minimal `Alert` domain concept, formally amending the frozen
+DDS from 10 to 11 core concepts). Full record:
+[ADR-017](../00-governance/decisions/ADR-017-mvp7-alert-architecture.md).
+
+| Item | 2026-09-14 §8 status | 2026-09-14 (this section) status |
+|---|---|---|
+| Q77 architecture (evaluation mechanism) | Open — "no server-side Attention/alert evaluation mechanism exists in any form." | **Decided**: extends `postgres/jobs/`'s existing TimescaleDB `add_job` pattern (1-minute interval, matching `69_environment_routing_job.sql`'s cadence). A new canonical SQL function becomes the single source of truth for the ±15% materiality rule; the existing client-side implementation (ADR-010) is tracked for future migration, gated by a mandatory parity test — not silently duplicated. **Still `MISSING` in code.** |
+| Q77 architecture (Alert domain concept) | Open — "no `Alert` entity exists in the frozen DDS model." | **Decided**: `Alert` added as the DDS's 11th core concept (five-criteria test applied and passed — see ADR-017). `analytics.insights` explicitly not reused; no generic event framework, generalized Subject, or severity taxonomy introduced. **Still `MISSING` in code/schema** — no migration exists. |
+| `API.alerts` (§1 shorthand) | `MISSING`; `PLANNED (MVP-7)` | **Unchanged as a code fact** — still `MISSING`, still `PLANNED (MVP-7)`. Verified compliant with the Analytics API boundary (ADR-007) and the existing tenant-authorization pattern (`_require_portal_user`, three-role scope model) at the design level; no endpoint exists. |
+
+**Reconciled, not silently resolved**: Space/Asset-level Attention is
+product-specified (Q99, Q100 — "where supported") but not yet built,
+deferred by MVP-3's own implementation-scoping decision the same way
+Demand/PQ thresholds were — a sequencing dependency, not a contradiction
+between ADR-016 and ADR-010. MVP-7 alerts are Site-level-Energy-only in
+practice until that extension is built — recorded in §3's blocker register
+above. Candidate/pending-qualification tracking and the 30-minute
+persistence-retry mechanism's relationship to TimescaleDB's own job-level
+retry are confirmed **implementation design details, resolvable under
+ADR-017's existing architecture** — no new architecture decision is
+required, provided candidate-tracking state is durable/idempotent across
+job runs and the discard-with-operational-record outcome reuses the
+platform's existing failure/quarantine-logging convention (e.g.
+`postgres/migrations/003_telemetry_pipeline_performance_state.sql`) rather
+than introducing a new customer-facing entity.
+
+## 10. Status update (2026-09-14) — Q77/MVP-7 Basic Alerts implemented, staging validation pending
+
+Following §8 (product capture) and §9 (architecture decided), MVP-7 was
+implemented in the same workstream. Full record: ADR-016, ADR-017, and
+[docs/07-features/alerts/README.md](../07-features/alerts/README.md).
+
+| Item | §9 status | 2026-09-14 (this section) status |
+|---|---|---|
+| Q77 (MVP alerts) | Architecture decided, `C — NOT LANDED` in code | **Implemented**: `postgres/migrations/238`/`239` (schema, evaluator, lifecycle procedure, job), `postgres/jobs/238_alert_evaluation_job.sql`, `GET /api/v1/sites/{id}/alerts` + `.../alerts/{id}` (Analytics API), `web/src/routes/alerts/AlertsArea.tsx` (list/detail/filter/tabs) + header indicator. Backend: 9 route-contract tests + 16 static SQL-contract tests, all passing. Frontend: 6 new component tests + navigation regression fixes; full suite (216 tests), `tsc --noEmit`, `eslint --max-warnings 0`, `vite build` all pass. |
+| `API.alerts` (§1 shorthand) | `MISSING`; `PLANNED (MVP-7)` | **`LIVE`** — `GET /api/v1/sites/{site_id}/alerts`, `GET /api/v1/alerts/{alert_id}`. |
+
+**Known limitations, flagged not silently absorbed** (full list:
+`docs/07-features/alerts/README.md` "Known limitations / deviations"):
+evaluation period is the most recent completed site-local day (a
+consequence of the existing whole-day constraint, not a new product
+decision); no executable cross-language parity harness between the SQL and
+TypeScript materiality implementations (ADR-017's named precondition —
+only static checks exist); no live "latest value" re-fetch in the detail
+view; Space/Asset cascading filters not implemented (no such condition
+exists); "Load more" is button- not scroll-triggered; header indicator
+count capped at 200; **no live TimescaleDB instance was available in this
+environment to execute the migrations themselves** — the SQL was validated
+by careful manual review (which did catch and fix one real bug: a `FOUND`-
+variable scoping error across multiple statements in the lifecycle
+procedure) and static contract tests, not live execution; this relies on
+the CI database/migration integration job as the first live-execution
+gate.
+
+This does not alter §8/§9's own historical snapshots, preserved per
+[source-of-truth.md](../00-governance/source-of-truth.md)'s no-silent-
+rewrite rule.
