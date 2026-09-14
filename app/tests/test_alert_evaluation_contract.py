@@ -42,15 +42,37 @@ def test_migrations_are_registered_in_the_deploy_manifest():
     absent from the very first staging deploy's migration list, which
     still reported success, because the manifest was never updated in the
     same commit). CI's database/migration integration test job does not
-    catch this -- it exercises the SQL files directly, not this manifest-
-    driven selection path."""
+    catch this in its migration-application phase -- it exercises the SQL
+    files directly, not this manifest-driven selection path."""
     manifest_text = MANIFEST.read_text()
     for source_file in (
         "238_mvp7_alert_evaluation.sql",
         "239_mvp7_alert_evaluation_functions.sql",
     ):
         assert f"{source_file},migration," in manifest_text
-    assert "238_alert_evaluation_job.sql,jobs," in manifest_text
+
+
+def test_job_registration_is_deliberately_not_in_the_manifest():
+    """Regression guard for a SECOND real bug this implementation caught,
+    the opposite mistake from the one above: a jobs-category manifest row
+    for postgres/jobs/238_alert_evaluation_job.sql was added, then removed
+    again, because CI's database/migration integration test job runs a
+    fresh-bootstrap phase FIRST (scripts/test/deploy_test_database.sh ->
+    scripts/deploy_database.sh, categories canonical+reference+jobs) that
+    builds from postgres/ddl/'s periodically-consolidated snapshot, which
+    has never been updated past migration ~237 -- so a jobs-category row
+    for a function only migration 239 creates fails immediately with
+    "function ... does not exist" in that phase, before the later
+    migration-application phase (which would have created it) ever runs.
+    The job registration remains genuinely out-of-band regardless (see
+    docs/07-features/alerts/README.md) -- apply_migrations.sh, the real
+    incremental deploy path, never reads jobs-category rows at all, so
+    omitting this one from the manifest has zero effect on production/
+    staging deployment behavior. Do not re-add it without also mirroring
+    migration 239 into postgres/ddl/ first."""
+    manifest_text = MANIFEST.read_text()
+    assert "238_alert_evaluation_job.sql,jobs," not in manifest_text
+    assert JOB_REGISTRATION.exists()
 
 
 def _schema_sql() -> str:

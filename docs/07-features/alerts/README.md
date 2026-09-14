@@ -102,15 +102,27 @@ staging validation.
   staging/production** — `scripts/apply_migrations.sh` (the incremental
   deploy pipeline) selects files exclusively from
   `postgres/restructure_manifest.csv`'s `target_category=migration` rows,
-  never by listing `postgres/migrations/` directly; `postgres/jobs/*.sql`
-  registrations are a `target_category=jobs` row, applied only by
-  `scripts/deploy_database.sh` (fresh-bootstrap only), the same as every
-  other existing job file. **A genuine deployment gap was caught after
-  the first staging deploy**: migrations 238/239 were entirely absent
-  from that deploy's own migration list (not SKIP, not APPLY — silently
-  never selected) because they had not yet been added to the manifest;
-  fixed in a follow-up commit, regression-guarded by
-  `test_migrations_are_registered_in_the_deploy_manifest`. Migrations
+  never by listing `postgres/migrations/` directly, and never reads
+  `target_category=jobs` rows at all; `postgres/jobs/*.sql` registrations
+  are applied only by `scripts/deploy_database.sh` (fresh-bootstrap only —
+  used both for a real fresh install and by CI's disposable test
+  database), the same as every other existing job file. **Two genuine
+  deployment gaps were caught in this pass, in opposite directions**: (1)
+  migrations 238/239 were entirely absent from the first staging deploy's
+  own migration list (not SKIP, not APPLY — silently never selected)
+  because they had not yet been added to the manifest — fixed by adding
+  `migration`-category rows, regression-guarded by
+  `test_migrations_are_registered_in_the_deploy_manifest`; (2) a
+  `jobs`-category manifest row was then added for the job registration
+  file and immediately broke CI — the fresh-bootstrap phase
+  (`scripts/deploy_database.sh`) runs BEFORE the migration-application
+  phase and builds from `postgres/ddl/`'s periodically-consolidated
+  snapshot, which has never been updated past migration ~237, so
+  registering a job whose function only migration 239 creates failed with
+  "function ... does not exist" — fixed by removing that row (it has zero
+  effect on real deployment either way, since `apply_migrations.sh` never
+  reads it), regression-guarded by
+  `test_job_registration_is_deliberately_not_in_the_manifest`. Migrations
   238/239 (schema, functions) are applied by the normal pipeline once
   registered; **the job registration
   (`postgres/jobs/238_alert_evaluation_job.sql`) itself still requires a
