@@ -15,15 +15,26 @@ then fixed `get_portal_site_alerts`'s date-range filter, which had keyed
 signature, verified functionally against a disposable local TimescaleDB
 container rather than by editing already-applied migration 239. **The
 job was then explicitly authorized and registered on staging
-(2026-09-14, job_id 1127) with correct config, but its first execution
-FAILED** with `invalid transaction termination` — PostgreSQL forbids the
-`COMMIT` statements inside `analytics.evaluate_alerts()` (migration 239)
-when that procedure is invoked via a **nested** `CALL` (from inside
-`run_alert_evaluation_job()`, itself called by the TimescaleDB job
-executor) rather than at the top level. Confirmed via
-`timescaledb_information.job_errors` on staging and reproduced locally.
-Deterministic — every future run fails identically until fixed by a new
-corrective migration (not yet authorized). See
+(2026-09-14, job_id 1127) with correct config, but every execution
+FAILED (3/3 runs)** with `invalid transaction termination`
+(SQLSTATE `2D000`) — PostgreSQL forbids the `COMMIT` statements inside
+`analytics.evaluate_alerts()` (migration 239) when that procedure is
+invoked via a **nested** `CALL` (from inside `run_alert_evaluation_job()`,
+itself called by the TimescaleDB job executor) rather than at the top
+level. The specific failing statement is the per-site `COMMIT` at
+migration file line 404 (inside `FOR v_site IN ... LOOP`, reached on the
+first site with ≥1 active site present), not the retention-DELETE
+`COMMIT` at line 412, which is never reached. Confirmed via
+`timescaledb_information.job_errors` on staging (error code/message
+only — TimescaleDB does not retain the CONTEXT stack there) and pinpointed
+by local reproduction with a real deployed-identical function body
+(`pg_get_functiondef`) and a fixture site row, matching staging's actual
+data shape. Deterministic — every future run would fail identically until
+fixed by a new corrective migration (not designed, authorized, or
+implemented — root cause only). **The job was explicitly authorized and
+disabled on staging** (`scheduled = false`; still registered, config
+intact; confirmed no further executions) to stop the recurring failures.
+See
 [07-features/alerts/README.md](../../07-features/alerts/README.md) for
 full detail and current status.
 Date: 2026-09-14

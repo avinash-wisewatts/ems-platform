@@ -15,13 +15,17 @@ registration state; a **second** same-day corrective migration (240)
 then fixed decision 48's date-range keying, verified functionally
 against a disposable local TimescaleDB container. **The job was then
 explicitly authorized and registered on staging (2026-09-14) with
-correct configuration, but its first execution FAILED deterministically**
-— a real, newly-discovered defect in already-applied migration 239
-(nested `CALL`/`COMMIT` transaction-control violation in
-`analytics.evaluate_alerts()`), confirmed live and reproduced locally.
-No alert has been or can currently be generated. MVP-7 remains NOT
-functional/released/lifecycle-validated pending a further corrective
-migration — see
+correct configuration, but every execution FAILED deterministically
+(3/3 runs)** — root-caused to the per-site `COMMIT` (migration 239, file
+line 404) inside `analytics.evaluate_alerts()`, illegal because that
+procedure is invoked via a nested `CALL` (from inside
+`run_alert_evaluation_job()`) rather than at the top level — confirmed
+live and pinpointed by local reproduction. **The job was then explicitly
+authorized and disabled on staging** (still registered, config intact,
+`scheduled = false`, confirmed no further executions) to stop the
+recurring failures pending a fix. No alert has been or can currently be
+generated. MVP-7 remains NOT functional/released/lifecycle-validated
+pending a further corrective migration — see
 [alerts/README.md](../../07-features/alerts/README.md) for full detail
 and current status.
 See [ADR-017](ADR-017-mvp7-alert-architecture.md) for the architecture that
