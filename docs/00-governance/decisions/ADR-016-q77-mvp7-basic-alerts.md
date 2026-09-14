@@ -13,11 +13,17 @@ corrective pass fixed the frontend gaps and a latent job-registration-
 script defect and added deployment-verification coverage for the job's
 registration state; a **second** same-day corrective migration (240)
 then fixed decision 48's date-range keying, verified functionally
-against a disposable local TimescaleDB container. **The job itself
-remains
-unregistered on staging pending separate authorization and a follow-up
-validation pass** — see
-[alerts/README.md](../../07-features/alerts/README.md) for current status.
+against a disposable local TimescaleDB container. **The job was then
+explicitly authorized and registered on staging (2026-09-14) with
+correct configuration, but its first execution FAILED deterministically**
+— a real, newly-discovered defect in already-applied migration 239
+(nested `CALL`/`COMMIT` transaction-control violation in
+`analytics.evaluate_alerts()`), confirmed live and reproduced locally.
+No alert has been or can currently be generated. MVP-7 remains NOT
+functional/released/lifecycle-validated pending a further corrective
+migration — see
+[alerts/README.md](../../07-features/alerts/README.md) for full detail
+and current status.
 See [ADR-017](ADR-017-mvp7-alert-architecture.md) for the architecture that
 resolves the two questions this ADR originally left open.
 Date: 2026-09-14

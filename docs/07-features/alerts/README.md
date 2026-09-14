@@ -42,14 +42,40 @@ table (migration 238), populated by `analytics.run_alert_evaluation_job` —
 a TimescaleDB-native background job (ADR-017, A1), the same mechanism
 already used by `postgres/jobs/69_environment_routing_job.sql` and its
 siblings, registered in `postgres/jobs/238_alert_evaluation_job.sql`.
-**Confirmed by live read-only staging query (2026-09-14): this job is not
-registered on staging** — `analytics.alerts` and
-`analytics.alert_evaluation_candidates` both exist and are empty (0 rows);
-no alert has ever been evaluated. `scripts/verify/verify_jobs.sh` now
-checks this job's registration/enablement/schedule/runtime/retry state on
-every deployment (reported, non-blocking — see
-`scripts/release/post_deploy_verify.sh`), so this state is detected
-automatically going forward rather than requiring a manual live query.
+**Registered on staging 2026-09-14 21:04:04+05:30** (job_id 1127,
+explicitly authorized), config confirmed live via
+`timescaledb_information.jobs`: 1-minute schedule, 5-minute max runtime,
+3 max retries, 1-minute retry period, enabled, registered exactly once —
+`scripts/verify/verify_jobs.sh`'s new MVP-7 section passes all 6 checks.
+**Registered is not executed is not lifecycle-validated**: the job's
+first scheduled run (2026-09-14, same timestamp) executed and **FAILED**
+deterministically —
+`ERROR: invalid transaction termination` (PostgreSQL SQLSTATE `2D000`) —
+confirmed both live (`timescaledb_information.job_errors`) and reproduced
+locally against a disposable TimescaleDB container by invoking
+`CALL analytics.run_alert_evaluation_job(1, '{}'::jsonb)` at the top
+level. **Root cause (confirmed, not hypothesized)**: `analytics.evaluate_alerts()`
+(migration 239) contains explicit `COMMIT` statements, which PostgreSQL
+only permits inside a procedure invoked at the true top level — but it is
+invoked via `CALL analytics.evaluate_alerts();` from *inside*
+`analytics.run_alert_evaluation_job()`, itself a procedure, making
+`evaluate_alerts()` a **nested** call. This is a real defect in
+already-applied migration 239, undetectable by the static contract tests
+or by testing only the job-registration script (`add_job`/`alter_job`)
+in isolation — exactly the live-execution gap ADR-017/this README already
+flagged as untested. It is deterministic, not transient: every future
+1-minute run will fail identically until fixed. `analytics.alerts` and
+`analytics.alert_evaluation_candidates` both remain empty (0 rows) —
+the failure is a full transactional rollback with no partial writes, no
+data corruption. `scripts/verify/verify_jobs.sh` now checks this job's
+registration/enablement/schedule/runtime/retry state on every deployment
+(reported, non-blocking — see `scripts/release/post_deploy_verify.sh`);
+it does not check successful execution, so this deterministic failure is
+NOT yet caught by any automated gate. **Fixing this requires a new
+migration correcting the nested-CALL/COMMIT structure — not performed in
+this pass** (out of scope: registration/verification only, no further
+database changes authorized) — flagged for separate authorization, same
+pattern as migration 240.
 
 **Single source of truth**: `analytics.evaluate_energy_attention_materiality`
 (migration 239) is the canonical server-side implementation of the ±15%
@@ -256,8 +282,25 @@ gaps, the job-registration script's first-registration config defect,
 and (migration 240) the date-range keying defect, and added
 deployment-verification coverage (`scripts/verify/verify_jobs.sh`) so the
 job's registration state is detected automatically on every future
-deployment. **Not yet re-validated**: the job registration step itself
-and a follow-up staging validation pass both remain outstanding, each
-requiring separate explicit authorization before this feature can be
-considered functional on staging. MVP-7 must not be represented as
-functional until both have run.
+deployment.
+
+**Job explicitly authorized and registered on staging 2026-09-14
+21:04:04+05:30** (job_id 1127; correct config confirmed live: 1-minute
+schedule, 5-minute max runtime, 3 max retries, 1-minute retry period,
+enabled, registered exactly once). **Its first execution then FAILED
+deterministically** with `invalid transaction termination` — a real,
+newly-discovered defect in already-applied migration 239 (nested
+`CALL`/`COMMIT` violation in `analytics.evaluate_alerts()`, confirmed by
+both the live staging error and local reproduction — see "Data / API
+dependencies" above for full detail). No alert has been or can currently
+be generated; `analytics.alerts` remains 0 rows with no partial writes.
+**MVP-7 is NOT functional, NOT released, and NOT lifecycle-validated.**
+Three states, kept distinct: the job is **registered** (yes, confirmed
+live); it has **executed** (yes, once, and failed — not merely inferred
+from registration); it is **lifecycle-validated** (no — cannot be while
+every run fails identically). Next required steps, each needing separate
+explicit authorization: a new corrective migration fixing the nested-CALL
+transaction-control defect, then re-verification that the job actually
+runs successfully, only then the broader MVP-7 lifecycle validation
+(qualification/resolution/recurrence/etc.) that was already deferred
+pending a working job.
