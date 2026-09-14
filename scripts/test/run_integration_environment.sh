@@ -217,6 +217,10 @@ echo
 echo "[analytics-api-query-boundary] Running Phase 7 (migration 231) /api/v1 query-boundary assertions..."
 bash "${SCRIPT_DIR}/assert_analytics_api_query_boundary.sh"
 
+echo
+echo "[mvp7-alert-evaluation-job-executes] Running MVP-7 (migration 241) alert-evaluation job live-execution assertions..."
+bash "${SCRIPT_DIR}/assert_mvp7_alert_evaluation_job_executes.sh"
+
 echo "[14/14] Verifying migration ledger..."
 ledger="$(
     docker compose \
