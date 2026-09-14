@@ -100,9 +100,12 @@ staging validation.
   one possible alert per site today, but not exact in principle.
 - **No live database available in this environment** — the SQL migration's
   correctness (beyond static/structural checks and manual review, which
-  did catch and fix one real bug — a `FOUND`-variable scoping error in the
-  lifecycle procedure) has not been exercised against a real TimescaleDB
-  instance locally. Relies on the CI "Database / migration / repository
+  did catch and fix two real bugs in the lifecycle procedure — a `FOUND`-
+  variable scoping error across multiple statements, and an illegal
+  COMMIT/ROLLBACK inside a PL/pgSQL block with an EXCEPTION clause, which
+  would have failed the job's very first run) has not been exercised
+  against a real TimescaleDB instance locally. Relies on the CI "Database
+  / migration / repository
   integration tests" job to validate at the SQL execution level before
   this is considered fully proven.
 
