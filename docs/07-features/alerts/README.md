@@ -35,12 +35,21 @@ time from the condition's stable identity, never a stored counter.
 ## Data / API dependencies
 
 `GET /api/v1/sites/{site_id}/alerts`, `GET /api/v1/alerts/{alert_id}`
-(migration 239). Backed by `analytics.alerts` + the internal
+(migration 239; `get_portal_site_alerts`'s date-range filter corrected by
+migration 240 — see "Known limitations" below). Backed by `analytics.alerts` + the internal
 `analytics.alert_evaluation_candidates` qualification/resolution scratch
 table (migration 238), populated by `analytics.run_alert_evaluation_job` —
 a TimescaleDB-native background job (ADR-017, A1), the same mechanism
 already used by `postgres/jobs/69_environment_routing_job.sql` and its
 siblings, registered in `postgres/jobs/238_alert_evaluation_job.sql`.
+**Confirmed by live read-only staging query (2026-09-14): this job is not
+registered on staging** — `analytics.alerts` and
+`analytics.alert_evaluation_candidates` both exist and are empty (0 rows);
+no alert has ever been evaluated. `scripts/verify/verify_jobs.sh` now
+checks this job's registration/enablement/schedule/runtime/retry state on
+every deployment (reported, non-blocking — see
+`scripts/release/post_deploy_verify.sh`), so this state is detected
+automatically going forward rather than requiring a manual live query.
 
 **Single source of truth**: `analytics.evaluate_energy_attention_materiality`
 (migration 239) is the canonical server-side implementation of the ±15%
@@ -72,10 +81,55 @@ reserves `space_id`/`asset_id` columns; nothing populates them today.
 Backend: `app/tests/test_analytics_api_v1_alerts_routes.py` (route
 contract), `app/tests/test_alert_evaluation_contract.py` (static SQL
 contract — the lifecycle procedure cannot be exercised without a live
-database in this environment). Frontend:
-`web/src/routes/alerts/AlertsArea.test.tsx`. See this session's
-implementation report for the full test/typecheck/lint/build results and
-staging validation.
+database in this environment), `app/tests/test_alert_date_filter_state_keying_contract.py`
+(migration 240's static SQL contract). Frontend:
+`web/src/routes/alerts/AlertsArea.test.tsx`.
+
+**Staging post-deploy validation (2026-09-14): FAIL.** Live, read-only
+verification against the deployed staging revision found: migrations 238
+and 239 applied correctly; all five alert functions present; both alert
+API endpoints reachable and correctly enforcing `_require_portal_user`
+authentication (401 without credentials); but the alert-evaluation
+TimescaleDB job was not registered (confirmed by direct query — see "Data
+/ API dependencies" above), so no alert has ever been generated, and the
+deployed frontend detail view was missing hierarchy context and
+threshold/reference and showed resolved fields in the wrong order (ADR-016
+decision 11). This is a live-verification result, not an inference from
+code — see this session's staging validation report for the full
+evidence-rich matrix (deployment revision, migration timestamps, job
+listing, API responses).
+
+**Same-day corrective pass**, verified as follows (no staging/production
+access): the job-registration script's first-registration config defect
+(see "Known limitations" below) was fixed and verified against a
+disposable local TimescaleDB container (not staging) — one execution of
+the corrected `postgres/jobs/238_alert_evaluation_job.sql` now leaves the
+job with the full intended `schedule_interval`/`max_runtime`/
+`max_retries`/`retry_period` configuration, confirmed by querying
+`timescaledb_information.jobs`; a second execution confirmed the
+idempotent path still leaves exactly one job registered. The frontend
+fixes were verified by `npx tsc --noEmit` (clean), `npx eslint . --max-warnings 0`
+(clean), the full frontend suite (`npx vitest run`: 218/218 passed across
+32 files, including 4 new/updated MVP-7 tests), and `npm run build`
+(clean). Backend: `test_alert_evaluation_contract.py` and
+`test_analytics_api_v1_alerts_routes.py` (28/28) unaffected and still
+passing (no backend Python code changed this pass).
+
+**Second same-day corrective fix — migration 240 (date-range state
+keying).** `app/tests/test_alert_date_filter_state_keying_contract.py`
+(9/9 passed) plus the unaffected 28/28 above (38/38 total). Also verified
+functionally against a disposable local TimescaleDB container (not
+staging): migrations 238, 239, and 240 applied cleanly in sequence
+against stub `metadata.sites`/`spaces`/`assets` tables and an
+`admin.portal_user_can_access_site` stub; three fixture alerts (Active
+triggered January 2026, Resolved and Ended both triggered in 2025 but
+resolved/ended in January 2026) were inserted directly, then
+`get_portal_site_alerts` was called with a January-2026 `from`/`to`
+range per state — the Resolved and Ended rows were correctly returned
+(found via `resolved_at`/`ended_at`, not `triggered_at`), and a control
+query with a 2025 range for the Resolved state correctly returned zero
+rows (proving the old unconditional-`triggered_at` bug is gone, not just
+that the new code compiles).
 
 ## Known limitations / deviations (this implementation pass)
 
@@ -92,6 +146,25 @@ staging validation.
   34) — only persisted trigger/resolved values are shown.
 - **Space/Asset cascading filters are not implemented** — no Space/Asset
   condition exists yet to filter by.
+- ~~The date-range filter (`from`/`to`) was keyed to triggered time for all
+  three tabs.~~ **Fixed by migration 240 (2026-09-14).** ADR-016 decision 48
+  specifies resolved time for the Resolved tab and ended time for the Ended
+  tab; `analytics.get_portal_site_alerts` (migration 239) filtered
+  `triggered_at` unconditionally regardless of `p_state`. Discovered during
+  the same-day corrective pass, deliberately deferred rather than editing
+  already-applied migration 239. Migration 240 `CREATE OR REPLACE`s the
+  function with the same signature/return shape, now keying `p_from`/`p_to`
+  on each row's own state (`triggered_at` for ACTIVE, `resolved_at` for
+  RESOLVED, `ended_at` for ENDED); the infinite-scroll cursor (`p_before`)
+  and ordering remain `triggered_at`-based (a pagination concern, not the
+  date-range filter). `analytics.get_portal_alert_detail` was never
+  affected — it takes no `p_from`/`p_to` (single-row lookup by
+  `alert_id`). Verified functionally against a disposable local
+  TimescaleDB container (not staging): a Resolved alert triggered in 2025
+  but resolved in January 2026 is correctly returned by a January-2026
+  query and correctly absent from a 2025 query — see
+  `app/tests/test_alert_date_filter_state_keying_contract.py` for the
+  static contract and this session's report for the live local evidence.
 - **"Load more" is button-triggered, not scroll-triggered** — the
   no-traditional-pagination substance of ADR-016 decision 47 is preserved;
   the trigger mechanism is simplified.
@@ -127,10 +200,29 @@ staging validation.
   registered; **the job registration
   (`postgres/jobs/238_alert_evaluation_job.sql`) itself still requires a
   separate, explicitly-authorized manual step against the live database**
-  — not performed in this pass, consistent with this repository's
-  staging-safety practice (`CLAUDE.md` §4) and prior precedent in this
-  project. **Alerts will not actually be evaluated on staging until that
-  step runs.**
+  — not performed in this pass or in the 2026-09-14 corrective pass that
+  followed, consistent with this repository's staging-safety practice
+  (`CLAUDE.md` §4) and prior precedent in this project. **Confirmed by live
+  staging query (2026-09-14): the job is not registered and no alert has
+  ever been evaluated on staging.**
+- **First-registration config defect in
+  `postgres/jobs/238_alert_evaluation_job.sql`, fixed 2026-09-14 (before the
+  job has ever been registered anywhere).** `add_job()` has no
+  `max_runtime`/`max_retries`/`retry_period` parameters (TimescaleDB API) —
+  only `alter_job()` does. The original file set these only in its
+  `ELSE`/`alter_job` branch (mirroring every sibling routing-job file in
+  `postgres/jobs/`), so a job's true first registration would have silently
+  run under TimescaleDB's own defaults until the file was executed a second
+  time. The `IF` branch now calls `alter_job()` immediately on the job
+  `add_job()` just created, so the intended configuration applies from the
+  very first registration. Verified against a disposable local TimescaleDB
+  container (not staging): one execution leaves
+  `schedule_interval=1min, max_runtime=5min, max_retries=3,
+  retry_period=1min` fully applied; a second execution confirms the
+  `ELSE`/`alter_job` idempotent path still leaves exactly one job
+  registered. The sibling routing-job files (`42_*`, `48_*`, `69_*`, `70_*`,
+  `74_*`) have the same first-registration gap and were **not** touched by
+  this pass (out of scope — flagged, not silently fixed).
 - **No live database available in this environment** — the SQL migration's
   correctness (beyond static/structural checks and manual review, which
   did catch and fix two real bugs in the lifecycle procedure — a `FOUND`-
@@ -140,9 +232,32 @@ staging validation.
   against a real TimescaleDB instance locally. Relies on the CI "Database
   / migration / repository
   integration tests" job to validate at the SQL execution level before
-  this is considered fully proven.
+  this is considered fully proven. (The 2026-09-14 corrective pass did
+  exercise `postgres/jobs/238_alert_evaluation_job.sql`'s registration
+  mechanics, and separately migration 240's `get_portal_site_alerts`
+  redefinition with fixture data, against disposable local TimescaleDB
+  containers — see "Validation" above — but neither covers
+  `analytics.evaluate_alerts()`'s lifecycle logic itself.)
 
 ## Release status
 
-**IMPLEMENTED, staging validation pending** — see this session's
-implementation report for exact test/build/deploy status.
+**IMPLEMENTED, DEPLOYED TO STAGING, STAGING VALIDATION FAILED (2026-09-14).**
+Root cause: the alert-evaluation TimescaleDB job was never registered
+(deliberately, pending a separate authorized step — see "Known
+limitations"), so no alert has ever been generated on staging; the
+deployed frontend also had real gaps against ADR-016 decision 11/48
+(missing hierarchy context and threshold/reference, reversed Resolved
+field order, no Condition/Metric/date-range/Apply-Clear filtering UI;
+the date-range filter was also found, separately, to key on
+`triggered_at` unconditionally instead of per-tab per ADR-016 decision
+48). A same-day corrective pass (branch
+`fix/mvp7-alert-job-config-and-adr016-corrections`) fixed the frontend
+gaps, the job-registration script's first-registration config defect,
+and (migration 240) the date-range keying defect, and added
+deployment-verification coverage (`scripts/verify/verify_jobs.sh`) so the
+job's registration state is detected automatically on every future
+deployment. **Not yet re-validated**: the job registration step itself
+and a follow-up staging validation pass both remain outstanding, each
+requiring separate explicit authorization before this feature can be
+considered functional on staging. MVP-7 must not be represented as
+functional until both have run.

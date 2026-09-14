@@ -1,9 +1,23 @@
 # ADR-017: MVP-7 Alert architecture — evaluation mechanism (A1) and domain concept (B1)
 
 Status: **Decided (architecture) and implemented** — ratified and built
-2026-09-14, staging validation pending. See this session's implementation
-report for exact migrations, API/frontend changes, test results, and
-staging status.
+2026-09-14, deployed to staging 2026-09-14. Staging post-deploy validation
+performed 2026-09-14: **FAIL** (alert-evaluation TimescaleDB job not
+registered; frontend detail/filtering gaps against ADR-016 decision 11/48).
+A same-day corrective pass addressed the frontend gaps and a
+first-registration config defect in
+`postgres/jobs/238_alert_evaluation_job.sql`, and extended
+`scripts/verify/verify_jobs.sh` to detect the job's registration state on
+every future deployment. A second same-day corrective migration (240)
+then fixed `get_portal_site_alerts`'s date-range filter, which had keyed
+`p_from`/`p_to` on `triggered_at` unconditionally instead of per-state
+(ADR-016 decision 48) — `CREATE OR REPLACE FUNCTION` with the same
+signature, verified functionally against a disposable local TimescaleDB
+container rather than by editing already-applied migration 239. **The
+job registration step itself remains
+deliberately not performed** pending separate explicit authorization — see
+[07-features/alerts/README.md](../../07-features/alerts/README.md) for
+current status and evidence.
 Date: 2026-09-14
 Decision owners: Product/Architecture (ratification of the two options
 identified in this session's architecture investigation brief)
