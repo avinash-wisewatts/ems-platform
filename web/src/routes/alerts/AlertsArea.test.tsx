@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { screen, waitFor, fireEvent } from "@testing-library/react";
+import { screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { AlertsArea } from "./AlertsArea";
 import { renderWithProviders, stubFetch, SITES_ONE } from "../../test-utils";
 
@@ -40,7 +40,10 @@ describe("AlertsArea (MVP-7, ADR-016/ADR-017)", () => {
 
     await waitFor(() => expect(screen.getByTestId("alert-list")).toBeTruthy());
     expect(screen.getByTestId("alerts-tab-active")).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByText("Energy consumption deviation")).toBeTruthy();
+    // Scoped to the list item -- the Condition/Metric filter (ADR-016 decision
+    // 48) also renders this same label as its one real option.
+    const { getByText } = within(screen.getByTestId("alert-list"));
+    expect(getByText("Energy consumption deviation")).toBeTruthy();
   });
 
   it("shows a good empty state, not an error, when there are no active alerts", async () => {
@@ -129,6 +132,81 @@ describe("AlertsArea (MVP-7, ADR-016/ADR-017)", () => {
 
     await waitFor(() => expect(screen.getByTestId("alert-detail")).toBeTruthy());
     expect(screen.getByTestId("alert-recurrence")).toHaveTextContent("Previous occurrences: 2");
+    // ADR-016 decision 48: hierarchy context and threshold/reference are
+    // required detail fields.
+    const detail = screen.getByTestId("alert-detail");
+    expect(within(detail).getByTestId("hierarchy-crumb")).toHaveTextContent("Alpha One");
+    expect(detail.textContent).toContain("Threshold/reference");
+    expect(detail.textContent).toContain("15% deviation from typical historical consumption");
+  });
+
+  it("Resolved detail shows resolution value before resolved time (ADR-016 decision 48 order)", async () => {
+    stubFetch((url) => {
+      if (url.includes(`/api/v1/sites/${SITE_ID}/alerts`)) {
+        return {
+          jsonBody: {
+            site_id: SITE_ID,
+            alerts: [
+              alertFixture({
+                state: "RESOLVED",
+                resolved_at: "2026-09-14T11:00:00Z",
+                resolved_value: 90.1,
+              }),
+            ],
+          },
+        };
+      }
+      if (url.includes("/api/v1/alerts/33333333-3333-4333-8333-333333333333")) {
+        return {
+          jsonBody: alertFixture({
+            state: "RESOLVED",
+            resolved_at: "2026-09-14T11:00:00Z",
+            resolved_value: 90.1,
+          }),
+        };
+      }
+      return { status: 404, jsonBody: { error: "not_found", detail: "unexpected" } };
+    });
+
+    renderWithProviders(<AlertsArea />, { sites: () => Promise.resolve(SITES_ONE) });
+    fireEvent.click(await screen.findByTestId("alerts-tab-resolved"));
+    await waitFor(() => expect(screen.getByTestId("alert-list")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("alert-item-33333333-3333-4333-8333-333333333333"));
+
+    await waitFor(() => expect(screen.getByTestId("alert-detail")).toBeTruthy());
+    const labels = within(screen.getByTestId("alert-detail"))
+      .getAllByRole("term")
+      .map((dt) => dt.textContent);
+    expect(labels.indexOf("Resolution value")).toBeLessThan(labels.indexOf("Resolved"));
+  });
+
+  it("Condition/Metric and date-range filters apply and clear (ADR-016 decision 48)", async () => {
+    const requestedUrls: string[] = [];
+    stubFetch((url) => {
+      requestedUrls.push(url);
+      return { jsonBody: { site_id: SITE_ID, alerts: [alertFixture()] } };
+    });
+
+    renderWithProviders(<AlertsArea />, { sites: () => Promise.resolve(SITES_ONE) });
+    await waitFor(() => expect(screen.getByTestId("alert-list")).toBeTruthy());
+
+    fireEvent.change(screen.getByTestId("alerts-filter-condition"), { target: { value: CONDITION_KEY } });
+    fireEvent.change(screen.getByTestId("alerts-filter-from"), { target: { value: "2026-01-01" } });
+    fireEvent.change(screen.getByTestId("alerts-filter-to"), { target: { value: "2026-02-01" } });
+    fireEvent.click(screen.getByTestId("alerts-apply-filters"));
+
+    await waitFor(() =>
+      expect(requestedUrls.some((u) => u.includes(`condition_key=${encodeURIComponent(CONDITION_KEY)}`))).toBe(true),
+    );
+    expect(requestedUrls.some((u) => u.includes("from=2026-01-01") && u.includes("to=2026-02-01"))).toBe(true);
+
+    fireEvent.click(screen.getByTestId("alerts-clear-filters"));
+
+    await waitFor(() =>
+      expect(requestedUrls[requestedUrls.length - 1]).not.toContain(
+        `condition_key=${encodeURIComponent(CONDITION_KEY)}`,
+      ),
+    );
   });
 
   it("never exposes internal identifiers in the rendered list or detail", async () => {
