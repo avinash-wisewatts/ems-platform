@@ -17,24 +17,42 @@ container rather than by editing already-applied migration 239. **The
 job was then explicitly authorized and registered on staging
 (2026-09-14, job_id 1127) with correct config, but every execution
 FAILED (3/3 runs)** with `invalid transaction termination`
-(SQLSTATE `2D000`) — PostgreSQL forbids the `COMMIT` statements inside
-`analytics.evaluate_alerts()` (migration 239) when that procedure is
-invoked via a **nested** `CALL` (from inside `run_alert_evaluation_job()`,
-itself called by the TimescaleDB job executor) rather than at the top
-level. The specific failing statement is the per-site `COMMIT` at
-migration file line 404 (inside `FOR v_site IN ... LOOP`, reached on the
-first site with ≥1 active site present), not the retention-DELETE
-`COMMIT` at line 412, which is never reached. Confirmed via
-`timescaledb_information.job_errors` on staging (error code/message
-only — TimescaleDB does not retain the CONTEXT stack there) and pinpointed
-by local reproduction with a real deployed-identical function body
-(`pg_get_functiondef`) and a fixture site row, matching staging's actual
-data shape. Deterministic — every future run would fail identically until
-fixed by a new corrective migration (not designed, authorized, or
-implemented — root cause only). **The job was explicitly authorized and
-disabled on staging** (`scheduled = false`; still registered, config
+(SQLSTATE `2D000`) — PostgreSQL forbids `COMMIT`/`ROLLBACK` inside a
+procedure that is `SECURITY DEFINER` or has a `SET`-configuration clause,
+in **any** calling context, top-level or nested; `analytics.evaluate_alerts()`
+(migration 239) has both. An earlier investigation pass attributed this
+to nesting (`run_alert_evaluation_job()` → `CALL evaluate_alerts()`)
+alone — **corrected**: isolated reproduction showed nesting alone does
+not cause the failure, while `SECURITY DEFINER` alone or the `SET` clause
+alone, even called at the true top level, each independently do. The
+specific failing statement is the per-site `COMMIT` at migration file
+line 404 (inside `FOR v_site IN ... LOOP`, reached on the first site with
+≥1 active site present), not the retention-DELETE `COMMIT` at line 412,
+which is never reached. Confirmed via `timescaledb_information.job_errors`
+on staging (error code/message only — TimescaleDB does not retain the
+CONTEXT stack there) and pinpointed by local reproduction with a real
+deployed-identical function body (`pg_get_functiondef`) and a fixture
+site row, matching staging's actual data shape. Deterministic — every
+future run would fail identically. **The job was explicitly authorized
+and disabled on staging** (`scheduled = false`; still registered, config
 intact; confirmed no further executions) to stop the recurring failures.
-See
+
+**A third same-day corrective migration (241)** removes
+`SECURITY DEFINER`/`SET search_path` from `evaluate_alerts()` — the same
+body otherwise, `analytics.run_alert_evaluation_job()` and the job
+registration SQL unchanged (consistent with the existing repository
+convention: every other TimescaleDB job wrapper in this codebase also
+nests a `CALL` to a separate business-logic procedure; that pattern was
+never the defect). Neither removed property was load-bearing: job 1127's
+owner (confirmed live) is `ems_admin`, the same role that already owns
+`evaluate_alerts()` and its tables; every reference in the body is
+already schema-qualified. **Implemented and tested locally — including a
+live-execution integration test
+(`scripts/test/assert_mvp7_alert_evaluation_job_executes.sh`) against a
+disposable TimescaleDB database, proving the real, unmodified
+`run_alert_evaluation_job()` → `evaluate_alerts()` path now executes
+without error — but NOT yet deployed to staging or production; job 1127
+remains disabled.** See
 [07-features/alerts/README.md](../../07-features/alerts/README.md) for
 full detail and current status.
 Date: 2026-09-14

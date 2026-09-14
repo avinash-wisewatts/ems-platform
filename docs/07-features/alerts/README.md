@@ -58,58 +58,62 @@ waiting past a full schedule interval, `total_runs` unchanged at 3 with
 no new `last_run_started_at`) — the job remains **registered** (row
 exists, correct config) but is **not currently scheduled to run**.
 
-**Root cause (confirmed by reproduction, not hypothesized), precise
-location identified**: `analytics.evaluate_alerts()` (migration 239) is
-invoked via `CALL analytics.evaluate_alerts();` (migration file line 435)
-from *inside* `analytics.run_alert_evaluation_job()` (migration file line
-426) — itself called by the TimescaleDB job executor. PostgreSQL permits
-`COMMIT`/`ROLLBACK` inside a procedure only when that procedure is
-invoked at the true top level; `evaluate_alerts()` is one level nested,
-making every `COMMIT` inside it illegal. Deployed `pg_get_functiondef()`
-output confirmed byte-identical to the migration 239 source (no drift).
-The **specific statement that actually fails on staging** is the
-**per-site `COMMIT;` at migration file line 404** — immediately after the
-per-site `BEGIN ... EXCEPTION WHEN OTHERS ... END;` block, inside
-`FOR v_site IN ... LOOP`, reached unconditionally on every site
-regardless of that site's own success/failure (by the procedure's own
-design comment, "reached on every path"). With ≥1 active site (staging
-has 3), this per-site `COMMIT` is hit on the very first loop iteration,
-well before the retention-DELETE `COMMIT` at line 412 is ever reached —
-confirmed by local reproduction with one fixture site row, which produced
-the identical `CONTEXT: PL/pgSQL function evaluate_alerts() line 206 at
-COMMIT` / `SQL statement "CALL analytics.evaluate_alerts()"` /
-`PL/pgSQL function analytics.run_alert_evaluation_job(integer,jsonb) line
-3 at CALL` stack (line numbers there are `pg_get_functiondef`-relative,
-not migration-file-relative). Staging's own
-`timescaledb_information.job_errors` does not retain this CONTEXT detail
-(TimescaleDB's background-job error tracking records only
-`sqlerrcode`/`err_message`, and these failures are not written to the
-PostgreSQL server log at the container's default log level) — the exact
-statement/line was established via local reproduction against a
-disposable TimescaleDB container with the exact deployed procedure
-bodies (fetched live via `pg_get_functiondef` and confirmed identical),
-not by directly reading a staging stack trace. This is a real defect in
-already-applied migration 239, undetectable by the static contract tests
-or by testing only the job-registration script (`add_job`/`alter_job`)
-in isolation — exactly the live-execution gap ADR-017/this README already
-flagged as untested. It is fully deterministic (3/3 identical failures on
-real data, further confirmed by two independent local reproductions):
-every future run will fail identically at the same statement until
-fixed. `analytics.alerts` and `analytics.alert_evaluation_candidates`
-both remain empty (0 rows) throughout — each failure is a full
-transactional rollback (the `BEGIN...EXCEPTION...END` block's own
-savepoint rolls back on the per-site exception path, and the illegal
-`COMMIT` itself aborts before committing anything), no partial writes, no
-data corruption. `scripts/verify/verify_jobs.sh` checks registration/
-config state, not successful execution, so this failure was NOT caught by
-any automated gate. **Fixing this requires a new migration restructuring
-the nested-CALL/COMMIT relationship (e.g. making `evaluate_alerts()` the
-job's direct entrypoint instead of wrapping it in a second procedure, or
-removing the intermediate `COMMIT`s in favor of a mechanism valid at this
-call depth) — not performed or further investigated beyond root-cause
-identification in this pass**, per explicit instruction: investigate and
-disable only, do not fix. Flagged for separate authorization, same
-corrective-migration pattern as migration 240.
+**Root cause — confirmed by reproduction, precise location identified,
+revised from an earlier, incomplete diagnosis (below).** `analytics.evaluate_alerts()`
+(migration 239) is declared `SECURITY DEFINER` and
+`SET search_path TO pg_catalog, analytics, admin`. PostgreSQL forbids
+`COMMIT`/`ROLLBACK` inside a procedure with **either** property, in
+**any** calling context — top level or nested. An earlier investigation
+pass attributed the failure to nesting alone (`evaluate_alerts()` being
+called via `CALL analytics.evaluate_alerts();` from *inside*
+`analytics.run_alert_evaluation_job()`) — **that was incomplete**: a
+follow-up deep-dive isolated the variables empirically (disposable local
+TimescaleDB containers) and found nesting alone is *not* sufficient to
+cause the failure (a plain nested `CALL` to a committing procedure with
+neither property succeeds); `SECURITY DEFINER` alone, even called at the
+true top level, *is* sufficient; the `SET` clause alone, even at the top
+level, *is* also independently sufficient. The **specific statement that
+actually fails on staging** is the **per-site `COMMIT;` at migration file
+line 404** — immediately after the per-site
+`BEGIN ... EXCEPTION WHEN OTHERS ... END;` block, inside
+`FOR v_site IN ... LOOP`, reached unconditionally on every site. With ≥1
+active site (staging has 3), this fires on the very first loop iteration,
+well before the retention-DELETE `COMMIT` at line 412 is ever reached.
+Deployed `pg_get_functiondef()` output confirmed byte-identical to the
+migration 239 source throughout (no drift). Staging's own
+`timescaledb_information.job_errors` retains only `sqlerrcode`/
+`err_message`, not a `CONTEXT` stack (and these failures are not written
+to the PostgreSQL server log at the container's default level) — the
+exact statement/line and the `SECURITY DEFINER`/`SET`-clause mechanism
+were both established via local reproduction against disposable
+TimescaleDB containers running the exact deployed procedure bodies, not
+by directly reading a staging stack trace. Neither removed property was
+load-bearing: job 1127's `owner` is `ems_admin` (confirmed live,
+read-only query) — the same role that owns `evaluate_alerts()` and the
+tables it touches, so `SECURITY DEFINER` never actually elevated
+privilege on this call path; every table/function reference in the body
+is already schema-qualified, so the `SET` clause was not load-bearing for
+correctness either. This is a real defect in already-applied migration
+239, undetectable by the static contract tests or by testing only the
+job-registration script (`add_job`/`alter_job`) in isolation — exactly
+the live-execution gap ADR-017/this README already flagged as untested.
+It was fully deterministic (3/3 identical failures on real data, further
+confirmed by multiple independent local reproductions).
+
+**Fixed by migration 241 (implemented and tested locally; NOT yet
+deployed to staging — see "Release status").** `CREATE OR REPLACE PROCEDURE analytics.evaluate_alerts()`
+with the exact same body, removing only `SECURITY DEFINER` and the `SET`
+clause. `analytics.run_alert_evaluation_job()`, the job registration SQL,
+job 1127's registration/configuration (still explicitly disabled), the
+alert schema, API contracts, and alert lifecycle semantics are all
+unchanged. Verified locally: the real, unmodified `run_alert_evaluation_job()`
+→ `evaluate_alerts()` nested-`CALL` path now succeeds against a
+disposable TimescaleDB container; a new live-execution integration test
+(`scripts/test/assert_mvp7_alert_evaluation_job_executes.sh`) proves this
+via `CALL analytics.run_alert_evaluation_job(1, '{}'::jsonb)` against the
+CI disposable database, exercising both the retention `COMMIT` (always)
+and the per-site `COMMIT` (with a guaranteed fixture site) — see
+"Validation" below for full results.
 
 **Single source of truth**: `analytics.evaluate_energy_attention_materiality`
 (migration 239) is the canonical server-side implementation of the ±15%
@@ -142,7 +146,10 @@ Backend: `app/tests/test_analytics_api_v1_alerts_routes.py` (route
 contract), `app/tests/test_alert_evaluation_contract.py` (static SQL
 contract — the lifecycle procedure cannot be exercised without a live
 database in this environment), `app/tests/test_alert_date_filter_state_keying_contract.py`
-(migration 240's static SQL contract). Frontend:
+(migration 240's static SQL contract), `app/tests/test_alert_evaluation_transaction_control_fix_contract.py`
+(migration 241's static SQL contract). Live execution:
+`scripts/test/assert_mvp7_alert_evaluation_job_executes.sh` (real
+TimescaleDB, not static text). Frontend:
 `web/src/routes/alerts/AlertsArea.test.tsx`.
 
 **Staging post-deploy validation (2026-09-14): FAIL.** Live, read-only
@@ -190,6 +197,32 @@ range per state — the Resolved and Ended rows were correctly returned
 query with a 2025 range for the Resolved state correctly returned zero
 rows (proving the old unconditional-`triggered_at` bug is gone, not just
 that the new code compiles).
+
+**Third corrective fix — migration 241 (transaction-control defect,
+`SECURITY DEFINER`/`SET search_path` on `evaluate_alerts()`). Implemented
+and tested locally; NOT yet deployed to staging.**
+`app/tests/test_alert_evaluation_transaction_control_fix_contract.py`
+(7/7 passed; static contract, plus the unaffected 38/38 above — 45/45
+total). **Live-execution proof, not just static text**: the new
+`scripts/test/assert_mvp7_alert_evaluation_job_executes.sh` was run
+against the real disposable TimescaleDB test database
+(`compose.test.yaml`, not the ad hoc containers used for migrations
+238-240's local checks), through the actual deployment path
+(`scripts/test/deploy_test_database.sh` +
+`scripts/test/apply_test_migrations.sh`, not a hand-built stub schema).
+Result: `CALL analytics.run_alert_evaluation_job(1, '{}'::jsonb)`
+succeeded with no exception, both as a baseline call (exercising the
+retention `COMMIT` unconditionally) and with a fixture active site
+present (exercising the per-site `COMMIT` — the exact statement that
+failed on staging). The full `scripts/test/run_integration_environment.sh`
+suite (all 30+ existing assertions plus this new one, in sequence) passed
+end-to-end, exit code 0 — confirming the new assertion's insertion point
+and fixture cleanup do not disturb any other test. Migration-apply
+idempotency independently confirmed: re-running
+`scripts/test/apply_test_migrations.sh` reported
+`SKIP 241_mvp7_alert_evaluation_transaction_control_fix (applied)` — the
+standard checksum-guard correctly recognizes it as already applied, no
+re-execution, no duplicate, no error.
 
 ## Known limitations / deviations (this implementation pass)
 
@@ -283,7 +316,20 @@ that the new code compiles).
   registered. The sibling routing-job files (`42_*`, `48_*`, `69_*`, `70_*`,
   `74_*`) have the same first-registration gap and were **not** touched by
   this pass (out of scope — flagged, not silently fixed).
-- **No live database available in this environment** — the SQL migration's
+- ~~`analytics.evaluate_alerts()`'s `COMMIT` statements were illegal
+  (SQLSTATE `2D000`), so job 1127 failed on every execution once
+  registered on staging.~~ **Fixed by migration 241 — implemented and
+  tested locally, NOT yet deployed to staging.** Root cause:
+  `SECURITY DEFINER` and a `SET search_path` clause on `evaluate_alerts()`
+  (migration 239) — PostgreSQL forbids transaction control inside a
+  procedure with either property, in any calling context. Neither was
+  load-bearing (job runs as `ems_admin`, the procedure's own owner; every
+  reference is schema-qualified) — see "Data / API dependencies" above for
+  the full root-cause account and "Validation" below for local test
+  evidence. **Staging job 1127 remains explicitly disabled** — this fix
+  has not been deployed or executed there.
+- **No live database available in this environment (for most of this
+  session)** — the SQL migration's
   correctness (beyond static/structural checks and manual review, which
   did catch and fix two real bugs in the lifecycle procedure — a `FOUND`-
   variable scoping error across multiple statements, and an illegal
@@ -292,12 +338,16 @@ that the new code compiles).
   against a real TimescaleDB instance locally. Relies on the CI "Database
   / migration / repository
   integration tests" job to validate at the SQL execution level before
-  this is considered fully proven. (The 2026-09-14 corrective pass did
+  this is considered fully proven. (The 2026-09-14 corrective passes did
   exercise `postgres/jobs/238_alert_evaluation_job.sql`'s registration
-  mechanics, and separately migration 240's `get_portal_site_alerts`
-  redefinition with fixture data, against disposable local TimescaleDB
-  containers — see "Validation" above — but neither covers
-  `analytics.evaluate_alerts()`'s lifecycle logic itself.)
+  mechanics, migration 240's `get_portal_site_alerts` redefinition with
+  fixture data, and — via migration 241's live-execution integration test,
+  `scripts/test/assert_mvp7_alert_evaluation_job_executes.sh` — that
+  `evaluate_alerts()` now *executes* without error, against disposable
+  local TimescaleDB containers; see "Validation" above. None of this
+  exercises the qualification/resolution/recurrence *timing* semantics
+  themselves — proving the procedure runs cleanly is not the same as
+  lifecycle-validating what it produces over multiple evaluation cycles.)
 
 ## Release status
 
@@ -323,25 +373,40 @@ deployment.
 schedule, 5-minute max runtime, 3 max retries, 1-minute retry period,
 registered exactly once). **Every execution FAILED deterministically**
 (3/3 runs, 0 successes) with `invalid transaction termination` — a real,
-newly-discovered defect in already-applied migration 239 (nested
-`CALL`/`COMMIT` violation in `analytics.evaluate_alerts()`, root-caused
-and pinpointed to the exact failing statement by both the live staging
-error record and local reproduction — see "Data / API dependencies"
-above for full detail). No alert has been or can currently be generated;
+newly-discovered defect in already-applied migration 239
+(`analytics.evaluate_alerts()`'s `COMMIT` statements are illegal because
+the procedure is `SECURITY DEFINER` and has a `SET search_path` clause —
+see "Data / API dependencies" above for the full root-cause account,
+including the correction of an earlier, incomplete "nesting is the cause"
+diagnosis). No alert has been or can currently be generated;
 `analytics.alerts` remains 0 rows with no partial writes. **Explicitly
 authorized: the job was then disabled on staging** (`scheduled = false`,
 confirmed live; still registered, config intact; confirmed no further
 executions after disabling) **to stop the recurring failures** while root
-cause was investigated. **MVP-7 is NOT functional, NOT released, and NOT
-lifecycle-validated.** Four states, kept distinct: the job is
-**registered** (yes); it has **executed** (yes, 3 times, all failed —
-not merely inferred from registration); it is currently **enabled**
-(no — deliberately disabled after the investigation); it is
-**lifecycle-validated** (no — cannot be until the execution defect is
-fixed and the job successfully runs). Next required steps, each needing
-separate explicit authorization: a new corrective migration fixing the
-nested-CALL transaction-control defect (not designed or implemented in
-this pass — root cause only), re-enabling the job, verification that it
-actually runs successfully, and only then the broader MVP-7 lifecycle
-validation (qualification/resolution/recurrence/etc.) that was already
-deferred pending a working job.
+cause was investigated.
+
+**Migration 241 (the fix) is now implemented and tested locally — it has
+NOT been deployed to staging and staging job 1127 remains disabled.**
+**MVP-7 is NOT functional, NOT released, and NOT lifecycle-validated.**
+Five states, kept distinct and none conflated:
+- **Implemented**: yes — migration 241 exists, on branch
+  `fix/mvp7-alert-evaluation-transaction-control`, not yet merged.
+- **Tested locally**: yes — static contract (7/7) and, critically, a real
+  live-execution integration test against the disposable CI-equivalent
+  TimescaleDB database (not staging) — see "Validation" above.
+- **Deployed**: **no** — migration 241 has not been applied to staging or
+  production.
+- **Operational**: **no** — staging job 1127 remains explicitly disabled
+  (`scheduled = false`); it has not been re-enabled, and it must not be
+  re-enabled or claimed to be operational until migration 241 is actually
+  deployed and executed there.
+- **Lifecycle-validated**: **no** — proving the procedure now *executes*
+  without error is not the same as validating what it *produces* over
+  real qualification/resolution/recurrence cycles; that broader MVP-7
+  lifecycle validation remains deferred pending a working, deployed,
+  re-enabled job.
+
+Next required steps, each needing separate explicit authorization: deploy
+migration 241 to staging, re-enable job 1127, confirm it executes
+successfully there, and only then perform the broader MVP-7 lifecycle
+validation.
