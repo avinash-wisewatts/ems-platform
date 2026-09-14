@@ -264,6 +264,41 @@ class EnergyTypicalReferenceResponse(BaseModel):
     windows: list[EnergyTypicalReferenceWindow]
 
 
+class AlertSummary(BaseModel):
+    """MVP-7 Basic Alerts (ADR-016/ADR-017). One row per alert occurrence,
+    from analytics.get_portal_site_alerts / get_portal_alert_detail
+    (migration 239). previous_occurrence_count /
+    most_recent_previous_occurrence_at are derived at read time by the SQL
+    function -- never a stored counter (ADR-016 decision 25: an expiring
+    90-day-old occurrence must silently lower the count on its own).
+
+    Known scope reduction (this pass): does not include a live "latest
+    value" re-fetch (ADR-016 decision 34) -- only the persisted
+    trigger_value / resolved_value are returned. Flagged in the
+    implementation report, not silently omitted."""
+
+    alert_id: UUID
+    site_id: UUID
+    space_id: UUID | None = None
+    asset_id: UUID | None = None
+    condition_key: str
+    metric: str
+    state: str
+    triggered_at: datetime
+    trigger_value: float
+    resolved_at: datetime | None = None
+    resolved_value: float | None = None
+    ended_at: datetime | None = None
+    ended_reason: str | None = None
+    previous_occurrence_count: int
+    most_recent_previous_occurrence_at: datetime | None = None
+
+
+class AlertListResponse(BaseModel):
+    site_id: UUID
+    alerts: list[AlertSummary]
+
+
 class SpaceSummary(BaseModel):
     """Slice 0 (Hierarchy Foundation). Identity + placement only -- no
     environmental snapshot, no comfort-target metadata (both out of scope
@@ -705,6 +740,79 @@ async def fetch_site_energy_typical_reference(
         ORDER BY window_index
         """,
         (portal_user_id, str(site_id), dt_from, dt_to),
+    )
+
+
+async def fetch_site_alerts(
+    *,
+    portal_user_id: int,
+    site_id: UUID,
+    state: str | None = None,
+    condition_key: str | None = None,
+    dt_from: datetime | None = None,
+    dt_to: datetime | None = None,
+    limit: int = 50,
+    before: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """MVP-7. Reads analytics.get_portal_site_alerts (migration 239)."""
+
+    return await _read_rows(
+        """
+        SELECT
+            alert_id, site_id, space_id, asset_id, condition_key, metric, state,
+            triggered_at, trigger_value, resolved_at, resolved_value, ended_at, ended_reason,
+            previous_occurrence_count, most_recent_previous_triggered_at
+        FROM analytics.get_portal_site_alerts(%s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            portal_user_id,
+            str(site_id),
+            state,
+            condition_key,
+            dt_from,
+            dt_to,
+            limit,
+            before,
+        ),
+    )
+
+
+async def fetch_alert_detail(
+    *, portal_user_id: int, alert_id: UUID
+) -> list[dict[str, Any]]:
+    """MVP-7. Reads analytics.get_portal_alert_detail (migration 239)."""
+
+    return await _read_rows(
+        """
+        SELECT
+            alert_id, site_id, space_id, asset_id, condition_key, metric, state,
+            triggered_at, trigger_value, resolved_at, resolved_value, ended_at, ended_reason,
+            previous_occurrence_count, most_recent_previous_triggered_at
+        FROM analytics.get_portal_alert_detail(%s, %s)
+        """,
+        (portal_user_id, str(alert_id)),
+    )
+
+
+def build_alert_summary(row: dict[str, Any]) -> AlertSummary:
+    return AlertSummary(
+        alert_id=row["alert_id"],
+        site_id=row["site_id"],
+        space_id=row["space_id"],
+        asset_id=row["asset_id"],
+        condition_key=row["condition_key"],
+        metric=row["metric"],
+        state=row["state"],
+        triggered_at=row["triggered_at"],
+        trigger_value=float(row["trigger_value"]),
+        resolved_at=row["resolved_at"],
+        resolved_value=(
+            float(row["resolved_value"]) if row["resolved_value"] is not None else None
+        ),
+        ended_at=row["ended_at"],
+        ended_reason=row["ended_reason"],
+        previous_occurrence_count=int(row["previous_occurrence_count"] or 0),
+        most_recent_previous_occurrence_at=row["most_recent_previous_triggered_at"],
     )
 
 

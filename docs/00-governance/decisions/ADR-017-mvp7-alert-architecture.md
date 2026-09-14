@@ -1,7 +1,9 @@
 # ADR-017: MVP-7 Alert architecture — evaluation mechanism (A1) and domain concept (B1)
 
-Status: **Decided (architecture)** — ratified 2026-09-14. Documentation only
-in this pass; **no application code or database schema was modified.**
+Status: **Decided (architecture) and implemented** — ratified and built
+2026-09-14, staging validation pending. See this session's implementation
+report for exact migrations, API/frontend changes, test results, and
+staging status.
 Date: 2026-09-14
 Decision owners: Product/Architecture (ratification of the two options
 identified in this session's architecture investigation brief)
@@ -348,13 +350,27 @@ reasoning) above.
 
 ## Implementation references
 
-None. No application code, schema, migration, or configuration was changed
-in this workstream — architecture design documentation only, per explicit
-instruction.
+`postgres/migrations/238_mvp7_alert_evaluation.sql` (schema),
+`postgres/migrations/239_mvp7_alert_evaluation_functions.sql` (evaluator,
+lifecycle procedure, job wrapper, read functions),
+`postgres/jobs/238_alert_evaluation_job.sql` (job registration),
+`app/src/analytics_api_service.py` / `app/src/routers/analytics_api.py`
+(Analytics API), `web/src/api/types.ts` / `endpoints.ts`,
+`web/src/routes/alerts/AlertsArea.tsx`,
+`web/src/alerts/useActiveAlertCount.ts`, `web/src/router.tsx`,
+`web/src/layout/navigation.ts` / `AppLayout.tsx`.
 
 ## Validation references
 
-None applicable — no code exists yet to validate. The mandatory parity
-test between the SQL and TypeScript materiality implementations
-(§"A1 — Single-source-of-truth arrangement," item 3) is a required
-precondition for future implementation, not performed here.
+Backend: `app/tests/test_analytics_api_v1_alerts_routes.py` (9 tests, API
+contract), `app/tests/test_alert_evaluation_contract.py` (16 tests, static
+SQL contract). Frontend: `web/src/routes/alerts/AlertsArea.test.tsx` (6
+tests) + updated `navigation.test.ts`; full frontend suite, `tsc --noEmit`,
+`eslint --max-warnings 0`, and `vite build` all pass. **Not performed**:
+the executable cross-language parity test between the SQL materiality
+function and the TypeScript implementation this ADR names as a required
+precondition (§"A1 — Single-source-of-truth arrangement," item 3) — only
+static/structural checks exist; see this session's implementation report
+and `docs/07-features/alerts/README.md` "Known limitations." No live
+TimescaleDB instance was available locally to execute the SQL migrations
+themselves — relies on the CI database/migration integration job.

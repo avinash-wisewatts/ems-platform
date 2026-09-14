@@ -342,3 +342,35 @@ job runs and the discard-with-operational-record outcome reuses the
 platform's existing failure/quarantine-logging convention (e.g.
 `postgres/migrations/003_telemetry_pipeline_performance_state.sql`) rather
 than introducing a new customer-facing entity.
+
+## 10. Status update (2026-09-14) — Q77/MVP-7 Basic Alerts implemented, staging validation pending
+
+Following §8 (product capture) and §9 (architecture decided), MVP-7 was
+implemented in the same workstream. Full record: ADR-016, ADR-017, and
+[docs/07-features/alerts/README.md](../07-features/alerts/README.md).
+
+| Item | §9 status | 2026-09-14 (this section) status |
+|---|---|---|
+| Q77 (MVP alerts) | Architecture decided, `C — NOT LANDED` in code | **Implemented**: `postgres/migrations/238`/`239` (schema, evaluator, lifecycle procedure, job), `postgres/jobs/238_alert_evaluation_job.sql`, `GET /api/v1/sites/{id}/alerts` + `.../alerts/{id}` (Analytics API), `web/src/routes/alerts/AlertsArea.tsx` (list/detail/filter/tabs) + header indicator. Backend: 9 route-contract tests + 16 static SQL-contract tests, all passing. Frontend: 6 new component tests + navigation regression fixes; full suite (216 tests), `tsc --noEmit`, `eslint --max-warnings 0`, `vite build` all pass. |
+| `API.alerts` (§1 shorthand) | `MISSING`; `PLANNED (MVP-7)` | **`LIVE`** — `GET /api/v1/sites/{site_id}/alerts`, `GET /api/v1/alerts/{alert_id}`. |
+
+**Known limitations, flagged not silently absorbed** (full list:
+`docs/07-features/alerts/README.md` "Known limitations / deviations"):
+evaluation period is the most recent completed site-local day (a
+consequence of the existing whole-day constraint, not a new product
+decision); no executable cross-language parity harness between the SQL and
+TypeScript materiality implementations (ADR-017's named precondition —
+only static checks exist); no live "latest value" re-fetch in the detail
+view; Space/Asset cascading filters not implemented (no such condition
+exists); "Load more" is button- not scroll-triggered; header indicator
+count capped at 200; **no live TimescaleDB instance was available in this
+environment to execute the migrations themselves** — the SQL was validated
+by careful manual review (which did catch and fix one real bug: a `FOUND`-
+variable scoping error across multiple statements in the lifecycle
+procedure) and static contract tests, not live execution; this relies on
+the CI database/migration integration job as the first live-execution
+gate.
+
+This does not alter §8/§9's own historical snapshots, preserved per
+[source-of-truth.md](../00-governance/source-of-truth.md)'s no-silent-
+rewrite rule.

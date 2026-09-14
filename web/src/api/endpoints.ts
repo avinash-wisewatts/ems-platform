@@ -14,6 +14,8 @@
  *   GET /api/v1/sites/{site_id}/energy/consumption/evidence (Slice C)
  *   GET /api/v1/sites/{site_id}/energy/consumption/typical-reference (Slice C)
  *   GET /api/v1/sites/{site_id}/telemetry-freshness (MVP-4)
+ *   GET /api/v1/sites/{site_id}/alerts                (MVP-7)
+ *   GET /api/v1/alerts/{alert_id}                      (MVP-7)
  *
  * No other paths, no arbitrary parameters, no generic query mechanism.
  *
@@ -30,6 +32,9 @@
 
 import { apiGet } from "./client";
 import type {
+  Alert,
+  AlertListResponse,
+  AlertState,
   AssetsResponse,
   CurrentDemandResponse,
   CurrentUser,
@@ -192,4 +197,39 @@ export function getSiteTelemetryFreshness(
     undefined,
     init,
   );
+}
+
+export type AlertListQuery = {
+  state?: AlertState;
+  condition_key?: string;
+  from?: string;
+  to?: string;
+  limit?: number;
+  before?: string; // infinite-scroll cursor: triggered_at of the last row already seen
+};
+
+/** MVP-7 (ADR-016/ADR-017). In-product only. */
+export function getSiteAlerts(
+  siteId: string,
+  query: AlertListQuery,
+  init?: RequestInit,
+): Promise<AlertListResponse> {
+  return apiGet<AlertListResponse>(
+    `/sites/${encodeURIComponent(siteId)}/alerts`,
+    {
+      state: query.state,
+      condition_key: query.condition_key,
+      from: query.from,
+      to: query.to,
+      limit: query.limit,
+      before: query.before,
+    },
+    init,
+  );
+}
+
+/** MVP-7. An unknown or inaccessible alert_id resolves as NotAccessibleError,
+ *  identical to every other portal-scoped resource this client reads. */
+export function getAlertDetail(alertId: string, init?: RequestInit): Promise<Alert> {
+  return apiGet<Alert>(`/alerts/${encodeURIComponent(alertId)}`, undefined, init);
 }

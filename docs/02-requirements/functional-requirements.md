@@ -123,8 +123,11 @@ Architecture decided 2026-09-14 — see
 [ADR-017](../00-governance/decisions/ADR-017-mvp7-alert-architecture.md)
 (evaluation mechanism, `Alert` domain model, single-source-of-truth
 arrangement for the materiality rule). **`READY-FOR-DESIGN` where noted,
-not implemented** — no alert model, endpoint, evaluation mechanism, or UI
-exists in the codebase for any row below.
+implemented 2026-09-14, staging validation pending** — see
+[requirements-traceability.md §10](requirements-traceability.md) and
+[docs/07-features/alerts/README.md](../07-features/alerts/README.md) for
+exact status; Site-level Energy Attention only, Space/Asset alerts await a
+separate condition decision.
 
 | ID | Title / description | Customer question | Priority | Source | Phase | Status | Dependencies | Notes |
 |---|---|---|---|---|---|---|---|---|

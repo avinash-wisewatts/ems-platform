@@ -20,14 +20,13 @@ content.
 | [site-overview/](site-overview/README.md) | MVP-3 | **DONE** |
 | [attention/](attention/README.md) | MVP-3 | **DONE** (Energy only; Demand/PQ informational, by decision) |
 | [site-performance-report/](site-performance-report/README.md) | MVP-6 | **IMPLEMENTED, not deployed** (2026-09-14, ADR-015) — the one decided Q76 report type; broader Reporting scope remains undecided |
+| [alerts/](alerts/README.md) | MVP-7 | **IMPLEMENTED, staging validation pending** (2026-09-14, ADR-016/ADR-017) — Site-level Energy Attention only; Space/Asset alerts await a separate condition decision |
 
 Evaluated but not given a dedicated document here because it would only
 duplicate [02-requirements/](../02-requirements/) and
 [03-ux-and-design/](../03-ux-and-design/) without adding a distinct
 architecture/validation chain yet: Portfolio (MVP-8, lowest priority),
-Alerts (MVP-7, decided in full detail per [ADR-016](../00-governance/decisions/ADR-016-q77-mvp7-basic-alerts.md)
-but not implemented — 2 architecture questions open), Export (MVP-6,
-decided per ADR-014 but not implemented). These get their own feature
-document once their underlying capability exists to document. Reporting
-(Q76) beyond the Site Performance Report above remains in the same
-position.
+Export (MVP-6, decided per ADR-014 but not implemented). These get their
+own feature document once their underlying capability exists to document.
+Reporting (Q76) beyond the Site Performance Report above remains in the
+same position.

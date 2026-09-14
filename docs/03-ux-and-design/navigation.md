@@ -38,7 +38,7 @@ CUSTOMER EMS
 │   ├── Trends
 │   ├── Comparisons
 │   └── Correlations             ← curated only, never a free-form query builder
-├── Alerts                        ← SHOULD/MVP-7; fully decided 2026-09-14 (ADR-016), not implemented; in-product only (header indicator + this area); config stays in Administration App (Q67)
+├── Alerts                        ← SHOULD/MVP-7; implemented 2026-09-14 (ADR-016/ADR-017), staging validation pending; in-product only (header indicator + this area); config stays in Administration App (Q67)
 ├── Export                        ← MVP-6; decided 2026-09-14 (ADR-014), not implemented; also reachable contextually from Energy/Demand/Power Quality screens, not only here
 └── Reports                       ← MVP-6; Site Performance Report decided + implemented 2026-09-14 (ADR-015), not yet deployed; Reports-area-only (no contextual access, unlike Export); rest of Q76 remains open
 

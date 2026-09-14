@@ -172,7 +172,7 @@ matches the DDS roadmap's own Phase 8 exit criterion ("empty shell").
   [ADR-016](../00-governance/decisions/ADR-016-q77-mvp7-basic-alerts.md)
   and [02-requirements/functional-requirements.md §Alerts](../02-requirements/functional-requirements.md#alerts)
   (`EMS-REQ-117`–`EMS-REQ-127`).
-- **Architecture decided 2026-09-14, not implemented**: both open
+- **Implemented 2026-09-14, staging validation pending**: both open
   architecture questions from ADR-016 are now resolved — see
   [ADR-017](../00-governance/decisions/ADR-017-mvp7-alert-architecture.md).
   Evaluation runs as an extension of the existing TimescaleDB-native
@@ -240,7 +240,7 @@ are parity-proven against Grafana.
 | Metric grammar/definitions/units | MVP-5 | Content only, no platform dependency |
 | Export | MVP-6 | MISSING (code); **decision DECIDED 2026-09-14, see ADR-014**; depends on MVP-2/3 |
 | Basic reporting | MVP-6 | Site Performance Report **implemented 2026-09-14, not yet deployed**, see ADR-015; broader Reporting scope still MISSING; depends on MVP-3 |
-| Basic alerts | MVP-7 | MISSING (code); **product decision DECIDED 2026-09-14 (ADR-016), architecture DECIDED 2026-09-14 (ADR-017)**; delivery corrected to in-product only (email removed); depends on MVP-3's Attention logic; Space/Asset-level Attention doesn't exist yet |
+| Basic alerts | MVP-7 | **IMPLEMENTED 2026-09-14, staging validation pending** (ADR-016/ADR-017); Site-level Energy Attention only — Space/Asset-level Attention doesn't exist yet |
 | Portfolio | MVP-8 | MISSING; lowest MVP priority by decision |
 | Financial visibility | Cross-cutting | No tariff/cost data exists anywhere |
 

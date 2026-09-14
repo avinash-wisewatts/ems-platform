@@ -3,6 +3,7 @@ import { NavLink } from "react-router-dom";
 import { useSession } from "../auth/SessionProvider";
 import { useTenant } from "../tenant/TenantProvider";
 import { logout } from "../api/client";
+import { useActiveAlertCount } from "../alerts/useActiveAlertCount";
 import { NAV_GROUP_LABELS, PRIMARY_NAV, SECONDARY_NAV, groupNav, visibleNav } from "./navigation";
 
 /**
@@ -19,6 +20,9 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const { user } = useSession();
   const { selectedSite, sites } = useTenant();
   const permissions = user?.permissions ?? [];
+  // MVP-7 (ADR-016 decision 37): visible with no number at zero; no count
+  // shown when no site is selected (activeAlertCount === null).
+  const activeAlertCount = useActiveAlertCount(selectedSite?.site_id ?? null);
 
   const primary = visibleNav(PRIMARY_NAV, permissions);
   const secondary = visibleNav(SECONDARY_NAV, permissions);
@@ -62,6 +66,11 @@ export function AppLayout({ children }: { children: ReactNode }) {
                 <li key={item.key}>
                   <NavLink to={item.to} data-testid={`nav-${item.key}`}>
                     {item.label}
+                    {item.key === "alerts" && activeAlertCount !== null ? (
+                      <span className="app-shell__nav-badge" data-testid="nav-alerts-badge">
+                        {activeAlertCount > 0 ? activeAlertCount : ""}
+                      </span>
+                    ) : null}
                   </NavLink>
                 </li>
               ))}

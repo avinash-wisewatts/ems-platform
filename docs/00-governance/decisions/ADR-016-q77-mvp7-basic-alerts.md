@@ -1,8 +1,10 @@
 # ADR-016: MVP-7 Basic Alerts (Q77) — full scope, lifecycle, and behavior
 
-Status: Decided (product/UX scope, in full detail); **not implemented**. Two
-genuine architecture questions identified during documentation capture are
-explicitly **unresolved** — see "Architecture questions identified."
+Status: Decided (product/UX scope, in full detail); **implemented
+2026-09-14, not yet deployed** — see
+[ADR-017](ADR-017-mvp7-alert-architecture.md) for the architecture that
+resolves the two questions this ADR originally left open, and this
+session's implementation report for exact test/build/staging results.
 Date: 2026-09-14
 Decision owners: Product Owner (via a Q77/MVP-7 discovery conversation
 conducted outside this repository, in ChatGPT, and transferred into this

@@ -110,7 +110,7 @@ and [ADR-004](../00-governance/decisions/ADR-004-site-overview-primary-destinati
 - **Comparisons:** periods, sites, spaces, or same-type assets — fairness rule: asset comparisons only within one `asset_type_id`. `PLANNED (Post-MVP)`.
 - **Correlations:** curated pairs only (e.g. energy vs. outside temperature) — never arbitrary metric-vs-metric. `MISSING`/`PLANNED (Post-MVP)`.
 
-## Alerts  *(SHOULD — MVP-7, fully decided 2026-09-14, not yet implemented)*
+## Alerts  *(SHOULD — MVP-7, implemented 2026-09-14, staging validation pending)*
 
 - **Purpose:** notify the customer of existing, already-computed Attention
   conditions — not a new detection mechanism. Every qualifying Attention
@@ -159,12 +159,11 @@ and [ADR-004](../00-governance/decisions/ADR-004-site-overview-primary-destinati
   requirements:
   [functional-requirements.md §Alerts](../02-requirements/functional-requirements.md#alerts)
   (`EMS-REQ-080`–`084`, `EMS-REQ-117`–`127`).
-- **API dependency:** `MISSING` — no alert model/endpoint defined, and two
-  genuine architecture questions are open (ADR-016): no server-side
-  Attention/alert evaluation mechanism exists in any form (Attention is a
-  stateless client-side computation today), and no `Alert` entity exists in
-  the frozen DDS conceptual model. Shape/schema `PLANNED (MVP-7)` at the
-  product level; implementation blocked on those two questions.
+- **API dependency:** `LIVE` — `GET /api/v1/sites/{site_id}/alerts`, `GET
+  /api/v1/alerts/{alert_id}` (migration 239). Architecture (ADR-017):
+  evaluation via a TimescaleDB-native background job; `Alert` is the DDS's
+  11th core concept. Implemented 2026-09-14, staging validation pending —
+  see [docs/07-features/alerts/README.md](../07-features/alerts/README.md).
 
 ## Export  *(MVP-6 — decided 2026-09-14, not yet implemented)*
 
