@@ -116,6 +116,25 @@ def test_lifecycle_procedure_does_not_rely_on_found_across_statements():
     assert "v_active_alert.alert_id IS NOT NULL" in sql
 
 
+def test_lifecycle_procedure_never_commits_inside_the_exception_guarded_block():
+    """Regression guard for a second real bug caught and fixed during this
+    implementation: PL/pgSQL forbids COMMIT/ROLLBACK inside a block that
+    has an EXCEPTION clause (the block is implemented as a subtransaction).
+    The per-site COMMIT must sit strictly after that block's END, and the
+    EXCEPTION handler must never call ROLLBACK explicitly (entering the
+    handler already rolls back to the block's own savepoint)."""
+    sql = _functions_sql()
+    start = sql.index("FOR v_site IN")
+    exception_idx = sql.index("EXCEPTION WHEN OTHERS THEN", start)
+    end_idx = sql.index("END;", exception_idx)
+    guarded_block = sql[start:end_idx]
+    assert "COMMIT;" not in guarded_block
+    assert "ROLLBACK;" not in guarded_block
+    # And it IS reached on every path -- no CONTINUE would skip past the
+    # COMMIT that sits immediately after this block's END.
+    assert "CONTINUE;" not in sql
+
+
 def test_configuration_transition_ends_not_resolves():
     sql = _functions_sql()
     assert "Attention condition configuration changed" in sql
