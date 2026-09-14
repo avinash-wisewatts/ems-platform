@@ -41,6 +41,14 @@ table (migration 238), populated by `analytics.run_alert_evaluation_job` —
 a TimescaleDB-native background job (ADR-017, A1), the same mechanism
 already used by `postgres/jobs/69_environment_routing_job.sql` and its
 siblings, registered in `postgres/jobs/238_alert_evaluation_job.sql`.
+**Confirmed by live read-only staging query (2026-09-14): this job is not
+registered on staging** — `analytics.alerts` and
+`analytics.alert_evaluation_candidates` both exist and are empty (0 rows);
+no alert has ever been evaluated. `scripts/verify/verify_jobs.sh` now
+checks this job's registration/enablement/schedule/runtime/retry state on
+every deployment (reported, non-blocking — see
+`scripts/release/post_deploy_verify.sh`), so this state is detected
+automatically going forward rather than requiring a manual live query.
 
 **Single source of truth**: `analytics.evaluate_energy_attention_materiality`
 (migration 239) is the canonical server-side implementation of the ±15%
@@ -73,9 +81,37 @@ Backend: `app/tests/test_analytics_api_v1_alerts_routes.py` (route
 contract), `app/tests/test_alert_evaluation_contract.py` (static SQL
 contract — the lifecycle procedure cannot be exercised without a live
 database in this environment). Frontend:
-`web/src/routes/alerts/AlertsArea.test.tsx`. See this session's
-implementation report for the full test/typecheck/lint/build results and
-staging validation.
+`web/src/routes/alerts/AlertsArea.test.tsx`.
+
+**Staging post-deploy validation (2026-09-14): FAIL.** Live, read-only
+verification against the deployed staging revision found: migrations 238
+and 239 applied correctly; all five alert functions present; both alert
+API endpoints reachable and correctly enforcing `_require_portal_user`
+authentication (401 without credentials); but the alert-evaluation
+TimescaleDB job was not registered (confirmed by direct query — see "Data
+/ API dependencies" above), so no alert has ever been generated, and the
+deployed frontend detail view was missing hierarchy context and
+threshold/reference and showed resolved fields in the wrong order (ADR-016
+decision 11). This is a live-verification result, not an inference from
+code — see this session's staging validation report for the full
+evidence-rich matrix (deployment revision, migration timestamps, job
+listing, API responses).
+
+**Same-day corrective pass**, verified as follows (no staging/production
+access): the job-registration script's first-registration config defect
+(see "Known limitations" below) was fixed and verified against a
+disposable local TimescaleDB container (not staging) — one execution of
+the corrected `postgres/jobs/238_alert_evaluation_job.sql` now leaves the
+job with the full intended `schedule_interval`/`max_runtime`/
+`max_retries`/`retry_period` configuration, confirmed by querying
+`timescaledb_information.jobs`; a second execution confirmed the
+idempotent path still leaves exactly one job registered. The frontend
+fixes were verified by `npx tsc --noEmit` (clean), `npx eslint . --max-warnings 0`
+(clean), the full frontend suite (`npx vitest run`: 218/218 passed across
+32 files, including 4 new/updated MVP-7 tests), and `npm run build`
+(clean). Backend: `test_alert_evaluation_contract.py` and
+`test_analytics_api_v1_alerts_routes.py` (28/28) unaffected and still
+passing (no backend Python code changed this pass).
 
 ## Known limitations / deviations (this implementation pass)
 
@@ -92,6 +128,15 @@ staging validation.
   34) — only persisted trigger/resolved values are shown.
 - **Space/Asset cascading filters are not implemented** — no Space/Asset
   condition exists yet to filter by.
+- **The date-range filter (`from`/`to`) is keyed to triggered time for all
+  three tabs.** ADR-016 decision 48 specifies resolved time for the
+  Resolved tab and ended time for the Ended tab;
+  `analytics.get_portal_site_alerts`/`get_portal_alert_detail` (migration
+  239) filter `triggered_at` unconditionally regardless of `p_state`.
+  Discovered during the 2026-09-14 corrective pass; not fixed there because
+  it requires a new migration to an already-applied SQL function (a
+  backend/schema change, not a frontend one) — flagged for separate
+  authorization, not silently left inconsistent with ADR-016.
 - **"Load more" is button-triggered, not scroll-triggered** — the
   no-traditional-pagination substance of ADR-016 decision 47 is preserved;
   the trigger mechanism is simplified.
@@ -127,10 +172,29 @@ staging validation.
   registered; **the job registration
   (`postgres/jobs/238_alert_evaluation_job.sql`) itself still requires a
   separate, explicitly-authorized manual step against the live database**
-  — not performed in this pass, consistent with this repository's
-  staging-safety practice (`CLAUDE.md` §4) and prior precedent in this
-  project. **Alerts will not actually be evaluated on staging until that
-  step runs.**
+  — not performed in this pass or in the 2026-09-14 corrective pass that
+  followed, consistent with this repository's staging-safety practice
+  (`CLAUDE.md` §4) and prior precedent in this project. **Confirmed by live
+  staging query (2026-09-14): the job is not registered and no alert has
+  ever been evaluated on staging.**
+- **First-registration config defect in
+  `postgres/jobs/238_alert_evaluation_job.sql`, fixed 2026-09-14 (before the
+  job has ever been registered anywhere).** `add_job()` has no
+  `max_runtime`/`max_retries`/`retry_period` parameters (TimescaleDB API) —
+  only `alter_job()` does. The original file set these only in its
+  `ELSE`/`alter_job` branch (mirroring every sibling routing-job file in
+  `postgres/jobs/`), so a job's true first registration would have silently
+  run under TimescaleDB's own defaults until the file was executed a second
+  time. The `IF` branch now calls `alter_job()` immediately on the job
+  `add_job()` just created, so the intended configuration applies from the
+  very first registration. Verified against a disposable local TimescaleDB
+  container (not staging): one execution leaves
+  `schedule_interval=1min, max_runtime=5min, max_retries=3,
+  retry_period=1min` fully applied; a second execution confirms the
+  `ELSE`/`alter_job` idempotent path still leaves exactly one job
+  registered. The sibling routing-job files (`42_*`, `48_*`, `69_*`, `70_*`,
+  `74_*`) have the same first-registration gap and were **not** touched by
+  this pass (out of scope — flagged, not silently fixed).
 - **No live database available in this environment** — the SQL migration's
   correctness (beyond static/structural checks and manual review, which
   did catch and fix two real bugs in the lifecycle procedure — a `FOUND`-
@@ -140,9 +204,28 @@ staging validation.
   against a real TimescaleDB instance locally. Relies on the CI "Database
   / migration / repository
   integration tests" job to validate at the SQL execution level before
-  this is considered fully proven.
+  this is considered fully proven. (The 2026-09-14 corrective pass did
+  exercise `postgres/jobs/238_alert_evaluation_job.sql`'s registration
+  mechanics specifically against a disposable local TimescaleDB container —
+  see "Validation" above — but this covers only `add_job`/`alter_job`
+  behavior, not `analytics.evaluate_alerts()`'s lifecycle logic.)
 
 ## Release status
 
-**IMPLEMENTED, staging validation pending** — see this session's
-implementation report for exact test/build/deploy status.
+**IMPLEMENTED, DEPLOYED TO STAGING, STAGING VALIDATION FAILED (2026-09-14).**
+Root cause: the alert-evaluation TimescaleDB job was never registered
+(deliberately, pending a separate authorized step — see "Known
+limitations"), so no alert has ever been generated on staging; the
+deployed frontend also had real gaps against ADR-016 decision 11/48
+(missing hierarchy context and threshold/reference, reversed Resolved
+field order, no Condition/Metric/date-range/Apply-Clear filtering UI). A
+same-day corrective pass (branch
+`fix/mvp7-alert-job-config-and-adr016-corrections`) fixed the frontend
+gaps and the job-registration script's first-registration config defect,
+and added deployment-verification coverage
+(`scripts/verify/verify_jobs.sh`) so the job's registration state is
+detected automatically on every future deployment. **Not yet
+re-validated**: the job registration step itself and a follow-up staging
+validation pass both remain outstanding, each requiring separate explicit
+authorization before this feature can be considered functional on
+staging. MVP-7 must not be represented as functional until both have run.

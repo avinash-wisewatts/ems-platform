@@ -1,10 +1,20 @@
 # ADR-016: MVP-7 Basic Alerts (Q77) — full scope, lifecycle, and behavior
 
-Status: Decided (product/UX scope, in full detail); **implemented
-2026-09-14, not yet deployed** — see
-[ADR-017](ADR-017-mvp7-alert-architecture.md) for the architecture that
-resolves the two questions this ADR originally left open, and this
-session's implementation report for exact test/build/staging results.
+Status: Decided (product/UX scope, in full detail); implemented and
+deployed to staging 2026-09-14. **Staging post-deploy validation performed
+2026-09-14: FAIL** — the alert-evaluation TimescaleDB job was not
+registered (a separate, explicitly-authorized manual step, deliberately
+withheld — see [alerts/README.md](../../07-features/alerts/README.md)),
+and the deployed frontend detail view omitted hierarchy context and
+threshold/reference and showed resolved fields in the wrong order versus
+decision 11 below. A same-day corrective pass fixed the frontend gaps and
+a latent job-registration-script defect and added deployment-verification
+coverage for the job's registration state; **the job itself remains
+unregistered on staging pending separate authorization and a follow-up
+validation pass** — see
+[alerts/README.md](../../07-features/alerts/README.md) for current status.
+See [ADR-017](ADR-017-mvp7-alert-architecture.md) for the architecture that
+resolves the two questions this ADR originally left open.
 Date: 2026-09-14
 Decision owners: Product Owner (via a Q77/MVP-7 discovery conversation
 conducted outside this repository, in ChatGPT, and transferred into this
