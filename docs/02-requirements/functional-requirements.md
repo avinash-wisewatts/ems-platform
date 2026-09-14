@@ -129,9 +129,61 @@ See [README.md](README.md) for conventions (`Priority`, `Status`, `Source`).
 | ID | Title / description | Customer question | Priority | Source | Phase | Status | Dependencies | Notes |
 |---|---|---|---|---|---|---|---|---|
 | EMS-REQ-090 | **Report catalogue + viewer.** Templated reports with preview. | "Give me the monthly energy report." | SHOULD | ROADMAP, ZEROWATT_TECHNICAL_REFERENCE | MVP-6 | DRAFT | report-definition storage; reads only via Phase 7 | |
-| EMS-REQ-091 | **Familiar export formats.** PDF and Excel. | "In the format finance expects." | SHOULD | ZEROWATT_TECHNICAL_REFERENCE, PRODUCT_OWNER | MVP-6 | BLOCKED | specific formats undecided (Q76 gives shape only) | |
+| EMS-REQ-091 | **Familiar report formats.** PDF and Excel. | "In the format finance expects." | SHOULD | ZEROWATT_TECHNICAL_REFERENCE, PRODUCT_OWNER | MVP-6 | BLOCKED | specific formats undecided (Q76 gives shape only) | Report (Q76) output format — still undecided. See the contradiction record below for why this row's title changed, and `EMS-REQ-096`/[ADR-014](../00-governance/decisions/ADR-014-q75-export-scope-and-behavior.md) for the distinct, now-decided Export (Q75) format. |
 | EMS-REQ-092 | **Scheduled report generation & delivery.** Runs unattended on a schedule. | "Send it automatically every month." | SHOULD | ROADMAP | MVP-6/Post-MVP | DRAFT | existing job-scheduling conventions | Not MVP per Q76 (no scheduling in MVP). |
 | EMS-REQ-093 | **Report figures traceable to on-screen numbers.** Matches Phase 10 parity. | "Does the report match the dashboard?" | MUST (of reporting) | ROADMAP | MVP-6 | DRAFT | Phase 10 parity | |
+
+> **Contradiction resolved (2026-09-14)** — `EMS-REQ-091`'s title, per
+> [source-of-truth.md](../00-governance/source-of-truth.md)'s recording
+> format:
+>
+> **CURRENT IMPLEMENTATION:** `EMS-REQ-091`'s title reads "Familiar report
+> formats" and its row describes Q76's (Reporting) output format only,
+> which remains `BLOCKED`/undecided.
+>
+> **HISTORICAL / DOCUMENTED EXPECTATION:** this row was originally titled
+> "Familiar export formats" — wording that, read on its own, could be
+> mistaken for specifying Q75's (Export) raw-data file format, even though
+> the row's own Notes column already said "Q76 gives shape only" and the
+> row sits under the "Reporting" heading, not a separate Export one (which
+> did not yet exist).
+>
+> **CHANGE:** the MVP-6 Product Decision Workshop (2026-09-14) decided
+> Q75's Export format is CSV (`EMS-REQ-096`,
+> [ADR-014](../00-governance/decisions/ADR-014-q75-export-scope-and-behavior.md)).
+> Because that is a different, now-decided format from Q76's still-open
+> Report format, `EMS-REQ-091`'s title was corrected from "export" to
+> "report" so it no longer reads as if it named the Export format. No
+> status, priority, or decision content in the row changed — only the two
+> words in its title.
+>
+> **VERIFICATION:** confirmed by re-reading `EMS-REQ-091`'s own
+> pre-existing Notes column ("specific formats undecided (Q76 gives shape
+> only)") and Workshop baseline §108
+> (`docs/99-archive/superseded-product/ems-product-owner-workshop-baseline.md`):
+> *"Report = communicate the important story; Export = provide the
+> underlying data"* — both already establish this row was always about
+> Reporting, not Export; the title alone was misleading.
+
+## Export
+
+Decided by the MVP-6 Product Decision Workshop (2026-09-14) — see
+[ADR-014](../00-governance/decisions/ADR-014-q75-export-scope-and-behavior.md)
+for full context, rationale, and evidence. Distinct from Reporting above
+per Q76's own framing: *"Report = communicate the important story; Export
+= provide the underlying data."* **`READY-FOR-DESIGN`, not implemented** —
+per this document's own Status convention (`READY-FOR-DESIGN` = "agreed
+enough to design against", [README.md](README.md#conventions)), which is
+exactly Export's current state: no code exists for any row below.
+
+| ID | Title / description | Customer question | Priority | Source | Phase | Status | Dependencies | Notes |
+|---|---|---|---|---|---|---|---|---|
+| EMS-REQ-094 | **Export content — aggregated figures, not raw series.** The on-screen aggregated analytical figure (e.g. period total, peak demand, PF/THD summary), not the underlying raw time-series. | "Give me the numbers I'm looking at." | SHOULD | PRODUCT_OWNER | MVP-6 | READY-FOR-DESIGN | Q75; ADR-014 decision 1 | Narrows Q75's original "relevant measurements" wording — see ADR-014 Rationale. |
+| EMS-REQ-095 | **Export context fields.** Site/hierarchy context, selected time range, comparison/baseline basis (where the metric has one), metric name and unit, and data-quality/freshness information where relevant to interpreting the figure. | "What am I looking at, and can I trust it?" | SHOULD | PRODUCT_OWNER | MVP-6 | READY-FOR-DESIGN | Q75; ADR-014 decisions 2-3, 8 | Comparison/baseline fields mirror exactly what's shown on-screen, including any displayed difference — not a separately-computed comparison. |
+| EMS-REQ-096 | **Export format — CSV.** | "What file do I get?" | SHOULD | PRODUCT_OWNER | MVP-6 | READY-FOR-DESIGN | Q75; ADR-014 decision 4 | Distinct from Report format (EMS-REQ-091), which remains `BLOCKED`/undecided. |
+| EMS-REQ-097 | **Export delivery — size-tiered.** Immediate download for smaller exports; background generation for larger exports. | "How do I get a big export?" | SHOULD | PRODUCT_OWNER | MVP-6 | READY-FOR-DESIGN | Q75; ADR-014 decision 5 | The two-tier delivery *model* is agreed enough to design against; the specific size/row/byte threshold between the tiers is not decided — deliberately not invented (see ADR-014 decision 5). |
+| EMS-REQ-098 | **Export availability — contextual and dedicated.** Available from relevant analytical screens (Energy, Demand, Power Quality, etc.) in context, and through a dedicated Export area. The dedicated area supports multi-metric export across Energy, Demand, and Power Quality together; the contextual path is single-screen. | "Where do I export from?" | SHOULD | PRODUCT_OWNER | MVP-6 | READY-FOR-DESIGN | Q75; ADR-014 decisions 6-7 | |
+| EMS-REQ-099 | **Export time range, hierarchy scoping, and data completeness.** Selectable time range is bounded by the site's actual min/max data-available dates. Contextual export follows the hierarchy level currently being viewed (Site/Space/Asset); the dedicated Export area lets the customer select the desired hierarchy level. Data gaps within the range retain their applicable data-quality/freshness state rather than being omitted; a metric with no usable data is still represented, with its applicable data-quality state and no fabricated value. | "Can I trust the range, and what happens with gaps?" | SHOULD | PRODUCT_OWNER | MVP-6 | READY-FOR-DESIGN | Q75; ADR-014 decisions 9-12; ADR-011 (no-data ≠ fabricated value, same discipline extended here) | |
 
 ## Priority summary
 
@@ -142,7 +194,7 @@ demand-endpoint schedule.) See
 cross-cutting MUST set (100–105, 109).
 
 **SHOULD:** 016–019, 025, 026, 028, 032, 033, 035, 036, 038, 041–043, 052,
-054, 061–064, 072, 073, 080, 081, 090–093.
+054, 061–064, 072, 073, 080, 081, 090–093, 094–099.
 
 **COULD:** 053, 065, 083, 106 (see non-functional).
 

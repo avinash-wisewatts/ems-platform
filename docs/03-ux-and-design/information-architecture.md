@@ -117,12 +117,57 @@ and [ADR-004](../00-governance/decisions/ADR-004-site-overview-primary-destinati
 - **Empty state (good):** "no active alerts" is a *good* empty state, distinct from no rules configured.
 - **API dependency:** `MISSING` — no alert model/endpoint defined. Scope resolved (Workshop Q77/Q78 — basic, measurable-condition alerts, in-product + email delivery); shape/schema still `PLANNED (MVP-7)`.
 
-## Reports  *(MVP-6)*
+## Export  *(MVP-6 — decided 2026-09-14, not yet implemented)*
+
+- **Purpose:** provide the underlying data behind an on-screen figure, for use outside WiseWatts — distinct from Reports below (Workshop Q76: "Report = communicate the important story; Export = provide the underlying data").
+- **Content:** the aggregated analytical figure already shown on screen (e.g. a period's total consumption, peak demand, PF/THD summary) — not raw/underlying time-series measurements.
+- **Context fields:** Site/hierarchy context, selected time range, comparison/baseline basis (mirroring exactly what's displayed on screen, including any shown difference), metric name and unit, and data-quality/freshness information where relevant to interpreting the figure.
+- **Format:** CSV.
+- **Delivery:** immediate download for smaller exports; background generation for larger exports. No specific size threshold between the two is decided.
+- **Availability:** contextually, from the relevant analytical screen (Energy, Demand, Power Quality, etc.), scoped to whatever hierarchy level (Site/Space/Asset) is currently being viewed; and through a dedicated Export area, which additionally supports multi-metric export across Energy, Demand, and Power Quality together and lets the customer select the desired hierarchy level directly.
+- **Time range:** selectable range is bounded by the specific site's actual minimum/maximum data-available dates.
+- **Data completeness:** gaps within the selected range retain their applicable data-quality/freshness state rather than being silently omitted; a selected metric with no usable data is still represented, with its applicable data-quality state and no fabricated value.
+- **Full decision record:** [ADR-014](../00-governance/decisions/ADR-014-q75-export-scope-and-behavior.md); requirements: [functional-requirements.md §Export](../02-requirements/functional-requirements.md#export) (`EMS-REQ-094`–`EMS-REQ-099`).
+- **API dependency:** `PLANNED (MVP-6)` — no endpoint exists yet; shape is now fully specified (see ADR-014) but unbuilt.
+
+## Reports  *(MVP-6 — Q76 remains open)*
 
 - **Purpose:** produce the documents customers must send to others.
-- **Primary:** report catalogue (templates); a viewer/preview; export; the exact source metrics traceable to what the customer sees on screen (parity discipline).
+- **Primary:** report catalogue (templates); a viewer/preview; the exact source metrics traceable to what the customer sees on screen (parity discipline).
 - **MVP scope (Workshop Q76):** deliberately simple — no scheduling, no report builder, no automated narratives.
 - **API dependency:** `PLANNED (MVP-6)` — report-definition storage + generation reading only through Phase 7.
+- **Status (2026-09-14):** unaffected by the Export (Q75) decision above — format, catalogue contents, and storage shape remain undecided. See `EMS-REQ-090`–`EMS-REQ-093` (`DRAFT`/`BLOCKED`).
+
+> **Contradiction resolved (2026-09-14)** — this section's "Primary"
+> bullet, per [source-of-truth.md](../00-governance/source-of-truth.md)'s
+> recording format:
+>
+> **CURRENT IMPLEMENTATION:** the "Primary" bullet above lists report
+> catalogue, viewer/preview, and on-screen-parity traceability only. Export
+> of underlying data is documented separately, in the "Export" section
+> above this one.
+>
+> **HISTORICAL / DOCUMENTED EXPECTATION:** this bullet previously read
+> "report catalogue (templates); a viewer/preview; export; the exact
+> source metrics traceable..." — bundling "export" into Reports' own
+> primary content, with no separate Export section existing anywhere in
+> this document at that time.
+>
+> **CHANGE:** the MVP-6 Product Decision Workshop (2026-09-14) resolved
+> Export (Q75) as its own, fully specified capability — see the "Export"
+> section above and [ADR-014](../00-governance/decisions/ADR-014-q75-export-scope-and-behavior.md).
+> Per Q76's own text, *"Report = communicate the important story; Export =
+> provide the underlying data,"* the two were always meant to be distinct;
+> this document simply hadn't reflected that split before Export had its
+> own decision record to document. The word "export" was removed from this
+> bullet accordingly — no other change was made to Reports' content or
+> status.
+>
+> **VERIFICATION:** confirmed by re-reading Workshop baseline §108
+> (`docs/99-archive/superseded-product/ems-product-owner-workshop-baseline.md`)
+> for the Report-vs-Export distinction, and by confirming Reports' own
+> decided scope (catalogue, viewer/preview, parity) makes no independent
+> claim about export behavior beyond that one now-removed word.
 
 ## Future areas (record only — not MVP features)
 

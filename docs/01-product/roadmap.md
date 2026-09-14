@@ -140,6 +140,14 @@ matches the DDS roadmap's own Phase 8 exit criterion ("empty shell").
   tool), Q76 (reporting — deliberately simple, no scheduling/builder/
   narratives).
 - **Depends on**: MVP-3 (reporting source) + MVP-2 (the figures exported).
+- **Q75 (Export) — decided in full, not yet implemented (2026-09-14)**:
+  content, context fields, format (CSV), delivery model, availability,
+  comparison-basis behavior, time-range bounds, and data-gap/no-data
+  handling are all now specified. See
+  [ADR-014](../00-governance/decisions/ADR-014-q75-export-scope-and-behavior.md)
+  and [02-requirements/functional-requirements.md §Export](../02-requirements/functional-requirements.md#export)
+  (`EMS-REQ-094`–`EMS-REQ-099`). **Q76 (Reporting) remains open** — format,
+  catalogue contents, and report-definition storage are undecided.
 
 ### MVP-7 (DDS Phase 10, deferred sub-scope) — Basic Alerts
 
@@ -191,7 +199,7 @@ are parity-proven against Grafana.
 | Attention / Issues | MVP-3 | **DONE** — Energy Attention only (±15%); Demand/PQ informational only, no threshold rule |
 | Data freshness/quality on energy & demand | MVP-4 | Primitive scaffolded; real backing MISSING |
 | Metric grammar/definitions/units | MVP-5 | Content only, no platform dependency |
-| Export | MVP-6 | MISSING; depends on MVP-2/3 |
+| Export | MVP-6 | MISSING (code); **decision DECIDED 2026-09-14, see ADR-014**; depends on MVP-2/3 |
 | Basic reporting | MVP-6 | MISSING; depends on MVP-3 |
 | Basic alerts | MVP-7 | MISSING; depends on MVP-3's Attention logic |
 | Portfolio | MVP-8 | MISSING; lowest MVP priority by decision |

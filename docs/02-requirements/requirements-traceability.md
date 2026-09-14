@@ -200,3 +200,30 @@ so no `/attention` endpoint exists or is planned to exist for this rule.
 
 See [scope-and-deferred-functionality.md](scope-and-deferred-functionality.md)
 §"Anti-pattern guardrails."
+
+## 6. Status update (2026-09-14) — Q75 Export decisions resolved
+
+The MVP-6 Product Decision Workshop (2026-09-14) resolved every
+previously open Export (Q75) question identified by that day's MVP-6
+discovery pass. Full record: [ADR-014](../00-governance/decisions/ADR-014-q75-export-scope-and-behavior.md).
+New requirements: [functional-requirements.md §Export](functional-requirements.md#export)
+(`EMS-REQ-094`–`EMS-REQ-099`).
+
+| Item | 2026-09-11 status (§1/§2) | 2026-09-14 status |
+|---|---|---|
+| Q75 (MVP export) | `C — NOT LANDED` (§2, "No export capability exists.") | **Decision resolved** — content, context fields, format, delivery model, availability, comparison/baseline behavior, time-range bounds, gap/no-data handling, and hierarchy scoping are all now decided (ADR-014). **Implementation status is unchanged: still no export capability exists anywhere in the codebase.** The `C` capability classification is accurate for "landed"; what changed is that the decision blocker referenced by the discovery pass's Decision Status Table is now closed for every Export question raised there. |
+| `API.export` (§1 shorthand) | `MISSING`; `PLANNED (MVP-6)` | **Unchanged as a code fact** — still `MISSING`, still `PLANNED (MVP-6)`. The *shape* is now fully specified (ADR-014) rather than merely "additive and understood in outline," per the `PLANNED (MVP-n)` legend definition. No endpoint, view, or function exists. |
+
+**Q76 (Reporting) is explicitly unaffected by this update** — its format,
+catalogue-contents, and report-definition-storage questions remain exactly
+as classified in §2 (`C`) and in `functional-requirements.md`
+(`EMS-REQ-090`–`EMS-REQ-093`, `DRAFT`/`BLOCKED`). Do not read this section
+as resolving Reporting; only Export (Q75) was decided in this workshop.
+
+This does not alter §2's 2026-09-11 classification row for Q75, which
+remains the preserved historical record of that date per
+[source-of-truth.md](../00-governance/source-of-truth.md)'s no-silent-
+rewrite rule. §4 line 189's "Q73–Q78... remain as classified in §2" is
+superseded for Q75 specifically by this section — Q75's *decision* status
+has changed; its *implementation* status has not, and §4's statement
+remains accurate for Q76-Q78, Q73, Q74.
