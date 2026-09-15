@@ -126,6 +126,15 @@ function fixed1(value: number | null | undefined): string | null {
 export function buildEnergyConsumptionExportCsv(input: EnergyConsumptionExportInput): string {
   const { site, current, basis, result, referenceResult, evidence, freshness } = input;
 
+  // evidence.hasData === false (whether evidence is null, or a non-null
+  // EMPTY_SUMMARY from evidence.ts) means the numeric counters are not
+  // real coverage/gap/reset/rollover data -- EnergyEvidencePanel.tsx fully
+  // suppresses them on screen in this state ("No evidence available for
+  // this period yet"). Mirror that here: empty cells, never a literal 0,
+  // for every evidence_* field except evidence_has_data itself, which
+  // still carries the false signal so the CSV communicates the state.
+  const evidenceNumbers = evidence?.hasData ? evidence : null;
+
   const row: Record<(typeof CSV_COLUMNS)[number], string | number | boolean | null> = {
     site_id: site.site_id,
     site_name: site.site_name,
@@ -147,18 +156,18 @@ export function buildEnergyConsumptionExportCsv(input: EnergyConsumptionExportIn
     typical_reference_requested_periods: referenceResult?.requestedPeriodCount ?? null,
     typical_reference_sufficient: referenceResult?.sufficient ?? null,
     evidence_has_data: evidence?.hasData ?? null,
-    evidence_total_intervals: evidence?.totalIntervals ?? null,
-    evidence_valid_import_intervals: evidence?.validImportIntervals ?? null,
-    evidence_invalid_import_intervals: evidence?.invalidImportIntervals ?? null,
-    evidence_valid_export_intervals: evidence?.validExportIntervals ?? null,
-    evidence_invalid_export_intervals: evidence?.invalidExportIntervals ?? null,
-    evidence_gap_interval_count: evidence?.gapIntervalCount ?? null,
-    evidence_reset_interval_count: evidence?.resetIntervalCount ?? null,
-    evidence_rollover_interval_count: evidence?.rolloverIntervalCount ?? null,
-    evidence_invalid_interval_count: evidence?.invalidIntervalCount ?? null,
-    evidence_coverage_percent: evidence ? fixed1(evidence.coveragePercent) : null,
-    evidence_first_source_bucket: evidence?.firstSourceBucket ?? null,
-    evidence_last_source_bucket: evidence?.lastSourceBucket ?? null,
+    evidence_total_intervals: evidenceNumbers?.totalIntervals ?? null,
+    evidence_valid_import_intervals: evidenceNumbers?.validImportIntervals ?? null,
+    evidence_invalid_import_intervals: evidenceNumbers?.invalidImportIntervals ?? null,
+    evidence_valid_export_intervals: evidenceNumbers?.validExportIntervals ?? null,
+    evidence_invalid_export_intervals: evidenceNumbers?.invalidExportIntervals ?? null,
+    evidence_gap_interval_count: evidenceNumbers?.gapIntervalCount ?? null,
+    evidence_reset_interval_count: evidenceNumbers?.resetIntervalCount ?? null,
+    evidence_rollover_interval_count: evidenceNumbers?.rolloverIntervalCount ?? null,
+    evidence_invalid_interval_count: evidenceNumbers?.invalidIntervalCount ?? null,
+    evidence_coverage_percent: fixed1(evidenceNumbers?.coveragePercent),
+    evidence_first_source_bucket: evidenceNumbers?.firstSourceBucket ?? null,
+    evidence_last_source_bucket: evidenceNumbers?.lastSourceBucket ?? null,
     freshness_state: freshness?.energy.state ?? null,
     freshness_as_of: freshness?.energy.as_of ?? null,
   };

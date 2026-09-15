@@ -347,6 +347,55 @@ describe("buildEnergyConsumptionExportCsv -- null/unavailable evidence", () => {
   });
 });
 
+describe("buildEnergyConsumptionExportCsv -- evidence present but hasData=false", () => {
+  it("all evidence_* numeric/bucket columns are empty (never a literal 0), but evidence_has_data still reports false", () => {
+    // Mirrors evidence.ts's EMPTY_SUMMARY -- a real, non-null summary
+    // object returned when the evidence endpoint reports no_data for the
+    // period. EnergyEvidencePanel.tsx fully suppresses these numbers on
+    // screen in this state; the export must not surface them as zeros.
+    const csv = buildEnergyConsumptionExportCsv({
+      site: site(),
+      current: current(),
+      basis: "PREVIOUS_PERIOD",
+      result: comparisonResult(),
+      referenceResult: null,
+      evidence: evidence({
+        hasData: false,
+        totalIntervals: 0,
+        validImportIntervals: 0,
+        invalidImportIntervals: 0,
+        validExportIntervals: 0,
+        invalidExportIntervals: 0,
+        gapIntervalCount: 0,
+        resetIntervalCount: 0,
+        rolloverIntervalCount: 0,
+        invalidIntervalCount: 0,
+        firstSourceBucket: null,
+        lastSourceBucket: null,
+        coveragePercent: null,
+      }),
+      freshness: freshness(),
+    });
+    expect(cell(csv, "evidence_has_data")).toBe("false");
+    for (const col of [
+      "evidence_total_intervals",
+      "evidence_valid_import_intervals",
+      "evidence_invalid_import_intervals",
+      "evidence_valid_export_intervals",
+      "evidence_invalid_export_intervals",
+      "evidence_gap_interval_count",
+      "evidence_reset_interval_count",
+      "evidence_rollover_interval_count",
+      "evidence_invalid_interval_count",
+      "evidence_coverage_percent",
+      "evidence_first_source_bucket",
+      "evidence_last_source_bucket",
+    ]) {
+      expect(cell(csv, col)).toBe("");
+    }
+  });
+});
+
 describe("buildEnergyConsumptionExportCsv -- null/unavailable freshness", () => {
   it("freshness_state and freshness_as_of are empty, not a fabricated state", () => {
     const csv = buildEnergyConsumptionExportCsv({

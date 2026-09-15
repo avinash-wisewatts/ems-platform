@@ -17,6 +17,49 @@ vi.mock("../../export/downloadCsv", () => ({
 
 const SITE_ID = SITES_ONE.sites[0]!.site_id;
 
+/** Minimal RFC4180-aware line splitter for wiring-test assertions --
+ *  mirrors energyExportCsv.test.ts's own helper (quoted fields, e.g.
+ *  comparison_basis_label, may contain commas that a naive split would
+ *  break on). This file only needs it to check that the real component
+ *  state (current vs. comparison, selected basis) lands in the correct
+ *  column -- the CSV's full schema/escaping is energyExportCsv.test.ts's
+ *  responsibility, not this one's. */
+function csvCell(csv: string, column: string): string {
+  const lines = csv.trim().split("\r\n");
+  const split = (line: string) => {
+    const cells: string[] = [];
+    let value = "";
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (inQuotes) {
+        if (ch === '"' && line[i + 1] === '"') {
+          value += '"';
+          i++;
+        } else if (ch === '"') {
+          inQuotes = false;
+        } else {
+          value += ch;
+        }
+      } else if (ch === '"') {
+        inQuotes = true;
+      } else if (ch === ",") {
+        cells.push(value);
+        value = "";
+      } else {
+        value += ch;
+      }
+    }
+    cells.push(value);
+    return cells;
+  };
+  const header = split(lines[0] ?? "");
+  const row = split(lines[1] ?? "");
+  const idx = header.indexOf(column);
+  expect(idx).toBeGreaterThanOrEqual(0);
+  return row[idx] ?? "";
+}
+
 function energyResponse(importKwh: number, noData = false) {
   return {
     site_id: SITE_ID,
@@ -382,10 +425,16 @@ describe("EnergyOverview (Slice A/C -- Energy Performance)", () => {
 
     it("the Export action appears once the screen is ready and triggers a CSV download of the currently displayed period/basis", async () => {
       mockDownloadCsv.mockClear();
+      let consumptionCalls = 0;
       stubFetch((url) => {
         if (isFreshnessUrl(url)) return { jsonBody: freshnessResponse() };
         if (isEvidenceUrl(url)) return { jsonBody: evidenceResponse() };
-        if (isConsumptionUrl(url)) return { jsonBody: energyResponse(120) };
+        if (isConsumptionUrl(url)) {
+          consumptionCalls += 1;
+          // Distinct current/comparison values -- a current/comparison
+          // column swap in the export would fail this test.
+          return { jsonBody: consumptionCalls === 1 ? energyResponse(120) : energyResponse(100) };
+        }
         return { status: 404, jsonBody: { error: "not_found", detail: "unexpected" } };
       });
 
@@ -398,9 +447,9 @@ describe("EnergyOverview (Slice A/C -- Energy Performance)", () => {
       expect(mockDownloadCsv).toHaveBeenCalledTimes(1);
       const [filename, csv] = mockDownloadCsv.mock.calls[0] as [string, string];
       expect(filename).toMatch(/^energy-consumption-.*\.csv$/);
-      expect(csv).toContain("current_value_kwh");
-      expect(csv).toContain("120.0");
-      expect(csv).toContain("PREVIOUS_PERIOD");
+      expect(csvCell(csv, "current_value_kwh")).toBe("120.0");
+      expect(csvCell(csv, "comparison_value_kwh")).toBe("100.0");
+      expect(csvCell(csv, "comparison_basis")).toBe("PREVIOUS_PERIOD");
     });
 
     it("preserves the currently selected comparison basis in the exported CSV", async () => {
