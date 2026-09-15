@@ -59,6 +59,8 @@ def _alert_row(
     resolved_value: float | None = None,
     ended_at: datetime | None = None,
     ended_reason: str | None = None,
+    ended_reason_code: str | None = None,
+    data_unavailable: bool = False,
     previous_occurrence_count: int = 0,
     most_recent_previous_triggered_at: datetime | None = None,
 ) -> dict[str, Any]:
@@ -76,6 +78,8 @@ def _alert_row(
         "resolved_value": resolved_value,
         "ended_at": ended_at,
         "ended_reason": ended_reason,
+        "ended_reason_code": ended_reason_code,
+        "data_unavailable": data_unavailable,
         "previous_occurrence_count": previous_occurrence_count,
         "most_recent_previous_triggered_at": most_recent_previous_triggered_at,
     }
@@ -161,6 +165,7 @@ def test_site_alerts_ended_row_carries_reason_not_resolved_fields(portal_client,
                 state="ENDED",
                 ended_at=datetime(2026, 9, 14, 11, 0, tzinfo=timezone.utc),
                 ended_reason="Attention condition configuration changed",
+                ended_reason_code="CONFIGURATION_CHANGED",
             )
         ]
 
@@ -172,8 +177,63 @@ def test_site_alerts_ended_row_carries_reason_not_resolved_fields(portal_client,
     alert = response.json()["alerts"][0]
     assert alert["state"] == "ENDED"
     assert alert["ended_reason"] == "Attention condition configuration changed"
+    assert alert["ended_reason_code"] == "CONFIGURATION_CHANGED"
     assert alert["resolved_at"] is None
     assert alert["resolved_value"] is None
+
+
+def test_active_alert_reports_data_unavailable_flag(portal_client, monkeypatch) -> None:
+    """ADR-016 section 4 (amended 2026-09-15, migration 242): the API must
+    expose the persisted data-unavailable flag so the frontend can show the
+    required "Unable to evaluate" / "Latest value: Data unavailable"
+    messaging -- this is a pass-through contract check only; the flag's
+    origin (analytics.evaluate_alerts()) is not exercised here, see
+    test_alert_evaluation_contract.py / the live-execution lifecycle test."""
+    _login_global_admin(portal_client, monkeypatch)
+
+    async def yes(portal_user_id, site_id):
+        return True
+
+    async def rows(**kwargs):
+        return [_alert_row(data_unavailable=True)]
+
+    monkeypatch.setattr("src.routers.analytics_api.portal_user_can_access_site", yes)
+    monkeypatch.setattr("src.routers.analytics_api.fetch_site_alerts", rows)
+
+    response = portal_client.get(f"/api/v1/sites/{SITE_ID}/alerts", params={"state": "ACTIVE"})
+    assert response.status_code == 200
+    alert = response.json()["alerts"][0]
+    assert alert["state"] == "ACTIVE"
+    assert alert["data_unavailable"] is True
+
+
+def test_ended_row_distinguishes_data_unavailable_from_configuration_changed(portal_client, monkeypatch) -> None:
+    """The two Ended causes (ADR-016 section 7, amended 2026-09-15) must be
+    distinguishable via the controlled ended_reason_code, not just the free-
+    text ended_reason."""
+    _login_global_admin(portal_client, monkeypatch)
+
+    async def yes(portal_user_id, site_id):
+        return True
+
+    async def rows(**kwargs):
+        return [
+            _alert_row(
+                state="ENDED",
+                ended_at=datetime(2026, 9, 15, 12, 0, tzinfo=timezone.utc),
+                ended_reason="Data was unavailable while this alert was active",
+                ended_reason_code="DATA_UNAVAILABLE",
+            )
+        ]
+
+    monkeypatch.setattr("src.routers.analytics_api.portal_user_can_access_site", yes)
+    monkeypatch.setattr("src.routers.analytics_api.fetch_site_alerts", rows)
+
+    response = portal_client.get(f"/api/v1/sites/{SITE_ID}/alerts", params={"state": "ENDED"})
+    assert response.status_code == 200
+    alert = response.json()["alerts"][0]
+    assert alert["ended_reason_code"] == "DATA_UNAVAILABLE"
+    assert alert["ended_reason_code"] != "CONFIGURATION_CHANGED"
 
 
 def test_alert_detail_404_when_no_row(portal_client, monkeypatch) -> None:

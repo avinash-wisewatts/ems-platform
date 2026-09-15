@@ -27,12 +27,14 @@ explicitly authorized and disabled on staging** (still registered, config
 intact, `scheduled = false`, confirmed no further executions) to stop the
 recurring failures pending a fix. **A third same-day corrective migration
 (241)** then removed `SECURITY DEFINER`/`SET search_path` from
-`evaluate_alerts()` — implemented and tested locally (including a real
-live-execution integration test against a disposable TimescaleDB
-database), **NOT yet deployed to staging**; job 1127 remains disabled.
-No alert has been or can currently be generated. MVP-7 remains NOT
-functional/released/lifecycle-validated pending deployment of migration
-241, re-enabling the job, and confirmation it runs successfully there —
+`evaluate_alerts()` — implemented, tested locally, **deployed to staging
+(PR #61, revision `a533773`)**, and **job 1127 has been explicitly
+authorized, re-enabled, and confirmed executing successfully** — live
+`job_stats` shows `Success`, and `job_errors` shows zero new errors since
+re-enabling (still only the original 3 pre-fix `2D000` rows). MVP-7 is
+still NOT functional as a released customer feature and NOT
+lifecycle-validated — the running job's own qualification/resolution/
+recurrence behavior over time has not yet been observed or validated —
 see [alerts/README.md](../../07-features/alerts/README.md) for full
 detail and current status.
 See [ADR-017](ADR-017-mvp7-alert-architecture.md) for the architecture that
@@ -144,13 +146,23 @@ establishing the clear supplies the resolution time and resolution value.
 **4. Data unavailable while Active, and recovery.** If an Active alert's
 underlying data becomes unavailable, the alert **remains Active** (not
 auto-resolved); the customer sees "Unable to evaluate — data unavailable" /
-"Latest value: Data unavailable." When data returns, the previous Active
-alert is resolved/ended per the applicable rule (§3 or §6 below as
-appropriate); if the condition is still true after recovery, a **fresh
-5-minute qualification** is required before a new alert is generated — the
-previous alert must not simply continue into a new occurrence, and no
-alert is immediately recreated merely because the condition is still true
-when data returns.
+"Latest value: Data unavailable." **When data returns (amended
+2026-09-15, resolving the ambiguity a corrective-design review found in
+the original wording below — see §7 and Evidence):**
+- **if the condition is no longer material, the existing alert follows the
+  normal resolution path (§3)** — unchanged from the original decision;
+- **if the condition is still material, the existing alert becomes
+  Ended** — a second, distinct Ended cause alongside §8's
+  configuration-change cause (see §7) — **with a data-unavailable
+  termination reason, and a fresh 5-minute qualification period starts
+  from the observation that detected the recovery.** The old alert must
+  not continue as the same occurrence, and no alert is immediately
+  recreated merely because the condition is still true when data returns.
+- Original wording, superseded by the above: ~~"the previous Active alert
+  is resolved/ended per the applicable rule (§3 or §6 below as
+  appropriate)"~~ — this left open which of Resolved/Ended applied when
+  the condition was still true on recovery; neither §3 nor §6 actually
+  covered that case. The amendment above is the resolution.
 
 **5. Restart/deployment resilience.** Persisted alert records (Active,
 Resolved, Ended) survive service restart/deployment — no disappearance, no
@@ -172,13 +184,27 @@ failure as a customer-visible alert. The exact discard/operational-record
 mechanism is explicitly an implementation detail, not decided here (see
 "Not decided here").
 
-**7. Alert states.** Exactly three customer-visible states: **Active**
-(condition remains true), **Resolved** (condition cleared normally,
-satisfied the 1-minute continuous-clear requirement), **Ended** (lifecycle
-terminated because the underlying Attention configuration was disabled or
-changed — explicitly **not** Resolved).
+**7. Alert states.** Exactly three customer-visible states — **unchanged,
+still exactly three (amended 2026-09-15 to broaden Ended's cause list
+only; no fourth state introduced — see §4)**: **Active** (condition
+remains true), **Resolved** (condition cleared normally, satisfied the
+1-minute continuous-clear requirement — the condition actually cleared;
+this is the only case that produces Resolved), **Ended** (lifecycle
+terminated for a reason **other than** normal condition clearing —
+explicitly **not** Resolved). Ended currently has exactly two causes,
+each with its own distinct, controlled termination reason (see §4, §8):
+(a) the underlying Attention configuration was disabled or changed
+(§8 — the original, only-documented cause); (b) the alert was Active
+through a data-unavailable gap and, when data returned, the condition was
+still material (§4, added by this amendment). The reason representation
+distinguishing (a) from (b) is a controlled/enumerated value, not
+arbitrary free text — exact representation is an implementation detail,
+not decided here (see the implementation design this amendment
+references in Evidence).
 
-**8. Configuration-change transitions.**
+**8. Configuration-change transitions.** (One of Ended's two causes — the
+other, data-unavailable-on-recovery, is §4, added by the 2026-09-15
+amendment; the two are independent triggers and do not interact.)
 - *Disabling* a condition: stop generating new alerts immediately; any
   existing Active alert becomes **Ended** (not auto-Resolved), recording
   when and why (reason: configuration disabled/changed).
@@ -404,6 +430,18 @@ decisions, not the deliberation or alternatives weighed to reach them.
 
 ## Evidence / references
 
+- **§4/§7 amendment (2026-09-15)**: a read-only corrective-design review
+  identified that the original §4 wording ("resolved/ended per the
+  applicable rule (§3 or §6 as appropriate)") did not actually specify an
+  outcome for "condition still material when data returns" — neither §3
+  nor §6 covers that case. Three options (Resolved / Ended / a new fourth
+  state) were presented without a recommendation; **Ended was selected**,
+  as recorded above. See `docs/07-features/alerts/README.md` and
+  `docs/08-verification/mvp7-alerts-staging-lifecycle-validation.md` for
+  the implementation-design/specified-vs-implemented status this
+  amendment produced, and [ADR-017](ADR-017-mvp7-alert-architecture.md)
+  for the corresponding conceptual-data-model addition
+  (`data_unavailable`, controlled Ended-reason representation).
 - Q77/MVP-7 Basic Alerts — Discovery Decision Handoff (this session,
   2026-09-14; transferred from a ChatGPT conversation not itself stored in
   this repository — same "cited decision source not present as a file"

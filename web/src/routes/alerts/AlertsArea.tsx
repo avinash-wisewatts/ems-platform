@@ -12,7 +12,10 @@
  *     decision 47's substance -- no traditional page-number pagination --
  *     is preserved; the trigger mechanism is simplified).
  *   - The detail panel does not re-fetch a live "latest value" (ADR-016
- *     decision 34) -- only the persisted trigger/resolved values are shown.
+ *     decision 34) -- only the persisted trigger/resolved values are shown,
+ *     EXCEPT while data_unavailable is set on an Active alert (ADR-016
+ *     section 4, migration 242), which is shown explicitly rather than a
+ *     stale/misleading number.
  *   - The date-range filter is keyed to triggered time for every tab
  *     (`from`/`to` on GET .../alerts). ADR-016 decision 48 specifies
  *     resolved time for Resolved and ended time for Ended;
@@ -95,6 +98,25 @@ function thresholdReferenceLabel(conditionKey: string): string {
   return conditionKey;
 }
 
+/** Customer-facing wording per controlled ended_reason_code (ADR-016
+ *  section 7, amended 2026-09-15) -- the CODE is the product decision
+ *  (exactly these two causes exist today); this mapping's exact strings
+ *  are an implementation/content detail, deliberately not the same thing,
+ *  and changeable without a data migration. Falls back to the raw
+ *  ended_reason column for a null/unrecognized code (defensive only --
+ *  every code this frontend knows how to produce is listed here). */
+const ENDED_REASON_LABELS: Record<"CONFIGURATION_CHANGED" | "DATA_UNAVAILABLE", string> = {
+  CONFIGURATION_CHANGED: "Alert configuration changed",
+  DATA_UNAVAILABLE: "Data was unavailable while this alert was active",
+};
+
+function endedReasonLabel(alert: Alert): string {
+  if (alert.ended_reason_code) {
+    return ENDED_REASON_LABELS[alert.ended_reason_code];
+  }
+  return alert.ended_reason ?? "—";
+}
+
 function AlertStateBadge({ state }: { state: AlertState }) {
   return (
     <span className={`alert-badge alert-badge--${state.toLowerCase()}`} data-testid="alert-state-badge">
@@ -135,6 +157,11 @@ function AlertDetailPanel({
       <h2>{conditionLabel(alert.condition_key)}</h2>
       <HierarchyCrumb siteName={siteName} multiSite={multiSite} leaf={null} />
       <AlertStateBadge state={alert.state} />
+      {alert.state === "ACTIVE" && alert.data_unavailable ? (
+        <p className="alert-detail__unavailable" data-testid="alert-data-unavailable">
+          Unable to evaluate — data unavailable
+        </p>
+      ) : null}
       <dl>
         <dt>Triggered</dt>
         <dd>{formatTimestamp(alert.triggered_at)}</dd>
@@ -142,6 +169,12 @@ function AlertDetailPanel({
         <dd>{alert.trigger_value.toFixed(2)} kWh</dd>
         <dt>Threshold/reference</dt>
         <dd>{thresholdReferenceLabel(alert.condition_key)}</dd>
+        {alert.state === "ACTIVE" && alert.data_unavailable ? (
+          <>
+            <dt>Latest value</dt>
+            <dd data-testid="alert-latest-value">Data unavailable</dd>
+          </>
+        ) : null}
         {alert.state === "RESOLVED" ? (
           <>
             <dt>Resolution value</dt>
@@ -155,7 +188,7 @@ function AlertDetailPanel({
             <dt>Ended</dt>
             <dd>{alert.ended_at ? formatTimestamp(alert.ended_at) : "—"}</dd>
             <dt>Reason</dt>
-            <dd>{alert.ended_reason ?? "—"}</dd>
+            <dd>{endedReasonLabel(alert)}</dd>
           </>
         ) : null}
         <dt>Previous occurrences</dt>
