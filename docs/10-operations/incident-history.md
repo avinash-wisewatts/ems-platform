@@ -130,6 +130,74 @@ rows the Best Energy "Air Sense" sensor needed. The architectural gap
 general reference seed) remains open — see
 [../06-platform/telemetry/onboarding-and-commissioning.md](../06-platform/telemetry/onboarding-and-commissioning.md).
 
+## Job 1068 auto-disabled by unbounded catch-up window (2026-09-04, fix implemented 2026-09-15, NOT yet deployed)
+
+**Status: fix implemented and locally tested on branch
+`fix/job-1068-raw-message-failure-capture-bounded-catchup` (migration 243).
+NOT merged, NOT deployed to staging or production, job 1068 remains disabled
+on staging.** This entry records the incident and the implemented-but-not-yet-
+deployed remediation together so the two are not conflated.
+
+**Incident:** `telemetry.run_raw_message_failure_capture_job` (job 1068,
+the raw-message failure quarantine/capture job that feeds job 1077's
+recovery queue) stopped succeeding on staging after 2026-08-30 14:28:47 and
+was auto-unscheduled by TimescaleDB itself on 2026-09-04 12:22:38
+("`Job 1068 unscheduled as max_retries reached 3, consecutive failures
+709`"). Root cause, read-only-investigated 2026-09-15: `telemetry.
+capture_raw_message_failures_incremental` (as redefined by migration 007 —
+baseline/003/006 are all superseded) computes its forward boundary as
+`LEAST(v_normalized_checkpoint, clock_timestamp()-p_grace)` with **no cap**
+on how far behind the checkpoint may trail — the exact same failure class
+migration 205 fixed for job 1000 in the 2026-08-26 incident above. Once the
+gap grew past the job's 5-minute `max_runtime`, every 5-minute attempt
+re-faced an equal-or-wider window and could make no durable progress, until
+TimescaleDB's own `max_retries` auto-disable kicked in. As of this
+investigation, `telemetry.raw_messages`' 48-hour retention means the
+~12–13 day gap between the last successful capture (2026-08-30) and the
+retention floor is already **permanently unrecoverable** (never quarantined,
+source rows purged); only the rolling 48-hour live window remains
+capturable, and shrinks further every day the job stays disabled.
+
+**Fix implemented (migration 243, NOT deployed):** mirrors migrations
+205+212 exactly — `capture_raw_message_failures_incremental` gains an
+optional third parameter `p_max_window INTERVAL DEFAULT NULL`
+(`LEAST(v_window_end, v_previous_checkpoint + p_max_window)` when supplied);
+the wrapper `run_raw_message_failure_capture_job` always derives and passes
+a validated, positive bound from `config.max_window` (unmeasured placeholder
+default `15 minutes`, explicitly not a recommendation), never `NULL`. A
+read-only design study had also proposed replacing the procedure's
+`produced_point_count` detection (an `EXISTS` against
+`telemetry.normalized_points` keyed on `(device_id, event_time,
+logical_point_id)`) with a `(platform_received_at, raw_message_id)` lookup;
+**that proposal was found, on closer reading of migration 007/006, to be
+incorrect and was NOT implemented** — migration 006 explicitly rejected
+exactly that approach, since `normalized_points.raw_message_id`/
+`platform_received_at` can be reassigned to a later replay on conflict
+("must not infer missing telemetry from mutable lineage"). Only the
+window-boundary computation was changed; the detection logic is byte-for-
+byte unchanged from migration 007.
+
+**Deliberately not done (per explicit instruction):** migration 243 does
+**not** `alter_job` job 1068's live configuration (no `config.max_window`
+merge, unlike migration 212's equivalent step for job 1000) and does **not**
+re-enable the job. A real `config.max_window` value requires staging
+performance evidence that has not yet been collected — see
+`scripts/test/staging_measure_raw_message_failure_capture_window.sh`, a
+bounded/safeguarded (60-minute cap, statement-timeout, plan-only by default,
+read-only/`ROLLBACK`-wrapped, cannot write `raw_message_failures`) measurement
+script, itself not yet run against staging. Job 1077 (recovery) was left
+completely unchanged.
+
+Tests: `scripts/test/assert_raw_message_failure_capture_bounded_catchup_window.sql`
+(disposable-DB, rollback-only, mirrors
+`assert_normalization_bounded_catchup_window.sql`'s structure) — NULL/
+unbounded regression, bounded advancement, steady state, wrapper default/
+override, invalid-config rejection, successive-run continuation, a contract
+check that job 1068's live config was not touched, and a functional
+detection-equivalence check (matching vs. non-matching
+`telemetry.normalized_points` rows still classify correctly after the
+window-bound change).
+
 ## Older history
 
 The Phase 0 → Phase 1E implementation sequence, the production read-only
