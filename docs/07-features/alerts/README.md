@@ -26,11 +26,18 @@ analytical deep links, no customer-facing severity taxonomy.
 
 Full lifecycle per ADR-016: an Attention condition qualifies after 5
 continuous minutes true (gap-resetting); an Active alert resolves after 1
-continuous minute false (gap-resetting); a configuration change Ends the
-existing alert (never Resolves it) and requires fresh qualification under a
-new identity; historical records are immutable; Resolved/Ended alerts
-retain for 90 days, Active indefinitely; recurrence is derived at read
-time from the condition's stable identity, never a stored counter.
+continuous minute false (gap-resetting); historical records are immutable;
+Resolved/Ended alerts retain for 90 days, Active indefinitely; recurrence
+is derived at read time from the condition's stable identity, never a
+stored counter. Ended has exactly two causes (ADR-016 §4/§7/§8, the
+second added by the 2026-09-15 amendment — **implemented and locally
+tested (migration 242); not yet deployed to staging/production**, see
+"Known limitations"): a configuration change, or
+an Active alert recovering from a data-unavailable gap while its
+condition is still material. Either cause Ends the existing alert (never
+Resolves it) and requires fresh qualification under a new identity —
+recovering while the condition is **no longer** material still follows
+the original, already-implemented normal resolution path instead.
 
 ## Data / API dependencies
 
@@ -118,9 +125,13 @@ and the per-site `COMMIT` (with a guaranteed fixture site) — see
 **Single source of truth**: `analytics.evaluate_energy_attention_materiality`
 (migration 239) is the canonical server-side implementation of the ±15%
 Energy Attention rule, replicating `web/src/attention/materiality-policy.ts`
-+ `energyAttention.ts` exactly (threshold 15, epsilon `1e-9`). The client
-implementation is unchanged and still drives today's MVP-3 display; a
-follow-on task (not scheduled) should migrate it to consume the
++ `energyAttention.ts` exactly (threshold 15, epsilon `1e-9`).
+**Classification parity between the two is now confirmed by an executable
+12-fixture harness (12/12 pass on both sides)** — see "Known limitations"
+below for the one documented, harmless numeric-representation asymmetry it
+found (`NUMERIC` vs. IEEE-754 `double`; classification unaffected). The
+client implementation is unchanged and still drives today's MVP-3 display;
+a follow-on task (not scheduled) should migrate it to consume the
 server-computed result, per ADR-017.
 
 ## Architecture
@@ -199,8 +210,10 @@ rows (proving the old unconditional-`triggered_at` bug is gone, not just
 that the new code compiles).
 
 **Third corrective fix — migration 241 (transaction-control defect,
-`SECURITY DEFINER`/`SET search_path` on `evaluate_alerts()`). Implemented
-and tested locally; NOT yet deployed to staging.**
+`SECURITY DEFINER`/`SET search_path` on `evaluate_alerts()`). Implemented,
+tested locally, deployed to staging (PR #61), and job 1127 re-enabled and
+confirmed executing successfully there — see "Release status" below for
+the live post-deployment/post-re-enable evidence.**
 `app/tests/test_alert_evaluation_transaction_control_fix_contract.py`
 (7/7 passed; static contract, plus the unaffected 38/38 above — 45/45
 total). **Live-execution proof, not just static text**: the new
@@ -226,10 +239,80 @@ re-execution, no duplicate, no error.
 
 ## Known limitations / deviations (this implementation pass)
 
-- **No executable cross-language parity harness** between the SQL
-  materiality function and the TypeScript implementation — ADR-017 names
-  this as a required precondition; only static/structural checks exist so
-  far (see `test_alert_evaluation_contract.py`'s own header comment).
+- **ADR-016 §4 (data-unavailable-while-Active) messaging and the
+  recovery-while-still-material Ended transition: IMPLEMENTED and locally
+  tested (migration 242, 2026-09-15). NOT YET deployed to staging/
+  production; NOT YET observed against real data.** A read-only
+  investigation traced the then-deployed `analytics.evaluate_alerts()`
+  (migration 239/241) and found: (a) the "remains Active during a gap"
+  half was correctly implemented, but the required customer messaging
+  ("Unable to evaluate — data unavailable" / "Latest value: Data
+  unavailable") did not exist at any layer; (b) recovery while the
+  condition is still material silently continued the same Active row with
+  no fresh qualification, contradicting the original decision text (found
+  ambiguous about the required end state — see ADR-016's 2026-09-15 §4/§7
+  amendment). A three-option product decision (Resolved / Ended / new
+  fourth state) was presented without a recommendation; **Ended was
+  selected**, with a controlled (`CONFIGURATION_CHANGED` /
+  `DATA_UNAVAILABLE`) reason code, not free text.
+  **Migration 242** adds `analytics.alerts.data_unavailable` /
+  `ended_reason_code` (DB-enforced enum), extends `evaluate_alerts()` with
+  the flagging and Ended-transition logic, and extends
+  `get_portal_site_alerts`/`get_portal_alert_detail` to return both
+  columns; the frontend (`AlertsArea.tsx`) renders the required messaging
+  and a controlled reason-label mapping. **Tests, all passing**: 16 static
+  SQL contract assertions
+  (`app/tests/test_mvp7_alert_data_unavailable_lifecycle_contract.py`), a
+  live-execution lifecycle test against a disposable TimescaleDB instance
+  (`scripts/test/assert_mvp7_alert_data_unavailable_lifecycle_executes.sql`
+  — the full qualify → Active → data-unavailable → recovery → Ended →
+  fresh-qualification → new-Active sequence, plus a negative/guard
+  scenario for recovery-while-not-material), extended API route tests (13
+  total) and frontend tests (11 total, `tsc`/`eslint` clean). **The live-
+  execution test caught a real, previously-latent PL/pgSQL defect** in the
+  exact pattern migration 239/241 already used
+  (`v_active_alert := NULL;` on a bare `RECORD` variable, which reverts it
+  to PostgreSQL's "not yet assigned" state) — never triggered before
+  because that branch was unreachable; fixed in both the pre-existing and
+  the new branch by a safe zero-row `SELECT * INTO ... WHERE FALSE`
+  instead. See ADR-016 §4/§7 and [ADR-017](../../00-governance/decisions/ADR-017-mvp7-alert-architecture.md)
+  for the full record.
+- ~~No executable cross-language parity harness between the SQL materiality
+  function and the TypeScript implementation.~~ **Built and passing (later
+  pass, see ADR-017 §"A1 — Single-source-of-truth arrangement," item 3).**
+  `scripts/test/assert_energy_attention_materiality_parity.sql` (12
+  fixtures, run only against the disposable `compose.test.yaml`/
+  `timescaledb-test`/`ems_test` database) and
+  `web/src/attention/materialityParity.test.ts` (same 12 fixtures, the
+  real `evaluateEnergyAttention`) both pass 12/12. One fixture
+  (`FLOAT_NOISE_REALISTIC_HIGH`, the `e64c1e3` regression case) surfaced a
+  real, previously-undocumented asymmetry — SQL's `NUMERIC` arithmetic
+  computes an exact `15.0` for a pair TypeScript's IEEE-754 `number`
+  computes as `14.999999999999988` — but **both classify `HIGH`**; this is
+  expected numeric-representation asymmetry between a decimal and a
+  binary-floating-point pipeline, not classification drift. The parity
+  requirement is classification/decision parity (same verdict for the same
+  `(current, typical)` pair), not bit-identical intermediate arithmetic.
+- **ADR-016 §8 (Configuration-change transitions, ACTIVE → ENDED):
+  NOT YET TESTED / NOT CURRENTLY TESTABLE, not VERIFIED.** The
+  ACTIVE → ENDED transition logic exists in `analytics.evaluate_alerts()`
+  (migration 239: an Active alert's stored `condition_key` is compared
+  against the freshly-evaluated one; a mismatch sets `state='ENDED'`), and
+  the simultaneous configuration-change-plus-condition-clearing precedence
+  (Ended, not Resolved) is structurally implemented — this check runs
+  unconditionally before the resolution path can begin. However, Attention
+  configuration is currently **static/hardcoded** (threshold `15` fixed in
+  both SQL and TypeScript source; no config table, Admin Portal page, or
+  API exists to change it) — so `condition_key` can never actually change
+  for a live site, and this branch is **unreachable in normal operation
+  today**, exactly as its own inline comment states. Existing tests
+  (`test_alert_evaluation_contract.py`, `test_analytics_api_v1_alerts_routes.py`)
+  provide only static string-presence / router-level mock-fixture
+  coverage, never executing the real `condition_key`-diff logic — no
+  executable lifecycle coverage exists either. Closing this gap requires
+  building a real Attention configuration mechanism first — a
+  product/architecture scope addition, not a test-data or staging
+  limitation.
 - **Evaluation period = most recent completed site-local calendar day**
   ("yesterday"), not "today so far" — a consequence of the existing
   whole-day constraint on `analytics.get_portal_site_energy_typical_reference`
@@ -318,16 +401,18 @@ re-execution, no duplicate, no error.
   this pass (out of scope — flagged, not silently fixed).
 - ~~`analytics.evaluate_alerts()`'s `COMMIT` statements were illegal
   (SQLSTATE `2D000`), so job 1127 failed on every execution once
-  registered on staging.~~ **Fixed by migration 241 — implemented and
-  tested locally, NOT yet deployed to staging.** Root cause:
-  `SECURITY DEFINER` and a `SET search_path` clause on `evaluate_alerts()`
-  (migration 239) — PostgreSQL forbids transaction control inside a
-  procedure with either property, in any calling context. Neither was
-  load-bearing (job runs as `ems_admin`, the procedure's own owner; every
-  reference is schema-qualified) — see "Data / API dependencies" above for
-  the full root-cause account and "Validation" below for local test
-  evidence. **Staging job 1127 remains explicitly disabled** — this fix
-  has not been deployed or executed there.
+  registered on staging.~~ **Fixed by migration 241 — implemented, tested
+  locally, deployed to staging (PR #61), and confirmed working under real
+  execution.** Root cause: `SECURITY DEFINER` and a `SET search_path`
+  clause on `evaluate_alerts()` (migration 239) — PostgreSQL forbids
+  transaction control inside a procedure with either property, in any
+  calling context. Neither was load-bearing (job runs as `ems_admin`, the
+  procedure's own owner; every reference is schema-qualified) — see "Data
+  / API dependencies" above for the full root-cause account. **Staging job
+  1127 was explicitly re-enabled and confirmed executing successfully**
+  (`job_stats.last_run_status = 'Success'`; `job_errors` shows zero new
+  rows since re-enabling) — see "Release status" below for the full live
+  evidence. MVP-7's broader lifecycle behavior remains unvalidated.
 - **No live database available in this environment (for most of this
   session)** — the SQL migration's
   correctness (beyond static/structural checks and manual review, which
@@ -385,28 +470,61 @@ confirmed live; still registered, config intact; confirmed no further
 executions after disabling) **to stop the recurring failures** while root
 cause was investigated.
 
-**Migration 241 (the fix) is now implemented and tested locally — it has
-NOT been deployed to staging and staging job 1127 remains disabled.**
-**MVP-7 is NOT functional, NOT released, and NOT lifecycle-validated.**
-Five states, kept distinct and none conflated:
-- **Implemented**: yes — migration 241 exists, on branch
-  `fix/mvp7-alert-evaluation-transaction-control`, not yet merged.
-- **Tested locally**: yes — static contract (7/7) and, critically, a real
-  live-execution integration test against the disposable CI-equivalent
-  TimescaleDB database (not staging) — see "Validation" above.
-- **Deployed**: **no** — migration 241 has not been applied to staging or
-  production.
-- **Operational**: **no** — staging job 1127 remains explicitly disabled
-  (`scheduled = false`); it has not been re-enabled, and it must not be
-  re-enabled or claimed to be operational until migration 241 is actually
-  deployed and executed there.
+**Migration 241 (the fix) is deployed to staging (PR #61, revision
+`a533773`) and job 1127 has been explicitly authorized, re-enabled, and
+confirmed executing successfully there — 2026-09-14.**
+**MVP-7 is still NOT functional as a released customer feature and is
+NOT lifecycle-validated.** Four states, kept distinct and none conflated:
+- **Registered**: yes — job 1127, config unchanged throughout (1-minute
+  schedule, 5-minute max runtime, 3 max retries, 1-minute retry period),
+  confirmed live post-deployment and again post-re-enable.
+- **Enabled**: yes — explicitly authorized and re-enabled
+  (`SELECT alter_job(1127, scheduled => true)`) 2026-09-14; confirmed live
+  (`scheduled = true`) immediately after.
+- **Executed successfully**: yes — confirmed directly, not inferred.
+  `timescaledb_information.job_stats` for job 1127: `last_run_status =
+  'Success'`, `last_run_started_at = 2026-09-14 22:38:04+05:30`; 3 new
+  runs occurred in the observation window, `total_successes` moved 0→3,
+  `total_failures` stayed at 3 (the original 3 pre-fix runs — no new
+  failures added). `timescaledb_information.job_errors` for job 1127:
+  still exactly the same 3 pre-fix rows (21:04-21:06, all `2D000`) — **zero
+  new errors of any kind**, confirming the transaction-control fix holds
+  under real execution, not just the disposable-container test. Deployed
+  `pg_get_functiondef('analytics.evaluate_alerts()')` fetched and byte-diffed
+  against migration 241's source: identical, confirming no drift between
+  what was deployed and what was tested.
 - **Lifecycle-validated**: **no** — proving the procedure now *executes*
-  without error is not the same as validating what it *produces* over
-  real qualification/resolution/recurrence cycles; that broader MVP-7
-  lifecycle validation remains deferred pending a working, deployed,
-  re-enabled job.
+  successfully is not the same as validating what it *produces* over real
+  qualification/resolution/recurrence cycles. Observed (read-only, nothing
+  manufactured): `analytics.alerts` = 0 rows;
+  `analytics.alert_evaluation_candidates` = 2 rows — real qualification
+  timers the running job has organically started against real staging
+  site data (not created or forced by this session). 0 Active alerts is
+  expected at this point regardless of outcome: qualification requires 5
+  continuous minutes, and only a few evaluation cycles have elapsed since
+  re-enabling. Whether either candidate reaches qualification, and what
+  the full lifecycle then does, is exactly the broader MVP-7 lifecycle
+  validation this pass deliberately does not perform.
 
-Next required steps, each needing separate explicit authorization: deploy
-migration 241 to staging, re-enable job 1127, confirm it executes
-successfully there, and only then perform the broader MVP-7 lifecycle
-validation.
+**Lifecycle validation, Part 1 (qualification → Active): PASS**, using
+real staging data, nothing manufactured — both real candidates naturally
+qualified (5 continuous minutes) and became exactly 2 `ACTIVE` alerts
+(`Unit 2`, `Coimbatore`), persisted fields verified against the MVP-7
+contract, duplicate suppression confirmed live across multiple further
+evaluation cycles, zero evaluator errors throughout. **Part 2
+(Active → Resolved): BLOCKED by staging data, not attempted around** —
+both sites' Energy Attention evaluation is pinned to a fixed prior
+calendar day ("yesterday"), confirmed live, which cannot change intraday
+regardless of how many more 1-minute cycles run; no naturally-clearing
+condition was available to time a resolution against, and none was
+manufactured. Full evidence:
+[08-verification/mvp7-alerts-staging-lifecycle-validation.md](../../08-verification/mvp7-alerts-staging-lifecycle-validation.md).
+**Not yet validated**: resolution (blocked, see above), recurrence beyond
+zero-prior-occurrence, data-gap/recovery, retention, and UI/frontend
+rendering of these real alerts — each remains a separate, explicitly
+authorized next step. **Configuration-transition (§8) is NOT YET TESTED /
+NOT CURRENTLY TESTABLE**, not merely unvalidated — see "Known limitations"
+above: the transition logic exists and is structurally sound, but no
+runtime Attention configuration mechanism exists to ever invoke it, so
+building one is a prerequisite, not a test-scheduling matter. MVP-7 is
+still not released as a functional customer feature.

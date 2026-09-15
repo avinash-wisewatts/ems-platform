@@ -290,6 +290,8 @@ class AlertSummary(BaseModel):
     resolved_value: float | None = None
     ended_at: datetime | None = None
     ended_reason: str | None = None
+    ended_reason_code: str | None = None
+    data_unavailable: bool = False
     previous_occurrence_count: int
     most_recent_previous_occurrence_at: datetime | None = None
 
@@ -761,6 +763,7 @@ async def fetch_site_alerts(
         SELECT
             alert_id, site_id, space_id, asset_id, condition_key, metric, state,
             triggered_at, trigger_value, resolved_at, resolved_value, ended_at, ended_reason,
+            ended_reason_code, data_unavailable,
             previous_occurrence_count, most_recent_previous_triggered_at
         FROM analytics.get_portal_site_alerts(%s, %s, %s, %s, %s, %s, %s, %s)
         """,
@@ -787,6 +790,7 @@ async def fetch_alert_detail(
         SELECT
             alert_id, site_id, space_id, asset_id, condition_key, metric, state,
             triggered_at, trigger_value, resolved_at, resolved_value, ended_at, ended_reason,
+            ended_reason_code, data_unavailable,
             previous_occurrence_count, most_recent_previous_triggered_at
         FROM analytics.get_portal_alert_detail(%s, %s)
         """,
@@ -811,6 +815,8 @@ def build_alert_summary(row: dict[str, Any]) -> AlertSummary:
         ),
         ended_at=row["ended_at"],
         ended_reason=row["ended_reason"],
+        ended_reason_code=row["ended_reason_code"],
+        data_unavailable=bool(row["data_unavailable"]),
         previous_occurrence_count=int(row["previous_occurrence_count"] or 0),
         most_recent_previous_occurrence_at=row["most_recent_previous_triggered_at"],
     )

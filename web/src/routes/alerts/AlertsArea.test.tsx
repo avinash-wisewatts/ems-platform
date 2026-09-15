@@ -21,6 +21,8 @@ function alertFixture(overrides: Record<string, unknown> = {}) {
     resolved_value: null,
     ended_at: null,
     ended_reason: null,
+    ended_reason_code: null,
+    data_unavailable: false,
     previous_occurrence_count: 0,
     most_recent_previous_occurrence_at: null,
     ...overrides,
@@ -207,6 +209,88 @@ describe("AlertsArea (MVP-7, ADR-016/ADR-017)", () => {
         `condition_key=${encodeURIComponent(CONDITION_KEY)}`,
       ),
     );
+  });
+
+  it("Active alert with data_unavailable shows the required unavailable messaging (ADR-016 section 4, migration 242)", async () => {
+    stubFetch((url) => {
+      if (url.includes(`/api/v1/sites/${SITE_ID}/alerts`)) {
+        return { jsonBody: { site_id: SITE_ID, alerts: [alertFixture({ data_unavailable: true })] } };
+      }
+      if (url.includes("/api/v1/alerts/33333333-3333-4333-8333-333333333333")) {
+        return { jsonBody: alertFixture({ data_unavailable: true }) };
+      }
+      return { status: 404, jsonBody: { error: "not_found", detail: "unexpected" } };
+    });
+
+    renderWithProviders(<AlertsArea />, { sites: () => Promise.resolve(SITES_ONE) });
+    await waitFor(() => expect(screen.getByTestId("alert-list")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("alert-item-33333333-3333-4333-8333-333333333333"));
+
+    await waitFor(() => expect(screen.getByTestId("alert-detail")).toBeTruthy());
+    expect(screen.getByTestId("alert-data-unavailable")).toHaveTextContent(
+      "Unable to evaluate — data unavailable",
+    );
+    expect(screen.getByTestId("alert-latest-value")).toHaveTextContent("Data unavailable");
+  });
+
+  it("Active alert without data_unavailable shows neither unavailable string (regression guard)", async () => {
+    stubFetch((url) => {
+      if (url.includes(`/api/v1/sites/${SITE_ID}/alerts`)) {
+        return { jsonBody: { site_id: SITE_ID, alerts: [alertFixture()] } };
+      }
+      if (url.includes("/api/v1/alerts/33333333-3333-4333-8333-333333333333")) {
+        return { jsonBody: alertFixture() };
+      }
+      return { status: 404, jsonBody: { error: "not_found", detail: "unexpected" } };
+    });
+
+    renderWithProviders(<AlertsArea />, { sites: () => Promise.resolve(SITES_ONE) });
+    await waitFor(() => expect(screen.getByTestId("alert-list")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("alert-item-33333333-3333-4333-8333-333333333333"));
+
+    await waitFor(() => expect(screen.getByTestId("alert-detail")).toBeTruthy());
+    expect(screen.queryByTestId("alert-data-unavailable")).toBeNull();
+    expect(screen.queryByTestId("alert-latest-value")).toBeNull();
+  });
+
+  it("Ended alert with ended_reason_code=DATA_UNAVAILABLE shows the mapped label, distinct from a configuration-change ending", async () => {
+    stubFetch((url) => {
+      if (url.includes("state=ENDED") && !url.includes("/api/v1/alerts/")) {
+        return {
+          jsonBody: {
+            site_id: SITE_ID,
+            alerts: [
+              alertFixture({
+                state: "ENDED",
+                ended_at: "2026-09-15T12:00:00Z",
+                ended_reason: "Data was unavailable while this alert was active",
+                ended_reason_code: "DATA_UNAVAILABLE",
+              }),
+            ],
+          },
+        };
+      }
+      if (url.includes("/api/v1/alerts/33333333-3333-4333-8333-333333333333")) {
+        return {
+          jsonBody: alertFixture({
+            state: "ENDED",
+            ended_at: "2026-09-15T12:00:00Z",
+            ended_reason: "Data was unavailable while this alert was active",
+            ended_reason_code: "DATA_UNAVAILABLE",
+          }),
+        };
+      }
+      return { jsonBody: { site_id: SITE_ID, alerts: [] } };
+    });
+
+    renderWithProviders(<AlertsArea />, { sites: () => Promise.resolve(SITES_ONE) });
+    fireEvent.click(await screen.findByTestId("alerts-tab-ended"));
+    await waitFor(() => expect(screen.getByTestId("alert-list")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("alert-item-33333333-3333-4333-8333-333333333333"));
+
+    await waitFor(() => expect(screen.getByTestId("alert-detail")).toBeTruthy());
+    const detail = screen.getByTestId("alert-detail");
+    expect(detail.textContent).toContain("Data was unavailable while this alert was active");
   });
 
   it("never exposes internal identifiers in the rendered list or detail", async () => {

@@ -312,6 +312,8 @@ export type Alert = {
   resolved_value: number | null;
   ended_at: string | null;
   ended_reason: string | null;
+  ended_reason_code: "CONFIGURATION_CHANGED" | "DATA_UNAVAILABLE" | null;
+  data_unavailable: boolean;
   previous_occurrence_count: number;
   most_recent_previous_occurrence_at: string | null;
 };

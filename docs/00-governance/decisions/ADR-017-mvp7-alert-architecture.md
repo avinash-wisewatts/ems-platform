@@ -46,15 +46,23 @@ nests a `CALL` to a separate business-logic procedure; that pattern was
 never the defect). Neither removed property was load-bearing: job 1127's
 owner (confirmed live) is `ems_admin`, the same role that already owns
 `evaluate_alerts()` and its tables; every reference in the body is
-already schema-qualified. **Implemented and tested locally — including a
-live-execution integration test
-(`scripts/test/assert_mvp7_alert_evaluation_job_executes.sh`) against a
-disposable TimescaleDB database, proving the real, unmodified
-`run_alert_evaluation_job()` → `evaluate_alerts()` path now executes
-without error — but NOT yet deployed to staging or production; job 1127
-remains disabled.** See
-[07-features/alerts/README.md](../../07-features/alerts/README.md) for
-full detail and current status.
+already schema-qualified. **Implemented, tested locally (including a
+live-execution integration test,
+`scripts/test/assert_mvp7_alert_evaluation_job_executes.sh`, against a
+disposable TimescaleDB database), and deployed to staging** (PR #61,
+revision `a533773`). **Job 1127 was then explicitly authorized,
+re-enabled, and confirmed executing successfully there**: live
+`timescaledb_information.job_stats` shows `last_run_status = 'Success'`
+(3 new runs, 3 new successes, 0 new failures); live
+`timescaledb_information.job_errors` shows zero new rows since
+re-enabling (still exactly the original 3 pre-fix `2D000` entries) — the
+real, deployed, unmodified `run_alert_evaluation_job()` →
+`evaluate_alerts()` path now executes cleanly under actual TimescaleDB
+job scheduling, not just in a disposable test container. MVP-7's broader
+lifecycle (qualification/resolution/recurrence/retention) has NOT been
+validated — not performed in this pass. Production untouched throughout.
+See [07-features/alerts/README.md](../../07-features/alerts/README.md)
+for full detail and current status.
 Date: 2026-09-14
 Decision owners: Product/Architecture (ratification of the two options
 identified in this session's architecture investigation brief)
@@ -141,9 +149,35 @@ arrangement:
    classification agrees with the TypeScript function's classification
    across the same class of fixtures that caught the original `e64c1e3`
    boundary defect (values mathematically exactly at ±15%, non-round
-   floating-point inputs). This test is an implementation task, not
-   performed in this pass, but its existence is now a **required
-   precondition**, recorded here so it cannot be silently skipped.
+   floating-point inputs). **Built and passing, this pass**: a 12-fixture
+   parity harness — `scripts/test/assert_energy_attention_materiality_parity.sql`
+   (SQL side, run only against the disposable `compose.test.yaml`/
+   `timescaledb-test`/`ems_test` database, never staging/production) and
+   `web/src/attention/materialityParity.test.ts` (TypeScript side, calling
+   the real, unmodified `evaluateEnergyAttention`) — both independently
+   check the same 12 named fixtures against the same expected
+   `(deviation_percent, is_material, direction)` table. **Result: 12/12
+   pass on both sides.** One fixture (`FLOAT_NOISE_REALISTIC_HIGH`,
+   current=158.01/typical=137.4, the exact `e64c1e3` regression case)
+   surfaced a genuine, previously-undocumented asymmetry: SQL computes this
+   pair's `deviation_percent` as an exact `15.00000000000000000000`
+   (`analytics.energy_consumption_daily.import_consumption_kwh` and the
+   function's internal arithmetic are `NUMERIC`, only cast to
+   `DOUBLE PRECISION` at the final `RETURN QUERY`), while TypeScript's
+   IEEE-754 `number` division yields `14.999999999999988` — a ~1e-14
+   difference. **Both still classify `HIGH`.** This is expected
+   numeric-representation asymmetry between a decimal (`NUMERIC`) and a
+   binary-floating-point (IEEE-754 `double`) arithmetic pipeline, not
+   classification drift — the parity requirement this ADR names is
+   **classification/decision parity** (does the same `(current, typical)`
+   pair produce the same `HIGH`/`LOW`/not-material verdict), **not
+   bit-identical intermediate arithmetic** between the two languages' raw
+   `deviation_percent` values. A practical consequence, also confirmed:
+   the 1e-9 epsilon is not actually load-bearing on the SQL side for
+   realistic data the way it is on the TypeScript side (NUMERIC division
+   doesn't exhibit the binary-representation rounding the epsilon was
+   introduced to absorb) — harmless to keep, but not doing the same work
+   in both places.
 
 This is the "appropriate source-of-truth/evaluation arrangement": SQL
 becomes canonical for the concern that now needs it (alerting), the client
@@ -228,6 +262,24 @@ scope for this pass. Working shape, for design purposes:
   `trigger_value`; `resolved_at`, `resolved_value` (null until Resolved);
   `ended_at`, `ended_reason` (null until Ended); `last_evaluated_at`
   (bookkeeping).
+- **Data-unavailability tracking (added by the ADR-016 §4/§7 amendment,
+  2026-09-15 — IMPLEMENTED, migration 242, `analytics.alerts.data_unavailable`
+  / `analytics.alerts.ended_reason_code`; tested via static SQL contract,
+  a live-execution lifecycle test against a disposable TimescaleDB
+  instance, and API/frontend contract tests — NOT YET deployed to
+  staging/production)**: `data_unavailable`
+  (boolean, true while an Active alert's underlying evaluation cannot
+  complete — cleared the moment evaluation succeeds again) and a
+  **controlled, enumerated `ended_reason_code`** distinguishing Ended's
+  now-two causes (values:
+  `CONFIGURATION_CHANGED` / `DATA_UNAVAILABLE`, DB-enforced via
+  `ck_alerts_ended_reason_code_values`) — the code is the product
+  decision (exactly these two causes exist today); the customer-facing
+  wording per code is a separate, unfixed implementation/content
+  decision, deliberately not the same thing. The existing free-text
+  `ended_reason` column's relationship to this new code (kept verbatim,
+  derived from the code, or retired) is an implementation choice, not
+  finalized here.
 - **Recurrence**: deliberately **not** stored as a separate counter —
   "previous occurrences"/"most recent" (ADR-016 decision 10) are derived by
   querying prior rows sharing the same condition identity within the
@@ -417,11 +469,41 @@ Backend: `app/tests/test_analytics_api_v1_alerts_routes.py` (9 tests, API
 contract), `app/tests/test_alert_evaluation_contract.py` (16 tests, static
 SQL contract). Frontend: `web/src/routes/alerts/AlertsArea.test.tsx` (6
 tests) + updated `navigation.test.ts`; full frontend suite, `tsc --noEmit`,
-`eslint --max-warnings 0`, and `vite build` all pass. **Not performed**:
-the executable cross-language parity test between the SQL materiality
-function and the TypeScript implementation this ADR names as a required
-precondition (§"A1 — Single-source-of-truth arrangement," item 3) — only
-static/structural checks exist; see this session's implementation report
-and `docs/07-features/alerts/README.md` "Known limitations." No live
-TimescaleDB instance was available locally to execute the SQL migrations
-themselves — relies on the CI database/migration integration job.
+`eslint --max-warnings 0`, and `vite build` all pass. **Cross-language
+parity — built and executed, later pass (see §"A1 — Single-source-of-truth
+arrangement," item 3 above for the full account)**:
+`scripts/test/assert_energy_attention_materiality_parity.sql` (SQL side,
+12/12 pass, run against the disposable test database only) and
+`web/src/attention/materialityParity.test.ts` (TypeScript side, 12/12
+pass, real `evaluateEnergyAttention`, full `web/src/attention/` suite
+38/38, `tsc`/`eslint` clean). The required precondition this ADR names is
+now satisfied: classification/decision parity confirmed across the
+`e64c1e3` boundary-defect fixture class, with one documented, harmless
+numeric-representation asymmetry (`NUMERIC` vs. IEEE-754 `double`) that
+does not affect classification. No live TimescaleDB instance was available
+locally to execute the SQL migrations themselves — relies on the CI
+database/migration integration job.
+
+**Migration 242 (ADR-016 §4/§7 amendment) — implemented and locally
+tested, later pass.** `app/tests/test_mvp7_alert_data_unavailable_lifecycle_contract.py`
+(16 tests, static SQL contract), `app/tests/test_analytics_api_v1_alerts_routes.py`
+(extended, 13 tests total), `web/src/routes/alerts/AlertsArea.test.tsx`
+(extended, 11 tests total) all pass; `tsc --noEmit` and `eslint --max-warnings 0`
+clean on the changed frontend files. **Live-execution proof**: a new
+`scripts/test/assert_mvp7_alert_data_unavailable_lifecycle_executes.sql`
+runs the full sequence — qualify → Active → data-unavailable flagged →
+recovery-while-still-material → old alert Ended (`DATA_UNAVAILABLE`) →
+fresh qualification → new, distinct Active alert — plus a negative/guard
+scenario (recovery while NOT material must not force an Ended) — through
+the real `analytics.run_alert_evaluation_job` entrypoint against a
+disposable TimescaleDB instance. This live run **caught a real,
+previously-latent defect** in the exact code pattern migration 239/241
+already used (`v_active_alert := NULL;`, in the theretofore-unreachable
+configuration-transition branch): assigning `NULL` directly to a bare
+PL/pgSQL `RECORD` variable reverts it to PostgreSQL's "not yet assigned"
+state, and any subsequent field access then raises "record ... is not
+assigned yet" — confirmed by isolated `DO` block reproduction. Fixed in
+both the pre-existing branch and the new one by using a zero-row
+`SELECT * INTO ... WHERE FALSE` instead (confirmed live to safely yield a
+properly-typed empty record). **Not yet deployed to staging or
+production**; not yet observed against real data.

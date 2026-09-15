@@ -125,14 +125,24 @@ and [ADR-004](../00-governance/decisions/ADR-004-site-overview-primary-destinati
   "Source-of-truth correction."
 - **Lifecycle:** a condition must be continuously true for 5 minutes
   (gap-resetting) before an alert qualifies. Active while the condition
-  remains true; Resolved after 1 minute continuously false (gap-resetting);
-  Ended if the underlying Attention configuration is disabled or changed
-  while Active (Ended is never presented as Resolved). Configuration
-  changes create a new alert identity and require fresh qualification.
+  remains true; Resolved after 1 minute continuously false (gap-resetting)
+  — the condition actually cleared. Ended covers two distinct causes
+  (Ended is never presented as Resolved, for either): the underlying
+  Attention configuration is disabled or changed while Active (creates a
+  new alert identity, requires fresh qualification), or — added
+  2026-09-15 — an Active alert recovers from a data-unavailable gap while
+  the condition is still true (see below).
 - **Data-unavailable-while-Active:** the alert stays Active
-  ("Unable to evaluate — data unavailable"); on recovery, a still-true
-  condition requires fresh 5-minute qualification before a new alert is
-  generated — the prior alert is not silently continued.
+  ("Unable to evaluate — data unavailable" / "Latest value: Data
+  unavailable"); on recovery, a no-longer-true condition follows the
+  normal Resolved path unchanged; a still-true condition **Ends** the
+  prior alert (a distinct, controlled reason from the configuration-change
+  cause above — not free text) and requires fresh 5-minute qualification
+  before a new alert is generated — the prior alert is not silently
+  continued. **Status: implemented and locally tested (migration 242,
+  2026-09-15) — static contract, live-execution disposable-database, and
+  API/frontend tests all pass; not yet deployed to staging/production, not
+  yet observed against real data.**
 - **Content:** existing EMS terminology, thresholds, and number formatting
   only — no alert-specific vocabulary and no new severity taxonomy. List
   shows condition + context + triggered time; detail adds hierarchy
