@@ -221,6 +221,10 @@ echo
 echo "[mvp7-alert-evaluation-job-executes] Running MVP-7 (migration 241) alert-evaluation job live-execution assertions..."
 bash "${SCRIPT_DIR}/assert_mvp7_alert_evaluation_job_executes.sh"
 
+echo
+echo "[raw-message-failure-capture-bounded-catchup-window] Running job 1068 (migration 243) bounded catch-up window assertions..."
+bash "${SCRIPT_DIR}/assert_raw_message_failure_capture_bounded_catchup_window.sh"
+
 echo "[14/14] Verifying migration ledger..."
 ledger="$(
     docker compose \

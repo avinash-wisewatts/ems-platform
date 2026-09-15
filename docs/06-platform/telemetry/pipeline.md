@@ -79,6 +79,50 @@ Job 1000 was resumed from a ~15.5h backlog and **self-drained to a
 bounded +6h at ~2,840 rows/s; steady-state 1-minute cycles now complete in
 ~2s). See [../../10-operations/incident-history.md](../../10-operations/incident-history.md).
 
+### Failure quarantine and recovery (jobs 1076/1068/1077)
+
+Three further jobs sit alongside the loaders above: `run_raw_receipt_state_job`
+(job 1076, every 1 minute) maintains an independent raw-ingestion watermark;
+`run_raw_message_failure_capture_job` (job 1068, `telemetry.
+capture_raw_message_failures_incremental`, migration 007) scans raw messages
+the normalization checkpoint has already passed and quarantines any that
+produced zero/partial normalized output into `telemetry.raw_message_failures`
+(a 30-day-retention hypertable) before `telemetry.raw_messages`' own 48-hour
+retention purges them; `run_failed_message_recovery_job` (job 1077,
+`telemetry.recover_failed_raw_messages`, migrations 201/202/204/206/218/220)
+consumes that quarantine hourly and retries normalizing each candidate,
+independently re-checking whether the point now exists before marking it
+`RECOVERED`. Job 1068 is upstream of 1077 — 1077 has nothing to do until 1068
+captures new candidates.
+
+**Job 1068 carried the same unbounded-window defect job 1000 had before
+migration 205/212** (see above): its forward boundary had no `p_max_window`
+cap, so once its checkpoint fell behind, every 5-minute attempt re-faced an
+equal-or-wider window. On staging this ran job 1068 into TimescaleDB's own
+`max_retries` auto-disable on 2026-09-04, after 709 consecutive failures —
+see [../../10-operations/incident-history.md](../../10-operations/incident-history.md)
+for the full incident record. **Status as of 2026-09-15: the identical
+migration-205/212 bounded-window pattern has been implemented for job 1068
+(migration 243, branch `fix/job-1068-raw-message-failure-capture-bounded-catchup`)
+and passed its disposable-DB regression suite — but this fix is NOT yet
+merged, NOT deployed to staging or production, and job 1068 remains
+disabled.** Unlike job 1000's `2 hours`, job 1068's wrapper default
+(`config.max_window`, code fallback `15 minutes`) is an unmeasured
+placeholder only — a real value requires a staging runtime measurement not
+yet taken (a bounded, safeguarded measurement script exists at
+`scripts/test/staging_measure_raw_message_failure_capture_window.sh` but has
+not been run). This section should be updated once that measurement is
+taken and the fix is actually deployed and job 1068 is re-enabled.
+
+`produced_point_count` (job 1068's zero-output detection) is deliberately
+**not** keyed on `(platform_received_at, raw_message_id)` against
+`telemetry.normalized_points` — migration 006 established that
+`raw_message_id`/`platform_received_at` on a `normalized_points` row are
+mutable (reassignable to a later replay on `ON CONFLICT`), so that lookup
+can under-report real failures. It is instead keyed on the row's stable
+identity, `(device_id, event_time, logical_point_id)`. This was re-verified,
+not changed, during the migration-243 work.
+
 ### Analytics tier: parent → child watermark cascade (migration 209)
 
 Since migration 209 the five `analytics.run_energy_consumption_*_job`
