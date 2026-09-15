@@ -71,7 +71,12 @@ export type EnergyConsumptionExportInput = {
   freshness: SiteTelemetryFreshnessResponse | null;
 };
 
-const CSV_COLUMNS = [
+// Exported (visibility only, contents unchanged) so tests can assert the
+// exact column set -- a direct regression guard against ever accidentally
+// adding an out-of-scope field (export_kwh, source_interval_count,
+// per-point evidence/quality) that no test would otherwise catch. See
+// energyExportCsv.test.ts's "forbidden fields never appear" block.
+export const CSV_COLUMNS = [
   "site_id",
   "site_name",
   "site_code",

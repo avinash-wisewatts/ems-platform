@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildEnergyConsumptionExportCsv, csvField, energyConsumptionExportFilename } from "./energyExportCsv";
+import { buildEnergyConsumptionExportCsv, csvField, energyConsumptionExportFilename, CSV_COLUMNS } from "./energyExportCsv";
 import type { ComparisonResult, TypicalReferenceResult } from "./comparison";
 import type { EnergyEvidenceSummary } from "./evidence";
 import type { EnergyConsumptionResponse, SiteSummary, SiteTelemetryFreshnessResponse } from "../api/types";
@@ -292,6 +292,51 @@ describe("buildEnergyConsumptionExportCsv -- one row per chart point", () => {
     expect(cell(csv, "typical_reference_eligible_periods")).toBe("");
     expect(cell(csv, "typical_reference_requested_periods")).toBe("");
     expect(cell(csv, "typical_reference_sufficient")).toBe("");
+  });
+});
+
+describe("buildEnergyConsumptionExportCsv -- forbidden fields never appear (regression guard)", () => {
+  // Code-review finding (fe01d747 review): no prior test asserted the
+  // header's exact column set, so a future accidental addition of an
+  // out-of-scope field would pass every existing test silently. This
+  // pins the header to CSV_COLUMNS exactly -- the single source of
+  // truth -- so ANY unauthorized column (named here or not) fails this
+  // test, not just the three named below.
+  it("the header contains exactly CSV_COLUMNS, in order -- no more, no fewer", () => {
+    const csv = buildEnergyConsumptionExportCsv({
+      site: site(),
+      current: current(),
+      basis: "PREVIOUS_PERIOD",
+      result: comparisonResult(),
+      referenceResult: null,
+      evidence: evidence(),
+      freshness: freshness(),
+    });
+    const { header } = parseCsvRows(csv);
+    expect(header).toEqual([...CSV_COLUMNS]);
+  });
+
+  it("does not include export_kwh, source_interval_count, or any per-point evidence/quality column", () => {
+    const csv = buildEnergyConsumptionExportCsv({
+      site: site(),
+      current: current(),
+      basis: "PREVIOUS_PERIOD",
+      result: comparisonResult(),
+      referenceResult: null,
+      evidence: evidence(),
+      freshness: freshness(),
+    });
+    const { header } = parseCsvRows(csv);
+    // Named explicitly for readability -- the exact-match test above is
+    // the actual backstop against anything not listed here, including a
+    // per-point evidence/quality column under any other name: every
+    // evidence_* column that exists is an aggregate, repeated identically
+    // on every row (see the "repeats identically" test above), and no
+    // column name in CSV_COLUMNS contains "point" other than the point's
+    // own chart_timestamp/energy_consumption_kwh pair.
+    expect(header).not.toContain("export_kwh");
+    expect(header).not.toContain("source_interval_count");
+    expect(header.filter((col) => /point/i.test(col))).toEqual([]);
   });
 });
 
