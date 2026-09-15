@@ -1,8 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { EnergyOverview } from "./EnergyOverview";
 import { renderWithProviders, stubFetch, SITES_ONE } from "../../test-utils";
 import type { EnergyTypicalReferenceResponse } from "../../api/types";
+
+// Q75 Increment 1 -- mocks the DOM-side-effect download trigger only
+// (mirrors SitePerformanceReportView.test.tsx's mocking of jsPDF's
+// `.save()` for the same reason: keep component tests free of a real
+// browser download side effect under jsdom, while buildEnergyConsumption
+// ExportCsv itself is exercised for real in energyExportCsv.test.ts).
+const mockDownloadCsv = vi.fn();
+vi.mock("../../export/downloadCsv", () => ({
+  downloadCsv: (...args: unknown[]) => mockDownloadCsv(...args),
+}));
 
 const SITE_ID = SITES_ONE.sites[0]!.site_id;
 
@@ -350,5 +361,91 @@ describe("EnergyOverview (Slice A/C -- Energy Performance)", () => {
     await waitFor(() => expect(screen.getByTestId("energy-current-value")).toHaveTextContent("120.0 kWh"));
     expect(screen.getByTestId("energy-evidence-coverage")).toHaveTextContent("100.0%");
     expect(screen.queryByTestId("freshness-indicator")).toBeNull();
+  });
+
+  describe("Q75 Increment 1 -- contextual CSV export", () => {
+    it("the Export action is not present while loading (before status === \"ready\")", async () => {
+      // All fetches (consumption/evidence/freshness) hang forever -- status
+      // stays at its initial "loading" value indefinitely -- while the site
+      // loader (a separate, non-fetch prop) still resolves, so the page
+      // shell mounts. This deterministically isolates the "loading" state,
+      // unlike racing a real fetch resolution against a waitFor poll.
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(() => new Promise(() => {})),
+      );
+      renderWithProviders(<EnergyOverview />, { sites: () => Promise.resolve(SITES_ONE) });
+      await waitFor(() => expect(screen.getByTestId("page-energy-overview")).toBeTruthy());
+      expect(screen.getByTestId("state-loading")).toBeTruthy();
+      expect(screen.queryByTestId("energy-export-csv")).toBeNull();
+    });
+
+    it("the Export action appears once the screen is ready and triggers a CSV download of the currently displayed period/basis", async () => {
+      mockDownloadCsv.mockClear();
+      stubFetch((url) => {
+        if (isFreshnessUrl(url)) return { jsonBody: freshnessResponse() };
+        if (isEvidenceUrl(url)) return { jsonBody: evidenceResponse() };
+        if (isConsumptionUrl(url)) return { jsonBody: energyResponse(120) };
+        return { status: 404, jsonBody: { error: "not_found", detail: "unexpected" } };
+      });
+
+      renderWithProviders(<EnergyOverview />, { sites: () => Promise.resolve(SITES_ONE) });
+      await waitFor(() => expect(screen.getByTestId("energy-current-value")).toHaveTextContent("120.0 kWh"));
+
+      const user = userEvent.setup();
+      await user.click(screen.getByTestId("energy-export-csv"));
+
+      expect(mockDownloadCsv).toHaveBeenCalledTimes(1);
+      const [filename, csv] = mockDownloadCsv.mock.calls[0] as [string, string];
+      expect(filename).toMatch(/^energy-consumption-.*\.csv$/);
+      expect(csv).toContain("current_value_kwh");
+      expect(csv).toContain("120.0");
+      expect(csv).toContain("PREVIOUS_PERIOD");
+    });
+
+    it("preserves the currently selected comparison basis in the exported CSV", async () => {
+      mockDownloadCsv.mockClear();
+      stubFetch((url) => {
+        if (isFreshnessUrl(url)) return { jsonBody: freshnessResponse() };
+        if (isEvidenceUrl(url)) return { jsonBody: evidenceResponse() };
+        if (isConsumptionUrl(url)) return { jsonBody: energyResponse(120) };
+        return { status: 404, jsonBody: { error: "not_found", detail: "unexpected" } };
+      });
+
+      renderWithProviders(<EnergyOverview />, { sites: () => Promise.resolve(SITES_ONE) });
+      await waitFor(() => expect(screen.getByTestId("energy-current-value")).toHaveTextContent("120.0 kWh"));
+
+      const user = userEvent.setup();
+      await user.click(screen.getByTestId("comparison-basis-SAME_PERIOD_PREVIOUSLY"));
+      await waitFor(() => expect(screen.getByTestId("energy-current-value")).toHaveTextContent("120.0 kWh"));
+
+      await user.click(screen.getByTestId("energy-export-csv"));
+
+      expect(mockDownloadCsv).toHaveBeenCalledTimes(1);
+      const [, csv] = mockDownloadCsv.mock.calls[0] as [string, string];
+      const dataRow = csv.trim().split("\r\n")[1]!;
+      expect(dataRow.split(",")).toContain("SAME_PERIOD_PREVIOUSLY");
+    });
+
+    it("current.no_data still allows export -- the row is emitted with an empty current value, never omitted", async () => {
+      mockDownloadCsv.mockClear();
+      stubFetch((url) => {
+        if (isFreshnessUrl(url)) return { jsonBody: freshnessResponse() };
+        if (isEvidenceUrl(url)) return { jsonBody: evidenceResponse({}, true) };
+        if (isConsumptionUrl(url)) return { jsonBody: energyResponse(0, true) };
+        return { status: 404, jsonBody: { error: "not_found", detail: "unexpected" } };
+      });
+
+      renderWithProviders(<EnergyOverview />, { sites: () => Promise.resolve(SITES_ONE) });
+      await waitFor(() => expect(screen.getByTestId("energy-export-csv")).toBeTruthy());
+
+      const user = userEvent.setup();
+      await user.click(screen.getByTestId("energy-export-csv"));
+
+      expect(mockDownloadCsv).toHaveBeenCalledTimes(1);
+      const [, csv] = mockDownloadCsv.mock.calls[0] as [string, string];
+      const lines = csv.trim().split("\r\n");
+      expect(lines).toHaveLength(2); // header + exactly one data row, still emitted
+    });
   });
 });
