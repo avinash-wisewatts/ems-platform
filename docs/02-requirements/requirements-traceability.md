@@ -374,3 +374,34 @@ gate.
 This does not alter §8/§9's own historical snapshots, preserved per
 [source-of-truth.md](../00-governance/source-of-truth.md)'s no-silent-
 rewrite rule.
+
+## 11. Status update (2026-09-15) — Q75 Increment 1 (Energy contextual CSV export) implemented, not deployed
+
+Following §6 (Q75 decision resolved, implementation unchanged), a first
+Export increment was implemented in this session: contextual CSV export of
+the Energy Consumption figure exactly as currently displayed on
+`EnergyOverview.tsx` (period total, selected comparison basis, evidence
+counters, freshness state) — client-side only, no request leaves the
+browser.
+
+| Item | §6 status | 2026-09-15 (this section) status |
+|---|---|---|
+| Q75 (MVP export) | Decision resolved; **still no export capability exists anywhere in the codebase** | **Partially implemented, not deployed.** `web/src/energy/energyExportCsv.ts` (pure CSV builder), `web/src/export/downloadCsv.ts` (generic Blob/anchor download utility), wired into `EnergyOverview.tsx` via one "Export CSV" action, gated to `status === "ready"`. Satisfies `EMS-REQ-094`/`095`/`096`/`099` **for the Energy contextual path only**: aggregated figure not raw series, full context fields (site, range, basis, evidence, freshness), CSV format, gaps/no-data preserved never fabricated. Verified this session: 20 new unit tests (`energyExportCsv.test.ts`) + 4 new wiring tests (`EnergyOverview.test.tsx`) + 4 new DOM tests (`downloadCsv.test.ts`), full frontend suite (249 tests), `tsc --noEmit`, `eslint --max-warnings 0`, `vite build` all pass. **Not implemented by this increment:** Demand/Power Quality export (`EMS-REQ-098`), the dedicated Export area and its multi-metric/hierarchy-level selection (`EMS-REQ-098`), size-tiered/background delivery for larger exports (`EMS-REQ-097` — this increment is single-row and always immediate), and any backend/API export capability (`API.export` remains `MISSING`, unchanged by this increment — the CSV is built entirely in the browser from data the existing Energy endpoints already return, mirroring the Site Performance Report's client-side-generation precedent). No staging/production deployment has occurred. |
+| `API.export` (§1/§6 shorthand) | `MISSING`; `PLANNED (MVP-6)` | **Unchanged as a code fact** — still `MISSING`. This increment added no endpoint, view, or function; it serializes client-held state only. |
+
+Four CSV serialization details not specified by ADR-014 or any other
+canonical document were resolved as **implementation conventions**
+(reversible, not product decisions): wide single-row column layout; numeric
+precision (one decimal place, reusing `EnergyOverview.tsx`'s own
+`.toFixed(1)` on-screen convention); filename pattern (reusing
+`SitePerformanceReportView.tsx`'s kebab-case slugification convention);
+and typical-reference evidence exported as aggregate eligible/requested
+period counts only, not the per-window gap/reset/rollover breakdown (which
+is prose-only on screen today, never a table). Full rationale in
+`energyExportCsv.ts`'s header comment.
+
+This does not alter §6's own historical snapshot, preserved per
+[source-of-truth.md](../00-governance/source-of-truth.md)'s no-silent-
+rewrite rule. §6's statement remains the accurate record of the
+2026-09-14 decision-only state; only the 2026-09-15 implementation state is
+new.

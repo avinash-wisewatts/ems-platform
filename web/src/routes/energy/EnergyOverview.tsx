@@ -66,6 +66,8 @@ import {
   type TypicalReferenceResult,
 } from "../../energy/comparison";
 import { summarizeEnergyEvidence } from "../../energy/evidence";
+import { buildEnergyConsumptionExportCsv, energyConsumptionExportFilename } from "../../energy/energyExportCsv";
+import { downloadCsv } from "../../export/downloadCsv";
 import { HierarchyCrumb } from "../../components/HierarchyCrumb";
 import { TimeRangePicker } from "../../components/TimeRangePicker";
 import { StatusBadge } from "../../components/StatusBadge";
@@ -251,6 +253,26 @@ export function EnergyOverview() {
 
   const evidenceSummary = evidence !== null ? summarizeEnergyEvidence(evidence) : null;
 
+  // Q75 Increment 1 (ADR-014) -- contextual Energy CSV export. Serializes
+  // exactly the already-computed on-screen state above (result/
+  // evidenceSummary/freshness/basis) -- no new fetch, no new calculation.
+  // Guarded by the same `status === "ready" && current && result` gate as
+  // the rest of this screen's content below (the button is only rendered,
+  // hence only usable, inside that block).
+  function handleExportCsv() {
+    if (!selectedSite || !current || !result) return;
+    const csv = buildEnergyConsumptionExportCsv({
+      site: selectedSite,
+      current,
+      basis,
+      result,
+      referenceResult,
+      evidence: evidenceSummary,
+      freshness,
+    });
+    downloadCsv(energyConsumptionExportFilename({ site: selectedSite, current }), csv);
+  }
+
   return (
     <div className="page page--energy-overview" data-testid="page-energy-overview">
       <HierarchyCrumb siteName={selectedSite.site_name} multiSite={sites.length > 1} leaf={{ label: "Energy" }} />
@@ -279,6 +301,17 @@ export function EnergyOverview() {
 
       {status === "ready" && current && result ? (
         <>
+          {/* Q75 Increment 1 (ADR-014) -- contextual export of this
+              period's Energy Consumption figure, exactly as currently
+              displayed below (selected period, selected comparison basis,
+              evidence, freshness). CSV only, immediate client-side
+              download -- no request leaves the browser. */}
+          <div className="energy-export">
+            <button type="button" onClick={handleExportCsv} data-testid="energy-export-csv">
+              Export CSV
+            </button>
+          </div>
+
           {/* Current Value -- MEASURED: a direct sum of persisted historian
               rows, never calculated or predicted. */}
           <section className="energy-current-value" data-testid="energy-current-value">

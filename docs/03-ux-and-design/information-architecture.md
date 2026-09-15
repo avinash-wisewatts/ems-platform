@@ -175,7 +175,7 @@ and [ADR-004](../00-governance/decisions/ADR-004-site-overview-primary-destinati
   11th core concept. Implemented 2026-09-14, staging validation pending —
   see [docs/07-features/alerts/README.md](../07-features/alerts/README.md).
 
-## Export  *(MVP-6 — decided 2026-09-14, not yet implemented)*
+## Export  *(MVP-6 — decided 2026-09-14; Increment 1 (Energy, contextual, CSV) implemented 2026-09-15, not yet deployed; dedicated Export area and Demand/Power Quality remain not implemented)*
 
 - **Purpose:** provide the underlying data behind an on-screen figure, for use outside WiseWatts — distinct from Reports below (Workshop Q76: "Report = communicate the important story; Export = provide the underlying data").
 - **Content:** the aggregated analytical figure already shown on screen (e.g. a period's total consumption, peak demand, PF/THD summary) — not raw/underlying time-series measurements.
@@ -186,7 +186,8 @@ and [ADR-004](../00-governance/decisions/ADR-004-site-overview-primary-destinati
 - **Time range:** selectable range is bounded by the specific site's actual minimum/maximum data-available dates.
 - **Data completeness:** gaps within the selected range retain their applicable data-quality/freshness state rather than being silently omitted; a selected metric with no usable data is still represented, with its applicable data-quality state and no fabricated value.
 - **Full decision record:** [ADR-014](../00-governance/decisions/ADR-014-q75-export-scope-and-behavior.md); requirements: [functional-requirements.md §Export](../02-requirements/functional-requirements.md#export) (`EMS-REQ-094`–`EMS-REQ-099`).
-- **API dependency:** `PLANNED (MVP-6)` — no endpoint exists yet; shape is now fully specified (see ADR-014) but unbuilt.
+- **API dependency:** `PLANNED (MVP-6)` — no endpoint exists; Increment 1's CSV is built entirely client-side from data the existing Energy endpoints already return (mirrors the Site Performance Report's client-side-generation precedent), so this remains unbuilt regardless of Increment 1.
+- **Implementation note (2026-09-15):** a first increment exists — an "Export CSV" action on the Energy screen only (`web/src/routes/energy/EnergyOverview.tsx`), immediate client-side download, single hierarchy level (whatever the screen is currently scoped to), no size tiering. Demand, Power Quality, and the dedicated multi-metric Export area described above remain entirely unimplemented. See [requirements-traceability.md §11](../02-requirements/requirements-traceability.md#11-status-update-2026-09-15--q75-increment-1-energy-contextual-csv-export-implemented-not-deployed).
 
 ## Reports  *(MVP-6 — one report type decided and implemented 2026-09-14, not yet deployed)*
 

@@ -225,10 +225,22 @@ Decided by the MVP-6 Product Decision Workshop (2026-09-14) — see
 [ADR-014](../00-governance/decisions/ADR-014-q75-export-scope-and-behavior.md)
 for full context, rationale, and evidence. Distinct from Reporting above
 per Q76's own framing: *"Report = communicate the important story; Export
-= provide the underlying data."* **`READY-FOR-DESIGN`, not implemented** —
-per this document's own Status convention (`READY-FOR-DESIGN` = "agreed
-enough to design against", [README.md](README.md#conventions)), which is
-exactly Export's current state: no code exists for any row below.
+= provide the underlying data."* **`READY-FOR-DESIGN`** — per this
+document's own Status convention (`READY-FOR-DESIGN` = "agreed enough to
+design against", [README.md](README.md#conventions)); this Status column
+tracks decision readiness, not implementation, per
+[requirements-traceability.md](requirements-traceability.md) (the
+implementation-status-authoritative view).
+>
+> **Implementation note (2026-09-15):** a first increment now has code — a
+> contextual CSV export of the Energy Consumption figure
+> (`web/src/energy/energyExportCsv.ts`, wired into `EnergyOverview.tsx`),
+> covering `EMS-REQ-094`/`095`/`096`/`099` for the Energy screen only. No
+> other row below has any implementation: Demand/Power Quality export,
+> the dedicated Export area (`EMS-REQ-098`), and size-tiered/background
+> delivery (`EMS-REQ-097`) remain uncoded. See
+> [requirements-traceability.md §11](requirements-traceability.md#11-status-update-2026-09-15--q75-increment-1-energy-contextual-csv-export-implemented-not-deployed)
+> for the full record. Not deployed to staging or production.
 
 | ID | Title / description | Customer question | Priority | Source | Phase | Status | Dependencies | Notes |
 |---|---|---|---|---|---|---|---|---|
