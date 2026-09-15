@@ -1,7 +1,8 @@
 # ADR-014: MVP-6 Export scope, content, format, and behavior (Q75)
 
-Status: Decided; not implemented
-Date: 2026-09-14 (MVP-6 Product Decision Workshop)
+Status: Decided; amended 2026-09-15 (see "Amendment" below) — Energy
+contextual chart-data export implemented, not deployed
+Date: 2026-09-14 (MVP-6 Product Decision Workshop); amended 2026-09-15
 Decision owners: Product Owner
 Related requirements: EMS-REQ-094 through EMS-REQ-099
 Related features: Export (no dedicated feature document yet — see
@@ -103,6 +104,59 @@ The dedicated Export area additionally lets the customer select the
 desired hierarchy level directly, rather than being limited to whatever
 level they last navigated to.
 
+## Amendment (2026-09-15) — Decision 1 narrowed: Energy chart series now in scope
+
+**This amendment does not delete or edit decision 1 above — that text is
+preserved verbatim as the historical record of what was decided
+2026-09-14, per this documentation set's no-silent-rewrite rule
+([source-of-truth.md](../source-of-truth.md)).** It records a
+**subsequent** Product Owner decision (2026-09-15) that narrows decision
+1's scope for one specific case.
+
+**Context for the amendment.** A read-only requirements reconciliation
+(2026-09-15, recorded in [requirements-traceability.md §12](../../02-requirements/requirements-traceability.md))
+found that decision 1's exclusion of "the raw/underlying time-series
+measurements behind" an aggregated figure is genuinely ambiguous as
+applied to the Energy Trend chart's own series: `current.series`
+(`bucket_start`/`import_kwh`, at the response-level `resolution`) is
+simultaneously (a) the data that `sum()`s into the period-total figure
+decision 1's own example describes, and (b) an aggregated analytical
+series **already presented on screen** (`Q94`, workshop baseline §127,
+"Underlying analytical time-series inspection") — matching decision 1's
+own affirmative definition ("aggregated analytical figures already
+presented in the EMS") at least as well as it matches the exclusion.
+This ADR's own "Alternatives considered" section already flagged that
+whether a raw-series alternative was explicitly discussed and rejected,
+as opposed to simply not chosen, was never recorded.
+
+**Decision.** The Product Owner has now resolved this ambiguity: the
+Energy contextual export (the "Export CSV" action on the Energy screen)
+**must export the analytical data points that make up the currently
+displayed Energy chart** — `current.series`, one CSV row per point
+(`bucket_start` as timestamp, `import_kwh` as value), in chart order, at
+the chart's own resolution. This supersedes the interpretation used by
+the first implementation of this export, which produced a single
+period-summary row instead.
+
+**What remains unchanged, explicitly.** This amendment is narrow. It does
+**not** reopen or decide:
+- Comparison-period point-by-point export — still excluded. The
+  comparison period's own series is not displayed on the Energy chart
+  (only its total/delta, per decision 8), so decision 8 continues to keep
+  comparison summary/contextual only.
+- `export_kwh`, `source_interval_count`, or per-point evidence/quality
+  fields — these exist on the underlying API responses but are not
+  rendered by the chart either; still explicitly out of scope/undecided,
+  not authorized by this amendment.
+- Demand or Power Quality export, the dedicated multi-metric Export area
+  (decisions 6-7), and size-tiered/background delivery (decision 5) — all
+  unchanged, still unimplemented, still governed by their original
+  decision text above.
+- Genuinely raw/sub-interval telemetry (i.e. data finer-grained than the
+  chart's own resolution) — decision 1's exclusion of this remains fully
+  in force; this amendment narrows decision 1 only for the chart's own
+  already-displayed series, not for raw telemetry generally.
+
 ## Rationale
 
 Decision 1 (aggregated, not raw) keeps Export aligned with Q75's own
@@ -154,6 +208,21 @@ option was recorded.
 - Q76 (Reporting) format/catalogue/storage-shape questions remain open —
   not addressed, not implied resolved, by this record.
 
+**Consequences of the 2026-09-15 Amendment above:**
+- `EMS-REQ-094` gains a dated clarification note (not a rewrite) in
+  `functional-requirements.md`, distinguishing genuinely raw telemetry
+  from the Energy chart's own already-displayed series.
+- `requirements-traceability.md` gains a new §12 recording the amendment
+  and the corrected implementation, without altering §6/§11's own
+  historical snapshots.
+- `information-architecture.md` and `docs/07-features/energy/README.md`
+  gain corrections noting the summary-row interpretation is superseded
+  for Energy's contextual export specifically.
+- Still **no** code, API, or database change beyond the Energy contextual
+  export's own CSV-building logic — the amendment authorizes no new
+  endpoint, and Demand/PQ/dedicated-area/background-delivery remain
+  exactly as unimplemented as before.
+
 ## Evidence / references
 
 - Workshop baseline §107 (Q75) — [../../99-archive/superseded-product/ems-product-owner-workshop-baseline.md](../../99-archive/superseded-product/ems-product-owner-workshop-baseline.md)
@@ -168,10 +237,21 @@ option was recorded.
 
 ## Implementation references
 
-None yet. MVP-6 (Export & Basic Reporting) remains unimplemented — no
-frontend, backend, or database code exists for either Export or Reporting
-as of this record.
+Energy contextual export only (`web/src/energy/energyExportCsv.ts`,
+`web/src/export/downloadCsv.ts`, wired into
+`web/src/routes/energy/EnergyOverview.tsx`). First implemented
+2026-09-15 as a single period-summary row (superseded interpretation);
+corrected 2026-09-15, per the Amendment above, to one row per
+`current.series` chart point. Demand, Power Quality, the dedicated
+Export area, and size-tiered delivery remain unimplemented. See
+[requirements-traceability.md §11](../../02-requirements/requirements-traceability.md)
+(original implementation) and
+[§12](../../02-requirements/requirements-traceability.md) (chart-data
+correction) for the full record.
 
 ## Validation references
 
-Not yet validated — no implementation exists to validate.
+Frontend test suite, `tsc --noEmit`, `eslint --max-warnings 0`, and
+`vite build` all pass for the corrected implementation (see
+requirements-traceability.md §12 for counts). Not deployed to staging or
+production; no live end-to-end validation performed.

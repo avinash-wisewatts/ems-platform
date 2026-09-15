@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildEnergyConsumptionExportCsv, csvField, energyConsumptionExportFilename } from "./energyExportCsv";
+import { buildEnergyConsumptionExportCsv, csvField, energyConsumptionExportFilename, CSV_COLUMNS } from "./energyExportCsv";
 import type { ComparisonResult, TypicalReferenceResult } from "./comparison";
 import type { EnergyEvidenceSummary } from "./evidence";
 import type { EnergyConsumptionResponse, SiteSummary, SiteTelemetryFreshnessResponse } from "../api/types";
@@ -15,6 +15,12 @@ function site(overrides: Partial<SiteSummary> = {}): SiteSummary {
   };
 }
 
+const THREE_POINT_SERIES = [
+  { bucket_start: "2026-09-01T00:00:00Z", import_kwh: 100.111, export_kwh: null, source_interval_count: 24 },
+  { bucket_start: "2026-09-02T00:00:00Z", import_kwh: 200.222, export_kwh: null, source_interval_count: 24 },
+  { bucket_start: "2026-09-03T00:00:00Z", import_kwh: 300.333, export_kwh: null, source_interval_count: 24 },
+];
+
 function current(overrides: Partial<EnergyConsumptionResponse> = {}): EnergyConsumptionResponse {
   return {
     site_id: "site-1",
@@ -22,7 +28,7 @@ function current(overrides: Partial<EnergyConsumptionResponse> = {}): EnergyCons
     from: "2026-09-01T00:00:00Z",
     to: "2026-09-08T00:00:00Z",
     no_data: false,
-    series: [],
+    series: THREE_POINT_SERIES,
     ...overrides,
   };
 }
@@ -112,18 +118,24 @@ function splitCsvLine(line: string): string[] {
   return cells;
 }
 
-function parseCsv(csv: string): { header: string[]; row: string[] } {
+/** Parses every row (header + all data rows), for asserting row counts,
+ *  order, and per-row column values across a multi-row export. */
+function parseCsvRows(csv: string): { header: string[]; rows: string[][] } {
   const lines = csv.trim().split("\r\n");
-  const headerLine = lines[0] ?? "";
-  const dataLine = lines[1] ?? "";
-  return { header: splitCsvLine(headerLine), row: splitCsvLine(dataLine) };
+  const [headerLine, ...dataLines] = lines;
+  return {
+    header: splitCsvLine(headerLine ?? ""),
+    rows: dataLines.map(splitCsvLine),
+  };
 }
 
-function cell(csv: string, column: string): string {
-  const { header, row } = parseCsv(csv);
+/** Cell from a specific data row (default: the first/only data row) --
+ *  most tests below have exactly one row and use the default. */
+function cell(csv: string, column: string, rowIndex = 0): string {
+  const { header, rows } = parseCsvRows(csv);
   const idx = header.indexOf(column);
   expect(idx).toBeGreaterThanOrEqual(0);
-  return row[idx] ?? "";
+  return rows[rowIndex]?.[idx] ?? "";
 }
 
 describe("csvField -- RFC4180 escaping", () => {
@@ -153,8 +165,8 @@ describe("csvField -- RFC4180 escaping", () => {
   });
 });
 
-describe("buildEnergyConsumptionExportCsv -- normal export", () => {
-  it("produces a header row and exactly one data row, CRLF-terminated", () => {
+describe("buildEnergyConsumptionExportCsv -- one row per chart point", () => {
+  it("produces a header row plus exactly one data row per current.series point", () => {
     const csv = buildEnergyConsumptionExportCsv({
       site: site(),
       current: current(),
@@ -164,12 +176,27 @@ describe("buildEnergyConsumptionExportCsv -- normal export", () => {
       evidence: evidence(),
       freshness: freshness(),
     });
-    const lines = csv.split("\r\n");
-    expect(lines).toHaveLength(3); // header, data row, trailing empty from final \r\n
-    expect(lines[2]).toBe("");
+    const { rows } = parseCsvRows(csv);
+    expect(rows).toHaveLength(THREE_POINT_SERIES.length);
   });
 
-  it("serializes context, current value, and comparison fields at 1-decimal precision (matches on-screen .toFixed(1))", () => {
+  it("emits rows in the same order as current.series, with correct timestamp/value per row", () => {
+    const csv = buildEnergyConsumptionExportCsv({
+      site: site(),
+      current: current(),
+      basis: "PREVIOUS_PERIOD",
+      result: comparisonResult(),
+      referenceResult: null,
+      evidence: evidence(),
+      freshness: freshness(),
+    });
+    THREE_POINT_SERIES.forEach((point, i) => {
+      expect(cell(csv, "chart_timestamp", i)).toBe(point.bucket_start);
+      expect(cell(csv, "energy_consumption_kwh", i)).toBe(point.import_kwh!.toFixed(1));
+    });
+  });
+
+  it("serializes context fields at 1-decimal precision (matches on-screen .toFixed(1))", () => {
     const csv = buildEnergyConsumptionExportCsv({
       site: site(),
       current: current(),
@@ -187,8 +214,7 @@ describe("buildEnergyConsumptionExportCsv -- normal export", () => {
     expect(cell(csv, "resolution")).toBe("1d");
     expect(cell(csv, "period_from")).toBe("2026-09-01T00:00:00Z");
     expect(cell(csv, "period_to")).toBe("2026-09-08T00:00:00Z");
-    expect(cell(csv, "current_value_kwh")).toBe("1234.6");
-    expect(cell(csv, "current_has_data")).toBe("true");
+    expect(cell(csv, "period_has_data")).toBe("true");
     expect(cell(csv, "comparison_basis")).toBe("PREVIOUS_PERIOD");
     expect(cell(csv, "comparison_basis_label")).toBe("Previous period");
     expect(cell(csv, "comparison_value_kwh")).toBe("1000.0");
@@ -197,7 +223,7 @@ describe("buildEnergyConsumptionExportCsv -- normal export", () => {
     expect(cell(csv, "delta_percent")).toBe("23.5");
   });
 
-  it("serializes evidence and freshness fields verbatim from the already-summarized objects", () => {
+  it("repeats every context column identically on every data row", () => {
     const csv = buildEnergyConsumptionExportCsv({
       site: site(),
       current: current(),
@@ -207,17 +233,50 @@ describe("buildEnergyConsumptionExportCsv -- normal export", () => {
       evidence: evidence(),
       freshness: freshness(),
     });
-    expect(cell(csv, "evidence_has_data")).toBe("true");
-    expect(cell(csv, "evidence_total_intervals")).toBe("168");
-    expect(cell(csv, "evidence_valid_import_intervals")).toBe("160");
-    expect(cell(csv, "evidence_invalid_import_intervals")).toBe("8");
-    expect(cell(csv, "evidence_gap_interval_count")).toBe("2");
-    expect(cell(csv, "evidence_invalid_interval_count")).toBe("1");
-    expect(cell(csv, "evidence_coverage_percent")).toBe("95.2");
-    expect(cell(csv, "evidence_first_source_bucket")).toBe("2026-09-01T00:00:00Z");
-    expect(cell(csv, "evidence_last_source_bucket")).toBe("2026-09-07T23:00:00Z");
-    expect(cell(csv, "freshness_state")).toBe("FRESH");
-    expect(cell(csv, "freshness_as_of")).toBe("2026-09-08T00:05:00Z");
+    for (const col of [
+      "site_id",
+      "site_name",
+      "metric",
+      "unit",
+      "resolution",
+      "period_from",
+      "period_to",
+      "period_has_data",
+      "comparison_basis",
+      "comparison_basis_label",
+      "comparison_value_kwh",
+      "delta_kwh",
+      "evidence_coverage_percent",
+      "freshness_state",
+    ]) {
+      const values = new Set(THREE_POINT_SERIES.map((_, i) => cell(csv, col, i)));
+      expect(values.size).toBe(1); // identical on every row
+    }
+  });
+
+  it("serializes evidence and freshness fields verbatim from the already-summarized objects, on every row", () => {
+    const csv = buildEnergyConsumptionExportCsv({
+      site: site(),
+      current: current(),
+      basis: "PREVIOUS_PERIOD",
+      result: comparisonResult(),
+      referenceResult: null,
+      evidence: evidence(),
+      freshness: freshness(),
+    });
+    for (let i = 0; i < THREE_POINT_SERIES.length; i++) {
+      expect(cell(csv, "evidence_has_data", i)).toBe("true");
+      expect(cell(csv, "evidence_total_intervals", i)).toBe("168");
+      expect(cell(csv, "evidence_valid_import_intervals", i)).toBe("160");
+      expect(cell(csv, "evidence_invalid_import_intervals", i)).toBe("8");
+      expect(cell(csv, "evidence_gap_interval_count", i)).toBe("2");
+      expect(cell(csv, "evidence_invalid_interval_count", i)).toBe("1");
+      expect(cell(csv, "evidence_coverage_percent", i)).toBe("95.2");
+      expect(cell(csv, "evidence_first_source_bucket", i)).toBe("2026-09-01T00:00:00Z");
+      expect(cell(csv, "evidence_last_source_bucket", i)).toBe("2026-09-07T23:00:00Z");
+      expect(cell(csv, "freshness_state", i)).toBe("FRESH");
+      expect(cell(csv, "freshness_as_of", i)).toBe("2026-09-08T00:05:00Z");
+    }
   });
 
   it("leaves typical-reference columns empty when basis is not TYPICAL_HISTORICAL_REFERENCE", () => {
@@ -233,6 +292,152 @@ describe("buildEnergyConsumptionExportCsv -- normal export", () => {
     expect(cell(csv, "typical_reference_eligible_periods")).toBe("");
     expect(cell(csv, "typical_reference_requested_periods")).toBe("");
     expect(cell(csv, "typical_reference_sufficient")).toBe("");
+  });
+});
+
+describe("buildEnergyConsumptionExportCsv -- forbidden fields never appear (regression guard)", () => {
+  // Code-review finding (fe01d747 review): no prior test asserted the
+  // header's exact column set, so a future accidental addition of an
+  // out-of-scope field would pass every existing test silently. This
+  // pins the header to CSV_COLUMNS exactly -- the single source of
+  // truth -- so ANY unauthorized column (named here or not) fails this
+  // test, not just the three named below.
+  it("the header contains exactly CSV_COLUMNS, in order -- no more, no fewer", () => {
+    const csv = buildEnergyConsumptionExportCsv({
+      site: site(),
+      current: current(),
+      basis: "PREVIOUS_PERIOD",
+      result: comparisonResult(),
+      referenceResult: null,
+      evidence: evidence(),
+      freshness: freshness(),
+    });
+    const { header } = parseCsvRows(csv);
+    expect(header).toEqual([...CSV_COLUMNS]);
+  });
+
+  it("does not include export_kwh, source_interval_count, or any per-point evidence/quality column", () => {
+    const csv = buildEnergyConsumptionExportCsv({
+      site: site(),
+      current: current(),
+      basis: "PREVIOUS_PERIOD",
+      result: comparisonResult(),
+      referenceResult: null,
+      evidence: evidence(),
+      freshness: freshness(),
+    });
+    const { header } = parseCsvRows(csv);
+    // Named explicitly for readability -- the exact-match test above is
+    // the actual backstop against anything not listed here, including a
+    // per-point evidence/quality column under any other name: every
+    // evidence_* column that exists is an aggregate, repeated identically
+    // on every row (see the "repeats identically" test above), and no
+    // column name in CSV_COLUMNS contains "point" other than the point's
+    // own chart_timestamp/energy_consumption_kwh pair.
+    expect(header).not.toContain("export_kwh");
+    expect(header).not.toContain("source_interval_count");
+    expect(header.filter((col) => /point/i.test(col))).toEqual([]);
+  });
+});
+
+describe("buildEnergyConsumptionExportCsv -- null chart point within a populated series", () => {
+  it("retains the null point as its own row with a blank Energy value -- never converted to zero", () => {
+    const seriesWithGap = [
+      THREE_POINT_SERIES[0]!,
+      { bucket_start: "2026-09-02T00:00:00Z", import_kwh: null, export_kwh: null, source_interval_count: 0 },
+      THREE_POINT_SERIES[2]!,
+    ];
+    const csv = buildEnergyConsumptionExportCsv({
+      site: site(),
+      current: current({ series: seriesWithGap }),
+      basis: "PREVIOUS_PERIOD",
+      result: comparisonResult(),
+      referenceResult: null,
+      evidence: evidence(),
+      freshness: freshness(),
+    });
+    const { rows } = parseCsvRows(csv);
+    expect(rows).toHaveLength(3); // the gap is a row, not an omission
+    expect(cell(csv, "chart_timestamp", 1)).toBe("2026-09-02T00:00:00Z");
+    expect(cell(csv, "energy_consumption_kwh", 1)).toBe(""); // blank, never "0" or "0.0"
+    // the period itself still has data (points 0 and 2 are real) --
+    // period_has_data is a whole-period flag, distinct from this one
+    // point's own gap.
+    expect(cell(csv, "period_has_data", 1)).toBe("true");
+  });
+});
+
+describe("buildEnergyConsumptionExportCsv -- whole-period no-data", () => {
+  it("emits the header plus exactly one explicit no-data row when current.no_data is true", () => {
+    const csv = buildEnergyConsumptionExportCsv({
+      site: site(),
+      current: current({ no_data: true, series: [] }),
+      basis: "PREVIOUS_PERIOD",
+      result: comparisonResult({ currentTotalKwh: null, currentHasData: false }),
+      referenceResult: null,
+      evidence: null,
+      freshness: null,
+    });
+    const { rows } = parseCsvRows(csv);
+    expect(rows).toHaveLength(1); // never an empty file, never more than one placeholder
+    expect(cell(csv, "chart_timestamp")).toBe("");
+    expect(cell(csv, "energy_consumption_kwh")).toBe(""); // never a fabricated number
+    expect(cell(csv, "period_has_data")).toBe("false");
+  });
+
+  it("also produces the one explicit no-data row defensively when series is empty but no_data was not set", () => {
+    const csv = buildEnergyConsumptionExportCsv({
+      site: site(),
+      current: current({ no_data: false, series: [] }),
+      basis: "PREVIOUS_PERIOD",
+      result: comparisonResult(),
+      referenceResult: null,
+      evidence: evidence(),
+      freshness: freshness(),
+    });
+    const { rows } = parseCsvRows(csv);
+    expect(rows).toHaveLength(1);
+    expect(cell(csv, "chart_timestamp")).toBe("");
+    expect(cell(csv, "energy_consumption_kwh")).toBe("");
+  });
+
+  it("still carries full context on the no-data row", () => {
+    const csv = buildEnergyConsumptionExportCsv({
+      site: site(),
+      current: current({ no_data: true, series: [] }),
+      basis: "SAME_PERIOD_PREVIOUSLY",
+      result: comparisonResult({ basis: "SAME_PERIOD_PREVIOUSLY", currentTotalKwh: null, currentHasData: false }),
+      referenceResult: null,
+      evidence: null,
+      freshness: null,
+    });
+    expect(cell(csv, "site_id")).toBe("site-1");
+    expect(cell(csv, "comparison_basis")).toBe("SAME_PERIOD_PREVIOUSLY");
+    expect(cell(csv, "comparison_basis_label")).toBe("Same period, one year earlier");
+  });
+});
+
+describe("buildEnergyConsumptionExportCsv -- comparison stays summary/contextual, never per-point", () => {
+  it("comparison fields are identical on every row regardless of series length, and no comparison-series rows are produced", () => {
+    const csv = buildEnergyConsumptionExportCsv({
+      site: site(),
+      current: current(), // 3 points
+      basis: "PREVIOUS_PERIOD",
+      result: comparisonResult({ comparisonTotalKwh: 999.9, deltaKwh: 111.1, deltaPercent: 12.3 }),
+      referenceResult: null,
+      evidence: evidence(),
+      freshness: freshness(),
+    });
+    const { rows } = parseCsvRows(csv);
+    // Row count is driven by current.series, not by any comparison-period
+    // series -- there is no separate comparison input the builder could
+    // even read a series length from (comparisonResult never carries one).
+    expect(rows).toHaveLength(THREE_POINT_SERIES.length);
+    for (let i = 0; i < rows.length; i++) {
+      expect(cell(csv, "comparison_value_kwh", i)).toBe("999.9");
+      expect(cell(csv, "delta_kwh", i)).toBe("111.1");
+      expect(cell(csv, "delta_percent", i)).toBe("12.3");
+    }
   });
 });
 
@@ -295,24 +500,6 @@ describe("buildEnergyConsumptionExportCsv -- typical-reference insufficient stat
     expect(cell(csv, "delta_percent")).toBe("");
     expect(cell(csv, "typical_reference_sufficient")).toBe("false");
     expect(cell(csv, "typical_reference_eligible_periods")).toBe("3");
-  });
-});
-
-describe("buildEnergyConsumptionExportCsv -- current.no_data", () => {
-  it("current_value_kwh is empty and current_has_data is false, row still emitted", () => {
-    const csv = buildEnergyConsumptionExportCsv({
-      site: site(),
-      current: current({ no_data: true }),
-      basis: "PREVIOUS_PERIOD",
-      result: comparisonResult({ currentTotalKwh: null, currentHasData: false }),
-      referenceResult: null,
-      evidence: null,
-      freshness: null,
-    });
-    const { row } = parseCsv(csv);
-    expect(row.length).toBeGreaterThan(0); // row is still emitted, never omitted
-    expect(cell(csv, "current_value_kwh")).toBe("");
-    expect(cell(csv, "current_has_data")).toBe("false");
   });
 });
 
@@ -413,7 +600,7 @@ describe("buildEnergyConsumptionExportCsv -- null/unavailable freshness", () => 
 });
 
 describe("buildEnergyConsumptionExportCsv -- CSV escaping in real fields", () => {
-  it("escapes a site name containing a comma and a quote", () => {
+  it("escapes a site name containing a comma and a quote, on every row", () => {
     const csv = buildEnergyConsumptionExportCsv({
       site: site({ site_name: 'Unit 2, "Main Block"' }),
       current: current(),
@@ -423,8 +610,11 @@ describe("buildEnergyConsumptionExportCsv -- CSV escaping in real fields", () =>
       evidence: evidence(),
       freshness: freshness(),
     });
-    const dataLine = csv.split("\r\n")[1];
-    expect(dataLine).toContain('"Unit 2, ""Main Block"""');
+    const { rows } = parseCsvRows(csv);
+    expect(rows).toHaveLength(THREE_POINT_SERIES.length);
+    for (const line of csv.trim().split("\r\n").slice(1)) {
+      expect(line).toContain('"Unit 2, ""Main Block"""');
+    }
   });
 });
 

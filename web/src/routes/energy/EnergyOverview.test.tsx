@@ -21,43 +21,49 @@ const SITE_ID = SITES_ONE.sites[0]!.site_id;
  *  mirrors energyExportCsv.test.ts's own helper (quoted fields, e.g.
  *  comparison_basis_label, may contain commas that a naive split would
  *  break on). This file only needs it to check that the real component
- *  state (current vs. comparison, selected basis) lands in the correct
- *  column -- the CSV's full schema/escaping is energyExportCsv.test.ts's
- *  responsibility, not this one's. */
-function csvCell(csv: string, column: string): string {
-  const lines = csv.trim().split("\r\n");
-  const split = (line: string) => {
-    const cells: string[] = [];
-    let value = "";
-    let inQuotes = false;
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i];
-      if (inQuotes) {
-        if (ch === '"' && line[i + 1] === '"') {
-          value += '"';
-          i++;
-        } else if (ch === '"') {
-          inQuotes = false;
-        } else {
-          value += ch;
-        }
+ *  state (current series/points, selected basis) lands in the correct
+ *  column, in the right number of rows -- the CSV's full schema/escaping
+ *  is energyExportCsv.test.ts's responsibility, not this one's. */
+function splitCsvLine(line: string): string[] {
+  const cells: string[] = [];
+  let value = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"' && line[i + 1] === '"') {
+        value += '"';
+        i++;
       } else if (ch === '"') {
-        inQuotes = true;
-      } else if (ch === ",") {
-        cells.push(value);
-        value = "";
+        inQuotes = false;
       } else {
         value += ch;
       }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ",") {
+      cells.push(value);
+      value = "";
+    } else {
+      value += ch;
     }
-    cells.push(value);
-    return cells;
-  };
-  const header = split(lines[0] ?? "");
-  const row = split(lines[1] ?? "");
+  }
+  cells.push(value);
+  return cells;
+}
+
+function csvDataRows(csv: string): string[][] {
+  const lines = csv.trim().split("\r\n");
+  return lines.slice(1).map(splitCsvLine);
+}
+
+function csvCell(csv: string, column: string, rowIndex = 0): string {
+  const lines = csv.trim().split("\r\n");
+  const header = splitCsvLine(lines[0] ?? "");
+  const rows = csvDataRows(csv);
   const idx = header.indexOf(column);
   expect(idx).toBeGreaterThanOrEqual(0);
-  return row[idx] ?? "";
+  return rows[rowIndex]?.[idx] ?? "";
 }
 
 function energyResponse(importKwh: number, noData = false) {
@@ -74,6 +80,27 @@ function energyResponse(importKwh: number, noData = false) {
         ],
   };
 }
+
+/** Multi-point consumption fixture for Q75 chart-data export tests --
+ *  distinct per-point values so row order/values are unambiguously
+ *  checkable, unlike energyResponse's single-point fixture used by the
+ *  rest of this file's pre-existing tests. */
+function energySeriesResponse(points: Array<{ bucket_start: string; import_kwh: number | null }>) {
+  return {
+    site_id: SITE_ID,
+    resolution: "1h",
+    from: "2026-06-01T00:00:00Z",
+    to: "2026-06-08T00:00:00Z",
+    no_data: false,
+    series: points.map((p) => ({ ...p, export_kwh: null, source_interval_count: 4 })),
+  };
+}
+
+const THREE_DISTINCT_POINTS = [
+  { bucket_start: "2026-06-01T00:00:00Z", import_kwh: 10 },
+  { bucket_start: "2026-06-01T01:00:00Z", import_kwh: 20 },
+  { bucket_start: "2026-06-01T02:00:00Z", import_kwh: 30 },
+];
 
 function evidenceResponse(
   overrides: Partial<{
@@ -406,7 +433,7 @@ describe("EnergyOverview (Slice A/C -- Energy Performance)", () => {
     expect(screen.queryByTestId("freshness-indicator")).toBeNull();
   });
 
-  describe("Q75 Increment 1 -- contextual CSV export", () => {
+  describe("Q75 -- contextual Energy chart-data CSV export (corrected 2026-09-15)", () => {
     it("the Export action is not present while loading (before status === \"ready\")", async () => {
       // All fetches (consumption/evidence/freshness) hang forever -- status
       // stays at its initial "loading" value indefinitely -- while the site
@@ -423,7 +450,7 @@ describe("EnergyOverview (Slice A/C -- Energy Performance)", () => {
       expect(screen.queryByTestId("energy-export-csv")).toBeNull();
     });
 
-    it("the Export action appears once the screen is ready and triggers a CSV download of the currently displayed period/basis", async () => {
+    it("exports one CSV row per chart point (>=3 distinct series values), in chart order, with the currently selected comparison basis repeated on every row", async () => {
       mockDownloadCsv.mockClear();
       let consumptionCalls = 0;
       stubFetch((url) => {
@@ -431,15 +458,16 @@ describe("EnergyOverview (Slice A/C -- Energy Performance)", () => {
         if (isEvidenceUrl(url)) return { jsonBody: evidenceResponse() };
         if (isConsumptionUrl(url)) {
           consumptionCalls += 1;
-          // Distinct current/comparison values -- a current/comparison
-          // column swap in the export would fail this test.
-          return { jsonBody: consumptionCalls === 1 ? energyResponse(120) : energyResponse(100) };
+          // First call = current period (3 distinct chart points);
+          // second = comparison (single point, never exported point-by-
+          // point -- only its total should appear, as context).
+          return { jsonBody: consumptionCalls === 1 ? energySeriesResponse(THREE_DISTINCT_POINTS) : energyResponse(100) };
         }
         return { status: 404, jsonBody: { error: "not_found", detail: "unexpected" } };
       });
 
       renderWithProviders(<EnergyOverview />, { sites: () => Promise.resolve(SITES_ONE) });
-      await waitFor(() => expect(screen.getByTestId("energy-current-value")).toHaveTextContent("120.0 kWh"));
+      await waitFor(() => expect(screen.getByTestId("energy-current-value")).toHaveTextContent("60.0 kWh"));
 
       const user = userEvent.setup();
       await user.click(screen.getByTestId("energy-export-csv"));
@@ -447,36 +475,45 @@ describe("EnergyOverview (Slice A/C -- Energy Performance)", () => {
       expect(mockDownloadCsv).toHaveBeenCalledTimes(1);
       const [filename, csv] = mockDownloadCsv.mock.calls[0] as [string, string];
       expect(filename).toMatch(/^energy-consumption-.*\.csv$/);
-      expect(csvCell(csv, "current_value_kwh")).toBe("120.0");
-      expect(csvCell(csv, "comparison_value_kwh")).toBe("100.0");
-      expect(csvCell(csv, "comparison_basis")).toBe("PREVIOUS_PERIOD");
+
+      const rows = csvDataRows(csv);
+      expect(rows).toHaveLength(THREE_DISTINCT_POINTS.length);
+      THREE_DISTINCT_POINTS.forEach((point, i) => {
+        expect(csvCell(csv, "chart_timestamp", i)).toBe(point.bucket_start);
+        expect(csvCell(csv, "energy_consumption_kwh", i)).toBe(point.import_kwh.toFixed(1));
+        expect(csvCell(csv, "comparison_basis", i)).toBe("PREVIOUS_PERIOD");
+        expect(csvCell(csv, "comparison_value_kwh", i)).toBe("100.0");
+      });
     });
 
-    it("preserves the currently selected comparison basis in the exported CSV", async () => {
+    it("preserves the currently selected comparison basis across every exported row after switching basis", async () => {
       mockDownloadCsv.mockClear();
       stubFetch((url) => {
         if (isFreshnessUrl(url)) return { jsonBody: freshnessResponse() };
         if (isEvidenceUrl(url)) return { jsonBody: evidenceResponse() };
-        if (isConsumptionUrl(url)) return { jsonBody: energyResponse(120) };
+        if (isConsumptionUrl(url)) return { jsonBody: energySeriesResponse(THREE_DISTINCT_POINTS) };
         return { status: 404, jsonBody: { error: "not_found", detail: "unexpected" } };
       });
 
       renderWithProviders(<EnergyOverview />, { sites: () => Promise.resolve(SITES_ONE) });
-      await waitFor(() => expect(screen.getByTestId("energy-current-value")).toHaveTextContent("120.0 kWh"));
+      await waitFor(() => expect(screen.getByTestId("energy-current-value")).toHaveTextContent("60.0 kWh"));
 
       const user = userEvent.setup();
       await user.click(screen.getByTestId("comparison-basis-SAME_PERIOD_PREVIOUSLY"));
-      await waitFor(() => expect(screen.getByTestId("energy-current-value")).toHaveTextContent("120.0 kWh"));
+      await waitFor(() => expect(screen.getByTestId("energy-current-value")).toHaveTextContent("60.0 kWh"));
 
       await user.click(screen.getByTestId("energy-export-csv"));
 
       expect(mockDownloadCsv).toHaveBeenCalledTimes(1);
       const [, csv] = mockDownloadCsv.mock.calls[0] as [string, string];
-      const dataRow = csv.trim().split("\r\n")[1]!;
-      expect(dataRow.split(",")).toContain("SAME_PERIOD_PREVIOUSLY");
+      const rows = csvDataRows(csv);
+      expect(rows).toHaveLength(THREE_DISTINCT_POINTS.length);
+      for (let i = 0; i < rows.length; i++) {
+        expect(csvCell(csv, "comparison_basis", i)).toBe("SAME_PERIOD_PREVIOUSLY");
+      }
     });
 
-    it("current.no_data still allows export -- the row is emitted with an empty current value, never omitted", async () => {
+    it("current.no_data emits the header plus exactly one explicit no-data row -- never an empty file, never a fabricated value", async () => {
       mockDownloadCsv.mockClear();
       stubFetch((url) => {
         if (isFreshnessUrl(url)) return { jsonBody: freshnessResponse() };
@@ -493,8 +530,11 @@ describe("EnergyOverview (Slice A/C -- Energy Performance)", () => {
 
       expect(mockDownloadCsv).toHaveBeenCalledTimes(1);
       const [, csv] = mockDownloadCsv.mock.calls[0] as [string, string];
-      const lines = csv.trim().split("\r\n");
-      expect(lines).toHaveLength(2); // header + exactly one data row, still emitted
+      const rows = csvDataRows(csv);
+      expect(rows).toHaveLength(1); // header + exactly one explicit no-data row
+      expect(csvCell(csv, "chart_timestamp")).toBe("");
+      expect(csvCell(csv, "energy_consumption_kwh")).toBe("");
+      expect(csvCell(csv, "period_has_data")).toBe("false");
     });
   });
 });

@@ -405,3 +405,37 @@ This does not alter §6's own historical snapshot, preserved per
 rewrite rule. §6's statement remains the accurate record of the
 2026-09-14 decision-only state; only the 2026-09-15 implementation state is
 new.
+
+## 12. Status update (2026-09-15) — Q75 Energy chart-data export decided, correcting Increment 1
+
+Following a read-only requirements reconciliation (this session) that
+found ADR-014 decision 1's "raw/underlying time-series measurements"
+exclusion genuinely ambiguous as applied to the Energy Trend chart's own
+series (see [ADR-014's dated amendment](../00-governance/decisions/ADR-014-q75-export-scope-and-behavior.md#amendment-2026-09-15--decision-1-narrowed-energy-chart-series-now-in-scope)
+for the full evidentiary record), the Product Owner resolved the
+ambiguity: **the Energy contextual export must export the analytical
+data points that make up the currently displayed Energy chart**
+(`current.series` — `bucket_start`/`import_kwh`, at the response-level
+`resolution`), one CSV row per point, in chart order. This **supersedes**
+§11's summary-row interpretation for Energy's contextual export
+specifically; nothing else recorded in §11 or §6 changes.
+
+| Item | §11 status | 2026-09-15 (this section) status |
+|---|---|---|
+| Q75 Energy contextual export | Implemented as a single period-summary row (one CSV row per export) | **Corrected: one CSV row per Energy chart point.** `energyExportCsv.ts` rewritten: `current.series` drives row count/order; `chart_timestamp`/`energy_consumption_kwh` are new per-row columns (`bucket_start`/`import_kwh`, `.toFixed(1)` precision, unchanged convention); every other field (site/hierarchy context, metric, unit, resolution, selected period, comparison basis/total/delta, typical-reference counts, aggregate evidence, freshness) is now repeated identically on every row instead of appearing once, per the explicit Product Owner instruction that context accompany every exported point. A null chart point is retained as its own row with an empty `energy_consumption_kwh` cell (never zero, never omitted). A whole-period `current.no_data` (or defensively, an empty series) produces the header plus exactly one explicit row (`chart_timestamp`/`energy_consumption_kwh` empty, `period_has_data=false`) — never an empty file, never a fabricated value; this reuses the same `result.currentHasData` signal §11's implementation already established, not a new customer-facing quality label (`NoDataYet.tsx`'s and `FreshnessIndicator.tsx`'s existing "no data" terminology was inspected; none was a good fit for a machine-readable per-row column, so none was introduced). `downloadCsv.ts`, RFC4180 escaping, the filename convention, the Export button/ready-state gating, and the client-side-only architecture are all unchanged from §11. Comparison remains summary/contextual only (its own series is still never displayed on the chart, so ADR-014 decision 8 is unaffected) — no comparison-point rows are produced. `export_kwh`, `source_interval_count`, and per-point evidence/quality remain explicitly out of scope, not added. Verified: 6 new/rewritten unit tests in `energyExportCsv.test.ts` (27 total in that file) + 3 rewritten wiring tests in `EnergyOverview.test.tsx`, full frontend suite (256 tests), `tsc --noEmit`, `eslint --max-warnings 0`, `vite build` all pass. No staging/production deployment. |
+| `API.export` (§1/§6/§11 shorthand) | `MISSING` | **Unchanged as a code fact** — still `MISSING`. `current.series` was already fetched by the existing, unmodified `GET /sites/{id}/energy/consumption` endpoint; this correction added no endpoint, view, or function. |
+
+**Remaining product decisions, not resolved by this correction** (carried
+forward from the reconciliation): whether the previous single-row
+summary should be retained alongside the point rows in some other form
+(it is not, per this correction); comparison-period point-by-point
+export; `export_kwh`/`source_interval_count`/per-point evidence
+inclusion; Demand/Power Quality contextual export; the dedicated
+multi-metric Export area; size-tiered/background delivery. All remain
+exactly as undecided/unimplemented as §6 and §11 left them.
+
+This does not alter §6's or §11's own historical snapshots, preserved per
+[source-of-truth.md](../00-governance/source-of-truth.md)'s no-silent-
+rewrite rule. §11's implementation record remains the accurate account of
+what was built and verified 2026-09-15 (morning); this section records
+the same-day correction.
