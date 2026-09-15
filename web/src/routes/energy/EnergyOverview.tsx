@@ -253,12 +253,13 @@ export function EnergyOverview() {
 
   const evidenceSummary = evidence !== null ? summarizeEnergyEvidence(evidence) : null;
 
-  // Q75 Increment 1 (ADR-014) -- contextual Energy CSV export. Serializes
-  // exactly the already-computed on-screen state above (result/
-  // evidenceSummary/freshness/basis) -- no new fetch, no new calculation.
-  // Guarded by the same `status === "ready" && current && result` gate as
-  // the rest of this screen's content below (the button is only rendered,
-  // hence only usable, inside that block).
+  // Q75 (ADR-014, amended 2026-09-15) -- contextual Energy CSV export: one
+  // row per Trend chart point (current.series), plus the already-computed
+  // on-screen context (result/evidenceSummary/freshness/basis) repeated on
+  // every row -- no new fetch, no new calculation. Guarded by the same
+  // `status === "ready" && current && result` gate as the rest of this
+  // screen's content below (the button is only rendered, hence only
+  // usable, inside that block).
   function handleExportCsv() {
     if (!selectedSite || !current || !result) return;
     const csv = buildEnergyConsumptionExportCsv({
@@ -301,11 +302,11 @@ export function EnergyOverview() {
 
       {status === "ready" && current && result ? (
         <>
-          {/* Q75 Increment 1 (ADR-014) -- contextual export of this
-              period's Energy Consumption figure, exactly as currently
-              displayed below (selected period, selected comparison basis,
-              evidence, freshness). CSV only, immediate client-side
-              download -- no request leaves the browser. */}
+          {/* Q75 (ADR-014, amended 2026-09-15) -- contextual export of the
+              Trend chart's own data points below (one CSV row per point),
+              plus the selected period/comparison basis/evidence/freshness
+              context repeated on every row. CSV only, immediate
+              client-side download -- no request leaves the browser. */}
           <div className="energy-export">
             <button type="button" onClick={handleExportCsv} data-testid="energy-export-csv">
               Export CSV

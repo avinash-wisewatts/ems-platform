@@ -232,7 +232,7 @@ tracks decision readiness, not implementation, per
 [requirements-traceability.md](requirements-traceability.md) (the
 implementation-status-authoritative view).
 >
-> **Implementation note (2026-09-15):** a first increment now has code — a
+> **Implementation note (2026-09-15):** a first increment had code — a
 > contextual CSV export of the Energy Consumption figure
 > (`web/src/energy/energyExportCsv.ts`, wired into `EnergyOverview.tsx`),
 > covering `EMS-REQ-094`/`095`/`096`/`099` for the Energy screen only. No
@@ -241,6 +241,23 @@ implementation-status-authoritative view).
 > delivery (`EMS-REQ-097`) remain uncoded. See
 > [requirements-traceability.md §11](requirements-traceability.md#11-status-update-2026-09-15--q75-increment-1-energy-contextual-csv-export-implemented-not-deployed)
 > for the full record. Not deployed to staging or production.
+>
+> **Correction (2026-09-15, later the same day):** the increment note
+> above described a single period-summary row per export. This
+> interpretation of `EMS-REQ-094` is **superseded** by a Product Owner
+> decision recorded in
+> [ADR-014's dated amendment](../00-governance/decisions/ADR-014-q75-export-scope-and-behavior.md#amendment-2026-09-15--decision-1-narrowed-energy-chart-series-now-in-scope):
+> for the Energy contextual export, "the on-screen aggregated analytical
+> figure" in `EMS-REQ-094`'s own description below includes the Energy
+> Trend chart's own already-displayed, already-aggregated per-bucket
+> series (`current.series` — `bucket_start`/`import_kwh`, at the
+> response-level resolution) — this is distinct from, and `EMS-REQ-094`'s
+> exclusion of "the underlying raw time-series" still means, genuinely raw
+> sub-interval telemetry, which remains out of scope. `EMS-REQ-094`'s
+> table text below is intentionally left unedited (historical record of
+> the 2026-09-14 decision); this note is the correction. See
+> [requirements-traceability.md §12](requirements-traceability.md#12-status-update-2026-09-15--q75-energy-chart-data-export-decided-correcting-increment-1)
+> for the full record.
 
 | ID | Title / description | Customer question | Priority | Source | Phase | Status | Dependencies | Notes |
 |---|---|---|---|---|---|---|---|---|

@@ -66,14 +66,23 @@ a real 22-device fleet. Slice C (comparison) landed with 1,277 backend +
 **DONE** (2026-09-13). Consumption (PR #46), comparison/evidence (PR #49,
 Slice C) all live on `origin/staging`.
 
-**Export CSV (2026-09-15, Q75 Increment 1, MVP-6):** an "Export CSV"
-action was added to this screen, serializing the already-displayed period
-total, comparison, evidence, and freshness state to a CSV file
-client-side (no new endpoint). Implemented, tested, not yet deployed to
-`origin/staging`. See
-[functional-requirements.md §Export](../../02-requirements/functional-requirements.md#export)
+**Export CSV (2026-09-15, Q75, MVP-6):** an "Export CSV" action was
+added to this screen, client-side only (no new endpoint). It was first
+implemented serializing a single period-summary row (total, comparison,
+evidence, freshness) — **that interpretation is superseded.** Corrected
+the same day, per an explicit Product Owner decision, to export one CSV
+row per Energy Trend chart point (`current.series` —
+`bucket_start`/`import_kwh`, at the chart's resolution), with the same
+context (site/hierarchy, metric, unit, period, comparison, evidence,
+freshness) repeated on every row. A null chart point is retained as its
+own row with a blank value; a whole-period no-data range produces the
+header plus one explicit no-data row. Implemented, tested, not yet
+deployed to `origin/staging`. See
+[functional-requirements.md §Export](../../02-requirements/functional-requirements.md#export),
+[ADR-014's amendment](../../00-governance/decisions/ADR-014-q75-export-scope-and-behavior.md#amendment-2026-09-15--decision-1-narrowed-energy-chart-series-now-in-scope),
 and
-[requirements-traceability.md §11](../../02-requirements/requirements-traceability.md#11-status-update-2026-09-15--q75-increment-1-energy-contextual-csv-export-implemented-not-deployed).
+[requirements-traceability.md §12](../../02-requirements/requirements-traceability.md#12-status-update-2026-09-15--q75-energy-chart-data-export-decided-correcting-increment-1)
+(§11 records the original, now-superseded, summary-row implementation).
 
 ## Known limitations
 

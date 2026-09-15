@@ -39,7 +39,7 @@ CUSTOMER EMS
 │   ├── Comparisons
 │   └── Correlations             ← curated only, never a free-form query builder
 ├── Alerts                        ← SHOULD/MVP-7; implemented 2026-09-14 (ADR-016/ADR-017), staging validation pending; in-product only (header indicator + this area); config stays in Administration App (Q67)
-├── Export                        ← MVP-6; decided 2026-09-14 (ADR-014); this dedicated nav area itself not implemented; a contextual Increment 1 (Energy only, CSV, no nav entry) implemented 2026-09-15, not yet deployed — see requirements-traceability.md §11; Demand/Power Quality contextual export also not implemented
+├── Export                        ← MVP-6; decided 2026-09-14, amended 2026-09-15 (ADR-014); this dedicated nav area itself not implemented; a contextual export (Energy only, CSV, no nav entry) implemented 2026-09-15 as chart-data rows per Trend-chart point (corrected same day from an earlier summary-row interpretation), not yet deployed — see requirements-traceability.md §11/§12; Demand/Power Quality contextual export also not implemented
 └── Reports                       ← MVP-6; Site Performance Report decided + implemented 2026-09-14 (ADR-015), not yet deployed; Reports-area-only (no contextual access, unlike Export); rest of Q76 remains open
 
 Future areas (record only; NOT approved MVP features):
