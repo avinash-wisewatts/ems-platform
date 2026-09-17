@@ -97,6 +97,7 @@ def test_sites_returns_accessible_sites(portal_client, monkeypatch) -> None:
             {
                 "site_id": SITE_ID,
                 "organization_id": ORG_ID,
+                "organization_name": "Acme Corp",
                 "site_code": "SITE_1",
                 "site_name": "Main Site",
                 "timezone": "Asia/Kolkata",
@@ -116,6 +117,7 @@ def test_sites_returns_accessible_sites(portal_client, monkeypatch) -> None:
             {
                 "site_id": SITE_ID,
                 "organization_id": ORG_ID,
+                "organization_name": "Acme Corp",
                 "site_code": "SITE_1",
                 "site_name": "Main Site",
                 "timezone": "Asia/Kolkata",
