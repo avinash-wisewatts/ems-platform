@@ -99,6 +99,7 @@ class SiteSummary(BaseModel):
 
     site_id: UUID
     organization_id: UUID
+    organization_name: str
     site_code: str
     site_name: str
     timezone: str | None = None
@@ -577,6 +578,7 @@ async def fetch_accessible_sites(portal_user_id: int) -> list[dict[str, Any]]:
         SELECT
             id            AS site_id,
             organization_id,
+            organization_name,
             site_code,
             site_name,
             timezone
@@ -927,6 +929,7 @@ def build_sites_response(rows: list[dict[str, Any]]) -> SitesResponse:
             SiteSummary(
                 site_id=row["site_id"],
                 organization_id=row["organization_id"],
+                organization_name=row["organization_name"],
                 site_code=row["site_code"],
                 site_name=row["site_name"],
                 timezone=row.get("timezone"),
