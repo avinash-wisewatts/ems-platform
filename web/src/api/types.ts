@@ -272,9 +272,13 @@ export type PowerQualityResponse = {
 // from, and never merged into, the measurement-quality lattice
 // (web/src/components/QualityIndicator.tsx) or Demand's own quality_status/
 // coverage_percent above. state is one of exactly four values; no internal
-// device state, device_id, or gateway_id is ever returned. as_of exists on
-// the wire but is intentionally not consumed by the frontend in MVP-4 (no
-// approved UX decision on timestamp presentation yet).
+// device state, device_id, or gateway_id is ever returned. as_of has existed
+// on the wire since MVP-4 but was intentionally not consumed by the frontend
+// then (no approved UX decision on timestamp presentation yet). The
+// WiseWatts Main Dashboard's "Last data update" line is the first consumer
+// -- the most recent non-null as_of across energy/demand/power_quality, per
+// explicit product direction for that screen (routes/dashboard/
+// MainDashboard.tsx). No other screen reads it.
 
 export type FreshnessState = "FRESH" | "STALE" | "NO_DATA" | "UNKNOWN";
 

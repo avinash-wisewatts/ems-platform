@@ -38,7 +38,10 @@ component-tree UI is explicitly deferred — see
 - Schema: `metadata.sites`, `metadata.buildings/floors/spaces`,
   `metadata.assets`, `metadata.asset_devices` — **LIVE**.
 - "Spaces for a site" list endpoint — **LIVE** (`GET /api/v1/sites/{site_id}/spaces`).
-- "Assets for a site" list endpoint — **LIVE** (`GET /api/v1/sites/{site_id}/assets`).
+- "Assets for a site" list endpoint — **LIVE** (`GET /api/v1/sites/{site_id}/assets`);
+  also returns `asset_type_name`, `parent_asset_name`, building/floor/space
+  names, and `location_path` (Asset View list enrichment), sourced from the
+  existing `admin.list_accessible_assets` rather than a new read path.
 - Asset-relationship + asset↔space read objects — **MISSING**, still
   deferred (frozen-architecture concepts not yet implemented — see
   [../../04-architecture/system-architecture.md](../../04-architecture/system-architecture.md)).

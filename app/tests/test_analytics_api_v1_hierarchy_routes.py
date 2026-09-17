@@ -249,6 +249,47 @@ def test_assets_returns_accessible_site_assets_with_nullable_placement(
     assert body["assets"][0]["external_id"] == "AHU_01"
 
 
+def test_assets_returns_type_hierarchy_and_location_fields(portal_client, monkeypatch) -> None:
+    _login_global_admin(portal_client, monkeypatch)
+
+    async def yes(portal_user_id, site_id):
+        return True
+
+    async def fetch(portal_user_id, site_id):
+        return [
+            {
+                "asset_id": ASSET_ID,
+                "site_id": SITE_ID,
+                "space_id": SPACE_ID,
+                "parent_asset_id": None,
+                "external_id": "AHU_01",
+                "asset_name": "Banquet 1 AHU",
+                "lifecycle_status": "ACTIVE",
+                "asset_type_id": "99999999-9999-4999-8999-999999999999",
+                "asset_type_name": "AHU",
+                "parent_asset_name": None,
+                "building_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                "building_name": "Hotel Building",
+                "floor_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+                "floor_name": "Mezzanine",
+                "space_name": "Above Banquet",
+                "location_path": "Hotel Building / Mezzanine / Above Banquet",
+            }
+        ]
+
+    monkeypatch.setattr("src.routers.analytics_api.portal_user_can_access_site", yes)
+    monkeypatch.setattr("src.routers.analytics_api.fetch_site_assets", fetch)
+
+    response = portal_client.get(f"/api/v1/sites/{SITE_ID}/assets")
+    assert response.status_code == 200
+    asset = response.json()["assets"][0]
+    assert asset["asset_type_name"] == "AHU"
+    assert asset["location_path"] == "Hotel Building / Mezzanine / Above Banquet"
+    assert asset["building_name"] == "Hotel Building"
+    assert asset["floor_name"] == "Mezzanine"
+    assert asset["space_name"] == "Above Banquet"
+
+
 def test_assets_tenant_isolation_does_not_leak_other_site(portal_client, monkeypatch) -> None:
     _login_global_admin(portal_client, monkeypatch)
 
@@ -268,3 +309,75 @@ def test_assets_tenant_isolation_does_not_leak_other_site(portal_client, monkeyp
 
     assert allowed.status_code == 200
     assert denied.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/sites/{site_id}/assets/{asset_id}/live-state (Asset View)
+# ---------------------------------------------------------------------------
+
+def test_asset_live_state_requires_authentication(portal_client) -> None:
+    response = portal_client.get(f"/api/v1/sites/{SITE_ID}/assets/{ASSET_ID}/live-state")
+    assert response.status_code == 401
+
+
+def test_asset_live_state_inaccessible_asset_is_404(portal_client, monkeypatch) -> None:
+    _login_global_admin(portal_client, monkeypatch)
+
+    async def no(portal_user_id, asset_id):
+        return False
+
+    monkeypatch.setattr("src.routers.analytics_api.portal_user_can_access_asset", no)
+
+    response = portal_client.get(f"/api/v1/sites/{SITE_ID}/assets/{ASSET_ID}/live-state")
+    assert response.status_code == 404
+
+
+def test_asset_live_state_returns_points_per_logical_point(portal_client, monkeypatch) -> None:
+    _login_global_admin(portal_client, monkeypatch)
+
+    async def yes(portal_user_id, asset_id):
+        return True
+
+    async def fetch(portal_user_id, asset_id):
+        return [
+            {
+                "device_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+                "device_name": "Meter 1",
+                "relationship_type": "PRIMARY_METER",
+                "logical_point": "ACTIVE_POWER_TOTAL",
+                "unit_symbol": "kW",
+                "numeric_value": 12.5,
+                "text_value": None,
+                "event_time": "2026-09-16T12:00:00Z",
+                "received_at": "2026-09-16T12:00:01Z",
+                "freshness_state": "LIVE",
+                "quality_code": "GOOD",
+            }
+        ]
+
+    monkeypatch.setattr("src.routers.analytics_api.portal_user_can_access_asset", yes)
+    monkeypatch.setattr("src.routers.analytics_api.fetch_asset_live_state", fetch)
+
+    response = portal_client.get(f"/api/v1/sites/{SITE_ID}/assets/{ASSET_ID}/live-state")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["asset_id"] == ASSET_ID
+    assert body["points"][0]["logical_point"] == "ACTIVE_POWER_TOTAL"
+    assert body["points"][0]["numeric_value"] == 12.5
+
+
+def test_asset_live_state_empty_is_200_not_error(portal_client, monkeypatch) -> None:
+    _login_global_admin(portal_client, monkeypatch)
+
+    async def yes(portal_user_id, asset_id):
+        return True
+
+    async def fetch(portal_user_id, asset_id):
+        return []
+
+    monkeypatch.setattr("src.routers.analytics_api.portal_user_can_access_asset", yes)
+    monkeypatch.setattr("src.routers.analytics_api.fetch_asset_live_state", fetch)
+
+    response = portal_client.get(f"/api/v1/sites/{SITE_ID}/assets/{ASSET_ID}/live-state")
+    assert response.status_code == 200
+    assert response.json()["points"] == []
