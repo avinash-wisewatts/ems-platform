@@ -109,6 +109,20 @@ BEGIN
         12.0, 12.6, 15.5, 'METER_NATIVE', 98.5, 'VALID'
     );
 
+    -- A second finalized interval several months earlier, specifically to
+    -- prove a long (>31-day) query window returns both rows -- the
+    -- previous 31-day API-layer cap never existed in this SQL function,
+    -- but this documents that a genuinely long range works end to end.
+    INSERT INTO analytics.demand_intervals(
+        interval_start, interval_end, organization_id, site_id, scope_type,
+        asset_id, demand_policy_id, demand_kw, demand_kva, peak_power_kw,
+        source_method, coverage_percent, quality_status
+    ) VALUES (
+        TIMESTAMPTZ '2026-01-15 09:00:00+00', TIMESTAMPTZ '2026-01-15 09:15:00+00',
+        v_org_a, v_site_a, 'ASSET', v_asset_metered, v_policy,
+        9.0, 9.4, 11.0, 'METER_NATIVE', 97.0, 'VALID'
+    );
+
     INSERT INTO analytics.demand_state(
         site_id, scope_type, asset_id, demand_policy_id,
         interval_start, interval_end, current_demand_kw, current_demand_kva,
@@ -219,6 +233,21 @@ BEGIN
     IF v_count <> 1 THEN
         RAISE EXCEPTION 'Expected exactly 1 row when p_to is past interval_start (got %)', v_count;
     END IF;
+
+    -- ------------------------------------------------------------------
+    -- 5. Long range (>31 days, spanning both finalized intervals) succeeds
+    --    end to end -- the previous 31-day API-layer cap (now removed) was
+    --    never enforced in this SQL function; this proves the full read
+    --    path returns all matching rows for a genuinely long window.
+    -- ------------------------------------------------------------------
+    SELECT count(*) INTO v_count
+    FROM analytics.get_portal_asset_demand_series(
+        v_user_a, v_asset_metered,
+        TIMESTAMPTZ '2026-01-01 00:00:00+00', TIMESTAMPTZ '2026-09-01 00:00:00+00'
+    );
+    IF v_count <> 2 THEN
+        RAISE EXCEPTION 'Expected 2 rows over an 8-month range spanning both intervals (got %)', v_count;
+    END IF;
 END;
 $test$;
 
@@ -226,6 +255,7 @@ $test$;
 \echo 'PASS: a caller in a different organization is denied (zero rows, no error)'
 \echo 'PASS: an asset never processed by the demand job (no PRIMARY_METER) returns zero rows, not an error'
 \echo 'PASS: [p_from, p_to) window boundaries on interval_start are enforced correctly'
+\echo 'PASS: an 8-month query window returns all matching rows -- no artificial window limit'
 
 ROLLBACK;
 SQL

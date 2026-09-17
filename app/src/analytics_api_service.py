@@ -45,18 +45,15 @@ ENERGY_RESOLUTION_MAX_WINDOW: dict[str, timedelta] = {
     "1d": timedelta(days=366),
 }
 
-# Slice B -- Demand. analytics.demand_intervals carries no coarser
-# persisted tier (native interval grain only, 900s or 1800s per the site's
-# config.site_demand_policies), so there is a single flat window cap rather
-# than a per-resolution table -- reusing the same 31-day bound already
-# established for energy's 1h tier, not an invented new number.
-DEMAND_MAX_WINDOW: timedelta = timedelta(days=31)
-
-# Asset View -- Demand (migration 245). Same native-interval-grain
-# rationale as DEMAND_MAX_WINDOW above, applied to the scope_type='ASSET'
-# rows of the same analytics.demand_intervals table -- reusing the
-# identical 31-day bound, not inventing a new one.
-ASSET_DEMAND_MAX_WINDOW: timedelta = timedelta(days=31)
+# Slice B -- Demand (Site and Asset). No maximum query-window: the previous
+# 31-day cap (both here and for Asset Demand) was an artificial API-layer
+# restriction carried over from Energy's 1h-tier bound, not a demonstrated
+# data-retention or performance boundary -- analytics.demand_intervals/
+# demand_state have no window restriction of their own, and neither
+# get_portal_site_demand_series (migration 233) nor get_portal_asset_
+# demand_series (migration 245) ever capped the window in SQL. Removed per
+# explicit product decision; see the two Demand routes in analytics_api.py,
+# which now pass None for this resolution instead of a concrete timedelta.
 
 # Asset View (migration 244). analytics.get_canonical_energy_read has no
 # resolution parameter to cap per-tier -- it auto-selects resolution for
@@ -506,6 +503,31 @@ class AssetCurrentDemandResponse(BaseModel):
     coverage_percent: float | None = None
 
 
+class AssetPowerTrendPoint(BaseModel):
+    """One raw instantaneous active-power sample from the asset's
+    PRIMARY_METER device (migration 246) -- a point sample, not an
+    aggregated interval, hence sample_time rather than interval_start/end.
+    quality_code is deliberately not exposed here: it is a raw internal
+    SMALLINT on telemetry.energy_measurements with no established
+    customer-facing translation anywhere in this codebase (unlike Demand's
+    own quality_status). is_estimated is plain and self-describing, so it
+    is exposed as-is."""
+
+    sample_time: datetime
+    active_power_kw: float | None
+    is_estimated: bool
+
+
+class AssetPowerTrendResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    asset_id: UUID
+    range_from: datetime = Field(alias="from")
+    range_to: datetime = Field(alias="to")
+    no_data: bool
+    series: list[AssetPowerTrendPoint]
+
+
 class PowerQualityPoint(BaseModel):
     """One bucket from telemetry.ca_energy_15min/hourly/daily for the
     site's resolved SITE_CONSUMPTION meter. current_thd is returned per
@@ -616,9 +638,15 @@ def parse_time_range(
     to_raw: str,
     *,
     resolution: str,
-    max_window_by_resolution: dict[str, timedelta],
+    max_window_by_resolution: dict[str, timedelta | None],
 ) -> tuple[datetime, datetime]:
-    """Parse and bound a required [from, to) window for one resolution."""
+    """Parse and bound a required [from, to) window for one resolution.
+
+    A resolution mapped to None has no maximum window -- used where the
+    cap was an artificial API-layer restriction rather than a demonstrated
+    data-retention or performance boundary (Demand and Asset Power Trend;
+    see analytics_api.py's own callers for the removal rationale). Every
+    other caller keeps an enforced, concrete timedelta unchanged."""
 
     dt_from = _parse_instant(from_raw, "from")
     dt_to = _parse_instant(to_raw, "to")
@@ -629,7 +657,7 @@ def parse_time_range(
         )
 
     max_window = max_window_by_resolution[resolution]
-    if dt_to - dt_from > max_window:
+    if max_window is not None and dt_to - dt_from > max_window:
         raise ApiContractError(
             "time_range_too_large",
             f"the maximum window for resolution '{resolution}' is "
@@ -1090,6 +1118,23 @@ async def fetch_asset_current_demand(
     return rows[0] if rows else None
 
 
+async def fetch_asset_power_trend(
+    *,
+    portal_user_id: int,
+    asset_id: UUID,
+    dt_from: datetime,
+    dt_to: datetime,
+) -> list[dict[str, Any]]:
+    return await _read_rows(
+        """
+        SELECT sample_time, active_power_kw, is_estimated
+        FROM analytics.get_portal_asset_power_trend(%s, %s, %s, %s)
+        ORDER BY sample_time
+        """,
+        (portal_user_id, str(asset_id), dt_from, dt_to),
+    )
+
+
 async def fetch_site_power_quality_series(
     *,
     portal_user_id: int,
@@ -1544,6 +1589,31 @@ def build_asset_current_demand_response(
             if row["coverage_percent"] is not None
             else None
         ),
+    )
+
+
+def build_asset_power_trend_response(
+    *,
+    asset_id: UUID,
+    dt_from: datetime,
+    dt_to: datetime,
+    rows: list[dict[str, Any]],
+) -> AssetPowerTrendResponse:
+    points = [
+        AssetPowerTrendPoint(
+            sample_time=row["sample_time"],
+            active_power_kw=(
+                float(row["active_power_kw"]) if row["active_power_kw"] is not None else None
+            ),
+            is_estimated=bool(row["is_estimated"]),
+        )
+        for row in rows
+    ]
+    return AssetPowerTrendResponse(
+        asset_id=asset_id,
+        **{"from": dt_from, "to": dt_to},
+        no_data=len(points) == 0,
+        series=points,
     )
 
 
