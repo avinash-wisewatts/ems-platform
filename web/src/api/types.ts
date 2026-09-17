@@ -97,6 +97,33 @@ export type AssetsResponse = {
   assets: AssetSummary[];
 };
 
+// ---- GET /api/v1/sites/{site_id}/assets/{asset_id}/live-state --
+// Always a "right now" read -- one row per (device, logical_point)
+// currently attached to the asset. No historical series. Paired with the
+// portal-session live WebSocket that keeps it current after the initial
+// fetch (see routes/assetView/useAssetLiveSocket.ts) -- this same shape
+// (asset_id + points[]) is also what that socket's "snapshot"/"telemetry"
+// messages carry.
+
+export type AssetLivePoint = {
+  device_id: string;
+  device_name: string;
+  relationship_type: string;
+  logical_point: string;
+  unit_symbol: string | null;
+  numeric_value: number | null;
+  text_value: string | null;
+  event_time: string | null;
+  received_at: string | null;
+  freshness_state: string;
+  quality_code: string | null;
+};
+
+export type AssetLiveStateResponse = {
+  asset_id: string;
+  points: AssetLivePoint[];
+};
+
 // ---- GET /api/v1/sites/{site_id}/energy/consumption --------------------
 
 export const ENERGY_RESOLUTIONS = ["1h", "1d"] as const;

@@ -9,3 +9,10 @@ itsdangerous==2.2.0
 argon2-cffi==23.1.0
 
 paho-mqtt==2.1.0
+
+# WebSocket client for main.py's Asset View live WebSocket proxy
+# (proxy_asset_live_websocket -> live-telemetry's live_asset_websocket).
+# Already an incidental transitive dependency of uvicorn[standard] (its
+# server-side WebSocket support); pinned explicitly here because
+# application code now imports it directly, not just uvicorn internally.
+websockets==17.1
