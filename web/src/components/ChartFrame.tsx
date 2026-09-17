@@ -16,8 +16,10 @@
  * No other charting library may be added. No feature-specific charts here.
  */
 
-import type { ReactElement } from "react";
+import { useId, type ReactElement } from "react";
 import {
+  Area,
+  AreaChart,
   CartesianGrid,
   Line,
   LineChart,
@@ -43,6 +45,12 @@ export type ChartFrameProps = {
   /** fixed width for tests / non-responsive contexts */
   width?: number;
   ariaLabel?: string;
+  /** "line" (default, unchanged) or a filled "area" rendering -- still the
+   *  same Recharts foundation, same data contract; purely a presentation
+   *  choice for screens (e.g. the WiseWatts Main Dashboard Load Trend card)
+   *  that want a filled trend instead of a bare line. No new chart library,
+   *  no feature-specific chart component. */
+  variant?: "line" | "area";
 };
 
 function formatTick(t: number): string {
@@ -56,11 +64,13 @@ export function ChartFrame({
   height = 280,
   width,
   ariaLabel,
+  variant = "line",
 }: ChartFrameProps) {
   const label = ariaLabel ?? `${valueLabel}${unit ? ` (${unit})` : ""} over time`;
+  const gradientId = `chart-frame-area-fill-${useId()}`;
 
-  const chart = (
-    <LineChart data={points} margin={{ top: 8, right: 16, bottom: 8, left: 8 }}>
+  const sharedAxes = (
+    <>
       <CartesianGrid strokeDasharray="3 3" />
       <XAxis
         dataKey="t"
@@ -75,16 +85,43 @@ export function ChartFrame({
         labelFormatter={(t) => new Date(Number(t)).toISOString()}
         formatter={(v) => [String(v), unit ? `${valueLabel} (${unit})` : valueLabel]}
       />
-      <Line
-        type="monotone"
-        dataKey="value"
-        dot={false}
-        isAnimationActive={false}
-        connectNulls={false}
-        strokeWidth={2}
-      />
-    </LineChart>
+    </>
   );
+
+  const chart =
+    variant === "area" ? (
+      <AreaChart data={points} margin={{ top: 8, right: 16, bottom: 8, left: 8 }}>
+        <defs>
+          <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="5%" stopColor="currentColor" stopOpacity={0.35} />
+            <stop offset="95%" stopColor="currentColor" stopOpacity={0.02} />
+          </linearGradient>
+        </defs>
+        {sharedAxes}
+        <Area
+          type="monotone"
+          dataKey="value"
+          dot={false}
+          isAnimationActive={false}
+          connectNulls={false}
+          strokeWidth={2}
+          stroke="currentColor"
+          fill={`url(#${gradientId})`}
+        />
+      </AreaChart>
+    ) : (
+      <LineChart data={points} margin={{ top: 8, right: 16, bottom: 8, left: 8 }}>
+        {sharedAxes}
+        <Line
+          type="monotone"
+          dataKey="value"
+          dot={false}
+          isAnimationActive={false}
+          connectNulls={false}
+          strokeWidth={2}
+        />
+      </LineChart>
+    );
 
   return (
     <figure className="chart-frame" aria-label={label} data-testid="chart-frame">

@@ -52,6 +52,13 @@ ENERGY_RESOLUTION_MAX_WINDOW: dict[str, timedelta] = {
 # established for energy's 1h tier, not an invented new number.
 DEMAND_MAX_WINDOW: timedelta = timedelta(days=31)
 
+# Asset View (migration 244). analytics.get_canonical_energy_read has no
+# resolution parameter to cap per-tier -- it auto-selects resolution for
+# whatever window is requested, so a single flat cap applies, matching the
+# "1d" energy tier's own 366-day bound (the widest window this screen's own
+# time-range control -- "Last 1 Year" -- can ever request).
+ASSET_ENERGY_MAX_WINDOW: timedelta = timedelta(days=366)
+
 # Slice B -- Power Quality. telemetry.ca_energy_15min/hourly/daily are the
 # three confirmed-live tiers (migrations 51/52/53). 1h and 1d reuse the
 # exact energy caps above; 15min gets a conservative, shorter bound in the
@@ -319,10 +326,16 @@ class SpacesResponse(BaseModel):
 
 
 class AssetSummary(BaseModel):
-    """Slice 0 (Hierarchy Foundation). Identity + placement only -- NO
-    relationship/component-tree data (explicitly deferred; see migration
-    232's header). space_id / parent_asset_id are passed through as-is and
-    may be null."""
+    """Slice 0 (Hierarchy Foundation) fields, plus the type/hierarchy/
+    location fields the Asset View screen needs -- all already computed by
+    the existing, already-portal-scoped admin.list_accessible_assets (the
+    same function the admin portal's own asset workspace already reads;
+    this is the first customer-facing /api/v1 read of it). No new business
+    logic: every field here was already joined and tenant-checked server-
+    side before this model existed. space_id / parent_asset_id /
+    asset_type_id and their resolved names may be null (assets without a
+    space, parent, or type assignment). Still NO relationship/component-tree
+    data (explicitly deferred; see migration 232's header)."""
 
     asset_id: UUID
     site_id: UUID
@@ -331,11 +344,91 @@ class AssetSummary(BaseModel):
     external_id: str
     asset_name: str
     lifecycle_status: str
+    asset_type_id: UUID | None = None
+    asset_type_name: str | None = None
+    parent_asset_name: str | None = None
+    building_id: UUID | None = None
+    building_name: str | None = None
+    floor_id: UUID | None = None
+    floor_name: str | None = None
+    space_name: str | None = None
+    location_path: str | None = None
 
 
 class AssetsResponse(BaseModel):
     site_id: UUID
     assets: list[AssetSummary]
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/sites/{site_id}/assets/{asset_id}/live-state (Asset View)
+#
+# Reads the existing, already-portal-scoped admin.get_portal_asset_live_state
+# (migration 022, unchanged) -- the SAME session-authenticated latest-value
+# cache the standalone live-telemetry service's GET /api/live/assets/{id}
+# already reads for the browser-facing live path, just served from this
+# customer-facing /api/v1 API instead. Always a "right now" read (one row
+# per device/logical-point currently attached to the asset) -- no
+# historical series, no aggregation.
+# ---------------------------------------------------------------------------
+
+class AssetLivePoint(BaseModel):
+    device_id: UUID
+    device_name: str
+    relationship_type: str
+    logical_point: str
+    unit_symbol: str | None = None
+    numeric_value: float | None = None
+    text_value: str | None = None
+    event_time: datetime | None = None
+    received_at: datetime | None = None
+    freshness_state: str
+    quality_code: str | None = None
+
+
+class AssetLiveStateResponse(BaseModel):
+    """asset_id only -- no asset_name/site_id duplication: the caller
+    already has both from the already-fetched GET .../assets list this
+    screen renders, and an asset with no device attached yet legitimately
+    returns zero point rows, which would leave those fields with nothing to
+    populate them from."""
+
+    asset_id: UUID
+    points: list[AssetLivePoint]
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/sites/{site_id}/assets/{asset_id}/energy/consumption
+# (migration 244, Asset View) -- reads the new, portal-scoped
+# analytics.get_portal_asset_energy_intervals, itself an auth-envelope-only
+# wrapper around the existing, unmodified analytics.get_grafana_asset_-
+# energy_intervals. No aggregation happens here or in that function --
+# summation into a period total is the frontend's job (energy/comparison.ts
+# already does this for sites; the Asset View screen reuses the same
+# summation approach for its own asset-shaped rows).
+# ---------------------------------------------------------------------------
+
+class AssetEnergyIntervalPoint(BaseModel):
+    interval_start: datetime
+    device_id: UUID
+    device_name: str
+    elapsed_minutes: float
+    import_consumption_kwh: float | None = None
+    export_consumption_kwh: float | None = None
+    import_quality_code: str | None = None
+    export_quality_code: str | None = None
+    reset_detected: bool
+    gap_detected: bool
+
+
+class AssetEnergyIntervalsResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    asset_id: UUID
+    range_from: datetime = Field(alias="from")
+    range_to: datetime = Field(alias="to")
+    no_data: bool
+    series: list[AssetEnergyIntervalPoint]
 
 
 class DemandIntervalPoint(BaseModel):
@@ -598,6 +691,16 @@ async def portal_user_can_access_site(
     return bool(result)
 
 
+async def portal_user_can_access_asset(
+    portal_user_id: int, asset_id: UUID
+) -> bool:
+    result = await _read_scalar(
+        "SELECT admin.portal_user_can_access_asset(%s, %s) AS allowed",
+        (portal_user_id, str(asset_id)),
+    )
+    return bool(result)
+
+
 async def portal_user_can_access_space(
     portal_user_id: int, space_id: UUID
 ) -> bool:
@@ -843,10 +946,46 @@ async def fetch_site_assets(
         """
         SELECT
             asset_id, site_id, space_id, parent_asset_id,
-            external_id, asset_name, lifecycle_status
-        FROM analytics.list_portal_site_assets(%s, %s)
+            external_id, asset_name, lifecycle_status,
+            asset_type_id, asset_type_name, parent_asset_name,
+            building_id, building_name, floor_id, floor_name,
+            space_name, location_path
+        FROM admin.list_accessible_assets(%s)
+        WHERE site_id = %s
         """,
         (portal_user_id, str(site_id)),
+    )
+
+
+async def fetch_asset_live_state(
+    portal_user_id: int, asset_id: UUID
+) -> list[dict[str, Any]]:
+    return await _read_rows(
+        """
+        SELECT
+            asset_id, asset_name, site_id, device_id, device_name,
+            relationship_type, logical_point, unit_symbol, numeric_value,
+            text_value, event_time, received_at, freshness_state,
+            quality_code
+        FROM admin.get_portal_asset_live_state(%s, %s)
+        """,
+        (portal_user_id, str(asset_id)),
+    )
+
+
+async def fetch_asset_energy_intervals(
+    portal_user_id: int, asset_id: UUID, dt_from: datetime, dt_to: datetime
+) -> list[dict[str, Any]]:
+    return await _read_rows(
+        """
+        SELECT
+            interval_start, device_id, device_name, elapsed_minutes,
+            import_consumption_kwh, export_consumption_kwh,
+            import_quality_code, export_quality_code,
+            reset_detected, gap_detected
+        FROM analytics.get_portal_asset_energy_intervals(%s, %s, %s, %s)
+        """,
+        (portal_user_id, str(asset_id), dt_from, dt_to),
     )
 
 
@@ -1144,6 +1283,65 @@ def build_assets_response(
                 external_id=row["external_id"],
                 asset_name=row["asset_name"],
                 lifecycle_status=row["lifecycle_status"],
+                asset_type_id=row.get("asset_type_id"),
+                asset_type_name=row.get("asset_type_name"),
+                parent_asset_name=row.get("parent_asset_name"),
+                building_id=row.get("building_id"),
+                building_name=row.get("building_name"),
+                floor_id=row.get("floor_id"),
+                floor_name=row.get("floor_name"),
+                space_name=row.get("space_name"),
+                location_path=row.get("location_path"),
+            )
+            for row in rows
+        ],
+    )
+
+
+def build_asset_live_state_response(
+    *, asset_id: UUID, rows: list[dict[str, Any]]
+) -> AssetLiveStateResponse:
+    return AssetLiveStateResponse(
+        asset_id=asset_id,
+        points=[
+            AssetLivePoint(
+                device_id=row["device_id"],
+                device_name=row["device_name"],
+                relationship_type=row["relationship_type"],
+                logical_point=row["logical_point"],
+                unit_symbol=row.get("unit_symbol"),
+                numeric_value=row.get("numeric_value"),
+                text_value=row.get("text_value"),
+                event_time=row.get("event_time"),
+                received_at=row.get("received_at"),
+                freshness_state=row["freshness_state"],
+                quality_code=row.get("quality_code"),
+            )
+            for row in rows
+        ],
+    )
+
+
+def build_asset_energy_intervals_response(
+    *, asset_id: UUID, dt_from: datetime, dt_to: datetime, rows: list[dict[str, Any]]
+) -> AssetEnergyIntervalsResponse:
+    return AssetEnergyIntervalsResponse(
+        asset_id=asset_id,
+        range_from=dt_from,
+        range_to=dt_to,
+        no_data=len(rows) == 0,
+        series=[
+            AssetEnergyIntervalPoint(
+                interval_start=row["interval_start"],
+                device_id=row["device_id"],
+                device_name=row["device_name"],
+                elapsed_minutes=row["elapsed_minutes"],
+                import_consumption_kwh=row.get("import_consumption_kwh"),
+                export_consumption_kwh=row.get("export_consumption_kwh"),
+                import_quality_code=row.get("import_quality_code"),
+                export_quality_code=row.get("export_quality_code"),
+                reset_detected=row["reset_detected"],
+                gap_detected=row["gap_detected"],
             )
             for row in rows
         ],

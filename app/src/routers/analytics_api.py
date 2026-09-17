@@ -8,6 +8,8 @@ Read-only endpoints consumed by the EMS web application:
     GET /api/v1/spaces/{space_id}/measurements
     GET /api/v1/sites/{site_id}/spaces                  (Slice 0: hierarchy)
     GET /api/v1/sites/{site_id}/assets                  (Slice 0: hierarchy)
+    GET /api/v1/sites/{site_id}/assets/{asset_id}/live-state (Asset View)
+    GET /api/v1/sites/{site_id}/assets/{asset_id}/energy/consumption (Asset View)
     GET /api/v1/sites/{site_id}/demand                  (Slice B: demand)
     GET /api/v1/sites/{site_id}/demand/current           (Slice B: demand)
     GET /api/v1/sites/{site_id}/power-quality            (Slice B: PQ)
@@ -28,10 +30,34 @@ only the already-safe fields of the authenticated session so a browser SPA
 can bootstrap identity/role/scope without a second auth system. It changes
 none of the three frozen Phase 7 data contracts.
 
-GET /api/v1/sites/{site_id}/spaces and .../assets (Slice 0, migration 232)
-are additive, site-scoped hierarchy listings -- identity and placement only.
-Neither reads metadata.asset_relationships; asset component-tree / "spaces
-served by an asset" are explicitly out of scope for this increment.
+GET /api/v1/sites/{site_id}/spaces (Slice 0, migration 232) is an additive,
+site-scoped hierarchy listing -- identity and placement only.
+
+GET /api/v1/sites/{site_id}/assets (Slice 0, migration 232) is likewise
+additive and site-scoped; it now also returns type/hierarchy/location
+fields (asset_type_name, parent_asset_name, building/floor/space names,
+location_path) alongside identity and placement, sourced from the existing,
+already-portal-scoped admin.list_accessible_assets rather than a new read
+path (Asset View list enrichment). Neither endpoint reads
+metadata.asset_relationships; asset component-tree / "spaces served by an
+asset" remain explicitly out of scope for this increment.
+
+GET /api/v1/sites/{site_id}/assets/{asset_id}/live-state (Asset View) reads
+the existing, already-portal-scoped admin.get_portal_asset_live_state
+(migration 022, unchanged) -- the same latest-value cache the standalone
+live-telemetry service's browser-facing snapshot endpoint already reads,
+served from this router instead of a second HTTP client/auth flow in the
+SPA. No historical series: this is always a "right now" read, one row per
+(device, logical_point) currently attached to the asset.
+
+GET /api/v1/sites/{site_id}/assets/{asset_id}/energy/consumption (Asset
+View, migration 244) reads analytics.get_portal_asset_energy_intervals -- a
+thin, portal-user-scoped wrapper around the existing, unmodified
+analytics.get_grafana_asset_energy_intervals / get_canonical_energy_read.
+No resolution query parameter: the wrapped function auto-selects it. Like
+every /energy/consumption reader, the response is raw interval rows;
+period-total summation and previous-window comparison are computed
+client-side, not by this endpoint.
 
 GET /api/v1/sites/{site_id}/demand and .../demand/current (Slice B,
 migration 233) read analytics.demand_intervals / analytics.demand_state
@@ -96,11 +122,14 @@ from src.auth.authorization import ROLE_PERMISSIONS, portal_role
 from src.auth.dependencies import get_authenticated_portal_user
 from src.auth.models import AuthenticatedPortalUser
 from src.analytics_api_service import (
+    ASSET_ENERGY_MAX_WINDOW,
     DEMAND_MAX_WINDOW,
     ENERGY_RESOLUTION_MAX_WINDOW,
     MEASUREMENT_RESOLUTION_MAX_WINDOW,
     POWER_QUALITY_RESOLUTION_MAX_WINDOW,
     ApiContractError,
+    AssetEnergyIntervalsResponse,
+    AssetLiveStateResponse,
     AssetsResponse,
     CurrentDemandResponse,
     CurrentUserResponse,
@@ -116,6 +145,8 @@ from src.analytics_api_service import (
     SiteTelemetryFreshnessResponse,
     SpacesResponse,
     build_alert_summary,
+    build_asset_energy_intervals_response,
+    build_asset_live_state_response,
     build_assets_response,
     build_current_demand_response,
     build_demand_series_response,
@@ -128,6 +159,8 @@ from src.analytics_api_service import (
     build_sites_response,
     build_spaces_response,
     fetch_accessible_sites,
+    fetch_asset_energy_intervals,
+    fetch_asset_live_state,
     fetch_site_assets,
     fetch_site_current_demand,
     fetch_site_demand_series,
@@ -142,6 +175,7 @@ from src.analytics_api_service import (
     fetch_space_measurement_series,
     parse_time_range,
     parse_typical_reference_range,
+    portal_user_can_access_asset,
     portal_user_can_access_space,
     portal_user_can_access_site,
     validate_measurement_parameter,
@@ -523,13 +557,16 @@ async def list_site_spaces(request: Request, site_id: UUID) -> SpacesResponse:
 @router.get(
     "/sites/{site_id}/assets",
     response_model=AssetsResponse,
-    summary="List a site's assets (Slice 0: Hierarchy Foundation)",
+    summary="List a site's assets, with type/hierarchy/location (Slice 0: Hierarchy Foundation)",
     operation_id="listSiteAssets",
     responses=_RESOURCE_RESPONSES,
 )
 async def list_site_assets(request: Request, site_id: UUID) -> AssetsResponse:
-    """Identity + placement only. NO component-tree / relationship data --
-    explicitly deferred (see migration 232's header)."""
+    """Identity + placement, plus type/hierarchy/location fields (asset
+    type, parent asset name, building/floor/space names, location path) --
+    all already computed by admin.list_accessible_assets. Still NO
+    component-tree / relationship data -- explicitly deferred (see
+    migration 232's header)."""
 
     user = _require_portal_user(request)
 
@@ -538,6 +575,81 @@ async def list_site_assets(request: Request, site_id: UUID) -> AssetsResponse:
 
     rows = await fetch_site_assets(user.portal_user_id, site_id)
     return build_assets_response(site_id=site_id, rows=rows)
+
+
+@router.get(
+    "/sites/{site_id}/assets/{asset_id}/live-state",
+    response_model=AssetLiveStateResponse,
+    summary="An asset's latest live telemetry reading, per logical point (Asset View)",
+    operation_id="getAssetLiveState",
+    responses=_RESOURCE_RESPONSES,
+)
+async def get_asset_live_state(
+    request: Request, site_id: UUID, asset_id: UUID
+) -> AssetLiveStateResponse:
+    """Reads admin.get_portal_asset_live_state (migration 022, unchanged) --
+    the same session-authenticated latest-value cache already used by the
+    standalone live-telemetry service's browser-facing snapshot endpoint.
+    site_id in the path is for a consistent /sites/{id}/assets/{id}/... URL
+    shape only; authorization is the asset's own site access, exactly like
+    admin.portal_user_can_access_asset itself resolves it."""
+
+    user = _require_portal_user(request)
+
+    if not await portal_user_can_access_asset(user.portal_user_id, asset_id):
+        raise _not_found("Asset")
+
+    rows = await fetch_asset_live_state(user.portal_user_id, asset_id)
+    return build_asset_live_state_response(asset_id=asset_id, rows=rows)
+
+
+@router.get(
+    "/sites/{site_id}/assets/{asset_id}/energy/consumption",
+    response_model=AssetEnergyIntervalsResponse,
+    summary="An asset's energy consumption intervals for a time window (Asset View)",
+    operation_id="getAssetEnergyConsumption",
+    responses=_RESOURCE_RESPONSES,
+)
+async def get_asset_energy_consumption(
+    request: Request,
+    site_id: UUID,
+    asset_id: UUID,
+    range_from: str = Query(
+        ...,
+        alias="from",
+        description="Inclusive ISO-8601 start of the window (UTC).",
+    ),
+    range_to: str = Query(
+        ...,
+        alias="to",
+        description="Exclusive ISO-8601 end of the window (UTC).",
+    ),
+) -> AssetEnergyIntervalsResponse:
+    """Reads analytics.get_portal_asset_energy_intervals (migration 244) --
+    a thin, portal-user-scoped wrapper around the existing, unmodified
+    analytics.get_grafana_asset_energy_intervals. No resolution parameter:
+    the wrapped function auto-selects it internally, the same as Demand has
+    no resolution parameter. Summation into a period total (for the Asset
+    View Energy tile) is done client-side, the same as site energy
+    consumption already is."""
+
+    user = _require_portal_user(request)
+
+    try:
+        dt_from, dt_to = parse_time_range(
+            range_from,
+            range_to,
+            resolution="native",
+            max_window_by_resolution={"native": ASSET_ENERGY_MAX_WINDOW},
+        )
+    except ApiContractError as exc:
+        raise _contract_error(exc)
+
+    if not await portal_user_can_access_asset(user.portal_user_id, asset_id):
+        raise _not_found("Asset")
+
+    rows = await fetch_asset_energy_intervals(user.portal_user_id, asset_id, dt_from, dt_to)
+    return build_asset_energy_intervals_response(asset_id=asset_id, dt_from=dt_from, dt_to=dt_to, rows=rows)
 
 
 @router.get(
