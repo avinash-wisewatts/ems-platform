@@ -52,6 +52,12 @@ ENERGY_RESOLUTION_MAX_WINDOW: dict[str, timedelta] = {
 # established for energy's 1h tier, not an invented new number.
 DEMAND_MAX_WINDOW: timedelta = timedelta(days=31)
 
+# Asset View -- Demand (migration 245). Same native-interval-grain
+# rationale as DEMAND_MAX_WINDOW above, applied to the scope_type='ASSET'
+# rows of the same analytics.demand_intervals table -- reusing the
+# identical 31-day bound, not inventing a new one.
+ASSET_DEMAND_MAX_WINDOW: timedelta = timedelta(days=31)
+
 # Asset View (migration 244). analytics.get_canonical_energy_read has no
 # resolution parameter to cap per-tier -- it auto-selects resolution for
 # whatever window is requested, so a single flat cap applies, matching the
@@ -460,6 +466,37 @@ class CurrentDemandResponse(BaseModel):
     read, so no_data would be misleading here."""
 
     site_id: UUID
+    has_data: bool
+    interval_start: datetime | None = None
+    interval_end: datetime | None = None
+    current_demand_kw: float | None = None
+    current_demand_kva: float | None = None
+    quality_status: str | None = None
+    coverage_percent: float | None = None
+
+
+class AssetDemandSeriesResponse(BaseModel):
+    """Same row shape as DemandSeriesResponse -- analytics.demand_intervals
+    is the identical source table, just filtered to scope_type='ASSET'
+    (migration 245) instead of 'SITE' -- reusing DemandIntervalPoint for
+    the series rather than duplicating it."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    asset_id: UUID
+    range_from: datetime = Field(alias="from")
+    range_to: datetime = Field(alias="to")
+    no_data: bool
+    series: list[DemandIntervalPoint]
+
+
+class AssetCurrentDemandResponse(BaseModel):
+    """The single most recent analytics.demand_state row for the asset
+    (scope_type='ASSET', migration 245), if any. Same has_data distinction
+    as CurrentDemandResponse and the same reason: there is no [from, to)
+    window for a single current-state read."""
+
+    asset_id: UUID
     has_data: bool
     interval_start: datetime | None = None
     interval_end: datetime | None = None
@@ -1021,6 +1058,38 @@ async def fetch_site_current_demand(
     return rows[0] if rows else None
 
 
+async def fetch_asset_demand_series(
+    *,
+    portal_user_id: int,
+    asset_id: UUID,
+    dt_from: datetime,
+    dt_to: datetime,
+) -> list[dict[str, Any]]:
+    return await _read_rows(
+        """
+        SELECT interval_start, interval_end, demand_kw, peak_power_kw,
+               quality_status, coverage_percent
+        FROM analytics.get_portal_asset_demand_series(%s, %s, %s, %s)
+        ORDER BY interval_start
+        """,
+        (portal_user_id, str(asset_id), dt_from, dt_to),
+    )
+
+
+async def fetch_asset_current_demand(
+    portal_user_id: int, asset_id: UUID
+) -> dict[str, Any] | None:
+    rows = await _read_rows(
+        """
+        SELECT interval_start, interval_end, current_demand_kw,
+               current_demand_kva, quality_status, coverage_percent
+        FROM analytics.get_portal_asset_current_demand(%s, %s)
+        """,
+        (portal_user_id, str(asset_id)),
+    )
+    return rows[0] if rows else None
+
+
 async def fetch_site_power_quality_series(
     *,
     portal_user_id: int,
@@ -1391,6 +1460,71 @@ def build_current_demand_response(
         return CurrentDemandResponse(site_id=site_id, has_data=False)
     return CurrentDemandResponse(
         site_id=site_id,
+        has_data=True,
+        interval_start=row["interval_start"],
+        interval_end=row["interval_end"],
+        current_demand_kw=(
+            float(row["current_demand_kw"])
+            if row["current_demand_kw"] is not None
+            else None
+        ),
+        current_demand_kva=(
+            float(row["current_demand_kva"])
+            if row["current_demand_kva"] is not None
+            else None
+        ),
+        quality_status=row["quality_status"],
+        coverage_percent=(
+            float(row["coverage_percent"])
+            if row["coverage_percent"] is not None
+            else None
+        ),
+    )
+
+
+def build_asset_demand_series_response(
+    *,
+    asset_id: UUID,
+    dt_from: datetime,
+    dt_to: datetime,
+    rows: list[dict[str, Any]],
+) -> AssetDemandSeriesResponse:
+    points = [
+        DemandIntervalPoint(
+            interval_start=row["interval_start"],
+            interval_end=row["interval_end"],
+            demand_kw=(
+                float(row["demand_kw"]) if row["demand_kw"] is not None else None
+            ),
+            peak_power_kw=(
+                float(row["peak_power_kw"])
+                if row["peak_power_kw"] is not None
+                else None
+            ),
+            quality_status=row["quality_status"],
+            coverage_percent=(
+                float(row["coverage_percent"])
+                if row["coverage_percent"] is not None
+                else None
+            ),
+        )
+        for row in rows
+    ]
+    return AssetDemandSeriesResponse(
+        asset_id=asset_id,
+        **{"from": dt_from, "to": dt_to},
+        no_data=len(points) == 0,
+        series=points,
+    )
+
+
+def build_asset_current_demand_response(
+    *, asset_id: UUID, row: dict[str, Any] | None
+) -> AssetCurrentDemandResponse:
+    if row is None:
+        return AssetCurrentDemandResponse(asset_id=asset_id, has_data=False)
+    return AssetCurrentDemandResponse(
+        asset_id=asset_id,
         has_data=True,
         interval_start=row["interval_start"],
         interval_end=row["interval_end"],
