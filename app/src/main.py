@@ -7527,10 +7527,24 @@ async def proxy_asset_live_websocket(websocket: WebSocket, asset_id: UUID) -> No
     only avoids opening a wasted upstream connection for traffic that was
     never going to be allowed.
 
+    websocket.accept() runs unconditionally, before any of these checks:
+    a WebSocket close frame can only carry a custom code (4401/4404/1013
+    below) once the opening handshake has actually completed. Closing
+    pre-accept instead denies the handshake itself, which uvicorn reports
+    as a bare HTTP 403 with no WebSocket framing at all -- a real browser
+    then sees a failed opening handshake and reports a generic close code
+    (1006), never the intended 4401/4404, breaking the non-retry contract
+    useAssetLiveSocket.ts depends on for those exact codes. Accepting first
+    costs nothing (the client was going to receive a close either way) and
+    is what makes every close code below actually reach the browser as
+    sent.
+
     No new telemetry data path: this never reads MQTT, the database, or
     admin.get_portal_asset_live_state directly -- it only relays whatever
     live_asset_websocket already sends.
     """
+
+    await websocket.accept()
 
     identity = deserialize_authenticated_user(
         websocket.scope.get("session", {}).get(SESSION_IDENTITY_KEY)
@@ -7552,7 +7566,6 @@ async def proxy_asset_live_websocket(websocket: WebSocket, asset_id: UUID) -> No
             additional_headers={"Cookie": cookie_header} if cookie_header else None,
             open_timeout=5,
         ) as upstream:
-            await websocket.accept()
             await _relay_asset_live_websocket(websocket, upstream)
     except (OSError, InvalidHandshake, WebSocketException, TimeoutError):
         # The upstream live-telemetry service is unreachable or refused the

@@ -20,7 +20,12 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 5173,
       proxy: {
-        "/api": { target: devBackend, changeOrigin: false },
+        // ws: true so the Asset View live WebSocket's upgrade request
+        // (/api/live/assets/{id}/ws) is actually forwarded to devBackend --
+        // without it, Vite's proxy never binds an `upgrade` handler for
+        // this path and a WS handshake attempt just hangs against the dev
+        // server itself, never reaching the backend at all.
+        "/api": { target: devBackend, changeOrigin: false, ws: true },
         "/login": { target: devBackend, changeOrigin: false },
         "/logout": { target: devBackend, changeOrigin: false },
       },
