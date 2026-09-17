@@ -10,6 +10,7 @@ Read-only endpoints consumed by the EMS web application:
     GET /api/v1/sites/{site_id}/assets                  (Slice 0: hierarchy)
     GET /api/v1/sites/{site_id}/assets/{asset_id}/live-state (Asset View)
     GET /api/v1/sites/{site_id}/assets/{asset_id}/energy/consumption (Asset View)
+    GET /api/v1/sites/{site_id}/assets/{asset_id}/demand and .../demand/current (Asset View)
     GET /api/v1/sites/{site_id}/demand                  (Slice B: demand)
     GET /api/v1/sites/{site_id}/demand/current           (Slice B: demand)
     GET /api/v1/sites/{site_id}/power-quality            (Slice B: PQ)
@@ -58,6 +59,18 @@ No resolution query parameter: the wrapped function auto-selects it. Like
 every /energy/consumption reader, the response is raw interval rows;
 period-total summation and previous-window comparison are computed
 client-side, not by this endpoint.
+
+GET /api/v1/sites/{site_id}/assets/{asset_id}/demand and .../demand/current
+(Asset View, migration 245) mirror GET /sites/{site_id}/demand and
+.../demand/current exactly, reading the same analytics.demand_intervals /
+analytics.demand_state tables filtered to scope_type='ASSET' instead of
+'SITE', gated by admin.portal_user_can_access_asset (migration 022) instead
+of admin.portal_user_can_access_site. Unlike the asset energy-consumption
+endpoint above, this does NOT wrap analytics.get_grafana_asset_demand_summary
+(grafana_org_id-scoped, current-value-only -- confirmed unsuitable for this
+portal_user_id-scoped API by read-only investigation) -- demand_intervals/
+demand_state already carry asset_id directly, so no grafana_org_id bridge is
+needed. No resolution query parameter, same rationale as site Demand.
 
 GET /api/v1/sites/{site_id}/demand and .../demand/current (Slice B,
 migration 233) read analytics.demand_intervals / analytics.demand_state
@@ -122,12 +135,15 @@ from src.auth.authorization import ROLE_PERMISSIONS, portal_role
 from src.auth.dependencies import get_authenticated_portal_user
 from src.auth.models import AuthenticatedPortalUser
 from src.analytics_api_service import (
+    ASSET_DEMAND_MAX_WINDOW,
     ASSET_ENERGY_MAX_WINDOW,
     DEMAND_MAX_WINDOW,
     ENERGY_RESOLUTION_MAX_WINDOW,
     MEASUREMENT_RESOLUTION_MAX_WINDOW,
     POWER_QUALITY_RESOLUTION_MAX_WINDOW,
     ApiContractError,
+    AssetCurrentDemandResponse,
+    AssetDemandSeriesResponse,
     AssetEnergyIntervalsResponse,
     AssetLiveStateResponse,
     AssetsResponse,
@@ -145,6 +161,8 @@ from src.analytics_api_service import (
     SiteTelemetryFreshnessResponse,
     SpacesResponse,
     build_alert_summary,
+    build_asset_current_demand_response,
+    build_asset_demand_series_response,
     build_asset_energy_intervals_response,
     build_asset_live_state_response,
     build_assets_response,
@@ -159,6 +177,8 @@ from src.analytics_api_service import (
     build_sites_response,
     build_spaces_response,
     fetch_accessible_sites,
+    fetch_asset_current_demand,
+    fetch_asset_demand_series,
     fetch_asset_energy_intervals,
     fetch_asset_live_state,
     fetch_site_assets,
@@ -650,6 +670,84 @@ async def get_asset_energy_consumption(
 
     rows = await fetch_asset_energy_intervals(user.portal_user_id, asset_id, dt_from, dt_to)
     return build_asset_energy_intervals_response(asset_id=asset_id, dt_from=dt_from, dt_to=dt_to, rows=rows)
+
+
+@router.get(
+    "/sites/{site_id}/assets/{asset_id}/demand",
+    response_model=AssetDemandSeriesResponse,
+    summary="Asset maximum-demand interval series (Asset View)",
+    operation_id="getAssetDemandSeries",
+    responses=_RESOURCE_RESPONSES,
+)
+async def get_asset_demand_series(
+    request: Request,
+    site_id: UUID,
+    asset_id: UUID,
+    range_from: str = Query(
+        ...,
+        alias="from",
+        description="Inclusive ISO-8601 start of the window (UTC).",
+    ),
+    range_to: str = Query(
+        ...,
+        alias="to",
+        description="Exclusive ISO-8601 end of the window (UTC).",
+    ),
+) -> AssetDemandSeriesResponse:
+    """Reads analytics.demand_intervals only (scope_type='ASSET', migration
+    245) -- the exact same table and quality-tagging Site Demand already
+    reads (migration 233), just asset-scoped. Native interval grain only, no
+    resolution parameter, no re-derivation of meter-role resolution. site_id
+    in the path is for a consistent /sites/{id}/assets/{id}/... URL shape
+    only; authorization is the asset's own site access via
+    portal_user_can_access_asset, exactly like the other asset-scoped
+    routes above."""
+
+    user = _require_portal_user(request)
+
+    try:
+        dt_from, dt_to = parse_time_range(
+            range_from,
+            range_to,
+            resolution="native",
+            max_window_by_resolution={"native": ASSET_DEMAND_MAX_WINDOW},
+        )
+    except ApiContractError as exc:
+        raise _contract_error(exc)
+
+    if not await portal_user_can_access_asset(user.portal_user_id, asset_id):
+        raise _not_found("Asset")
+
+    rows = await fetch_asset_demand_series(
+        portal_user_id=user.portal_user_id,
+        asset_id=asset_id,
+        dt_from=dt_from,
+        dt_to=dt_to,
+    )
+    return build_asset_demand_series_response(asset_id=asset_id, dt_from=dt_from, dt_to=dt_to, rows=rows)
+
+
+@router.get(
+    "/sites/{site_id}/assets/{asset_id}/demand/current",
+    response_model=AssetCurrentDemandResponse,
+    summary="Asset's most recent live demand reading (Asset View)",
+    operation_id="getAssetCurrentDemand",
+    responses=_RESOURCE_RESPONSES,
+)
+async def get_asset_current_demand(
+    request: Request, site_id: UUID, asset_id: UUID
+) -> AssetCurrentDemandResponse:
+    """Reads analytics.demand_state only (scope_type='ASSET', migration
+    245) -- the live/current-interval table, distinct from the finalized
+    historical series above."""
+
+    user = _require_portal_user(request)
+
+    if not await portal_user_can_access_asset(user.portal_user_id, asset_id):
+        raise _not_found("Asset")
+
+    row = await fetch_asset_current_demand(user.portal_user_id, asset_id)
+    return build_asset_current_demand_response(asset_id=asset_id, row=row)
 
 
 @router.get(

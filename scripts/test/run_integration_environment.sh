@@ -225,6 +225,10 @@ echo
 echo "[raw-message-failure-capture-bounded-catchup-window] Running job 1068 (migration 243) bounded catch-up window assertions..."
 bash "${SCRIPT_DIR}/assert_raw_message_failure_capture_bounded_catchup_window.sh"
 
+echo
+echo "[asset-demand-portal-read] Running portal-scoped Asset Demand (migration 245) read assertions..."
+bash "${SCRIPT_DIR}/assert_asset_demand_portal_read.sh"
+
 echo "[14/14] Verifying migration ledger..."
 ledger="$(
     docker compose \
