@@ -11,6 +11,19 @@ messages in either direction. This proves the proxy's own auth/authorization
 gate, the exact upstream URL/asset_id it forwards, and the relay behavior,
 without any network or database dependency (mirrors the existing pattern of
 monkeypatching service-layer functions used throughout this test suite).
+
+Close-code assertions below only verify the ASGI-level `websocket.close(code=
+...)` call the route makes -- Starlette's TestClient operates above the real
+HTTP/WebSocket wire protocol, so it cannot reproduce (and these tests cannot
+catch) a regression where that close happens before `websocket.accept()`.
+Pre-accept, a real uvicorn server denies the opening handshake itself (a bare
+HTTP 403, no WebSocket framing), which a real browser then reports as a
+generic close code (1006), never the intended 4401/4404/1013 -- verified
+directly against the deployed (pre-fix) staging route with curl, not via this
+suite. `proxy_asset_live_websocket` therefore calls `websocket.accept()`
+unconditionally before any close, and that ordering is exactly what these
+close-code assertions are here to guard against regressing, even though they
+cannot independently prove the wire-level framing.
 """
 
 from __future__ import annotations
@@ -18,6 +31,8 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+
+from starlette.websockets import WebSocketDisconnect
 
 from src.auth.models import AuthenticatedPortalUser
 from src.auth.security import AuthenticationStatus
@@ -104,9 +119,17 @@ class _FakeConnect:
 
 
 def test_asset_live_ws_requires_authentication(portal_client) -> None:
-    with pytest.raises(Exception):
-        with portal_client.websocket_connect(f"/api/live/assets/{ASSET_ID}/ws"):
-            pass
+    # The handshake itself now succeeds (websocket.accept() runs
+    # unconditionally, before this check) -- the rejection arrives as the
+    # next message on the now-open connection, not as a connect-time
+    # refusal. receive_text() is what surfaces it as WebSocketDisconnect.
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with portal_client.websocket_connect(f"/api/live/assets/{ASSET_ID}/ws") as ws:
+            ws.receive_text()
+    # Must be the application-level non-retryable rejection code, not a
+    # generic disconnect -- see the module docstring on why this alone
+    # cannot prove the real wire-level close code a browser would see.
+    assert exc_info.value.code == 4401
 
 
 def test_asset_live_ws_inaccessible_asset_is_rejected(portal_client, monkeypatch) -> None:
@@ -117,9 +140,10 @@ def test_asset_live_ws_inaccessible_asset_is_rejected(portal_client, monkeypatch
 
     monkeypatch.setattr("src.main.portal_user_can_access_asset", no)
 
-    with pytest.raises(Exception):
-        with portal_client.websocket_connect(f"/api/live/assets/{ASSET_ID}/ws"):
-            pass
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with portal_client.websocket_connect(f"/api/live/assets/{ASSET_ID}/ws") as ws:
+            ws.receive_text()
+    assert exc_info.value.code == 4404
 
 
 def test_asset_live_ws_relays_snapshot_and_telemetry(portal_client, monkeypatch) -> None:
@@ -203,9 +227,12 @@ def test_asset_live_ws_upstream_unreachable_closes_cleanly(portal_client, monkey
         _FakeConnect(raises=OSError("connection refused")),
     )
 
-    with pytest.raises(Exception):
-        with portal_client.websocket_connect(f"/api/live/assets/{ASSET_ID}/ws"):
-            pass
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with portal_client.websocket_connect(f"/api/live/assets/{ASSET_ID}/ws") as ws:
+            ws.receive_text()
+    # 1013 = "Try Again Later" -- a reconnecting client must see a clean,
+    # retryable close, not a raw connection error.
+    assert exc_info.value.code == 1013
 
 
 def test_asset_live_ws_relay_is_content_agnostic(portal_client, monkeypatch) -> None:
