@@ -11,6 +11,7 @@ Read-only endpoints consumed by the EMS web application:
     GET /api/v1/sites/{site_id}/assets/{asset_id}/live-state (Asset View)
     GET /api/v1/sites/{site_id}/assets/{asset_id}/energy/consumption (Asset View)
     GET /api/v1/sites/{site_id}/assets/{asset_id}/demand and .../demand/current (Asset View)
+    GET /api/v1/sites/{site_id}/assets/{asset_id}/power-trend (Asset View)
     GET /api/v1/sites/{site_id}/demand                  (Slice B: demand)
     GET /api/v1/sites/{site_id}/demand/current           (Slice B: demand)
     GET /api/v1/sites/{site_id}/power-quality            (Slice B: PQ)
@@ -70,13 +71,30 @@ endpoint above, this does NOT wrap analytics.get_grafana_asset_demand_summary
 (grafana_org_id-scoped, current-value-only -- confirmed unsuitable for this
 portal_user_id-scoped API by read-only investigation) -- demand_intervals/
 demand_state already carry asset_id directly, so no grafana_org_id bridge is
-needed. No resolution query parameter, same rationale as site Demand.
+needed. No resolution query parameter, same rationale as site Demand. No
+maximum query-window either (see below) -- removed at the same time as
+Site Demand's, for the same reason.
+
+GET /api/v1/sites/{site_id}/assets/{asset_id}/power-trend (Asset View,
+migration 246) reads analytics.get_portal_asset_power_trend -- raw
+instantaneous active-power samples from the asset's PRIMARY_METER device,
+read directly from telemetry.energy_measurements (no grafana_org_id
+bridge needed: unlike asset energy-consumption, there is no non-trivial
+business logic to re-derive here -- see migration 246's own header for the
+full investigation). Points are sample_time + active_power_kw + is_estimated
+-- quality_code is deliberately not exposed (no established customer-facing
+translation exists for it anywhere in this codebase). No resolution
+parameter, no maximum query-window.
 
 GET /api/v1/sites/{site_id}/demand and .../demand/current (Slice B,
 migration 233) read analytics.demand_intervals / analytics.demand_state
 only -- both already meter-role-resolved upstream; neither this router nor
 migration 233 re-derives that resolution or reads the older
-v_energy_demand_15min / v_energy_site_demand_kpis view family.
+v_energy_demand_15min / v_energy_site_demand_kpis view family. Neither has a
+maximum query-window: the previous 31-day cap was an artificial API-layer
+restriction, not a demonstrated data-retention or performance boundary --
+removed per explicit product decision (see analytics_api_service.py's
+parse_time_range and the DEMAND_MAX_WINDOW removal note above it).
 
 GET /api/v1/sites/{site_id}/power-quality (Slice B, migration 234) resolves
 the site's SITE_CONSUMPTION-role meter directly against
@@ -135,9 +153,7 @@ from src.auth.authorization import ROLE_PERMISSIONS, portal_role
 from src.auth.dependencies import get_authenticated_portal_user
 from src.auth.models import AuthenticatedPortalUser
 from src.analytics_api_service import (
-    ASSET_DEMAND_MAX_WINDOW,
     ASSET_ENERGY_MAX_WINDOW,
-    DEMAND_MAX_WINDOW,
     ENERGY_RESOLUTION_MAX_WINDOW,
     MEASUREMENT_RESOLUTION_MAX_WINDOW,
     POWER_QUALITY_RESOLUTION_MAX_WINDOW,
@@ -146,6 +162,7 @@ from src.analytics_api_service import (
     AssetDemandSeriesResponse,
     AssetEnergyIntervalsResponse,
     AssetLiveStateResponse,
+    AssetPowerTrendResponse,
     AssetsResponse,
     CurrentDemandResponse,
     CurrentUserResponse,
@@ -165,6 +182,7 @@ from src.analytics_api_service import (
     build_asset_demand_series_response,
     build_asset_energy_intervals_response,
     build_asset_live_state_response,
+    build_asset_power_trend_response,
     build_assets_response,
     build_current_demand_response,
     build_demand_series_response,
@@ -181,6 +199,7 @@ from src.analytics_api_service import (
     fetch_asset_demand_series,
     fetch_asset_energy_intervals,
     fetch_asset_live_state,
+    fetch_asset_power_trend,
     fetch_site_assets,
     fetch_site_current_demand,
     fetch_site_demand_series,
@@ -701,7 +720,9 @@ async def get_asset_demand_series(
     in the path is for a consistent /sites/{id}/assets/{id}/... URL shape
     only; authorization is the asset's own site access via
     portal_user_can_access_asset, exactly like the other asset-scoped
-    routes above."""
+    routes above. No maximum query-window: the previous 31-day cap was an
+    artificial API-layer restriction, not a demonstrated data-retention or
+    performance boundary -- removed per explicit product decision."""
 
     user = _require_portal_user(request)
 
@@ -710,7 +731,7 @@ async def get_asset_demand_series(
             range_from,
             range_to,
             resolution="native",
-            max_window_by_resolution={"native": ASSET_DEMAND_MAX_WINDOW},
+            max_window_by_resolution={"native": None},
         )
     except ApiContractError as exc:
         raise _contract_error(exc)
@@ -751,6 +772,61 @@ async def get_asset_current_demand(
 
 
 @router.get(
+    "/sites/{site_id}/assets/{asset_id}/power-trend",
+    response_model=AssetPowerTrendResponse,
+    summary="Asset instantaneous active-power trend (Asset View)",
+    operation_id="getAssetPowerTrend",
+    responses=_RESOURCE_RESPONSES,
+)
+async def get_asset_power_trend(
+    request: Request,
+    site_id: UUID,
+    asset_id: UUID,
+    range_from: str = Query(
+        ...,
+        alias="from",
+        description="Inclusive ISO-8601 start of the window (UTC).",
+    ),
+    range_to: str = Query(
+        ...,
+        alias="to",
+        description="Exclusive ISO-8601 end of the window (UTC).",
+    ),
+) -> AssetPowerTrendResponse:
+    """Reads analytics.get_portal_asset_power_trend (migration 246) -- raw
+    instantaneous active-power samples from the asset's PRIMARY_METER
+    device, read directly from telemetry.energy_measurements. Unlike the
+    asset energy-consumption endpoint above, this does NOT bridge to a
+    grafana_org_id or wrap any analytics.get_grafana_* function -- there is
+    no non-trivial business logic between the raw column and this response
+    to risk re-deriving (see migration 246's own header). No resolution
+    parameter, no maximum query-window, same rationale as Demand above."""
+
+    user = _require_portal_user(request)
+
+    try:
+        dt_from, dt_to = parse_time_range(
+            range_from,
+            range_to,
+            resolution="native",
+            max_window_by_resolution={"native": None},
+        )
+    except ApiContractError as exc:
+        raise _contract_error(exc)
+
+    if not await portal_user_can_access_asset(user.portal_user_id, asset_id):
+        raise _not_found("Asset")
+
+    rows = await fetch_asset_power_trend(
+        portal_user_id=user.portal_user_id,
+        asset_id=asset_id,
+        dt_from=dt_from,
+        dt_to=dt_to,
+    )
+    return build_asset_power_trend_response(asset_id=asset_id, dt_from=dt_from, dt_to=dt_to, rows=rows)
+
+
+@router.get(
     "/sites/{site_id}/demand",
     response_model=DemandSeriesResponse,
     summary="Site maximum-demand interval series (Slice B)",
@@ -774,7 +850,10 @@ async def get_site_demand_series(
     """Reads analytics.demand_intervals only -- native interval grain
     (900s/1800s per the site's own config.site_demand_policies), so there
     is no resolution query parameter to select. No re-derivation of
-    meter-role resolution here; that already happened upstream."""
+    meter-role resolution here; that already happened upstream. No maximum
+    query-window: the previous 31-day cap was an artificial API-layer
+    restriction, not a demonstrated data-retention or performance boundary
+    -- removed per explicit product decision."""
 
     user = _require_portal_user(request)
 
@@ -783,7 +862,7 @@ async def get_site_demand_series(
             range_from,
             range_to,
             resolution="native",
-            max_window_by_resolution={"native": DEMAND_MAX_WINDOW},
+            max_window_by_resolution={"native": None},
         )
     except ApiContractError as exc:
         raise _contract_error(exc)

@@ -229,6 +229,10 @@ echo
 echo "[asset-demand-portal-read] Running portal-scoped Asset Demand (migration 245) read assertions..."
 bash "${SCRIPT_DIR}/assert_asset_demand_portal_read.sh"
 
+echo
+echo "[asset-power-trend-portal-read] Running portal-scoped Asset Power Trend (migration 246) read assertions..."
+bash "${SCRIPT_DIR}/assert_asset_power_trend_portal_read.sh"
+
 echo "[14/14] Verifying migration ledger..."
 ledger="$(
     docker compose \

@@ -84,11 +84,24 @@ def test_asset_demand_series_from_after_to(portal_client, monkeypatch) -> None:
     assert response.json()["error"] == "invalid_time_range"
 
 
-def test_asset_demand_series_window_too_large_is_422(portal_client, monkeypatch) -> None:
+def test_asset_demand_series_no_maximum_query_window(portal_client, monkeypatch) -> None:
+    """The previous 31-day cap was an artificial API-layer restriction, not
+    a demonstrated data-retention or performance boundary -- removed per
+    explicit product decision. A multi-year window must not be rejected."""
     _login_global_admin(portal_client, monkeypatch)
-    response = _demand(portal_client, **{"from": "2026-01-01T00:00:00Z", "to": "2026-09-01T00:00:00Z"})
-    assert response.status_code == 422
-    assert response.json()["error"] == "time_range_too_large"
+
+    async def yes(portal_user_id, asset_id):
+        return True
+
+    async def fetch(**kwargs):
+        return []
+
+    monkeypatch.setattr("src.routers.analytics_api.portal_user_can_access_asset", yes)
+    monkeypatch.setattr("src.routers.analytics_api.fetch_asset_demand_series", fetch)
+
+    response = _demand(portal_client, **{"from": "2020-01-01T00:00:00Z", "to": "2026-09-01T00:00:00Z"})
+    assert response.status_code == 200
+    assert response.json()["no_data"] is True
 
 
 # ---------------------------------------------------------------------------
