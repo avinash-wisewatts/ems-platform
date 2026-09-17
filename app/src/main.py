@@ -1,10 +1,14 @@
 from src.grafana_client import GrafanaApiError
+import asyncio
+import contextlib
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, AsyncIterator
 from uuid import UUID
 
-from fastapi import FastAPI, Form, HTTPException, Request
+import websockets
+from websockets.exceptions import InvalidHandshake, WebSocketException
+from fastapi import FastAPI, Form, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.exception_handlers import (
     http_exception_handler as default_http_exception_handler,
     request_validation_exception_handler as default_request_validation_handler,
@@ -39,6 +43,8 @@ from src.auth.access_scope import (
     normalize_portal_access_scope_submission,
 )
 from src.auth.middleware import PortalAuthenticationMiddleware
+from src.auth.session import SESSION_IDENTITY_KEY, deserialize_authenticated_user
+from src.analytics_api_service import portal_user_can_access_asset
 from src.context.dependencies import site_context
 from src.context.service import (
     AdministrationContextError,
@@ -7493,6 +7499,125 @@ async def submit_review_step(
         ),
         status_code=303,
     )
+
+
+@app.websocket("/api/live/assets/{asset_id}/ws")
+async def proxy_asset_live_websocket(websocket: WebSocket, asset_id: UUID) -> None:
+    """Same-origin proxy to the live-telemetry service's portal-session
+    WebSocket (live_main.py::live_asset_websocket) -- the customer browser
+    only ever talks to this admin-portal origin, never to live-telemetry,
+    MQTT, or any internal broker directly. Chosen over exposing
+    live-telemetry on its own public port because no reverse proxy exists
+    yet (docs/04-architecture/deployment-architecture.md: "Reverse proxy /
+    public TLS is explicitly planned, not implemented") -- this reuses the
+    admin-portal origin/port the Web App is already served from instead of
+    waiting on that infrastructure.
+
+    PortalAuthenticationMiddleware does not run for WebSocket scopes (see
+    its own `if scope["type"] != "http": ...` passthrough) -- this route
+    performs its own identity/authorization check first, the same
+    fail-closed "second gate" pattern _require_portal_user already applies
+    to every /api/v1 HTTP route (analytics_api.py), using the exact same
+    deserialize_authenticated_user / portal_user_can_access_asset this
+    application already relies on elsewhere. This does not replace
+    live_asset_websocket's own check -- the browser's session cookie is
+    forwarded upstream unchanged, so live-telemetry independently
+    re-derives and re-checks the same identity and authorization itself,
+    exactly as it already does for any other caller. Rejecting here first
+    only avoids opening a wasted upstream connection for traffic that was
+    never going to be allowed.
+
+    No new telemetry data path: this never reads MQTT, the database, or
+    admin.get_portal_asset_live_state directly -- it only relays whatever
+    live_asset_websocket already sends.
+    """
+
+    identity = deserialize_authenticated_user(
+        websocket.scope.get("session", {}).get(SESSION_IDENTITY_KEY)
+    )
+    if identity is None:
+        await websocket.close(code=4401)
+        return
+
+    if not await portal_user_can_access_asset(identity.portal_user_id, asset_id):
+        await websocket.close(code=4404)
+        return
+
+    cookie_header = websocket.headers.get("cookie")
+    upstream_url = f"{settings.live_telemetry_ws_base_url}/api/live/assets/{asset_id}/ws"
+
+    try:
+        async with websockets.connect(
+            upstream_url,
+            additional_headers={"Cookie": cookie_header} if cookie_header else None,
+            open_timeout=5,
+        ) as upstream:
+            await websocket.accept()
+            await _relay_asset_live_websocket(websocket, upstream)
+    except (OSError, InvalidHandshake, WebSocketException, TimeoutError):
+        # The upstream live-telemetry service is unreachable or refused the
+        # connection (e.g. mid-deploy). 1013 = "Try Again Later" (RFC 6455
+        # IANA registry) -- the same code live_main.py's own
+        # fetch_grafana_asset_state_with_retry path uses for its equivalent
+        # transient-failure case, so a reconnecting client sees a clean
+        # close it can retry rather than a raw connection error.
+        with contextlib.suppress(Exception):
+            await websocket.close(code=1013)
+
+
+async def _relay_asset_live_websocket(client: WebSocket, upstream) -> None:
+    """Pump frames both directions until either side closes.
+
+    upstream (live_asset_websocket) only reads client frames to detect
+    disconnect -- it never acts on their content -- so forwarding the
+    browser's frames upstream unexamined is harmless and keeps this a
+    transparent relay rather than a second place that interprets the
+    telemetry protocol. Any unexpected frame/content on either side ends
+    that pump gracefully rather than crashing the connection or the
+    process.
+    """
+
+    async def pump_upstream_to_client() -> None:
+        try:
+            async for message in upstream:
+                await client.send_text(
+                    message if isinstance(message, str) else message.decode("utf-8", "replace")
+                )
+        except (WebSocketException, RuntimeError):
+            # WebSocketException (e.g. ConnectionClosed): live-telemetry
+            # ended the stream. RuntimeError: the browser side is already
+            # closed, so client.send_text() refuses -- Starlette's own
+            # signal for that, not a WebSocketDisconnect (that's only
+            # raised by receive_*()).
+            pass
+
+    async def pump_client_to_upstream() -> None:
+        try:
+            while True:
+                message = await client.receive_text()
+                await upstream.send(message)
+        except (WebSocketDisconnect, WebSocketException):
+            # WebSocketDisconnect: the browser closed. WebSocketException
+            # (e.g. ConnectionClosed): live-telemetry already ended the
+            # stream, so there is nothing left to forward to.
+            pass
+
+    tasks = [
+        asyncio.create_task(pump_upstream_to_client()),
+        asyncio.create_task(pump_client_to_upstream()),
+    ]
+    try:
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            with contextlib.suppress(Exception):
+                await task
+        with contextlib.suppress(Exception):
+            await client.close()
+        with contextlib.suppress(Exception):
+            await upstream.close()
 
 
 @app.get("/health", include_in_schema=False)

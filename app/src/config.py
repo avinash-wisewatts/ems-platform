@@ -18,6 +18,16 @@ class Settings(BaseSettings):
         alias="EMS_GRAFANA_URL",
     )
 
+    # Same-origin proxy target for the Asset View live WebSocket (see
+    # main.py's proxy_asset_live_websocket). Reuses the exact env var name
+    # the grafana container already sets for its own backend plugin's
+    # connection to the same service (compose.yaml) -- one internal address,
+    # two independent, already-authenticated consumers.
+    live_telemetry_ws_base_url: str = Field(
+        default="ws://live-telemetry:8090",
+        alias="EMS_LIVE_TELEMETRY_WS_BASE_URL",
+    )
+
     grafana_admin_user: str = Field(
         alias="EMS_GRAFANA_ADMIN_USER",
     )

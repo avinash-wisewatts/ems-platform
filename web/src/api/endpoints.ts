@@ -8,6 +8,7 @@
  *   GET /api/v1/spaces/{space_id}/measurements
  *   GET /api/v1/sites/{site_id}/spaces                  (Slice 0)
  *   GET /api/v1/sites/{site_id}/assets                  (Slice 0)
+ *   GET /api/v1/sites/{site_id}/assets/{asset_id}/live-state
  *   GET /api/v1/sites/{site_id}/demand                  (Slice B)
  *   GET /api/v1/sites/{site_id}/demand/current           (Slice B)
  *   GET /api/v1/sites/{site_id}/power-quality            (Slice B)
@@ -24,6 +25,11 @@
  * served by an asset" concept -- neither exists as a read path yet; both
  * are explicitly deferred pending a separate product/architecture decision.
  *
+ * getAssetLiveState is always a "right now" read (one row per
+ * device/logical-point currently attached to the asset) -- the initial
+ * snapshot a caller pairs with routes/assetView/useAssetLiveSocket.ts's
+ * WebSocket to keep those readings current without polling.
+ *
  * Slice B scope note: getSiteDemandSeries takes no resolution parameter --
  * the backend has no coarser persisted demand tier to select between.
  * getSitePowerQuality returns PF plus per-phase (L1/L2/L3) THD only; there
@@ -35,6 +41,7 @@ import type {
   Alert,
   AlertListResponse,
   AlertState,
+  AssetLiveStateResponse,
   AssetsResponse,
   CurrentDemandResponse,
   CurrentUser,
@@ -138,6 +145,18 @@ export function getSiteSpaces(siteId: string, init?: RequestInit): Promise<Space
 
 export function getSiteAssets(siteId: string, init?: RequestInit): Promise<AssetsResponse> {
   return apiGet<AssetsResponse>(`/sites/${encodeURIComponent(siteId)}/assets`, undefined, init);
+}
+
+export function getAssetLiveState(
+  siteId: string,
+  assetId: string,
+  init?: RequestInit,
+): Promise<AssetLiveStateResponse> {
+  return apiGet<AssetLiveStateResponse>(
+    `/sites/${encodeURIComponent(siteId)}/assets/${encodeURIComponent(assetId)}/live-state`,
+    undefined,
+    init,
+  );
 }
 
 export type DemandQuery = {
