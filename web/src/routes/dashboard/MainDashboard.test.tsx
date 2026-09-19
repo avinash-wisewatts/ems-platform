@@ -1,229 +1,540 @@
-import { describe, expect, it } from "vitest";
-import { screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MainDashboard } from "./MainDashboard";
-import { renderWithProviders, stubFetch, SITES_ONE } from "../../test-utils";
+import { useTenant } from "../../tenant/TenantProvider";
+import { renderWithProviders, stubFetch, SITES_TWO_ORGS } from "../../test-utils";
+import { resolveEnergyUsageRequestRange } from "./energyUsage";
+import type { EnergyConsumptionPoint, EnergyConsumptionResponse, SiteEnergyAvailabilityResponse } from "../../api/types";
+
+// SITES_TWO_ORGS (test-utils.tsx): Alpha One / Alpha Two (Org A, timezone
+// Asia/Kolkata, UTC+5:30), Bravo One (Org B, timezone UTC). More than one
+// site -> TenantProvider does NOT auto-select; each test drives selection
+// itself via the harness below, matching TenantProvider.test.tsx's own
+// button-driven pattern.
+const ALPHA_ONE = SITES_TWO_ORGS.sites[0]!; // Asia/Kolkata
+const BRAVO_ONE = SITES_TWO_ORGS.sites[2]!; // UTC
+
+// 2026-09-19T09:00:00Z is 2026-09-19T14:30 in Kolkata -- "today" is the
+// 19th in both fixture sites' timezones, avoiding an incidental date-
+// rollover difference muddying the more targeted timezone tests below.
+const FIXED_NOW = new Date("2026-09-19T09:00:00Z");
+
+function DashboardHarness() {
+  const { selectSite } = useTenant();
+  return (
+    <>
+      <button data-testid="pick-alpha" onClick={() => selectSite(ALPHA_ONE.site_id)}>
+        pick-alpha
+      </button>
+      <button data-testid="pick-bravo" onClick={() => selectSite(BRAVO_ONE.site_id)}>
+        pick-bravo
+      </button>
+      <MainDashboard />
+    </>
+  );
+}
+
+function availabilityResponse(siteId: string, overrides: Partial<SiteEnergyAvailabilityResponse> = {}): SiteEnergyAvailabilityResponse {
+  return { site_id: siteId, has_data: true, earliest: "2025-01-01T00:00:00Z", latest: FIXED_NOW.toISOString(), ...overrides };
+}
+
+function energyConsumptionResponse(
+  siteId: string,
+  resolution: EnergyConsumptionResponse["resolution"],
+  from: string,
+  to: string,
+  series: EnergyConsumptionPoint[] = [],
+): EnergyConsumptionResponse {
+  return { site_id: siteId, resolution, from, to, no_data: series.length === 0, series };
+}
+
+const GENERIC_NO_DATA = { from: "2026-01-01T00:00:00Z", to: "2026-01-02T00:00:00Z", no_data: true, series: [] };
+
+type EnergyUsageStub = { from: string; resolution: string; response: EnergyConsumptionResponse };
 
 /**
- * Component-level tests for the Main Dashboard. Every section fetches from
- * an already-live /api/v1 endpoint (see MainDashboard.tsx's own header) --
- * these tests stub those HTTP responses and assert on what the page
- * renders, the same pattern EnergyOverview.test.tsx / SiteOverview tests
- * already use. Not wired into router.tsx/AppLayout.tsx in this change (see
- * PR notes) -- rendered directly, like every other route-level test file.
+ * Stubs every endpoint MainDashboard's OTHER cards (YTD/MTD/Demand/Site
+ * Health/Freshness) call with a harmless "no data" response -- their own
+ * correctness is out of scope here -- plus GET .../energy/consumption/
+ * availability, and routes GET .../energy/consumption calls by their exact
+ * `resolution`+`from` query params against a LIST of scripted responses
+ * (every display resolution now has its own distinct source resolution, so
+ * a single test may need several registered at once): a call matching one
+ * entry gets its response; every other energy/consumption call (YTD/MTD/
+ * Health, all real but uninteresting here) gets a generic no-data response.
  */
-
-function energyConsumption(totalKwh: number) {
-  return {
-    jsonBody: {
-      site_id: "x",
-      resolution: "1d",
-      from: "",
-      to: "",
-      no_data: false,
-      series: [{ bucket_start: "2026-09-01T00:00:00Z", import_kwh: totalKwh, export_kwh: 0, source_interval_count: 1 }],
-    },
-  };
-}
-
-const NO_DATA_ENERGY = {
-  jsonBody: { site_id: "x", resolution: "1d", from: "", to: "", no_data: true, series: [] },
-};
-
-const INSUFFICIENT_TYPICAL_REFERENCE = {
-  jsonBody: {
-    site_id: "x",
-    period_length_days: 7,
-    from: "",
-    to: "",
-    typical_kwh: null,
-    requested_period_count: 8,
-    windows_with_data_count: 0,
-    eligible_period_count: 0,
-    sufficient: false,
-    windows: [],
-  },
-};
-
-const NO_DATA_EVIDENCE = {
-  jsonBody: { site_id: "x", resolution: "1d", from: "", to: "", no_data: true, series: [] },
-};
-
-const CURRENT_DEMAND_WITH_DATA = {
-  jsonBody: {
-    site_id: "x",
-    has_data: true,
-    interval_start: "2026-09-16T12:00:00Z",
-    interval_end: "2026-09-16T12:15:00Z",
-    current_demand_kw: 42.3,
-    current_demand_kva: 45.1,
-    quality_status: "GOOD",
-    coverage_percent: 100,
-  },
-};
-
-function demandSeriesWithPeak(peakKw: number) {
-  return {
-    jsonBody: {
-      site_id: "x",
-      from: "",
-      to: "",
-      no_data: false,
-      series: [
-        {
-          interval_start: "2026-09-16T08:00:00Z",
-          interval_end: "2026-09-16T08:15:00Z",
-          demand_kw: peakKw,
-          peak_power_kw: peakKw,
-          quality_status: "GOOD",
-          coverage_percent: 100,
-        },
-      ],
-    },
-  };
-}
-
-const NO_DATA_DEMAND_SERIES = {
-  jsonBody: { site_id: "x", from: "", to: "", no_data: true, series: [] },
-};
-
-const FRESHNESS_WITH_AS_OF = {
-  jsonBody: {
-    site_id: "x",
-    energy: { state: "FRESH", as_of: "2026-09-16T12:30:00Z" },
-    demand: { state: "FRESH", as_of: "2026-09-16T12:45:00Z" },
-    power_quality: { state: "FRESH", as_of: "2026-09-16T12:00:00Z" },
-  },
-};
-
-const FRESHNESS_UNKNOWN = {
-  jsonBody: {
-    site_id: "x",
-    energy: { state: "UNKNOWN", as_of: null },
-    demand: { state: "UNKNOWN", as_of: null },
-    power_quality: { state: "UNKNOWN", as_of: null },
-  },
-};
-
-/** A fully-populated stub: real YTD/MTD totals, a real demand peak, and a
- *  deliberately-insufficient typical-reference so Site Health resolves
- *  deterministically to "not available" without depending on the Energy
- *  Attention materiality threshold's exact internals. */
-function stubDashboardWithData() {
+function stubDashboard(
+  siteId: string,
+  opts: {
+    availability?: SiteEnergyAvailabilityResponse;
+    energyUsage?: EnergyUsageStub | EnergyUsageStub[];
+  } = {},
+) {
+  const energyUsageStubs = opts.energyUsage ? ([] as EnergyUsageStub[]).concat(opts.energyUsage) : [];
   return stubFetch((url) => {
-    if (url.includes("/energy/consumption/evidence")) return NO_DATA_EVIDENCE;
-    if (url.includes("/energy/consumption/typical-reference")) return INSUFFICIENT_TYPICAL_REFERENCE;
-    if (url.includes("/energy/consumption")) return energyConsumption(1234);
-    if (url.includes("/demand/current")) return CURRENT_DEMAND_WITH_DATA;
-    if (url.includes("/demand")) return demandSeriesWithPeak(78.5);
-    if (url.includes("/telemetry-freshness")) return FRESHNESS_WITH_AS_OF;
+    if (url.includes(`/api/v1/sites/${siteId}/energy/consumption/availability`)) {
+      return { jsonBody: opts.availability ?? availabilityResponse(siteId) };
+    }
+    if (url.includes(`/api/v1/sites/${siteId}/telemetry-freshness`)) {
+      return {
+        jsonBody: {
+          site_id: siteId,
+          energy: { state: "UNKNOWN", as_of: null },
+          demand: { state: "UNKNOWN", as_of: null },
+          power_quality: { state: "UNKNOWN", as_of: null },
+        },
+      };
+    }
+    if (url.includes(`/api/v1/sites/${siteId}/demand/current`)) {
+      return {
+        jsonBody: {
+          site_id: siteId,
+          has_data: false,
+          interval_start: null,
+          interval_end: null,
+          current_demand_kw: null,
+          current_demand_kva: null,
+          quality_status: null,
+          coverage_percent: null,
+        },
+      };
+    }
+    if (url.includes(`/api/v1/sites/${siteId}/demand`)) {
+      return { jsonBody: { site_id: siteId, ...GENERIC_NO_DATA } };
+    }
+    if (url.includes(`/api/v1/sites/${siteId}/energy/consumption/evidence`)) {
+      return { jsonBody: { site_id: siteId, resolution: "1h", ...GENERIC_NO_DATA } };
+    }
+    if (url.includes(`/api/v1/sites/${siteId}/energy/consumption/typical-reference`)) {
+      return {
+        jsonBody: {
+          site_id: siteId,
+          period_length_days: 7,
+          from: "2026-01-01T00:00:00Z",
+          to: "2026-01-08T00:00:00Z",
+          typical_kwh: null,
+          requested_period_count: 8,
+          windows_with_data_count: 0,
+          eligible_period_count: 0,
+          sufficient: false,
+          windows: [],
+        },
+      };
+    }
+    if (url.includes(`/api/v1/sites/${siteId}/energy/consumption`)) {
+      const parsed = new URL(url, "http://localhost");
+      const from = parsed.searchParams.get("from");
+      const resolution = parsed.searchParams.get("resolution");
+      const match = energyUsageStubs.find((s) => s.from === from && s.resolution === resolution);
+      if (match) return { jsonBody: match.response };
+      return { jsonBody: { site_id: siteId, resolution: resolution ?? "1d", ...GENERIC_NO_DATA } };
+    }
     return { status: 404, jsonBody: { error: "not_found", detail: "unexpected" } };
   });
 }
 
-describe("MainDashboard", () => {
-  it("renders YTD/MTD energy, demand values, and the last-updated timestamp for a site with data", async () => {
-    stubDashboardWithData();
-    renderWithProviders(<MainDashboard />, { sites: () => Promise.resolve(SITES_ONE) });
+async function pickAlpha() {
+  const user = userEvent.setup();
+  await user.click(screen.getByTestId("pick-alpha"));
+  await waitFor(() => expect(screen.getByTestId("page-main-dashboard")).toBeInTheDocument());
+}
 
-    await waitFor(() => expect(screen.getByTestId("page-main-dashboard")).toBeInTheDocument());
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(FIXED_NOW);
+});
 
-    const ytd = screen.getByTestId("kpi-energy-ytd");
-    await waitFor(() => expect(within(ytd).getByText("1,234")).toBeInTheDocument());
+afterEach(() => {
+  vi.useRealTimers();
+});
 
-    const mtd = screen.getByTestId("kpi-energy-mtd");
-    await waitFor(() => expect(within(mtd).getByText("1,234")).toBeInTheDocument());
+describe("MainDashboard -- Energy Usage chart", () => {
+  it("defaults to Today (site-local) at Hourly resolution -- never a rolling preset", async () => {
+    const defaultRange = resolveEnergyUsageRequestRange("2026-09-19", "2026-09-19", ALPHA_ONE.timezone, FIXED_NOW);
+    stubDashboard(ALPHA_ONE.site_id, {
+      energyUsage: {
+        from: defaultRange.from,
+        resolution: "1h",
+        response: energyConsumptionResponse(ALPHA_ONE.site_id, "1h", defaultRange.from, defaultRange.to, [
+          { bucket_start: "2026-09-19T04:00:00Z", import_kwh: 12, export_kwh: null, source_interval_count: 4 },
+        ]),
+      },
+    });
+    renderWithProviders(<DashboardHarness />, { sites: () => Promise.resolve(SITES_TWO_ORGS) });
+    await pickAlpha();
 
-    const demand = screen.getByTestId("kpi-demand");
-    await waitFor(() => expect(within(demand).getByText("42.3 kW")).toBeInTheDocument());
-    // Peak (Today) and Max (This Month) both read the same stubbed series in
-    // this test, so 78.5 kW legitimately appears twice.
-    expect(within(demand).getAllByText("78.5 kW")).toHaveLength(2);
+    await waitFor(() => expect(screen.getByTestId("energy-usage-from")).toHaveValue("2026-09-19"));
+    expect(screen.getByTestId("energy-usage-to")).toHaveValue("2026-09-19");
+    expect(screen.getByTestId("energy-usage-resolution")).toHaveValue("HOURLY");
+  });
 
-    await waitFor(() =>
-      expect(screen.getByTestId("dashboard-last-update")).toHaveTextContent("Last data update:"),
-    );
-    // The freshest as_of across energy/demand/power_quality is demand's 12:45.
-    expect(screen.getByTestId("dashboard-last-update")).not.toHaveTextContent("not available");
+  it("REGRESSION: with real hourly data available for today, the DEFAULT initial state renders a real bar, not an empty/no-data chart", async () => {
+    const defaultRange = resolveEnergyUsageRequestRange("2026-09-19", "2026-09-19", ALPHA_ONE.timezone, FIXED_NOW);
+    stubDashboard(ALPHA_ONE.site_id, {
+      energyUsage: {
+        from: defaultRange.from,
+        resolution: "1h",
+        response: energyConsumptionResponse(ALPHA_ONE.site_id, "1h", defaultRange.from, defaultRange.to, [
+          { bucket_start: "2026-09-19T04:00:00Z", import_kwh: 42, export_kwh: null, source_interval_count: 4 },
+        ]),
+      },
+    });
+    renderWithProviders(<DashboardHarness />, { sites: () => Promise.resolve(SITES_TWO_ORGS) });
+    await pickAlpha();
 
-    // Site Health: typical-reference is insufficient (sufficient: false), so
-    // energyAssessable is false and it resolves deterministically to
-    // INSUFFICIENT_DATA rather than depending on the Energy Attention
-    // threshold's exact numbers.
-    await waitFor(() =>
-      expect(screen.getByTestId("dashboard-site-health")).toHaveTextContent("Insufficient Data"),
-    );
-    expect(screen.getByTestId("dashboard-site-health")).toHaveAttribute("data-state", "INSUFFICIENT_DATA");
-
-    // Load Trend chart renders (not a "no data" placeholder) once its own
-    // demand series resolves.
     await waitFor(() => expect(screen.getByTestId("chart-frame")).toBeInTheDocument());
+    expect(screen.getByTestId("energy-usage").querySelector('[data-testid="state-no-data"]')).toBeNull();
   });
 
-  it("always shows Live Electrical Parameters as 'Not available yet', even when every other section has real data", async () => {
-    stubDashboardWithData();
-    renderWithProviders(<MainDashboard />, { sites: () => Promise.resolve(SITES_ONE) });
-
-    await waitFor(() => expect(screen.getByTestId("page-main-dashboard")).toBeInTheDocument());
-
-    const liveParams = screen.getByTestId("live-electrical-parameters");
-    expect(within(liveParams).getByText("Voltage")).toBeInTheDocument();
-    expect(within(liveParams).getByText("Current")).toBeInTheDocument();
-    expect(within(liveParams).getByText("Power Factor")).toBeInTheDocument();
-    expect(within(liveParams).getByText("Frequency")).toBeInTheDocument();
-    expect(within(liveParams).getAllByText("Not available yet")).toHaveLength(4);
-  });
-
-  it("shows an honest 'no data' state per card, not a fabricated value, when a site has no energy/demand/freshness data yet", async () => {
-    stubFetch((url) => {
-      if (url.includes("/energy/consumption/evidence")) return NO_DATA_EVIDENCE;
-      if (url.includes("/energy/consumption/typical-reference")) return INSUFFICIENT_TYPICAL_REFERENCE;
-      if (url.includes("/energy/consumption")) return NO_DATA_ENERGY;
-      if (url.includes("/demand/current")) return { jsonBody: { site_id: "x", has_data: false, interval_start: null, interval_end: null, current_demand_kw: null, current_demand_kva: null, quality_status: null, coverage_percent: null } };
-      if (url.includes("/demand")) return NO_DATA_DEMAND_SERIES;
-      if (url.includes("/telemetry-freshness")) return FRESHNESS_UNKNOWN;
-      return { status: 404, jsonBody: { error: "not_found", detail: "unexpected" } };
+  it("bounds the date pickers to the site's ACTUAL earliest/latest data, not an API window cap", async () => {
+    stubDashboard(ALPHA_ONE.site_id, {
+      availability: availabilityResponse(ALPHA_ONE.site_id, { earliest: "2025-03-10T00:00:00Z", latest: FIXED_NOW.toISOString() }),
     });
-    renderWithProviders(<MainDashboard />, { sites: () => Promise.resolve(SITES_ONE) });
+    renderWithProviders(<DashboardHarness />, { sites: () => Promise.resolve(SITES_TWO_ORGS) });
+    await pickAlpha();
 
-    await waitFor(() => expect(screen.getByTestId("page-main-dashboard")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId("energy-usage-from")).not.toBeDisabled());
+    expect(screen.getByTestId("energy-usage-from")).toHaveAttribute("min", "2025-03-10");
+    expect(screen.getByTestId("energy-usage-to")).toHaveAttribute("max", "2026-09-19");
+  });
+
+  it("a no-data site's picker collapses to today only, never a fabricated range", async () => {
+    stubDashboard(ALPHA_ONE.site_id, {
+      availability: availabilityResponse(ALPHA_ONE.site_id, { has_data: false, earliest: null, latest: null }),
+    });
+    renderWithProviders(<DashboardHarness />, { sites: () => Promise.resolve(SITES_TWO_ORGS) });
+    await pickAlpha();
+
+    await waitFor(() => expect(screen.getByTestId("energy-usage-from")).not.toBeDisabled());
+    expect(screen.getByTestId("energy-usage-from")).toHaveAttribute("min", "2026-09-19");
+    expect(screen.getByTestId("energy-usage-to")).toHaveAttribute("max", "2026-09-19");
+  });
+
+  it("all four Energy Usage controls (From, To, Apply, Resolution) share the same horizontal control row", async () => {
+    stubDashboard(ALPHA_ONE.site_id);
+    renderWithProviders(<DashboardHarness />, { sites: () => Promise.resolve(SITES_TWO_ORGS) });
+    await pickAlpha();
+    await waitFor(() => expect(screen.getByTestId("energy-usage-apply")).toBeInTheDocument());
+
+    const controls = screen.getByTestId("energy-usage-apply").closest(".energy-usage__controls");
+    expect(controls).not.toBeNull();
+    expect(controls!.contains(screen.getByTestId("energy-usage-from"))).toBe(true);
+    expect(controls!.contains(screen.getByTestId("energy-usage-to"))).toBe(true);
+    expect(controls!.contains(screen.getByTestId("energy-usage-resolution"))).toBe(true);
+  });
+
+  it("a range of 31 days or less offers all five resolutions, including Hourly", async () => {
+    stubDashboard(ALPHA_ONE.site_id);
+    renderWithProviders(<DashboardHarness />, { sites: () => Promise.resolve(SITES_TWO_ORGS) });
+    await pickAlpha();
+    await waitFor(() => expect(screen.getByTestId("energy-usage-resolution")).toBeInTheDocument());
+
+    const options = screen.getByTestId("energy-usage-resolution").querySelectorAll("option");
+    expect(Array.from(options).map((o) => o.textContent)).toEqual(["Hourly", "Daily", "Weekly", "Monthly", "Yearly"]);
+  });
+
+  it("applying a range beyond 31 days removes Hourly from the resolution options -- the date range is NOT restricted because of this", async () => {
+    const longRange = resolveEnergyUsageRequestRange("2026-06-01", "2026-09-19", ALPHA_ONE.timezone, FIXED_NOW);
+    stubDashboard(ALPHA_ONE.site_id, {
+      energyUsage: {
+        from: longRange.from,
+        resolution: "1d",
+        response: energyConsumptionResponse(ALPHA_ONE.site_id, "1d", longRange.from, longRange.to, []),
+      },
+    });
+    renderWithProviders(<DashboardHarness />, { sites: () => Promise.resolve(SITES_TWO_ORGS) });
+    await pickAlpha();
+    await waitFor(() => expect(screen.getByTestId("energy-usage-from")).not.toBeDisabled());
+
+    fireEvent.change(screen.getByTestId("energy-usage-from"), { target: { value: "2026-06-01" } });
+    const user = userEvent.setup();
+    await user.click(screen.getByTestId("energy-usage-apply"));
+
+    await waitFor(() => expect(screen.getByTestId("energy-usage-from")).toHaveValue("2026-06-01"));
+    // The date range itself was applied exactly as entered -- never shrunk.
+    expect(screen.getByTestId("energy-usage-to")).toHaveValue("2026-09-19");
+    const options = screen.getByTestId("energy-usage-resolution").querySelectorAll("option");
+    expect(Array.from(options).map((o) => o.textContent)).toEqual(["Daily", "Weekly", "Monthly", "Yearly"]);
+  });
+
+  it("applying a range beyond 31 days while Hourly is selected automatically switches to Daily, keeping the applied range unchanged", async () => {
+    const longRange = resolveEnergyUsageRequestRange("2026-06-01", "2026-09-19", ALPHA_ONE.timezone, FIXED_NOW);
+    const fetchMock = stubDashboard(ALPHA_ONE.site_id, {
+      energyUsage: {
+        from: longRange.from,
+        resolution: "1d",
+        response: energyConsumptionResponse(ALPHA_ONE.site_id, "1d", longRange.from, longRange.to, [
+          { bucket_start: longRange.from, import_kwh: 10, export_kwh: null, source_interval_count: 96 },
+        ]),
+      },
+    });
+    renderWithProviders(<DashboardHarness />, { sites: () => Promise.resolve(SITES_TWO_ORGS) });
+    await pickAlpha();
+    await waitFor(() => expect(screen.getByTestId("energy-usage-resolution")).toHaveValue("HOURLY"));
+
+    fireEvent.change(screen.getByTestId("energy-usage-from"), { target: { value: "2026-06-01" } });
+    const user = userEvent.setup();
+    await user.click(screen.getByTestId("energy-usage-apply"));
+
+    await waitFor(() => expect(screen.getByTestId("energy-usage-resolution")).toHaveValue("DAILY"));
+    // The range itself was preserved exactly, not reverted or shrunk.
+    expect(screen.getByTestId("energy-usage-from")).toHaveValue("2026-06-01");
+    expect(screen.getByTestId("energy-usage-to")).toHaveValue("2026-09-19");
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          (c) => String(c[0]).includes(encodeURIComponent(longRange.from)) && String(c[0]).includes("resolution=1d"),
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it("does not re-fetch when the dates are changed but Apply is not clicked, and fetches the new range once Apply is clicked", async () => {
+    const defaultRange = resolveEnergyUsageRequestRange("2026-09-19", "2026-09-19", ALPHA_ONE.timezone, FIXED_NOW);
+    const appliedRange = resolveEnergyUsageRequestRange("2026-09-01", "2026-09-05", ALPHA_ONE.timezone, FIXED_NOW);
+    const fetchMock = stubDashboard(ALPHA_ONE.site_id, {
+      energyUsage: {
+        from: appliedRange.from,
+        resolution: "1h",
+        response: energyConsumptionResponse(ALPHA_ONE.site_id, "1h", appliedRange.from, appliedRange.to, []),
+      },
+    });
+    renderWithProviders(<DashboardHarness />, { sites: () => Promise.resolve(SITES_TWO_ORGS) });
+    await pickAlpha();
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some((c) => String(c[0]).includes(encodeURIComponent(defaultRange.from)))).toBe(true),
+    );
+    const callsBefore = fetchMock.mock.calls.length;
+
+    fireEvent.change(screen.getByTestId("energy-usage-from"), { target: { value: "2026-09-01" } });
+    fireEvent.change(screen.getByTestId("energy-usage-to"), { target: { value: "2026-09-05" } });
+    // Changing the drafts alone must not trigger any new request.
+    expect(fetchMock.mock.calls.length).toBe(callsBefore);
+    expect(fetchMock.mock.calls.some((c) => String(c[0]).includes(encodeURIComponent(appliedRange.from)))).toBe(false);
+
+    const user = userEvent.setup();
+    await user.click(screen.getByTestId("energy-usage-apply"));
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some((c) => String(c[0]).includes(encodeURIComponent(appliedRange.from)))).toBe(true),
+    );
+    // A short range keeps Hourly valid -- no auto-switch should occur here.
+    expect(screen.getByTestId("energy-usage-resolution")).toHaveValue("HOURLY");
+  });
+
+  it("the Apply button is disabled for an out-of-order (From after To) selection", async () => {
+    stubDashboard(ALPHA_ONE.site_id);
+    renderWithProviders(<DashboardHarness />, { sites: () => Promise.resolve(SITES_TWO_ORGS) });
+    await pickAlpha();
+    await waitFor(() => expect(screen.getByTestId("energy-usage-from")).not.toBeDisabled());
+
+    fireEvent.change(screen.getByTestId("energy-usage-from"), { target: { value: "2026-09-19" } });
+    fireEvent.change(screen.getByTestId("energy-usage-to"), { target: { value: "2026-09-10" } });
+
+    expect(screen.getByTestId("energy-usage-apply")).toBeDisabled();
+  });
+
+  it("Weekly/Monthly/Yearly each request the server-side aggregation resolution (1w/1mo/1y) and render the server's totals directly", async () => {
+    const range = resolveEnergyUsageRequestRange("2026-06-01", "2026-09-19", ALPHA_ONE.timezone, FIXED_NOW);
+    const fetchMock = stubDashboard(ALPHA_ONE.site_id, {
+      energyUsage: [
+        {
+          from: range.from,
+          resolution: "1d",
+          response: energyConsumptionResponse(ALPHA_ONE.site_id, "1d", range.from, range.to, [
+            { bucket_start: range.from, import_kwh: 1, export_kwh: null, source_interval_count: 96 },
+          ]),
+        },
+        {
+          from: range.from,
+          resolution: "1w",
+          response: energyConsumptionResponse(ALPHA_ONE.site_id, "1w", range.from, range.to, [
+            { bucket_start: "2026-06-01T00:00:00Z", import_kwh: 70, export_kwh: null, source_interval_count: 672 },
+          ]),
+        },
+        {
+          from: range.from,
+          resolution: "1mo",
+          response: energyConsumptionResponse(ALPHA_ONE.site_id, "1mo", range.from, range.to, [
+            { bucket_start: "2026-06-01T00:00:00Z", import_kwh: 300, export_kwh: null, source_interval_count: 2880 },
+          ]),
+        },
+        {
+          from: range.from,
+          resolution: "1y",
+          response: energyConsumptionResponse(ALPHA_ONE.site_id, "1y", range.from, range.to, [
+            { bucket_start: "2026-01-01T00:00:00Z", import_kwh: 3650, export_kwh: null, source_interval_count: 35040 },
+          ]),
+        },
+      ],
+    });
+    renderWithProviders(<DashboardHarness />, { sites: () => Promise.resolve(SITES_TWO_ORGS) });
+    await pickAlpha();
+    fireEvent.change(screen.getByTestId("energy-usage-from"), { target: { value: "2026-06-01" } });
+    const user = userEvent.setup();
+    await user.click(screen.getByTestId("energy-usage-apply"));
+    await waitFor(() => expect(screen.getByTestId("energy-usage-resolution")).toHaveValue("DAILY"));
+
+    for (const [option, resolution] of [
+      ["WEEKLY", "1w"],
+      ["MONTHLY", "1mo"],
+      ["YEARLY", "1y"],
+    ] as const) {
+      await user.selectOptions(screen.getByTestId("energy-usage-resolution"), option);
+      await waitFor(() =>
+        expect(
+          fetchMock.mock.calls.some(
+            (c) => String(c[0]).includes(encodeURIComponent(range.from)) && String(c[0]).includes(`resolution=${resolution}`),
+          ),
+        ).toBe(true),
+      );
+    }
+  });
+
+  it("shows kWh on the chart (axis/tooltip labelling)", async () => {
+    const defaultRange = resolveEnergyUsageRequestRange("2026-09-19", "2026-09-19", ALPHA_ONE.timezone, FIXED_NOW);
+    stubDashboard(ALPHA_ONE.site_id, {
+      energyUsage: {
+        from: defaultRange.from,
+        resolution: "1h",
+        response: energyConsumptionResponse(ALPHA_ONE.site_id, "1h", defaultRange.from, defaultRange.to, [
+          { bucket_start: "2026-09-19T04:00:00Z", import_kwh: 12, export_kwh: null, source_interval_count: 4 },
+        ]),
+      },
+    });
+    renderWithProviders(<DashboardHarness />, { sites: () => Promise.resolve(SITES_TWO_ORGS) });
+    await pickAlpha();
+
+    await waitFor(() => expect(screen.getByTestId("chart-frame")).toBeInTheDocument());
+    expect(screen.getByTestId("chart-frame")).toHaveAttribute("aria-label", expect.stringContaining("kWh"));
+  });
+
+  it("shows the existing no-data state, never a fabricated chart, when the selected range has no usable data", async () => {
+    const defaultRange = resolveEnergyUsageRequestRange("2026-09-19", "2026-09-19", ALPHA_ONE.timezone, FIXED_NOW);
+    stubDashboard(ALPHA_ONE.site_id, {
+      energyUsage: {
+        from: defaultRange.from,
+        resolution: "1h",
+        response: energyConsumptionResponse(ALPHA_ONE.site_id, "1h", defaultRange.from, defaultRange.to, []),
+      },
+    });
+    renderWithProviders(<DashboardHarness />, { sites: () => Promise.resolve(SITES_TWO_ORGS) });
+    await pickAlpha();
 
     await waitFor(() =>
-      expect(screen.getByTestId("kpi-energy-ytd")).toHaveTextContent("No data for the selected range."),
+      expect(screen.getByTestId("energy-usage").querySelector('[data-testid="state-no-data"]')).toBeInTheDocument(),
     );
-    expect(screen.getByTestId("kpi-energy-mtd")).toHaveTextContent("No data for the selected range.");
+    expect(screen.getByTestId("energy-usage").querySelector('[data-testid="chart-frame"]')).toBeNull();
+  });
 
-    const demand = screen.getByTestId("kpi-demand");
-    await waitFor(() => expect(within(demand).getAllByText("No data available").length).toBeGreaterThan(0));
+  it("uses the SELECTED SITE's own timezone for the default range and availability bounds, not UTC", async () => {
+    const bravoDefaultRange = resolveEnergyUsageRequestRange("2026-09-19", "2026-09-19", BRAVO_ONE.timezone, FIXED_NOW);
+    const alphaDefaultRange = resolveEnergyUsageRequestRange("2026-09-19", "2026-09-19", ALPHA_ONE.timezone, FIXED_NOW);
+    expect(bravoDefaultRange.from).not.toBe(alphaDefaultRange.from); // sanity: the two zones really do diverge
+
+    const fetchMock = stubDashboard(BRAVO_ONE.site_id, {
+      energyUsage: {
+        from: bravoDefaultRange.from,
+        resolution: "1h",
+        response: energyConsumptionResponse(BRAVO_ONE.site_id, "1h", bravoDefaultRange.from, bravoDefaultRange.to, []),
+      },
+    });
+    renderWithProviders(<DashboardHarness />, { sites: () => Promise.resolve(SITES_TWO_ORGS) });
+    const user = userEvent.setup();
+    await user.click(screen.getByTestId("pick-bravo"));
 
     await waitFor(() =>
-      expect(screen.getByTestId("dashboard-last-update")).toHaveTextContent("not available"),
+      expect(fetchMock.mock.calls.some((c) => String(c[0]).includes(encodeURIComponent(bravoDefaultRange.from)))).toBe(
+        true,
+      ),
     );
   });
 
-  it("shows an empty state with no fabricated dashboard when the user has no accessible sites", async () => {
-    renderWithProviders(<MainDashboard />, { sites: () => Promise.resolve({ sites: [] }) });
+  it("reloads Energy Usage (fresh default range + fresh availability) for a newly selected site", async () => {
+    const alphaRange = resolveEnergyUsageRequestRange("2026-09-19", "2026-09-19", ALPHA_ONE.timezone, FIXED_NOW);
+    const bravoRange = resolveEnergyUsageRequestRange("2026-09-19", "2026-09-19", BRAVO_ONE.timezone, FIXED_NOW);
 
-    await waitFor(() => expect(screen.getByText("No site selected")).toBeInTheDocument());
-    expect(screen.queryByTestId("page-main-dashboard")).not.toBeInTheDocument();
-  });
-
-  it("one card's failure (Demand) does not block the YTD/MTD cards from rendering their own data", async () => {
-    stubFetch((url) => {
-      if (url.includes("/energy/consumption/evidence")) return NO_DATA_EVIDENCE;
-      if (url.includes("/energy/consumption/typical-reference")) return INSUFFICIENT_TYPICAL_REFERENCE;
-      if (url.includes("/energy/consumption")) return energyConsumption(500);
-      if (url.includes("/demand/current")) return { status: 500, jsonBody: { error: "internal_error", detail: "boom" } };
-      if (url.includes("/demand")) return { status: 500, jsonBody: { error: "internal_error", detail: "boom" } };
-      if (url.includes("/telemetry-freshness")) return FRESHNESS_WITH_AS_OF;
+    const fetchMock = stubFetch((url) => {
+      for (const site of [ALPHA_ONE, BRAVO_ONE]) {
+        if (url.includes(`/api/v1/sites/${site.site_id}/energy/consumption/availability`)) {
+          return { jsonBody: availabilityResponse(site.site_id) };
+        }
+        if (url.includes(`/api/v1/sites/${site.site_id}/telemetry-freshness`)) {
+          return {
+            jsonBody: {
+              site_id: site.site_id,
+              energy: { state: "UNKNOWN", as_of: null },
+              demand: { state: "UNKNOWN", as_of: null },
+              power_quality: { state: "UNKNOWN", as_of: null },
+            },
+          };
+        }
+        if (url.includes(`/api/v1/sites/${site.site_id}/demand/current`)) {
+          return {
+            jsonBody: {
+              site_id: site.site_id,
+              has_data: false,
+              interval_start: null,
+              interval_end: null,
+              current_demand_kw: null,
+              current_demand_kva: null,
+              quality_status: null,
+              coverage_percent: null,
+            },
+          };
+        }
+        if (url.includes(`/api/v1/sites/${site.site_id}/demand`)) {
+          return { jsonBody: { site_id: site.site_id, ...GENERIC_NO_DATA } };
+        }
+        if (url.includes(`/api/v1/sites/${site.site_id}/energy/consumption/evidence`)) {
+          return { jsonBody: { site_id: site.site_id, resolution: "1h", ...GENERIC_NO_DATA } };
+        }
+        if (url.includes(`/api/v1/sites/${site.site_id}/energy/consumption/typical-reference`)) {
+          return {
+            jsonBody: {
+              site_id: site.site_id,
+              period_length_days: 7,
+              from: "2026-01-01T00:00:00Z",
+              to: "2026-01-08T00:00:00Z",
+              typical_kwh: null,
+              requested_period_count: 8,
+              windows_with_data_count: 0,
+              eligible_period_count: 0,
+              sufficient: false,
+              windows: [],
+            },
+          };
+        }
+      }
+      if (url.includes(`/api/v1/sites/${ALPHA_ONE.site_id}/energy/consumption`)) {
+        return { jsonBody: energyConsumptionResponse(ALPHA_ONE.site_id, "1h", alphaRange.from, alphaRange.to, []) };
+      }
+      if (url.includes(`/api/v1/sites/${BRAVO_ONE.site_id}/energy/consumption`)) {
+        return { jsonBody: energyConsumptionResponse(BRAVO_ONE.site_id, "1h", bravoRange.from, bravoRange.to, []) };
+      }
       return { status: 404, jsonBody: { error: "not_found", detail: "unexpected" } };
     });
-    renderWithProviders(<MainDashboard />, { sites: () => Promise.resolve(SITES_ONE) });
 
-    await waitFor(() => expect(screen.getByTestId("page-main-dashboard")).toBeInTheDocument());
+    renderWithProviders(<DashboardHarness />, { sites: () => Promise.resolve(SITES_TWO_ORGS) });
+    await pickAlpha();
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some((c) => String(c[0]).includes(`/sites/${ALPHA_ONE.site_id}/energy/consumption`)),
+      ).toBe(true),
+    );
 
-    const ytd = screen.getByTestId("kpi-energy-ytd");
-    await waitFor(() => expect(within(ytd).getByText("500")).toBeInTheDocument());
+    const user = userEvent.setup();
+    await user.click(screen.getByTestId("pick-bravo"));
 
-    await waitFor(() => expect(screen.getByTestId("kpi-demand")).toHaveTextContent(/Try again|Retry/i));
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          (c) =>
+            String(c[0]).includes(`/sites/${BRAVO_ONE.site_id}/energy/consumption`) &&
+            String(c[0]).includes(encodeURIComponent(bravoRange.from)),
+        ),
+      ).toBe(true),
+    );
+    await waitFor(() => expect(screen.getByTestId("energy-usage-from")).toHaveValue("2026-09-19"));
   });
 });

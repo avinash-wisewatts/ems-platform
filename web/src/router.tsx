@@ -6,6 +6,8 @@ import { AppLayout } from "./layout/AppLayout";
 import { Bootstrap } from "./routes/Bootstrap";
 import { SelectContext } from "./routes/SelectContext";
 import { SiteOverview } from "./routes/SiteOverview";
+import { MainDashboard } from "./routes/dashboard/MainDashboard";
+import { AssetView } from "./routes/assetView/AssetView";
 import { PlaceholderArea } from "./routes/PlaceholderArea";
 import { Forbidden } from "./routes/Forbidden";
 import { NotFound } from "./routes/NotFound";
@@ -25,7 +27,11 @@ import { AlertsArea } from "./routes/alerts/AlertsArea";
  * Foundation routes:
  *   /            session/tenant bootstrap -> redirect
  *   /select      organization / site picker
- *   /home        Site Overview & Attention (MVP-3)
+ *   /dashboard   Main Dashboard (WiseWatts redesign) -- the new landing screen
+ *   /asset-view  Asset View (WiseWatts redesign) -- filters + live tiles
+ *                per asset; supersedes AssetsList in the primary nav
+ *   /home        Site Overview & Attention (MVP-3) -- unchanged; reachable
+ *                from the sidebar's Archive section, not the new primary nav
  *   /features/*  honest placeholder namespace for later-phase features
  *   *            not found
  *
@@ -65,6 +71,22 @@ export function AppRoutes() {
         element={
           <ShellGate>
             <SelectContext />
+          </ShellGate>
+        }
+      />
+      <Route
+        path="/dashboard"
+        element={
+          <ShellGate>
+            <MainDashboard />
+          </ShellGate>
+        }
+      />
+      <Route
+        path="/asset-view"
+        element={
+          <ShellGate>
+            <AssetView />
           </ShellGate>
         }
       />

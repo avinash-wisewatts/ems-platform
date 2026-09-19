@@ -216,6 +216,180 @@ When remote staging access is required:
 
 
 
+\# 4A. EMS WEB APP — LOCAL UI DEVELOPMENT AND STAGING DATA VERIFICATION
+
+
+
+This section clarifies how local frontend (`web/`) development relates to
+
+Section 4 (STAGING SAFETY) — it does not loosen that section's authorization
+
+requirements for writes; it explains an already-established, already-
+
+authorized READ path.
+
+
+
+\## The established workflow
+
+
+
+All EMS Web App UI development happens on the local Vite dev server
+
+(`npm run dev` in `web/`). Frontend changes do NOT need to be deployed to
+
+staging just to test the UI.
+
+
+
+The local dev server's `/api` proxy target is controlled by `EMS\_DEV\_BACKEND`
+
+(see `web/vite.config.ts` and `web/.env`). On this machine that variable is
+
+routinely pointed at a local port forwarded, via an already-established SSH
+
+tunnel, to the staging EMS backend (`ssh -L <local-port>:127.0.0.1:8080
+
+emsadmin@<staging-host>`). When that tunnel is active:
+
+
+
+&#x20;   Local Web App -> Vite /api proxy -> SSH tunnel -> staging EMS backend ->
+
+&#x20;   staging database / real staging telemetry and analytics data
+
+
+
+This is the intended, standing verification path for customer-facing UI
+
+work: local frontend, real staging data, no frontend deployment required.
+
+
+
+\## Local database is not the source of truth for this path
+
+
+
+The local development database may be empty or incomplete at any time —
+
+this is normal and expected. When the frontend is configured to use the
+
+staging tunnel, the local database says NOTHING about whether real
+
+(staging) data exists for the feature under development. Never conclude
+
+"there is no data" from the local database under that configuration.
+
+
+
+\## Required investigation order when a locally running UI shows no data or an API error
+
+
+
+1\. What exact API request is the frontend making (method, path, params)?
+
+2\. Where is that request actually routed? Check `web/.env`'s
+
+&#x20;  `EMS\_DEV\_BACKEND` and the Vite proxy config (`web/vite.config.ts`) first.
+
+3\. Is an SSH tunnel active and is `EMS\_DEV\_BACKEND` pointed at it (a locally
+
+&#x20;  forwarded port, not the local Docker Compose backend)?
+
+4\. Which environment actually answered — call the same path directly
+
+&#x20;  against that same target to see the raw response.
+
+5\. Does that environment (usually staging, per the above) actually have the
+
+&#x20;  required API route/data?
+
+
+
+Only after establishing that the frontend is genuinely configured to hit
+
+the LOCAL backend should the local database be inspected as part of a
+
+no-data investigation. Do not inspect the local database first, and do not
+
+treat it as a proxy for staging.
+
+
+
+\## When UI work requires an API that does not yet exist
+
+
+
+A. Implement the API locally.
+
+B. Test the API locally.
+
+C. Run backend tests.
+
+D. Commit the backend/API change.
+
+E. Deploy the API/backend change through the normal staging deployment
+
+&#x20;  process (Section 15, CI/CD) — never by applying a migration or patching
+
+&#x20;  a container on staging directly from this machine.
+
+F. Verify the deployed API against staging (read-only checks through the
+
+&#x20;  existing tunnel/SSH access are the established, pre-authorized diagnostic
+
+&#x20;  path for this — see Section 19, DIAGNOSTICS).
+
+G. Continue frontend UI work locally against the now-deployed staging
+
+&#x20;  API/data through the SSH tunnel.
+
+
+
+Do not skip straight to a frontend workaround (e.g. reintroducing an API
+
+capability limit as a stand-in for real data availability) when the actual
+
+gap is an undeployed backend change.
+
+
+
+\## Frontend deployment gate
+
+
+
+Deploy Web App frontend changes to staging only after: local implementation
+
+is complete; local Vitest/tsc/eslint/build all pass; the UI has been
+
+exercised locally; and, where real data is required, the local frontend has
+
+been verified against staging data through the SSH tunnel per this section.
+
+
+
+\## What this does not change
+
+
+
+Using the existing tunnel for read-only local UI verification (the GET
+
+requests the frontend itself already issues) is standing, pre-authorized
+
+diagnostic access. It does NOT authorize SSH'ing into staging to run
+
+arbitrary commands, applying migrations to staging, restarting staging
+
+services, or any write/administrative action — those still require fresh,
+
+explicit, per-operation authorization under Section 4.
+
+
+
+---
+
+
+
 \# 5. SECRETS
 
 

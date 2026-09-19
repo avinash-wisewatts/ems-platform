@@ -12,6 +12,7 @@
 grafana/.env
 grafana/live-stream.env
 app/live-telemetry.env
+compose.override.yaml
 
 ###############################################################################
 # Secrets & Credentials

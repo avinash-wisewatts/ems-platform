@@ -3,16 +3,27 @@
  * (Current Value -> Comparison -> Trend -> Status -> Evidence/Data Quality)
  * to what Demand actually has:
  *
- *   Current Value  -- GET /demand/current (analytics.demand_state; live)
+ *   Current Value  -- GET /demand/current (analytics.demand_state; live),
+ *                     current_demand_kw -- the latest calculated 15-minute
+ *                     demand interval, still updating. Presented together
+ *                     with Peak Power under one "Current Demand (kW)"
+ *                     heading (components/DemandCurrentAndMax.tsx, the same
+ *                     shared presentation Asset View's Demand tile uses).
  *   Comparison     -- OMITTED. No historical-comparison or contract-demand
  *                     basis has been approved for Demand (unlike Energy's
  *                     Q54-56); inventing one here would be a product
  *                     decision, not an implementation task.
- *   Trend + Peak   -- GET /demand (analytics.demand_intervals; historical).
- *                     Peak demand and peak timing are derived client-side
- *                     from the returned series (max of peak_power_kw),
- *                     the same client-side-derivation pattern Slice A uses
- *                     for its comparison -- no new backend aggregation.
+ *   Trend + Peak Power -- GET /demand (analytics.demand_intervals;
+ *                     historical). Peak Power and its occurrence time are
+ *                     derived client-side from the returned series (max of
+ *                     peak_power_kw, via findPeak below -- the maximum
+ *                     INSTANTANEOUS power sample seen in any interval in
+ *                     the period, deliberately NOT demand_kw -- see
+ *                     findPeak's own doc comment; Peak Power is never
+ *                     labelled "Demand"), the same client-side-derivation
+ *                     pattern Slice A uses for its comparison -- no new
+ *                     backend aggregation. The occurrence time is shown in
+ *                     the selected site's own configured timezone.
  *   Status         -- quality_status, translated to an approved MVP-5
  *                     customer label (see DEMAND_STATUS_LABELS below). NOT
  *                     a StatusBadge: StatusBadge represents comparison
@@ -54,6 +65,7 @@ import { planDemandRequest, type TimeRangePreset } from "../../time/ranges";
 import { HierarchyCrumb } from "../../components/HierarchyCrumb";
 import { TimeRangePicker } from "../../components/TimeRangePicker";
 import { ChartFrame, type ChartPoint } from "../../components/ChartFrame";
+import { DemandCurrentAndMax } from "../../components/DemandCurrentAndMax";
 import { FreshnessIndicator } from "../../components/FreshnessIndicator";
 import { InfoDisclosure } from "../../components/InfoDisclosure";
 import { Loading } from "../../components/states/Loading";
@@ -90,25 +102,50 @@ const DEMAND_STATUS_FALLBACK_EXPLANATION = "We can't currently provide a usable 
 /** Translates quality_status (or its absence -- no current-demand row at
  *  all) into the approved MVP-5 customer label. An unrecognized value
  *  defensively falls back to "Data unavailable" rather than ever leaking
- *  the raw technical string. */
-function demandStatusLabel(qualityStatus: string | null): string {
+ *  the raw technical string. Exported so Asset View's Demand section
+ *  reuses this exact translation instead of duplicating it -- the Asset
+ *  Demand API (migration 245) returns the identical quality_status
+ *  vocabulary as Site Demand. */
+export function demandStatusLabel(qualityStatus: string | null): string {
   if (qualityStatus === null) return DEMAND_STATUS_FALLBACK_LABEL;
   return DEMAND_STATUS_LABELS[qualityStatus] ?? DEMAND_STATUS_FALLBACK_LABEL;
 }
 
-function demandStatusExplanation(qualityStatus: string | null): string {
+export function demandStatusExplanation(qualityStatus: string | null): string {
   if (qualityStatus === null) return DEMAND_STATUS_FALLBACK_EXPLANATION;
   return DEMAND_STATUS_EXPLANATIONS[qualityStatus] ?? DEMAND_STATUS_FALLBACK_EXPLANATION;
 }
 
-function toChartPoints(series: DemandIntervalPoint[]): ChartPoint[] {
+/** Exported for the same reason as findPeak below -- Asset View's Demand
+ *  trend chart reuses this exact mapping (AssetDemandSeriesResponse.series
+ *  is DemandIntervalPoint[], the identical shape). */
+export function toChartPoints(series: DemandIntervalPoint[]): ChartPoint[] {
   return series.map((point) => ({ t: Date.parse(point.interval_start), value: point.demand_kw }));
 }
 
-/** Peak demand + when it occurred, derived client-side -- no backend
- *  aggregation beyond the raw interval series. Exported (MVP-3) so
- *  SiteOverview's Demand summary reuses this exact calculation instead of
- *  duplicating it -- no change to its behavior or this screen's contract. */
+/**
+ * Peak Power: the maximum INSTANTANEOUS power sample observed within any
+ * interval in the series, and when it occurred -- derived client-side, no
+ * backend aggregation beyond the raw interval series. Exported so Asset
+ * View's Demand tile, SiteOverview's Demand summary, MainDashboard, and
+ * SitePerformanceReportView all reuse this exact calculation instead of
+ * duplicating it.
+ *
+ * Evidence this is genuinely a different figure from Current Demand's
+ * demand_kw (read directly from the deployed schema/functions, not assumed
+ * from field names -- postgres/migrations/013_demand_calculation_
+ * processor.sql): `demand_kw` is the interval's own calculated demand
+ * value (energy-delta-derived average kW, time-weighted average kW, or a
+ * native meter register reading, depending on source method).
+ * `peak_power_kw` is a DIFFERENT, independent column populated only for
+ * ENERGY_COUNTER_DELTA/TIME_WEIGHTED_POWER sources
+ * (`max(active_power_total_w)/1000` over raw sub-interval telemetry
+ * samples within that interval) -- entirely NULL for METER_NATIVE-sourced
+ * rows. This function maxes peak_power_kw specifically -- the customer-
+ * facing "Peak Power" figure, deliberately never labelled "Demand"
+ * (components/DemandCurrentAndMax.tsx keeps the two distinct in both
+ * label and value).
+ */
 export function findPeak(series: DemandIntervalPoint[]): { kw: number; at: string } | null {
   let best: { kw: number; at: string } | null = null;
   for (const point of series) {
@@ -209,25 +246,21 @@ export function DemandOverview() {
 
       {status === "ready" && current && series ? (
         <>
-          {/* Current Value */}
+          {/* Current Value + Peak Power -- shared presentation with Asset
+              View's Demand tile (components/DemandCurrentAndMax.tsx). Peak
+              Power uses peak_power_kw (findPeak) -- see its own doc
+              comment for why that's deliberately not demand_kw. */}
           <section className="demand-current-value" data-testid="demand-current-value">
-            <h2>Current demand</h2>
+            <h2>Current Demand (kW)</h2>
             {current.has_data ? (
-              <p className="value">{current.current_demand_kw?.toFixed(1) ?? "—"} kW</p>
+              <DemandCurrentAndMax
+                currentDemandKw={current.current_demand_kw}
+                peakPower={peak}
+                siteTimezone={selectedSite.timezone}
+                testIdPrefix="demand"
+              />
             ) : (
               <NoDataYet message="No current demand reading yet." />
-            )}
-          </section>
-
-          {/* Peak (part of Trend, per the product requirement) */}
-          <section className="demand-peak" data-testid="demand-peak">
-            <h2>Peak demand this period</h2>
-            {peak ? (
-              <p>
-                {peak.kw.toFixed(1)} kW at {new Date(peak.at).toLocaleString()}
-              </p>
-            ) : (
-              <NoDataYet />
             )}
           </section>
 

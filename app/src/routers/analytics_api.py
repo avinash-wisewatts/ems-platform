@@ -15,6 +15,7 @@ Read-only endpoints consumed by the EMS web application:
     GET /api/v1/sites/{site_id}/demand                  (Slice B: demand)
     GET /api/v1/sites/{site_id}/demand/current           (Slice B: demand)
     GET /api/v1/sites/{site_id}/power-quality            (Slice B: PQ)
+    GET /api/v1/sites/{site_id}/energy/consumption/availability (Main Dashboard Energy Usage)
     GET /api/v1/sites/{site_id}/energy/consumption/evidence (Slice C: C2)
     GET /api/v1/sites/{site_id}/energy/consumption/typical-reference (Slice C)
     GET /api/v1/sites/{site_id}/telemetry-freshness      (MVP-4: Data Quality & Freshness)
@@ -154,6 +155,8 @@ from src.auth.dependencies import get_authenticated_portal_user
 from src.auth.models import AuthenticatedPortalUser
 from src.analytics_api_service import (
     ASSET_ENERGY_MAX_WINDOW,
+    ENERGY_PERIODIC_RESOLUTION_MAX_WINDOW,
+    ENERGY_PERIODIC_RESOLUTIONS,
     ENERGY_RESOLUTION_MAX_WINDOW,
     MEASUREMENT_RESOLUTION_MAX_WINDOW,
     POWER_QUALITY_RESOLUTION_MAX_WINDOW,
@@ -174,6 +177,7 @@ from src.analytics_api_service import (
     AlertSummary,
     MeasurementSeriesResponse,
     PowerQualityResponse,
+    SiteEnergyAvailabilityResponse,
     SitesResponse,
     SiteTelemetryFreshnessResponse,
     SpacesResponse,
@@ -191,6 +195,7 @@ from src.analytics_api_service import (
     build_energy_typical_reference_response,
     build_measurement_series_response,
     build_power_quality_response,
+    build_site_energy_availability_response,
     build_site_telemetry_freshness_response,
     build_sites_response,
     build_spaces_response,
@@ -203,8 +208,10 @@ from src.analytics_api_service import (
     fetch_site_assets,
     fetch_site_current_demand,
     fetch_site_demand_series,
+    fetch_site_energy_availability,
     fetch_site_energy_consumption,
     fetch_site_energy_consumption_evidence,
+    fetch_site_energy_consumption_periodic,
     fetch_alert_detail,
     fetch_site_alerts,
     fetch_site_energy_typical_reference,
@@ -328,7 +335,7 @@ async def list_sites(request: Request) -> SitesResponse:
 @router.get(
     "/sites/{site_id}/energy/consumption",
     response_model=EnergyConsumptionResponse,
-    summary="Site energy consumption series (mature persisted historian)",
+    summary="Site energy consumption series (mature persisted historian; 1w/1mo/1y are server-side aggregations of the 1d historian)",
     operation_id="getSiteEnergyConsumption",
     responses=_RESOURCE_RESPONSES,
 )
@@ -337,7 +344,7 @@ async def get_site_energy_consumption(
     site_id: UUID,
     resolution: str = Query(
         ...,
-        description="Time resolution. One of: 1h, 1d.",
+        description="Time resolution. One of: 1h, 1d, 1w, 1mo, 1y.",
     ),
     range_from: str = Query(
         ...,
@@ -350,17 +357,31 @@ async def get_site_energy_consumption(
         description="Exclusive ISO-8601 end of the window (UTC).",
     ),
 ) -> EnergyConsumptionResponse:
+    """1w/1mo/1y (migration 248) are NOT a separate persisted tier -- they
+    are server-side date_trunc aggregations of the SAME analytics.energy_
+    consumption_daily historian resolution=1d already reads, returned in
+    the exact same row shape. Their own window cap
+    (ENERGY_PERIODIC_RESOLUTION_MAX_WINDOW) is a separate, generous
+    engineering backstop -- it does not affect, and is not affected by,
+    ENERGY_RESOLUTION_MAX_WINDOW's existing 1h/1d entries, which every
+    other caller (evidence, typical-reference) still validates against
+    unchanged."""
+
     user = _require_portal_user(request)
 
+    max_window_by_resolution = {
+        **ENERGY_RESOLUTION_MAX_WINDOW,
+        **ENERGY_PERIODIC_RESOLUTION_MAX_WINDOW,
+    }
     try:
         resolved = validate_resolution(
-            resolution, tuple(ENERGY_RESOLUTION_MAX_WINDOW.keys())
+            resolution, tuple(max_window_by_resolution.keys())
         )
         dt_from, dt_to = parse_time_range(
             range_from,
             range_to,
             resolution=resolved,
-            max_window_by_resolution=ENERGY_RESOLUTION_MAX_WINDOW,
+            max_window_by_resolution=max_window_by_resolution,
         )
     except ApiContractError as exc:
         raise _contract_error(exc)
@@ -368,13 +389,22 @@ async def get_site_energy_consumption(
     if not await portal_user_can_access_site(user.portal_user_id, site_id):
         raise _not_found("Site")
 
-    rows = await fetch_site_energy_consumption(
-        portal_user_id=user.portal_user_id,
-        site_id=site_id,
-        dt_from=dt_from,
-        dt_to=dt_to,
-        resolution=resolved,
-    )
+    if resolved in ENERGY_PERIODIC_RESOLUTIONS:
+        rows = await fetch_site_energy_consumption_periodic(
+            portal_user_id=user.portal_user_id,
+            site_id=site_id,
+            dt_from=dt_from,
+            dt_to=dt_to,
+            resolution=resolved,
+        )
+    else:
+        rows = await fetch_site_energy_consumption(
+            portal_user_id=user.portal_user_id,
+            site_id=site_id,
+            dt_from=dt_from,
+            dt_to=dt_to,
+            resolution=resolved,
+        )
     return build_energy_consumption_response(
         site_id=site_id,
         resolution=resolved,
@@ -382,6 +412,31 @@ async def get_site_energy_consumption(
         dt_to=dt_to,
         rows=rows,
     )
+
+
+@router.get(
+    "/sites/{site_id}/energy/consumption/availability",
+    response_model=SiteEnergyAvailabilityResponse,
+    summary="Site energy consumption ACTUAL data availability (earliest/latest)",
+    operation_id="getSiteEnergyAvailability",
+    responses=_RESOURCE_RESPONSES,
+)
+async def get_site_energy_availability(
+    request: Request, site_id: UUID
+) -> SiteEnergyAvailabilityResponse:
+    """Migration 247. The site's real persisted earliest/latest energy data
+    -- NOT the query-window caps GET /energy/consumption itself enforces
+    (ENERGY_RESOLUTION_MAX_WINDOW is a per-request size limit, not a
+    data-availability fact). A UI date-range picker should bound its
+    selectable dates against THIS endpoint, never against those caps."""
+
+    user = _require_portal_user(request)
+
+    if not await portal_user_can_access_site(user.portal_user_id, site_id):
+        raise _not_found("Site")
+
+    row = await fetch_site_energy_availability(user.portal_user_id, site_id)
+    return build_site_energy_availability_response(site_id=site_id, row=row)
 
 
 @router.get(

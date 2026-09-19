@@ -20,6 +20,7 @@ const SELECTED_SITE_KEY = "ems.web.selectedSiteId";
 
 export type OrganizationGroup = {
   organization_id: string;
+  organization_name: string;
   sites: SiteSummary[];
 };
 
@@ -47,9 +48,17 @@ function groupByOrganization(sites: SiteSummary[]): OrganizationGroup[] {
   return [...map.entries()]
     .map(([organization_id, groupSites]) => ({
       organization_id,
+      // Every site in a bucket was grouped by this same organization_id, so
+      // they all carry the same organization_name -- take it from the first.
+      organization_name: groupSites[0]!.organization_name,
       sites: [...groupSites].sort((a, b) => a.site_name.localeCompare(b.site_name)),
     }))
-    .sort((a, b) => a.organization_id.localeCompare(b.organization_id));
+    // organization_name is a required field on the wire contract, but this
+    // sort must not crash the whole shell (no error boundary sits above
+    // TenantProvider) if it's ever absent -- e.g. a client running ahead of
+    // an old-contract backend during a rolling deploy. Falls back to the
+    // always-present organization_id so grouping/ordering stays stable.
+    .sort((a, b) => (a.organization_name || a.organization_id).localeCompare(b.organization_name || b.organization_id));
 }
 
 function readStoredSelection(): string | null {

@@ -63,4 +63,19 @@ describe("TenantProvider -- organization / site context from GET /api/v1/sites",
     await waitFor(() => expect(screen.getByTestId("status").textContent).toBe("ready"));
     expect(screen.getByTestId("selected").textContent).toBe("-");
   });
+
+  // Regression: a backend running the pre-organization_name contract (e.g.
+  // mid-rollout, or an older deployed version) omits organization_name from
+  // GET /api/v1/sites entirely. Grouping/sorting must degrade gracefully,
+  // never throw during render -- there is no error boundary above
+  // TenantProvider, so an uncaught error here blanks the whole app.
+  it("does not throw when a site is missing organization_name (old-contract backend)", async () => {
+    const sitesWithoutOrgName = {
+      sites: SITES_TWO_ORGS.sites.map(({ organization_name: _organization_name, ...rest }) => rest),
+    } as unknown as SitesResponse;
+    renderTenant(() => Promise.resolve(sitesWithoutOrgName));
+    await waitFor(() => expect(screen.getByTestId("status").textContent).toBe("ready"));
+    expect(screen.getByTestId("orgs").textContent).toBe("org-a,org-b");
+    expect(screen.getByTestId("siteCount").textContent).toBe("3");
+  });
 });

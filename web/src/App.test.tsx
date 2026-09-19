@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { AppRoutes } from "./router";
 import { UnauthenticatedError } from "./api/errors";
 import {
@@ -7,6 +7,7 @@ import {
   NO_SHELL_USER,
   renderWithProviders,
   SITES_ONE,
+  SITES_THREE_ORGS,
   SITES_TWO_ORGS,
   stubFetch,
   VIEWER_USER,
@@ -70,7 +71,14 @@ function stubHomeNoDataFetch() {
 }
 
 describe("application shell -- foundation routing, auth and tenant context", () => {
+  // A stored selection (used by the org-switch test below) must never leak
+  // into a neighbouring test's expectations about the picker/select flow.
+  beforeEach(() => window.sessionStorage.clear());
+
   it("renders the empty shell for an authenticated user with one accessible site", async () => {
+    // WiseWatts redesign: Bootstrap's "/" landing redirect now targets
+    // /dashboard (Main Dashboard), not /home (SiteOverview stays intact,
+    // reachable from the sidebar's Archive section) -- see Bootstrap.tsx.
     stubHomeNoDataFetch();
     renderWithProviders(<AppRoutes />, {
       session: () => Promise.resolve(ADMIN_USER),
@@ -78,9 +86,98 @@ describe("application shell -- foundation routing, auth and tenant context", () 
       initialEntries: ["/"],
     });
     await waitFor(() => expect(screen.getByTestId("app-shell")).toBeInTheDocument());
-    expect(screen.getByTestId("page-home")).toBeInTheDocument();
+    expect(screen.getByTestId("page-main-dashboard")).toBeInTheDocument();
     expect(screen.getByTestId("identity-name")).toHaveTextContent("Platform Admin");
     expect(screen.getByTestId("context-site")).toHaveTextContent("Alpha One");
+  });
+
+  it("shows the organization as static text (no dropdown) for a single-org user", async () => {
+    stubHomeNoDataFetch();
+    renderWithProviders(<AppRoutes />, {
+      session: () => Promise.resolve(ADMIN_USER),
+      sites: () => Promise.resolve(SITES_ONE),
+      initialEntries: ["/"],
+    });
+    await waitFor(() => expect(screen.getByTestId("app-shell")).toBeInTheDocument());
+    expect(screen.getByTestId("org-switcher-static")).toHaveTextContent("Org A");
+    expect(screen.queryByTestId("org-switcher-trigger")).not.toBeInTheDocument();
+    expect(screen.getByTestId("context-site")).toHaveTextContent("Org A: Alpha One");
+  });
+
+  it("lets a multi-org user switch organizations from the sidebar, which switches the selected site", async () => {
+    stubHomeNoDataFetch();
+    window.sessionStorage.setItem("ems.web.selectedSiteId", SITES_TWO_ORGS.sites[0]!.site_id);
+    renderWithProviders(<AppRoutes />, {
+      session: () => Promise.resolve(ADMIN_USER),
+      sites: () => Promise.resolve(SITES_TWO_ORGS),
+      initialEntries: ["/"],
+    });
+    await waitFor(() => expect(screen.getByTestId("app-shell")).toBeInTheDocument());
+    expect(screen.getByTestId("context-site")).toHaveTextContent("Org A: Alpha One");
+    expect(screen.getByTestId("org-switcher-trigger")).toHaveTextContent("Org A");
+
+    fireEvent.click(screen.getByTestId("org-switcher-trigger"));
+    fireEvent.click(screen.getByTestId("org-switcher-item-org-b"));
+
+    expect(screen.getByTestId("context-site")).toHaveTextContent("Org B: Bravo One");
+    expect(screen.getByTestId("org-switcher-trigger")).toHaveTextContent("Org B");
+    expect(screen.getByTestId("site-switcher-trigger")).toHaveTextContent("Bravo One");
+  });
+
+  it("lists every accessible organization and scopes the Site dropdown to whichever one is current", async () => {
+    stubHomeNoDataFetch();
+    window.sessionStorage.setItem("ems.web.selectedSiteId", SITES_THREE_ORGS.sites[0]!.site_id);
+    renderWithProviders(<AppRoutes />, {
+      session: () => Promise.resolve(ADMIN_USER),
+      sites: () => Promise.resolve(SITES_THREE_ORGS),
+      initialEntries: ["/"],
+    });
+    await waitFor(() => expect(screen.getByTestId("app-shell")).toBeInTheDocument());
+
+    // All three orgs the user has access to are listed, not just the current one.
+    fireEvent.click(screen.getByTestId("org-switcher-trigger"));
+    const orgList = screen.getByRole("listbox", { name: "Organizations" });
+    expect(within(orgList).getByTestId("org-switcher-item-org-a")).toBeInTheDocument();
+    expect(within(orgList).getByTestId("org-switcher-item-org-b")).toBeInTheDocument();
+    expect(within(orgList).getByTestId("org-switcher-item-org-c")).toBeInTheDocument();
+
+    // Switching to Org C (two sites) scopes the Site dropdown to exactly those two.
+    fireEvent.click(screen.getByTestId("org-switcher-item-org-c"));
+    expect(screen.getByTestId("site-switcher-trigger")).toHaveTextContent("Charlie One");
+    fireEvent.click(screen.getByTestId("site-switcher-trigger"));
+    const siteList = screen.getByRole("listbox", { name: "Sites" });
+    expect(within(siteList).getByText("Charlie One")).toBeInTheDocument();
+    expect(within(siteList).getByText("Charlie Two")).toBeInTheDocument();
+    expect(within(siteList).queryByText("Alpha One")).not.toBeInTheDocument();
+    expect(within(siteList).queryByText("Alpha Two")).not.toBeInTheDocument();
+    expect(within(siteList).queryByText("Bravo One")).not.toBeInTheDocument();
+
+    // Switching again to Org B (one site) re-scopes the Site dropdown to just that one.
+    fireEvent.click(screen.getByTestId("site-switcher-trigger")); // close the site panel first
+    fireEvent.click(screen.getByTestId("org-switcher-trigger"));
+    fireEvent.click(screen.getByTestId("org-switcher-item-org-b"));
+    expect(screen.getByTestId("site-switcher-trigger")).toHaveTextContent("Bravo One");
+    fireEvent.click(screen.getByTestId("site-switcher-trigger"));
+    const siteListAfterB = screen.getByRole("listbox", { name: "Sites" });
+    expect(within(siteListAfterB).getByText("Bravo One")).toBeInTheDocument();
+    expect(within(siteListAfterB).queryByText("Charlie One")).not.toBeInTheDocument();
+  });
+
+  it("falls back to organization_id (never a blank label) when a backend omits organization_name", async () => {
+    stubHomeNoDataFetch();
+    const oldContractSites = {
+      sites: SITES_TWO_ORGS.sites.map(({ organization_name: _organization_name, ...rest }) => rest),
+    } as unknown as typeof SITES_TWO_ORGS;
+    window.sessionStorage.setItem("ems.web.selectedSiteId", oldContractSites.sites[0]!.site_id);
+    renderWithProviders(<AppRoutes />, {
+      session: () => Promise.resolve(ADMIN_USER),
+      sites: () => Promise.resolve(oldContractSites),
+      initialEntries: ["/"],
+    });
+    await waitFor(() => expect(screen.getByTestId("app-shell")).toBeInTheDocument());
+    expect(screen.getByTestId("org-switcher-trigger")).toHaveTextContent("org-a");
+    fireEvent.click(screen.getByTestId("org-switcher-trigger"));
+    expect(screen.getByTestId("org-switcher-item-org-b")).toHaveTextContent("org-b");
   });
 
   it("routes an authenticated user with several sites to the site picker first", async () => {
@@ -90,8 +187,11 @@ describe("application shell -- foundation routing, auth and tenant context", () 
       initialEntries: ["/"],
     });
     await waitFor(() => expect(screen.getByTestId("page-select-context")).toBeInTheDocument());
-    // organizations are derived from the (already scope-filtered) site list
-    expect(screen.getByText("Bravo One")).toBeInTheDocument();
+    // organizations are derived from the (already scope-filtered) site list.
+    // Scoped to the page itself: the WiseWatts redesign's sidebar also has
+    // its own site search/switcher (visible shell-wide, including here),
+    // so "Bravo One" now legitimately appears twice on this screen.
+    expect(within(screen.getByTestId("page-select-context")).getByText("Bravo One")).toBeInTheDocument();
   });
 
   it("shows the loading state while the session resolves", () => {

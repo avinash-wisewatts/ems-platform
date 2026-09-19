@@ -8,6 +8,7 @@ function site(overrides: Partial<SiteSummary> = {}): SiteSummary {
   return {
     site_id: "site-1",
     organization_id: "org-1",
+    organization_name: "Org 1",
     site_code: "UNIT2",
     site_name: "Unit 2",
     timezone: "Asia/Kolkata",

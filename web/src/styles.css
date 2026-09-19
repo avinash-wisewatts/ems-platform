@@ -1,23 +1,43 @@
+/*
+ * WiseWatts EMS -- design tokens.
+ *
+ * The generic tokens (--bg/--panel/--line/--text/--muted/--accent/--good/
+ * --gap/--estimated/--invalid/--partial) are the SAME names every existing
+ * screen (Energy/Demand/Power Quality/Spaces/Assets/Reports/Alerts/...)
+ * already reads via var(...) -- only their VALUES change here, to the
+ * WiseWatts brand light theme. No component file needed editing for the
+ * re-theme; every existing page inherits it automatically.
+ *
+ * --ww-* tokens are new, used by the redesigned shell (AppLayout) and the
+ * new Main Dashboard only.
+ */
 :root {
-  --bg: #0f1116;
-  --panel: #171a21;
-  --line: #262b36;
-  --text: #e6e9ef;
-  --muted: #9aa4b2;
-  --accent: #4c8dff;
-  --good: #3fb950;
-  --gap: #d29922;
-  --estimated: #58a6ff;
-  --invalid: #f85149;
-  --partial: #a371f7;
-  color-scheme: dark;
+  --ww-navy: #05245b;
+  --ww-navy-700: #0a3374;
+  --ww-navy-600: #0f4694;
+  --ww-teal: #03a9a0;
+  --ww-teal-600: #028f87;
+  --ww-orange: #ff9966;
+
+  --bg: #f3f5f9;
+  --panel: #ffffff;
+  --line: #e2e8f0;
+  --text: #16212e;
+  --muted: #64748b;
+  --accent: #03a9a0;
+  --good: #16a34a;
+  --gap: #d97706;
+  --estimated: #2563eb;
+  --invalid: #dc2626;
+  --partial: #7c3aed;
+  color-scheme: light;
 }
 
 * { box-sizing: border-box; }
 
 body {
   margin: 0;
-  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font: 14px/1.5 "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   background: var(--bg);
   color: var(--text);
 }
@@ -25,41 +45,256 @@ body {
 button {
   font: inherit;
   color: inherit;
-  background: #222732;
+  background: #fff;
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: 6px 12px;
   cursor: pointer;
 }
 button:disabled { opacity: 0.45; cursor: not-allowed; }
-button[aria-pressed="true"] { border-color: var(--accent); color: #fff; }
+button[aria-pressed="true"] { border-color: var(--accent); color: var(--ww-navy); background: #e6f7f6; }
 
-a { color: var(--accent); }
+a { color: var(--ww-teal-600); }
+
+.visually-hidden {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Shell -- header                                                         */
+/* ---------------------------------------------------------------------- */
 
 .app-shell { min-height: 100vh; display: flex; flex-direction: column; }
-.app-shell__header {
-  display: flex; align-items: center; gap: 24px;
-  padding: 10px 18px; border-bottom: 1px solid var(--line); background: var(--panel);
-}
-.app-shell__brand { display: flex; align-items: center; gap: 10px; font-weight: 600; }
-.app-shell__brand-mark {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 28px; height: 28px; border-radius: 6px; background: var(--accent); color: #fff; font-size: 12px;
-}
-.app-shell__context { color: var(--muted); }
-.app-shell__identity { margin-left: auto; display: flex; align-items: center; gap: 10px; }
-.app-shell__role { color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; font-size: 12px; }
-.app-shell__body { display: flex; flex: 1; }
-.app-shell__nav { width: 240px; border-right: 1px solid var(--line); padding: 14px; background: var(--panel); }
-.app-shell__nav ul { list-style: none; margin: 0 0 12px; padding: 0; }
-.app-shell__nav a { display: block; padding: 8px 10px; border-radius: 6px; text-decoration: none; }
-.app-shell__nav a.active { background: #222732; }
-.app-shell__nav-secondary { border-top: 1px solid var(--line); padding-top: 12px !important; }
-.app-shell__content { flex: 1; padding: 22px; }
 
-.page h1 { margin-top: 0; }
+.app-shell__header {
+  display: flex; align-items: center; gap: 16px;
+  padding: 10px 20px; background: var(--ww-navy); color: #fff;
+  position: sticky; top: 0; z-index: 20;
+}
+.app-shell__brand { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: 0.03em; }
+/* logo.svg is the full lockup (mark + "WISEWATTS SOLUTIONS" wordmark), not
+   a small square icon -- sized taller so the baked-in text stays legible.
+   Its wordmark is filled navy, matching this header's own background, so
+   the chip gives it a light backing rather than disappearing into it. */
+.app-shell__brand-mark-chip {
+  display: inline-flex; align-items: center; background: #fff; border-radius: 6px; padding: 4px 10px;
+}
+.app-shell__brand-mark--logo { height: 36px; width: auto; display: block; }
+.app-shell__brand-mark--fallback {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: 7px;
+  background: linear-gradient(135deg, var(--ww-teal), var(--ww-orange));
+  color: #fff; font-size: 14px;
+}
+
+.app-shell__context {
+  margin-left: 12px; color: rgba(255, 255, 255, 0.7); font-size: 13px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.app-shell__header-actions { margin-left: auto; display: flex; align-items: center; gap: 14px; }
+
+.app-shell__alerts-bell {
+  position: relative; display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; border-radius: 6px; color: #fff; text-decoration: none;
+}
+.app-shell__alerts-bell:hover { background: rgba(255, 255, 255, 0.1); }
+.app-shell__alerts-count {
+  position: absolute; top: -2px; right: -2px;
+  background: var(--ww-orange); color: #26150a;
+  font-size: 10px; font-weight: 700; line-height: 1;
+  min-width: 16px; height: 16px; padding: 0 3px; border-radius: 999px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+
+.user-menu { position: relative; }
+.user-menu__trigger {
+  display: flex; align-items: center; gap: 10px;
+  background: transparent; border: none; color: #fff; padding: 4px 6px; border-radius: 8px;
+}
+.user-menu__trigger:hover { background: rgba(255, 255, 255, 0.1); }
+.user-menu__avatar {
+  width: 32px; height: 32px; border-radius: 50%;
+  background: rgba(255, 255, 255, 0.16); color: #fff;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700;
+}
+.user-menu__identity { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.25; }
+.user-menu__identity > span:first-child { font-weight: 600; font-size: 13px; }
+.user-menu__datetime { font-size: 11px; color: rgba(255, 255, 255, 0.65); }
+.user-menu__chevron { font-size: 11px; color: rgba(255, 255, 255, 0.65); }
+.user-menu__panel {
+  position: absolute; right: 0; top: calc(100% + 8px); min-width: 180px;
+  background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: 0 12px 28px rgba(5, 36, 91, 0.18); padding: 10px; z-index: 30;
+}
+.user-menu__role {
+  margin: 0 0 8px; color: var(--muted); font-size: 12px;
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.user-menu__panel button { width: 100%; }
+
+/* ---------------------------------------------------------------------- */
+/* Shell -- sidebar                                                        */
+/* ---------------------------------------------------------------------- */
+
+.app-shell__body { display: flex; flex: 1; min-height: 0; }
+
+.app-shell__sidebar {
+  width: 272px; flex: 0 0 auto; background: var(--ww-navy); color: #fff;
+  display: flex; flex-direction: column; overflow-y: auto;
+  transition: width 0.15s ease;
+}
+.app-shell--collapsed .app-shell__sidebar { width: 64px; }
+.app-shell--collapsed .app-shell__field,
+.app-shell--collapsed .app-shell__archive-wrapper,
+.app-shell--collapsed .app-shell__nav-label,
+.app-shell--collapsed .app-shell__nav-badge { display: none; }
+/* The collapse toggle lives inside .app-shell__site-panel-header, which
+   must stay visible (and centered) even while collapsed -- otherwise there
+   would be no way to expand the sidebar again. */
+.app-shell--collapsed .app-shell__site-panel-header { justify-content: center; }
+.app-shell--collapsed .app-shell__site-panel { padding-left: 0; padding-right: 0; }
+
+.app-shell__site-panel { padding: 16px 16px 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.12); }
+.app-shell__site-panel-header {
+  display: flex; align-items: center; justify-content: flex-end;
+  margin-bottom: 10px;
+}
+
+/* The sidebar collapse/expand toggle -- moved here (from the top header)
+   to sit where the old pin control used to be. */
+.app-shell__collapse-toggle {
+  flex: 0 0 auto;
+  background: transparent; border: 1px solid rgba(255, 255, 255, 0.25); color: #fff;
+  width: 28px; height: 28px; padding: 0; border-radius: 6px; font-size: 14px; line-height: 1;
+}
+.app-shell__collapse-toggle:hover { background: rgba(255, 255, 255, 0.1); }
+.app-shell__collapse-toggle[aria-pressed="true"] { border-color: var(--ww-teal); color: var(--ww-teal); background: transparent; }
+
+.app-shell__field { margin-bottom: 10px; }
+.app-shell__field:last-child { margin-bottom: 0; }
+.app-shell__field-label {
+  display: block; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+  color: rgba(255, 255, 255, 0.5); margin-bottom: 6px;
+}
+
+.site-switcher, .org-switcher { position: relative; }
+
+.org-switcher--static {
+  padding: 8px 10px; border-radius: 6px; border: 1px solid transparent;
+  font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.site-switcher__trigger, .org-switcher__trigger {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06); color: #fff; text-align: left;
+}
+.site-switcher__trigger:hover, .org-switcher__trigger:hover { background: rgba(255, 255, 255, 0.1); }
+.site-switcher__trigger[aria-expanded="true"], .org-switcher__trigger[aria-expanded="true"] { border-color: var(--ww-teal); }
+.site-switcher__trigger-label, .org-switcher__trigger-label {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500;
+}
+.site-switcher__chevron, .org-switcher__chevron { color: rgba(255, 255, 255, 0.6); font-size: 11px; flex: 0 0 auto; }
+
+.org-switcher__list {
+  position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 25;
+  background: var(--ww-navy-700); border: 1px solid rgba(255, 255, 255, 0.16); border-radius: 8px;
+  padding: 8px; box-shadow: 0 16px 32px rgba(0, 0, 0, 0.35);
+  list-style: none; margin: 0; max-height: 220px; overflow-y: auto;
+}
+.org-switcher__list button {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 100%; text-align: left; background: transparent; border: none; color: rgba(255, 255, 255, 0.85);
+  padding: 7px 8px; border-radius: 6px; font-size: 13px;
+}
+.org-switcher__list button:hover { background: rgba(255, 255, 255, 0.08); }
+.org-switcher__list button.is-selected { background: rgba(3, 169, 160, 0.25); color: #fff; font-weight: 600; }
+.org-switcher__item-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.org-switcher__check { color: var(--ww-teal); font-weight: 700; flex: 0 0 auto; }
+
+.site-switcher__panel {
+  position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 25;
+  background: var(--ww-navy-700); border: 1px solid rgba(255, 255, 255, 0.16); border-radius: 8px;
+  padding: 8px; box-shadow: 0 16px 32px rgba(0, 0, 0, 0.35);
+}
+.site-switcher__panel input[type="search"] {
+  width: 100%; padding: 7px 10px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.08); color: #fff; margin-bottom: 8px;
+}
+.site-switcher__panel input[type="search"]::placeholder { color: rgba(255, 255, 255, 0.5); }
+.site-switcher__list { list-style: none; margin: 0; padding: 0; max-height: 220px; overflow-y: auto; }
+.site-switcher__list button {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 100%; text-align: left; background: transparent; border: none; color: rgba(255, 255, 255, 0.85);
+  padding: 7px 8px; border-radius: 6px; font-size: 13px;
+}
+.site-switcher__list button:hover { background: rgba(255, 255, 255, 0.08); }
+.site-switcher__list button.is-selected { background: rgba(3, 169, 160, 0.25); color: #fff; font-weight: 600; }
+.site-switcher__item-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.site-switcher__check { color: var(--ww-teal); font-weight: 700; flex: 0 0 auto; }
+.site-switcher__empty { color: rgba(255, 255, 255, 0.5); font-size: 12px; padding: 6px 8px; }
+
+.app-shell__primary-nav { padding: 10px 10px; }
+.app-shell__primary-nav ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.app-shell__primary-nav a {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 12px; border-radius: 8px; text-decoration: none;
+  color: rgba(255, 255, 255, 0.85); font-size: 13.5px; font-weight: 500;
+  position: relative;
+}
+.app-shell__primary-nav a:hover { background: rgba(255, 255, 255, 0.08); }
+.app-shell__primary-nav a.active { background: var(--ww-teal); color: #fff; }
+.app-shell__nav-label { flex: 1; }
+
+.app-shell__nav-badge {
+  background: var(--ww-orange); color: #26150a; font-size: 11px; font-weight: 700;
+  min-width: 18px; height: 18px; padding: 0 4px; border-radius: 999px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+
+.app-shell__archive-wrapper { margin-top: auto; padding: 10px; border-top: 1px solid rgba(255, 255, 255, 0.12); }
+.app-shell__archive summary {
+  cursor: pointer; list-style: none; display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; border-radius: 8px; color: rgba(255, 255, 255, 0.7); font-size: 13px; font-weight: 600;
+}
+.app-shell__archive summary::-webkit-details-marker { display: none; }
+.app-shell__archive summary:hover { background: rgba(255, 255, 255, 0.08); }
+.app-shell__archive-hint { margin: 4px 12px 8px; font-size: 11.5px; color: rgba(255, 255, 255, 0.5); }
+.app-shell__archive nav { padding: 0 4px 6px; }
+.app-shell__archive .app-shell__nav-section { list-style: none; margin: 0 0 10px; padding: 0; }
+.app-shell__archive .app-shell__nav-section-label {
+  padding: 4px 12px; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: rgba(255, 255, 255, 0.4);
+}
+.app-shell__archive a {
+  display: block; padding: 7px 12px; border-radius: 6px; text-decoration: none;
+  color: rgba(255, 255, 255, 0.72); font-size: 13px;
+}
+.app-shell__archive a:hover { background: rgba(255, 255, 255, 0.08); }
+.app-shell__archive a.active { background: rgba(255, 255, 255, 0.14); color: #fff; }
+.app-shell__nav-secondary { list-style: none; margin: 0; padding: 8px 0 0; border-top: 1px solid rgba(255, 255, 255, 0.1); }
+
+.app-shell__content { flex: 1; min-width: 0; padding: 22px; }
+
+/* ---------------------------------------------------------------------- */
+/* Generic page chrome (unchanged structure, re-themed)                    */
+/* ---------------------------------------------------------------------- */
+
+.page h1 { margin-top: 0; color: var(--ww-navy); }
 .page--message { max-width: 520px; }
 .hint { color: var(--muted); }
+
+.hierarchy-crumb { font-size: 13px; color: var(--muted); margin-bottom: 10px; }
+.hierarchy-crumb a { color: var(--muted); text-decoration: none; }
+.hierarchy-crumb a:hover { color: var(--ww-teal-600); text-decoration: underline; }
 
 .time-range-picker { display: inline-flex; gap: 6px; flex-wrap: wrap; }
 
@@ -69,7 +304,7 @@ a { color: var(--accent); }
 .site-list__item { display: flex; justify-content: space-between; width: 100%; text-align: left; }
 .site-list__code { color: var(--muted); }
 
-.state { padding: 18px; border: 1px dashed var(--line); border-radius: 8px; }
+.state { padding: 18px; border: 1px dashed var(--line); border-radius: 8px; background: var(--panel); }
 .state--error { border-style: solid; border-color: var(--invalid); }
 .state--no-data { color: var(--muted); }
 .state__title { font-weight: 600; margin: 0 0 6px; }
@@ -81,7 +316,7 @@ a { color: var(--accent); }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-.chart-frame { margin: 0; }
+.chart-frame { margin: 0; color: var(--ww-teal); }
 
 .quality { font-size: 11px; letter-spacing: 0.04em; border-radius: 4px; padding: 1px 6px; border: 1px solid var(--line); }
 .quality--good { color: var(--good); }
@@ -93,18 +328,240 @@ a { color: var(--accent); }
 
 .freshness { font-size: 12px; color: var(--muted); }
 
-.info-disclosure { display: inline-block; margin-left: 4px; vertical-align: middle; }
+/* position: relative anchors the floating explanation below (see
+   .info-disclosure__explanation) -- shown on hover/focus now, not a
+   click-toggle, so it must float rather than push surrounding content
+   down, or it would visibly reflow the page every time the pointer merely
+   passes over the icon. */
+.info-disclosure { display: inline-block; position: relative; margin-left: 4px; vertical-align: middle; }
 .info-disclosure__trigger {
   display: inline-flex; align-items: center; justify-content: center;
   width: 18px; height: 18px; padding: 0; border-radius: 50%; cursor: pointer;
-  background: transparent; border: 1px solid var(--line);
-  color: var(--muted); font-size: 11px; line-height: 1;
+  background: transparent; border: none;
+  color: var(--muted);
 }
+.info-disclosure__icon { width: 15px; height: 15px; }
 .info-disclosure__trigger:hover,
 .info-disclosure__trigger:focus-visible,
-.info-disclosure__trigger[aria-expanded="true"] { color: var(--text); border-color: var(--muted); }
+.info-disclosure__trigger[aria-expanded="true"] { color: var(--ww-navy-600); background: #eef2f7; }
 .info-disclosure__explanation {
-  display: block; margin-top: 4px; max-width: 320px;
+  position: absolute; z-index: 20; top: calc(100% + 6px); left: 0;
+  display: block; width: max-content; max-width: 280px;
+  padding: 8px 10px; border-radius: 6px; border: 1px solid var(--line);
+  background: var(--panel); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
   font-size: 12px; color: var(--muted);
 }
 .info-disclosure__explanation[hidden] { display: none; }
+
+.status-badge { font-size: 12px; border-radius: 999px; padding: 2px 10px; border: 1px solid var(--line); }
+.status-badge--higher { color: var(--invalid); border-color: var(--invalid); }
+.status-badge--lower { color: var(--good); border-color: var(--good); }
+.status-badge--unchanged { color: var(--muted); }
+.status-badge--unknown { color: var(--muted); }
+.status-badge__basis { color: var(--muted); }
+
+/* ---------------------------------------------------------------------- */
+/* Main Dashboard                                                          */
+/* ---------------------------------------------------------------------- */
+
+.page--main-dashboard .dashboard-header {
+  display: flex; align-items: flex-start; gap: 14px; margin: 4px 0 20px;
+}
+.dashboard-header__icon {
+  width: 44px; height: 44px; border-radius: 10px; flex: 0 0 auto;
+  background: #eef2ff; color: var(--ww-navy);
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.dashboard-header__identity { flex: 1; min-width: 0; }
+.page--main-dashboard h1 { margin: 0; font-size: 22px; }
+.dashboard-header__subtitle { margin: 4px 0 0; color: var(--muted); font-size: 13.5px; }
+
+.dashboard-header__status {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 8px; flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.status-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12.5px; font-weight: 600; white-space: nowrap;
+  padding: 4px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel);
+}
+button.status-pill { font-family: inherit; cursor: pointer; }
+.status-pill--loading { color: var(--muted); font-weight: 500; }
+.status-pill--muted { color: var(--muted); font-weight: 500; background: transparent; border-color: transparent; }
+.status-pill--error { color: var(--invalid); border-color: var(--invalid); background: #fef2f2; }
+.status-pill--unknown { color: var(--muted); font-weight: 500; border-style: dashed; }
+.status-pill--healthy { color: var(--good); border-color: var(--good); background: #f0fdf4; }
+.status-pill--attention { color: var(--gap); border-color: var(--gap); background: #fffbeb; }
+.status-pill--insufficient { color: var(--muted); border-style: dashed; }
+.status-pill__dot {
+  width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: 0 0 auto;
+}
+
+.dashboard-kpis {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin-bottom: 16px;
+}
+
+.kpi-card, .dashboard-card {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px;
+}
+.kpi-card h2, .dashboard-card h2 {
+  margin: 0 0 12px; font-size: 13.5px; font-weight: 600; color: var(--muted);
+  text-transform: none;
+}
+.kpi-card__link { float: right; color: var(--muted); text-decoration: none; font-size: 16px; }
+
+/* .value is the same "prominent current figure" treatment as
+   .kpi-card__value -- shared by design, not by accident: Energy's and
+   Demand's current-value figures (Energy Overview, Demand Overview, and
+   both of their Asset View kpi-card tiles) must all read with the same
+   visual weight, so this one rule backs every one of them. */
+.kpi-card__value, .value { margin: 0; font-size: 30px; font-weight: 700; color: var(--ww-navy); line-height: 1.1; }
+
+.demand-current-caption { margin: 6px 0 0; }
+.demand-peak { margin-top: 14px; }
+.demand-peak__label { display: block; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: none; }
+.demand-peak__value { display: block; margin-top: 2px; font-size: 15px; font-weight: 600; color: var(--text); }
+.kpi-card__unit { font-size: 15px; font-weight: 500; color: var(--muted); }
+
+.kpi-card__delta { margin: 10px 0 0; font-size: 13px; display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
+.kpi-card__delta-figure { font-weight: 700; }
+.kpi-card__delta--lower .kpi-card__delta-figure { color: var(--good); }
+.kpi-card__delta--higher .kpi-card__delta-figure { color: var(--invalid); }
+.kpi-card__delta--unchanged .kpi-card__delta-figure { color: var(--muted); }
+.kpi-card__delta-basis { color: var(--muted); }
+.kpi-card__delta--unknown { color: var(--muted); }
+
+.kpi-card__stats { display: flex; gap: 26px; margin: 0; flex-wrap: wrap; }
+.kpi-card__stats dt { margin: 0 0 4px; font-size: 12px; color: var(--muted); }
+.kpi-card__stats dd { margin: 0; font-size: 20px; font-weight: 700; color: var(--ww-navy); }
+.kpi-card__stat-unavailable {
+  font-size: 13px !important; font-weight: 500 !important; color: var(--muted) !important; font-style: italic;
+}
+
+.dashboard-card { margin-bottom: 16px; }
+.dashboard-card__header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.dashboard-card__header h2 { margin: 0; }
+.dashboard-card__note { margin: 12px 0 0; font-size: 12.5px; color: var(--muted); }
+.load-trend__range select {
+  padding: 6px 10px; border-radius: 6px; border: 1px solid var(--line); background: #fff; color: var(--text);
+}
+.live-params__stats { gap: 34px; }
+
+/* Energy Usage -- same modern input/select/button treatment as Load
+   Trend's own .load-trend__range select above (border/radius/padding/
+   typography), all on ONE horizontal line: [From] -> [To] [Apply]
+   [Resolution], right-aligned with and compact against the card heading. */
+.energy-usage__controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.energy-usage__date-sep { color: var(--muted); }
+.energy-usage__date-field input,
+.energy-usage__resolution select {
+  padding: 6px 10px; border-radius: 6px; border: 1px solid var(--line); background: #fff; color: var(--text);
+  font-size: 13.5px; font-family: inherit;
+}
+.energy-usage__date-field input:disabled { opacity: 0.55; cursor: not-allowed; }
+.energy-usage__apply {
+  padding: 6px 14px; border-radius: 6px; border: 1px solid var(--ww-navy-600); background: var(--ww-navy-600);
+  color: #fff; font-size: 13.5px; font-weight: 600; cursor: pointer;
+}
+.energy-usage__apply:hover:not(:disabled) { background: var(--ww-navy); }
+.energy-usage__apply:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ---------------------------------------------------------------------- */
+/* Asset View                                                              */
+/* ---------------------------------------------------------------------- */
+
+.asset-view-toolbar {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  margin: 4px 0 18px;
+}
+.asset-view-filters { display: flex; gap: 12px; flex-wrap: wrap; }
+.asset-view-filter { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.asset-view-filter select,
+.asset-view-time select {
+  padding: 7px 10px; border-radius: 6px; border: 1px solid var(--line); background: #fff; color: var(--text);
+  min-width: 180px; font-size: 13.5px;
+}
+.asset-view-filter select:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* Power Trend / Demand chart time-range selectors -- the same modern
+   control treatment as the filters above (border/radius/padding/
+   typography), not the bare native <select> look, so every dropdown on
+   this screen feels like one design system. Scoped via .page--asset-view
+   since .dashboard-card__header is also used by MainDashboard, which this
+   must not affect. */
+.page--asset-view .dashboard-card__header select {
+  padding: 7px 10px; border-radius: 6px; border: 1px solid var(--line); background: #fff; color: var(--text);
+  font-size: 13.5px;
+}
+
+.asset-view-time { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.asset-view-last-updated { margin: 0; font-size: 12px; color: var(--muted); }
+
+.asset-detail-panel {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  padding: 16px 20px; margin-bottom: 16px;
+}
+.asset-detail-panel h1 { margin: 0; font-size: 19px; }
+.asset-detail-panel__meta { margin: 6px 0 0; font-size: 13px; color: var(--muted); }
+
+/* Compact tiles -- a narrower minimum column width and smaller gap/padding
+   than the generic .dashboard-kpis grid (MainDashboard etc., unaffected)
+   so more tiles fit per row on this screen specifically. Capped (not 1fr)
+   so a tile's width tracks its own content instead of stretching to fill
+   the row and leaving empty space to the right of that content;
+   justify-content: start packs the tiles themselves to the left rather
+   than spreading them across the row. align-items: stretch (the default,
+   stated explicitly) keeps every card in the same row the same height. */
+.asset-view-kpis {
+  grid-template-columns: repeat(auto-fit, minmax(170px, 210px));
+  justify-content: start; gap: 12px; align-items: stretch;
+}
+
+/* Energy + Demand -- this screen's two headline KPIs, given stronger
+   visual weight (border/heading) via kpi-card--primary, but now the same
+   width as every other tile in the row (see .asset-view-kpis above) since
+   they share one grid; their own delta/Max-Demand lines wrap onto a
+   second line at this width, same as any other compact card. */
+.asset-view-kpis .kpi-card { padding: 10px 14px; }
+/* Tighter heading-to-content gap than the shared 12px (.kpi-card h2),
+   scoped to this screen only -- the shared rule itself is unchanged. */
+.asset-view-kpis .kpi-card h2 { margin-bottom: 6px; }
+.kpi-card--primary { border-color: var(--ww-navy-600); box-shadow: 0 1px 3px rgba(5, 36, 91, 0.08); }
+/* display: flex + white-space: nowrap keep the heading text and its
+   InfoDisclosure icon (Current Demand / Energy) as one unbreakable row --
+   at this tile's compact width, plain inline layout was wrapping the icon
+   alone onto its own line below the text. Trimmed icon size/spacing
+   (scoped here, not the shared InfoDisclosure rules other screens use)
+   buys back the few px that combination needs to fit. */
+.kpi-card--primary h2 {
+  color: var(--ww-navy); font-weight: 700; font-size: 14px;
+  display: flex; align-items: center; gap: 3px; white-space: nowrap;
+}
+.kpi-card--primary .info-disclosure { margin-left: 0; }
+.kpi-card--primary .info-disclosure__trigger { width: 15px; height: 15px; }
+.kpi-card--primary .info-disclosure__icon { width: 12px; height: 12px; }
+.kpi-card__evidence { margin-top: 10px; display: flex; align-items: center; gap: 2px; }
+/* Tighter than .kpi-card__delta's/.demand-peak's own shared 10px/14px top
+   margin (MainDashboard, SiteOverview, and Site Demand's Peak Power line
+   also use those two classes) -- scoped to kpi-card--primary (exclusively
+   Asset View's Energy/Demand tiles) rather than the shared rule itself. */
+.kpi-card--primary .kpi-card__delta { margin-top: 6px; }
+.kpi-card--primary .demand-peak { margin-top: 8px; }
+
+/* live-param-card is exclusively an Asset View class (the electrical
+   parameter tiles), so its own rules below are inherently scoped. */
+.live-param-card__total { font-size: 24px; }
+/* Each phase (P1/P2/P3) sits directly below the Total value as one
+   compact block -- minimal top margin, and minimal padding between the
+   rows themselves -- rather than spread across the tile's height. No
+   separator rule between them, kept deliberately calm/quiet since these
+   are secondary to the Total reading above. */
+.live-param-card__phases { margin: 3px 0 0; font-size: 12.5px; color: var(--muted); }
+/* Label and value sit close together (a small fixed gap), not stretched to
+   opposite ends of the row via justify-content: space-between -- that
+   made the gap as wide as the tile itself, which read as an odd amount of
+   empty space between e.g. "P1" and its value. */
+.live-param-card__phases div { display: flex; align-items: baseline; gap: 24px; padding: 1px 0; }
+.live-param-card__phases dt { font-weight: 500; }
+.live-param-card__phases dd { margin: 0; color: var(--text); font-weight: 600; }

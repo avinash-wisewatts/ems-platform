@@ -45,6 +45,31 @@ ENERGY_RESOLUTION_MAX_WINDOW: dict[str, timedelta] = {
     "1d": timedelta(days=366),
 }
 
+# Migration 248. Weekly/Monthly/Yearly are server-side aggregations of the
+# SAME analytics.energy_consumption_daily historian ENERGY_RESOLUTION_MAX_
+# WINDOW["1d"] already reads -- deliberately a SEPARATE dict, not merged
+# into ENERGY_RESOLUTION_MAX_WINDOW, so this widened window has no effect on
+# GET .../energy/consumption/evidence or /typical-reference, which validate
+# resolution against ENERGY_RESOLUTION_MAX_WINDOW alone and have no periodic
+# counterpart. The 10-year figure is an engineering safety backstop only --
+# analytics.energy_consumption_daily itself has no retention policy, and a
+# periodic response's row count scales with bucket count (~520 weeks / ~120
+# months / ~10 years for this cap), not with raw day count, so it stays
+# small regardless. The PRODUCT decision of which dates are actually
+# selectable remains GET .../energy/consumption/availability (migration
+# 247) alone -- this cap is never that mechanism.
+ENERGY_PERIODIC_RESOLUTIONS: tuple[str, ...] = ("1w", "1mo", "1y")
+ENERGY_PERIODIC_RESOLUTION_MAX_WINDOW: dict[str, timedelta] = {
+    "1w": timedelta(days=3660),
+    "1mo": timedelta(days=3660),
+    "1y": timedelta(days=3660),
+}
+_ENERGY_PERIODIC_RESOLUTION_TO_SQL_PERIOD: dict[str, str] = {
+    "1w": "week",
+    "1mo": "month",
+    "1y": "year",
+}
+
 # Slice B -- Demand (Site and Asset). No maximum query-window: the previous
 # 31-day cap (both here and for Asset Demand) was an artificial API-layer
 # restriction carried over from Energy's 1h-tier bound, not a demonstrated
@@ -174,6 +199,23 @@ class EnergyConsumptionResponse(BaseModel):
     range_to: datetime = Field(alias="to")
     no_data: bool
     series: list[EnergyConsumptionPoint]
+
+
+class SiteEnergyAvailabilityResponse(BaseModel):
+    """Migration 247. The site's ACTUAL persisted energy-consumption data
+    availability -- earliest/latest bucket_start across BOTH
+    analytics.energy_consumption_daily and analytics.energy_consumption_hourly
+    -- deliberately NOT derived from ENERGY_RESOLUTION_MAX_WINDOW (a
+    per-request query-window cap, not a data-availability fact) and NOT from
+    telemetry.device_telemetry_state (migration 237's freshness source,
+    which reflects raw telemetry receipt, not these persisted historians).
+    has_data is false, and earliest/latest are both None, when the site has
+    no energy data in either table -- never a fabricated date."""
+
+    site_id: UUID
+    has_data: bool
+    earliest: datetime | None
+    latest: datetime | None
 
 
 class EnergyConsumptionEvidencePoint(BaseModel):
@@ -804,6 +846,23 @@ async def fetch_space_measurement_series(
     )
 
 
+async def fetch_site_energy_availability(
+    portal_user_id: int, site_id: UUID
+) -> dict[str, Any] | None:
+    """Migration 247. No dt_from/dt_to -- this reads the site's WHOLE
+    persisted history, not a requested window (that is the entire point:
+    the caller does not yet know the available window)."""
+
+    rows = await _read_rows(
+        """
+        SELECT site_id, earliest, latest
+        FROM analytics.get_portal_site_energy_availability(%s, %s)
+        """,
+        (portal_user_id, str(site_id)),
+    )
+    return rows[0] if rows else None
+
+
 async def fetch_site_energy_consumption(
     *,
     portal_user_id: int,
@@ -830,6 +889,44 @@ async def fetch_site_energy_consumption(
             dt_from,
             dt_to,
             resolution,
+        ),
+    )
+
+
+async def fetch_site_energy_consumption_periodic(
+    *,
+    portal_user_id: int,
+    site_id: UUID,
+    dt_from: datetime,
+    dt_to: datetime,
+    resolution: str,
+) -> list[dict[str, Any]]:
+    """Migration 248. `resolution` is one of ENERGY_PERIODIC_RESOLUTIONS
+    ("1w"/"1mo"/"1y") -- mapped here to the plain 'week'/'month'/'year'
+    vocabulary analytics.get_portal_site_energy_consumption_periodic
+    expects, since that DB-layer function has no reason to know this API's
+    resolution-string convention. Row shape is identical to
+    fetch_site_energy_consumption's -- build_energy_consumption_response
+    maps either unchanged."""
+
+    return await _read_rows(
+        """
+        SELECT
+            bucket_start,
+            import_consumption_kwh,
+            export_consumption_kwh,
+            source_interval_count
+        FROM analytics.get_portal_site_energy_consumption_periodic(
+            %s, %s, %s, %s, %s
+        )
+        ORDER BY bucket_start
+        """,
+        (
+            portal_user_id,
+            str(site_id),
+            dt_from,
+            dt_to,
+            _ENERGY_PERIODIC_RESOLUTION_TO_SQL_PERIOD[resolution],
         ),
     )
 
@@ -1223,6 +1320,28 @@ def build_measurement_series_response(
         **{"from": dt_from, "to": dt_to},
         no_data=len(points) == 0,
         series=points,
+    )
+
+
+def build_site_energy_availability_response(
+    *, site_id: UUID, row: dict[str, Any] | None
+) -> SiteEnergyAvailabilityResponse:
+    # The router already gates this call on portal_user_can_access_site, and
+    # analytics.get_portal_site_energy_availability always returns exactly
+    # one row once access is confirmed -- row is None is therefore an
+    # unreachable defense-in-depth case (mirrors
+    # build_site_telemetry_freshness_response), not a real "no data" state
+    # (that is has_data=false with a real row, not row absence). If it is
+    # ever hit, never fabricate a positive/dated result.
+    if row is None or row["earliest"] is None:
+        return SiteEnergyAvailabilityResponse(
+            site_id=site_id, has_data=False, earliest=None, latest=None
+        )
+    return SiteEnergyAvailabilityResponse(
+        site_id=site_id,
+        has_data=True,
+        earliest=row["earliest"],
+        latest=row["latest"],
     )
 
 

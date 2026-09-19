@@ -54,6 +54,7 @@ export const SITES_TWO_ORGS: SitesResponse = {
     {
       site_id: "aaaaaaaa-0000-4000-8000-000000000001",
       organization_id: "org-a",
+      organization_name: "Org A",
       site_code: "A_ONE",
       site_name: "Alpha One",
       timezone: "Asia/Kolkata",
@@ -61,6 +62,7 @@ export const SITES_TWO_ORGS: SitesResponse = {
     {
       site_id: "aaaaaaaa-0000-4000-8000-000000000002",
       organization_id: "org-a",
+      organization_name: "Org A",
       site_code: "A_TWO",
       site_name: "Alpha Two",
       timezone: "Asia/Kolkata",
@@ -68,6 +70,7 @@ export const SITES_TWO_ORGS: SitesResponse = {
     {
       site_id: "bbbbbbbb-0000-4000-8000-000000000001",
       organization_id: "org-b",
+      organization_name: "Org B",
       site_code: "B_ONE",
       site_name: "Bravo One",
       timezone: "UTC",
@@ -77,6 +80,28 @@ export const SITES_TWO_ORGS: SitesResponse = {
 
 export const SITES_ONE: SitesResponse = {
   sites: [SITES_TWO_ORGS.sites[0]!],
+};
+
+export const SITES_THREE_ORGS: SitesResponse = {
+  sites: [
+    ...SITES_TWO_ORGS.sites,
+    {
+      site_id: "cccccccc-0000-4000-8000-000000000001",
+      organization_id: "org-c",
+      organization_name: "Org C",
+      site_code: "C_ONE",
+      site_name: "Charlie One",
+      timezone: "UTC",
+    },
+    {
+      site_id: "cccccccc-0000-4000-8000-000000000002",
+      organization_id: "org-c",
+      organization_name: "Org C",
+      site_code: "C_TWO",
+      site_name: "Charlie Two",
+      timezone: "UTC",
+    },
+  ],
 };
 
 type RenderOptions = {

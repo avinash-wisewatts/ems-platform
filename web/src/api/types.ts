@@ -27,6 +27,7 @@ export type CurrentUser = {
 export type SiteSummary = {
   site_id: string;
   organization_id: string;
+  organization_name: string;
   site_code: string;
   site_name: string;
   timezone: string | null;
@@ -79,8 +80,10 @@ export type SpacesResponse = {
 };
 
 // ---- GET /api/v1/sites/{site_id}/assets (Slice 0: Hierarchy Foundation) --
-// Identity + placement only. NO relationship/component-tree fields --
-// explicitly deferred; see docs in endpoints.ts.
+// Identity + placement, PLUS type/hierarchy/location (Asset View) --
+// sourced from the existing, already-portal-scoped
+// admin.list_accessible_assets; no asset_relationships / component-tree
+// read (still explicitly deferred; see docs in endpoints.ts).
 
 export type AssetSummary = {
   asset_id: string;
@@ -90,6 +93,15 @@ export type AssetSummary = {
   external_id: string;
   asset_name: string;
   lifecycle_status: string;
+  asset_type_id: string | null;
+  asset_type_name: string | null;
+  parent_asset_name: string | null;
+  building_id: string | null;
+  building_name: string | null;
+  floor_id: string | null;
+  floor_name: string | null;
+  space_name: string | null;
+  location_path: string | null;
 };
 
 export type AssetsResponse = {
@@ -124,9 +136,42 @@ export type AssetLiveStateResponse = {
   points: AssetLivePoint[];
 };
 
+// ---- GET /api/v1/sites/{site_id}/assets/{asset_id}/energy/consumption (Asset View, migration 244) --
+// Raw interval rows -- period-total summation and previous-window
+// comparison are computed client-side (routes/assetView/assetEnergy.ts),
+// the same as site energy consumption already is.
+
+export type AssetEnergyIntervalPoint = {
+  interval_start: string;
+  device_id: string;
+  device_name: string;
+  elapsed_minutes: number;
+  import_consumption_kwh: number | null;
+  export_consumption_kwh: number | null;
+  import_quality_code: string | null;
+  export_quality_code: string | null;
+  reset_detected: boolean;
+  gap_detected: boolean;
+};
+
+export type AssetEnergyIntervalsResponse = {
+  asset_id: string;
+  from: string;
+  to: string;
+  no_data: boolean;
+  series: AssetEnergyIntervalPoint[];
+};
+
 // ---- GET /api/v1/sites/{site_id}/energy/consumption --------------------
 
-export const ENERGY_RESOLUTIONS = ["1h", "1d"] as const;
+// "1w"/"1mo"/"1y" (migration 248) are NOT a separate persisted tier -- they
+// are server-side date_trunc aggregations of the SAME "1d" historian
+// (analytics.energy_consumption_daily), returned in the exact same
+// EnergyConsumptionPoint shape as "1h"/"1d". See energyUsage.ts's module
+// docstring for why the Main Dashboard Energy Usage chart's Weekly/Monthly/
+// Yearly resolutions are sourced this way rather than by aggregating raw
+// daily rows client-side.
+export const ENERGY_RESOLUTIONS = ["1h", "1d", "1w", "1mo", "1y"] as const;
 export type EnergyResolution = (typeof ENERGY_RESOLUTIONS)[number];
 
 export type EnergyConsumptionPoint = {
@@ -143,6 +188,21 @@ export type EnergyConsumptionResponse = {
   to: string;
   no_data: boolean;
   series: EnergyConsumptionPoint[];
+};
+
+// ---- GET /api/v1/sites/{site_id}/energy/consumption/availability
+// (migration 247) -- the site's ACTUAL persisted energy-consumption data
+// availability (earliest/latest across BOTH energy_consumption_daily and
+// energy_consumption_hourly), deliberately independent of
+// ENERGY_MAX_WINDOW_S's per-request query-window caps. has_data is false,
+// and earliest/latest are both null, when the site has no energy data at
+// all -- never a fabricated date.
+
+export type SiteEnergyAvailabilityResponse = {
+  site_id: string;
+  has_data: boolean;
+  earliest: string | null;
+  latest: string | null;
 };
 
 // ---- GET /api/v1/sites/{site_id}/energy/consumption/evidence (Slice C) ---
@@ -261,6 +321,62 @@ export type CurrentDemandResponse = {
   current_demand_kva: number | null;
   quality_status: string | null;
   coverage_percent: number | null;
+};
+
+// ---- GET /api/v1/sites/{site_id}/assets/{asset_id}/demand (Asset View,
+// migration 245) -- mirrors GET /sites/{site_id}/demand exactly, scoped to
+// the asset. Same source table (analytics.demand_intervals, scope_type=
+// 'ASSET'), same quality_status vocabulary, so the series reuses
+// DemandIntervalPoint rather than a duplicate type. No resolution
+// parameter, no maximum query-window (migration 246 batch removed the
+// artificial 31-day cap from both Site and Asset Demand).
+
+export type AssetDemandSeriesResponse = {
+  asset_id: string;
+  from: string;
+  to: string;
+  no_data: boolean;
+  series: DemandIntervalPoint[];
+};
+
+// ---- GET /api/v1/sites/{site_id}/assets/{asset_id}/demand/current (Asset
+// View, migration 245) -- mirrors GET /sites/{site_id}/demand/current,
+// reading analytics.demand_state (scope_type='ASSET').
+
+export type AssetCurrentDemandResponse = {
+  asset_id: string;
+  has_data: boolean;
+  interval_start: string | null;
+  interval_end: string | null;
+  current_demand_kw: number | null;
+  current_demand_kva: number | null;
+  quality_status: string | null;
+  coverage_percent: number | null;
+};
+
+// ---- GET /api/v1/sites/{site_id}/assets/{asset_id}/power-trend (Asset
+// View, migration 246) -- raw instantaneous active-power samples from the
+// asset's PRIMARY_METER device, read directly from telemetry.energy_
+// measurements (no Grafana envelope). sample_time, not interval_start/end:
+// this is a point sample series, not an aggregated interval. quality_code
+// is deliberately not returned by the API -- it has no established
+// customer-facing translation anywhere in the platform (unlike Demand's
+// own quality_status) -- so only is_estimated (a plain boolean) is
+// available as the data-state signal. No resolution parameter, no maximum
+// query-window.
+
+export type AssetPowerTrendPoint = {
+  sample_time: string;
+  active_power_kw: number | null;
+  is_estimated: boolean;
+};
+
+export type AssetPowerTrendResponse = {
+  asset_id: string;
+  from: string;
+  to: string;
+  no_data: boolean;
+  series: AssetPowerTrendPoint[];
 };
 
 // ---- GET /api/v1/sites/{site_id}/power-quality (Slice B) -------------------

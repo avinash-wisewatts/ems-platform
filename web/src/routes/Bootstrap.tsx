@@ -32,5 +32,8 @@ export function Bootstrap() {
   if (!tenant.selectedSite && tenant.sites.length !== 1 && tenant.sites.length > 0) {
     return <Navigate to="/select" replace />;
   }
-  return <Navigate to="/home" replace />;
+  // WiseWatts redesign: the Main Dashboard is now the landing screen.
+  // SiteOverview (/home) is unchanged and still reachable from the sidebar's
+  // Archive section.
+  return <Navigate to="/dashboard" replace />;
 }
