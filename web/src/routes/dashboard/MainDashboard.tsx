@@ -25,6 +25,41 @@
  *                          derivation SiteOverview already reuses.
  *   Load Trend           -- GET /sites/{id}/demand for the selected range,
  *                          rendered with the shared ChartFrame (area variant).
+ *   Energy Usage          -- the site's ACTUAL persisted energy-data
+ *                          availability (GET /sites/{id}/energy/
+ *                          consumption/availability, migration 247) bounds
+ *                          a proper From/To date-range picker -- never
+ *                          time/ranges.ts#ENERGY_MAX_WINDOW_S, which is a
+ *                          per-request query-window cap, not a
+ *                          data-availability fact (see energyUsage.ts's
+ *                          module docstring). The chart itself reuses the
+ *                          SAME GET /sites/{id}/energy/consumption YTD/MTD
+ *                          already use above, at resolution "1h"/"1d" for
+ *                          Hourly/Daily and "1w"/"1mo"/"1y" for Weekly/
+ *                          Monthly/Yearly -- the latter three are SERVER-side
+ *                          aggregations of the daily historian (migration
+ *                          248), not client-side reconstruction, per a
+ *                          dedicated read-only architecture investigation
+ *                          run before implementing this. Which display
+ *                          resolutions are OFFERED is a function of the
+ *                          applied range's actual duration, per locked
+ *                          product decision (energyUsage.ts#
+ *                          availableEnergyUsageResolutions): Hourly only
+ *                          for a range of 31 days or less; Daily/Weekly/
+ *                          Monthly/Yearly always. The date range itself is
+ *                          never restricted by resolution availability --
+ *                          if Apply makes the current resolution invalid,
+ *                          the next available one is selected automatically
+ *                          (resolveValidResolution), the range is untouched.
+ *                          The date range is gated behind an explicit Apply
+ *                          (unlike Load Trend's immediate-reload preset);
+ *                          resolution changes fetch immediately (each has
+ *                          its own source resolution now, so every change
+ *                          fetches fresh). Defaults to "Today" (the SITE's
+ *                          own calendar day) at Hourly resolution, per
+ *                          explicit product direction -- never a rolling
+ *                          preset. All boundaries use the site's own
+ *                          timezone, not UTC.
  *   Site Health           -- the exact same derivation SiteOverview already
  *                          uses (attention/siteHealth.ts#deriveSiteHealth +
  *                          attention/energyAttention.ts#evaluateEnergyAttention
@@ -73,12 +108,18 @@ import { useTenant } from "../../tenant/TenantProvider";
 import {
   getSiteCurrentDemand,
   getSiteDemandSeries,
+  getSiteEnergyAvailability,
   getSiteEnergyConsumption,
   getSiteEnergyConsumptionEvidence,
   getSiteEnergyTypicalReference,
   getSiteTelemetryFreshness,
 } from "../../api/endpoints";
-import type { CurrentDemandResponse, DemandSeriesResponse, SiteTelemetryFreshnessResponse } from "../../api/types";
+import type {
+  CurrentDemandResponse,
+  DemandSeriesResponse,
+  EnergyConsumptionResponse,
+  SiteTelemetryFreshnessResponse,
+} from "../../api/types";
 import {
   PRESET_LABELS,
   TIME_RANGE_PRESETS,
@@ -99,6 +140,19 @@ import type { AttentionItem, SiteHealthState } from "../../attention/types";
 import { deriveStatusTone } from "../../components/StatusBadge";
 import { findPeak } from "../demand/DemandOverview";
 import { mtdRange, previousMonthRange, ytdRange } from "./dateWindows";
+import {
+  ENERGY_USAGE_RESOLUTIONS,
+  ENERGY_USAGE_RESOLUTION_LABELS,
+  availableEnergyUsageResolutions,
+  bucketEnergyUsage,
+  clampDateKey,
+  deriveEnergyUsageAvailability,
+  planEnergyUsageFetch,
+  resolveDefaultEnergyUsageSelection,
+  resolveValidResolution,
+  type EnergyUsageAvailability,
+  type EnergyUsageResolution,
+} from "./energyUsage";
 import { DATE_TIME_FORMAT } from "../../time/format";
 import { HierarchyCrumb } from "../../components/HierarchyCrumb";
 import { ChartFrame, type ChartPoint } from "../../components/ChartFrame";
@@ -141,6 +195,34 @@ type TrendSection = {
 };
 
 const TREND_INITIAL: TrendSection = { status: "loading", error: null, unsupportedReason: null, series: null };
+
+type EnergyUsageSection = {
+  status: LoadStatus;
+  error: unknown;
+  unsupportedReason: string | null;
+  response: EnergyConsumptionResponse | null;
+  /** The exact [from, to) instant range `response` was fetched for --
+   *  needed alongside `response` for bucketing (energyUsage.ts#
+   *  bucketEnergyUsage), since a resolution change re-buckets the SAME
+   *  response/range pair without a new fetch. */
+  range: { from: string; to: string } | null;
+};
+
+const ENERGY_USAGE_INITIAL: EnergyUsageSection = {
+  status: "loading",
+  error: null,
+  unsupportedReason: null,
+  response: null,
+  range: null,
+};
+
+type AvailabilitySection = {
+  status: LoadStatus;
+  error: unknown;
+  data: EnergyUsageAvailability | null;
+};
+
+const AVAILABILITY_INITIAL: AvailabilitySection = { status: "loading", error: null, data: null };
 
 type HealthSection = {
   status: LoadStatus;
@@ -315,10 +397,79 @@ export function MainDashboard() {
   const [trendPreset, setTrendPreset] = useState<TimeRangePreset>(TREND_PRESETS[0] ?? "TODAY");
   const [trend, setTrend] = useState<TrendSection>(TREND_INITIAL);
   const [trendNonce, setTrendNonce] = useState(0);
+  // Draft vs. applied: the date range only takes effect on "Apply" (per
+  // Energy Usage's own requirement). Resolution has no Apply gate -- it
+  // fetches immediately -- but unlike the prior revision, EVERY resolution
+  // now has its own distinct source (energyUsage.ts#sourceResolutionFor:
+  // Hourly=1h, Daily=1d, Weekly=1w, Monthly=1mo, Yearly=1y, migration
+  // 248), so a resolution change always triggers a fresh fetch; there is
+  // no more "reuse the same response, just re-bucket" case. All four
+  // default to "" until the site's timezone is known, then reset to
+  // "Today"/Hourly (resolveDefaultEnergyUsageSelection) by the effect
+  // right after this block -- every site switch resets to that same
+  // default, never carrying over a stale range that may not even be valid
+  // for the newly selected site.
+  const [energyUsageFromDraft, setEnergyUsageFromDraft] = useState("");
+  const [energyUsageToDraft, setEnergyUsageToDraft] = useState("");
+  const [energyUsageFromApplied, setEnergyUsageFromApplied] = useState("");
+  const [energyUsageToApplied, setEnergyUsageToApplied] = useState("");
+  const [energyUsageResolution, setEnergyUsageResolution] = useState<EnergyUsageResolution>("HOURLY");
+  const [energyUsage, setEnergyUsage] = useState<EnergyUsageSection>(ENERGY_USAGE_INITIAL);
+  const [energyUsageNonce, setEnergyUsageNonce] = useState(0);
+  const [availability, setAvailability] = useState<AvailabilitySection>(AVAILABILITY_INITIAL);
+  const [availabilityNonce, setAvailabilityNonce] = useState(0);
   const [health, setHealth] = useState<HealthSection>(HEALTH_INITIAL);
   const [healthNonce, setHealthNonce] = useState(0);
   const [freshness, setFreshness] = useState<FreshnessSection>(FRESHNESS_INITIAL);
   const [freshnessNonce, setFreshnessNonce] = useState(0);
+
+  // Energy Usage's default state -- "Today" (site-local) at Hourly
+  // resolution, per explicit product direction (never a rolling preset).
+  // Re-applied on every site change (keyed on site_id, not the whole
+  // object) since a stale range from a previously selected site may not
+  // even be valid for this one.
+  useEffect(() => {
+    if (!selectedSite) return;
+    const defaults = resolveDefaultEnergyUsageSelection(selectedSite.timezone);
+    setEnergyUsageFromDraft(defaults.from);
+    setEnergyUsageToDraft(defaults.to);
+    setEnergyUsageFromApplied(defaults.from);
+    setEnergyUsageToApplied(defaults.to);
+    setEnergyUsageResolution(defaults.resolution);
+    // Deliberately keyed on site_id alone, not the whole selectedSite
+    // object: a `sites` list refetch that leaves the same site selected
+    // gets a new selectedSite object reference but must NOT reset the
+    // user's in-progress date-range/resolution choices.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSite?.site_id]);
+
+  // Energy Usage's ACTUAL data-availability bounds (GET .../energy/
+  // consumption/availability, migration 247) -- bounds the date-range
+  // picker in real persisted data, never in ENERGY_MAX_WINDOW_S's
+  // per-request query-window caps (see energyUsage.ts's module docstring).
+  useEffect(() => {
+    if (!selectedSite) return;
+    let active = true;
+    setAvailability((s) => ({ ...s, status: "loading", error: null }));
+
+    getSiteEnergyAvailability(selectedSite.site_id)
+      .then((response) => {
+        if (!active) return;
+        setAvailability({
+          status: "ready",
+          error: null,
+          data: deriveEnergyUsageAvailability(response, selectedSite.timezone),
+        });
+      })
+      .catch((err: unknown) => {
+        if (!active) return;
+        setAvailability((s) => ({ ...s, status: "error", error: err }));
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [selectedSite, availabilityNonce]);
 
   useEffect(() => {
     if (!selectedSite) return;
@@ -436,6 +587,47 @@ export function MainDashboard() {
     };
   }, [selectedSite, trendPreset, trendNonce]);
 
+  // Energy Usage -- its own independent date-range control (gated by an
+  // explicit Apply, per this chart's requirement) and fetch, matching Load
+  // Trend's pattern above. Each display resolution now has its own distinct
+  // source resolution (energyUsage.ts#sourceResolutionFor: Hourly=1h,
+  // Daily=1d, Weekly=1w, Monthly=1mo, Yearly=1y -- migration 248 moved
+  // Weekly/Monthly/Yearly's aggregation server-side), so a resolution
+  // change always fetches fresh -- there is no more shared-source reuse to
+  // special-case. Not gated behind Apply itself -- an unsupported
+  // combination is reported via `unsupportedReason`, never silently sent
+  // and rejected; in normal operation the resolution dropdown is already
+  // filtered by availableEnergyUsageResolutions (see the useMemo below) so
+  // this is a defense-in-depth path, not the primary mechanism.
+  useEffect(() => {
+    if (!selectedSite || !energyUsageFromApplied || !energyUsageToApplied) return;
+    let active = true;
+    setEnergyUsage((s) => ({ ...s, status: "loading", error: null, unsupportedReason: null }));
+
+    const plan = planEnergyUsageFetch(
+      { from: energyUsageFromApplied, to: energyUsageToApplied, resolution: energyUsageResolution },
+      selectedSite.timezone,
+    );
+    if (!plan.supported) {
+      setEnergyUsage({ status: "ready", error: null, unsupportedReason: plan.reason, response: null, range: null });
+      return;
+    }
+
+    getSiteEnergyConsumption(selectedSite.site_id, { resolution: plan.resolution, ...plan.range })
+      .then((response) => {
+        if (!active) return;
+        setEnergyUsage({ status: "ready", error: null, unsupportedReason: null, response, range: plan.range });
+      })
+      .catch((err: unknown) => {
+        if (!active) return;
+        setEnergyUsage((s) => ({ ...s, status: "error", error: err }));
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [selectedSite, energyUsageFromApplied, energyUsageToApplied, energyUsageResolution, energyUsageNonce]);
+
   // Site Health -- the exact same derivation SiteOverview uses (7-day
   // typical-reference comparison + the single approved Energy Attention
   // rule), reused verbatim rather than a second health mechanism.
@@ -524,6 +716,30 @@ export function MainDashboard() {
   }, [selectedSite, freshnessNonce]);
 
   const trendPoints = useMemo(() => (trend.series ? toChartPoints(trend.series.series) : []), [trend.series]);
+
+  const energyUsageBars = useMemo(() => {
+    if (!energyUsage.response || !energyUsage.range || energyUsage.response.no_data) return [];
+    return bucketEnergyUsage(energyUsage.response.series, energyUsageResolution, energyUsage.range);
+  }, [energyUsage.response, energyUsage.range, energyUsageResolution]);
+
+  const energyUsagePoints = useMemo(
+    () => energyUsageBars.map((bar) => ({ t: bar.t, value: bar.kwh })),
+    [energyUsageBars],
+  );
+
+  // Which display resolutions the CURRENTLY APPLIED range actually
+  // supports -- driven by its real duration, per the locked product
+  // decision (energyUsage.ts#availableEnergyUsageResolutions). The
+  // dropdown only ever offers these; resolveValidResolution (called on
+  // Apply, below) keeps the current selection unless it just became
+  // invalid, in which case it steps to the next available one.
+  const energyUsageAvailableResolutions = useMemo(
+    () =>
+      energyUsageFromApplied && energyUsageToApplied
+        ? availableEnergyUsageResolutions(energyUsageFromApplied, energyUsageToApplied)
+        : ENERGY_USAGE_RESOLUTIONS,
+    [energyUsageFromApplied, energyUsageToApplied],
+  );
 
   if (!selectedSite) {
     return (
@@ -697,6 +913,110 @@ export function MainDashboard() {
             <NoDataYet />
           ) : (
             <ChartFrame points={trendPoints} valueLabel="Load" unit="kW" variant="area" height={260} />
+          )
+        ) : null}
+      </section>
+
+      <section className="dashboard-card" data-testid="energy-usage">
+        <div className="dashboard-card__header">
+          <h2>Energy Usage</h2>
+          <div className="energy-usage__controls">
+            <label className="energy-usage__date-field">
+              <span className="visually-hidden">From date</span>
+              <input
+                type="date"
+                value={energyUsageFromDraft}
+                min={availability.data?.minDateKey}
+                max={energyUsageToDraft || availability.data?.maxDateKey}
+                disabled={availability.status !== "ready"}
+                onChange={(e) => setEnergyUsageFromDraft(e.target.value)}
+                data-testid="energy-usage-from"
+              />
+            </label>
+            <span className="energy-usage__date-sep" aria-hidden="true">
+              →
+            </span>
+            <label className="energy-usage__date-field">
+              <span className="visually-hidden">To date</span>
+              <input
+                type="date"
+                value={energyUsageToDraft}
+                min={energyUsageFromDraft || availability.data?.minDateKey}
+                max={availability.data?.maxDateKey}
+                disabled={availability.status !== "ready"}
+                onChange={(e) => setEnergyUsageToDraft(e.target.value)}
+                data-testid="energy-usage-to"
+              />
+            </label>
+            <button
+              type="button"
+              className="energy-usage__apply"
+              disabled={
+                availability.status !== "ready" ||
+                !energyUsageFromDraft ||
+                !energyUsageToDraft ||
+                energyUsageFromDraft > energyUsageToDraft
+              }
+              onClick={() => {
+                if (!availability.data) return;
+                const from = clampDateKey(energyUsageFromDraft, availability.data);
+                const to = clampDateKey(energyUsageToDraft, availability.data);
+                setEnergyUsageFromApplied(from);
+                setEnergyUsageToApplied(to);
+                // The date range itself is never restricted by resolution
+                // availability (locked product decision) -- but if the
+                // NEWLY applied range invalidates the currently selected
+                // resolution (today, only Hourly beyond 31 days), step to
+                // the next available one automatically. The range set
+                // above is untouched either way.
+                const nowAvailable = availableEnergyUsageResolutions(from, to);
+                setEnergyUsageResolution((current) => resolveValidResolution(current, nowAvailable));
+              }}
+              data-testid="energy-usage-apply"
+            >
+              Apply
+            </button>
+            <label className="energy-usage__resolution">
+              <span className="visually-hidden">Resolution</span>
+              <select
+                value={energyUsageResolution}
+                onChange={(e) => setEnergyUsageResolution(e.target.value as EnergyUsageResolution)}
+                data-testid="energy-usage-resolution"
+              >
+                {energyUsageAvailableResolutions.map((resolution) => (
+                  <option key={resolution} value={resolution}>
+                    {ENERGY_USAGE_RESOLUTION_LABELS[resolution]}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </div>
+        {availability.status === "error" ? (
+          <ErrorState
+            title="Couldn't check this site's energy data availability"
+            error={availability.error}
+            onRetry={() => setAvailabilityNonce((n) => n + 1)}
+          />
+        ) : null}
+        {energyUsage.status === "loading" ? <Loading label="Loading energy usage…" /> : null}
+        {energyUsage.status === "error" ? (
+          <ErrorState error={energyUsage.error} onRetry={() => setEnergyUsageNonce((n) => n + 1)} />
+        ) : null}
+        {energyUsage.unsupportedReason ? <NoDataYet message={energyUsage.unsupportedReason} /> : null}
+        {energyUsage.status === "ready" && !energyUsage.unsupportedReason && energyUsage.response ? (
+          energyUsage.response.no_data ? (
+            <NoDataYet />
+          ) : (
+            <ChartFrame
+              points={energyUsagePoints}
+              valueLabel="Energy Usage"
+              unit="kWh"
+              variant="bar"
+              height={260}
+              timeZone={selectedSite.timezone}
+              axisUnitLabel
+            />
           )
         ) : null}
       </section>

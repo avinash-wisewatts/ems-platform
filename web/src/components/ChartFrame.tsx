@@ -20,6 +20,8 @@ import { useId, type ReactElement } from "react";
 import {
   Area,
   AreaChart,
+  Bar,
+  BarChart,
   CartesianGrid,
   Line,
   LineChart,
@@ -45,16 +47,61 @@ export type ChartFrameProps = {
   /** fixed width for tests / non-responsive contexts */
   width?: number;
   ariaLabel?: string;
-  /** "line" (default, unchanged) or a filled "area" rendering -- still the
-   *  same Recharts foundation, same data contract; purely a presentation
-   *  choice for screens (e.g. the WiseWatts Main Dashboard Load Trend card)
-   *  that want a filled trend instead of a bare line. No new chart library,
-   *  no feature-specific chart component. */
-  variant?: "line" | "area";
+  /** "line" (default, unchanged), a filled "area" rendering, or a "bar"
+   *  rendering -- still the same Recharts foundation, same data contract;
+   *  purely a presentation choice for screens (e.g. the WiseWatts Main
+   *  Dashboard Load Trend card's "area", and its Energy Usage card's "bar")
+   *  that want something other than a bare line. No new chart library, no
+   *  feature-specific chart component. */
+  variant?: "line" | "area" | "bar";
+  /** IANA timezone (e.g. a site's own `timezone`) for the X-axis ticks and
+   *  the tooltip's timestamp -- omitted (the default) keeps every existing
+   *  caller's current UTC-ISO rendering exactly as-is; a caller opts in
+   *  only when it has a real site timezone to show data in, rather than
+   *  this component guessing one. */
+  timeZone?: string | null;
+  /** Shows `unit` as a Y-axis label (e.g. "kW") when true. Defaults to
+   *  false so existing callers that already pass `unit` for the tooltip
+   *  (Demand Overview, Energy, Power Quality, Main Dashboard) keep their
+   *  current axis exactly as-is; a caller opts in per chart. */
+  axisUnitLabel?: boolean;
 };
 
-function formatTick(t: number): string {
-  return new Date(t).toISOString().slice(5, 16).replace("T", " ");
+function formatTick(t: number, timeZone?: string | null): string {
+  if (!timeZone) return new Date(t).toISOString().slice(5, 16).replace("T", " ");
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(t));
+}
+
+function formatTooltipLabel(t: number, timeZone?: string | null): string {
+  if (!timeZone) return new Date(t).toISOString();
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(t));
+}
+
+/** Rounds a plotted value to 2 decimal places -- universal across every
+ *  chart (Y-axis ticks and the hover tooltip), since raw JS floats
+ *  (e.g. from an unrounded division upstream) were otherwise showing with
+ *  far more precision than any of this app's figures are ever displayed
+ *  with elsewhere (KPI tiles, live-parameter readings, etc. all round to a
+ *  fixed, small number of decimals). Non-numeric values pass through
+ *  unchanged (Recharts can call a tick formatter with a non-numeric axis
+ *  value in edge cases). */
+export function formatValue(v: unknown): string {
+  return typeof v === "number" ? v.toFixed(2) : String(v);
 }
 
 export function ChartFrame({
@@ -65,6 +112,8 @@ export function ChartFrame({
   width,
   ariaLabel,
   variant = "line",
+  timeZone,
+  axisUnitLabel = false,
 }: ChartFrameProps) {
   const label = ariaLabel ?? `${valueLabel}${unit ? ` (${unit})` : ""} over time`;
   const gradientId = `chart-frame-area-fill-${useId()}`;
@@ -76,20 +125,42 @@ export function ChartFrame({
         dataKey="t"
         type="number"
         domain={["dataMin", "dataMax"]}
-        tickFormatter={formatTick}
+        tickFormatter={(t: number) => formatTick(t, timeZone)}
         scale="time"
         minTickGap={40}
       />
-      <YAxis tickFormatter={(v) => String(v)} width={56} />
+      <YAxis
+        tickFormatter={formatValue}
+        width={56}
+        // A "bar" series is always a non-negative magnitude (energy, never
+        // negative) -- pinning the domain floor to 0 keeps every bar drawn
+        // from a true zero baseline. The ceiling stays "auto" (Recharts'
+        // own nice-rounded max from the actual data), so the axis still
+        // scales dynamically with whatever range/resolution is selected --
+        // never a fixed maximum, never clipped, no more headroom than a
+        // "nice" rounding already adds. Line/area keep their prior
+        // undefined (fully auto) domain -- unchanged behavior.
+        domain={variant === "bar" ? [0, "auto"] : undefined}
+        label={
+          axisUnitLabel && unit
+            ? { value: unit, angle: -90, position: "insideLeft", style: { fontSize: 11, fill: "var(--muted)" } }
+            : undefined
+        }
+      />
       <Tooltip
-        labelFormatter={(t) => new Date(Number(t)).toISOString()}
-        formatter={(v) => [String(v), unit ? `${valueLabel} (${unit})` : valueLabel]}
+        labelFormatter={(t) => formatTooltipLabel(Number(t), timeZone)}
+        formatter={(v) => [formatValue(v), unit ? `${valueLabel} (${unit})` : valueLabel]}
       />
     </>
   );
 
   const chart =
-    variant === "area" ? (
+    variant === "bar" ? (
+      <BarChart data={points} margin={{ top: 8, right: 16, bottom: 8, left: 8 }}>
+        {sharedAxes}
+        <Bar dataKey="value" fill="currentColor" isAnimationActive={false} />
+      </BarChart>
+    ) : variant === "area" ? (
       <AreaChart data={points} margin={{ top: 8, right: 16, bottom: 8, left: 8 }}>
         <defs>
           <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">

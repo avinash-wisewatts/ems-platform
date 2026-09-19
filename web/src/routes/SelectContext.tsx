@@ -38,7 +38,7 @@ export function SelectContext() {
                   className="site-list__item"
                   onClick={() => {
                     selectSite(site.site_id);
-                    navigate("/home");
+                    navigate("/dashboard");
                   }}
                 >
                   <span className="site-list__name">{site.site_name}</span>

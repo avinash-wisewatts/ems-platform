@@ -5,10 +5,14 @@
  *   GET /api/v1/me                                       (Phase 8 session echo)
  *   GET /api/v1/sites
  *   GET /api/v1/sites/{site_id}/energy/consumption
+ *   GET /api/v1/sites/{site_id}/energy/consumption/availability (Main Dashboard)
  *   GET /api/v1/spaces/{space_id}/measurements
  *   GET /api/v1/sites/{site_id}/spaces                  (Slice 0)
  *   GET /api/v1/sites/{site_id}/assets                  (Slice 0)
- *   GET /api/v1/sites/{site_id}/assets/{asset_id}/live-state
+ *   GET /api/v1/sites/{site_id}/assets/{asset_id}/live-state (Asset View)
+ *   GET /api/v1/sites/{site_id}/assets/{asset_id}/energy/consumption (Asset View)
+ *   GET /api/v1/sites/{site_id}/assets/{asset_id}/demand and .../demand/current (Asset View)
+ *   GET /api/v1/sites/{site_id}/assets/{asset_id}/power-trend (Asset View)
  *   GET /api/v1/sites/{site_id}/demand                  (Slice B)
  *   GET /api/v1/sites/{site_id}/demand/current           (Slice B)
  *   GET /api/v1/sites/{site_id}/power-quality            (Slice B)
@@ -20,15 +24,31 @@
  *
  * No other paths, no arbitrary parameters, no generic query mechanism.
  *
- * Slice 0 scope note: getSiteAssets returns identity + placement only. It
+ * Slice 0 scope note: getSiteAssets returns identity + placement, plus
+ * type/hierarchy/location fields for the Asset View screen (asset_type_name,
+ * parent_asset_name, building/floor/space names, location_path). It still
  * does NOT expose asset_relationships (component tree) or any "spaces
  * served by an asset" concept -- neither exists as a read path yet; both
  * are explicitly deferred pending a separate product/architecture decision.
  *
- * getAssetLiveState is always a "right now" read (one row per
- * device/logical-point currently attached to the asset) -- the initial
- * snapshot a caller pairs with routes/assetView/useAssetLiveSocket.ts's
- * WebSocket to keep those readings current without polling.
+ * Asset View scope note: getAssetLiveState is always a "right now" read (one
+ * row per device/logical-point currently attached to the asset) -- the
+ * initial snapshot a caller pairs with routes/assetView/
+ * useAssetLiveSocket.ts's WebSocket to keep those readings current without
+ * polling. getAssetEnergyConsumption returns raw interval rows for a time
+ * window (period-total summation and previous-window comparison are
+ * computed client-side, routes/assetView/assetEnergy.ts) -- no resolution
+ * parameter, the backend auto-selects it. getAssetDemandSeries/
+ * getAssetCurrentDemand (migration 245) mirror the Site Demand functions
+ * exactly, scoped to the asset -- same DemandIntervalPoint shape, same
+ * quality_status vocabulary, no maximum query-window. getAssetPowerTrend
+ * (migration 246) returns raw instantaneous active-power samples from the
+ * asset's PRIMARY_METER device -- no resolution parameter, no maximum
+ * query-window, quality_code is not returned (no established
+ * customer-facing translation exists for it). Asset-level historical
+ * PF/THD trend and asset-level Attention/health still have no read path --
+ * the Asset View screen shows those as honest "not available yet" states
+ * rather than guessing at one.
  *
  * Slice B scope note: getSiteDemandSeries takes no resolution parameter --
  * the backend has no coarser persisted demand tier to select between.
@@ -41,7 +61,11 @@ import type {
   Alert,
   AlertListResponse,
   AlertState,
+  AssetCurrentDemandResponse,
+  AssetDemandSeriesResponse,
+  AssetEnergyIntervalsResponse,
   AssetLiveStateResponse,
+  AssetPowerTrendResponse,
   AssetsResponse,
   CurrentDemandResponse,
   CurrentUser,
@@ -55,6 +79,7 @@ import type {
   MeasurementSeriesResponse,
   PowerQualityResolution,
   PowerQualityResponse,
+  SiteEnergyAvailabilityResponse,
   SitesResponse,
   SiteTelemetryFreshnessResponse,
   SpacesResponse,
@@ -101,6 +126,21 @@ export function getSiteEnergyConsumption(
   return apiGet<EnergyConsumptionResponse>(
     `/sites/${encodeURIComponent(siteId)}/energy/consumption`,
     { resolution: query.resolution, from: query.from, to: query.to },
+    init,
+  );
+}
+
+/** Migration 247. The site's ACTUAL persisted energy data availability
+ *  (earliest/latest) -- independent of, and never a substitute for,
+ *  ENERGY_MAX_WINDOW_S's per-request query-window caps. Used to bound the
+ *  Main Dashboard Energy Usage chart's date-range picker. */
+export function getSiteEnergyAvailability(
+  siteId: string,
+  init?: RequestInit,
+): Promise<SiteEnergyAvailabilityResponse> {
+  return apiGet<SiteEnergyAvailabilityResponse>(
+    `/sites/${encodeURIComponent(siteId)}/energy/consumption/availability`,
+    undefined,
     init,
   );
 }
@@ -159,6 +199,24 @@ export function getAssetLiveState(
   );
 }
 
+export type AssetEnergyQuery = {
+  from: string; // ISO-8601 UTC
+  to: string; // ISO-8601 UTC (exclusive)
+};
+
+export function getAssetEnergyConsumption(
+  siteId: string,
+  assetId: string,
+  query: AssetEnergyQuery,
+  init?: RequestInit,
+): Promise<AssetEnergyIntervalsResponse> {
+  return apiGet<AssetEnergyIntervalsResponse>(
+    `/sites/${encodeURIComponent(siteId)}/assets/${encodeURIComponent(assetId)}/energy/consumption`,
+    { from: query.from, to: query.to },
+    init,
+  );
+}
+
 export type DemandQuery = {
   from: string; // ISO-8601 UTC
   to: string; // ISO-8601 UTC (exclusive)
@@ -183,6 +241,52 @@ export function getSiteCurrentDemand(
   return apiGet<CurrentDemandResponse>(
     `/sites/${encodeURIComponent(siteId)}/demand/current`,
     undefined,
+    init,
+  );
+}
+
+/** Asset View (migration 245) -- mirrors getSiteDemandSeries/
+ *  getSiteCurrentDemand exactly, scoped to the asset. Reuses DemandQuery:
+ *  the {from, to} shape is identical. No resolution parameter, no maximum
+ *  query-window (the 31-day cap was removed from both Site and Asset
+ *  Demand -- migration 246). */
+export function getAssetDemandSeries(
+  siteId: string,
+  assetId: string,
+  query: DemandQuery,
+  init?: RequestInit,
+): Promise<AssetDemandSeriesResponse> {
+  return apiGet<AssetDemandSeriesResponse>(
+    `/sites/${encodeURIComponent(siteId)}/assets/${encodeURIComponent(assetId)}/demand`,
+    { from: query.from, to: query.to },
+    init,
+  );
+}
+
+export function getAssetCurrentDemand(
+  siteId: string,
+  assetId: string,
+  init?: RequestInit,
+): Promise<AssetCurrentDemandResponse> {
+  return apiGet<AssetCurrentDemandResponse>(
+    `/sites/${encodeURIComponent(siteId)}/assets/${encodeURIComponent(assetId)}/demand/current`,
+    undefined,
+    init,
+  );
+}
+
+/** Asset View (migration 246) -- raw instantaneous active-power samples
+ *  from the asset's PRIMARY_METER device. Reuses DemandQuery: the same
+ *  {from, to} shape. No resolution parameter, no maximum query-window. */
+export function getAssetPowerTrend(
+  siteId: string,
+  assetId: string,
+  query: DemandQuery,
+  init?: RequestInit,
+): Promise<AssetPowerTrendResponse> {
+  return apiGet<AssetPowerTrendResponse>(
+    `/sites/${encodeURIComponent(siteId)}/assets/${encodeURIComponent(assetId)}/power-trend`,
+    { from: query.from, to: query.to },
     init,
   );
 }

@@ -76,6 +76,16 @@ export const MEASUREMENT_MAX_WINDOW_S: Record<MeasurementResolution, number> = {
 export const ENERGY_MAX_WINDOW_S: Record<EnergyResolution, number> = {
   "1h": 31 * 86400,
   "1d": 366 * 86400,
+  // "1w"/"1mo"/"1y" (migration 248) are server-side aggregations of the
+  // same "1d" historian -- a separate, generous engineering safety
+  // backstop (ENERGY_PERIODIC_RESOLUTION_MAX_WINDOW in
+  // analytics_api_service.py), not a product-facing availability limit.
+  // The Main Dashboard Energy Usage chart's own selectable-range decision
+  // is made entirely from GET .../energy/consumption/availability
+  // (migration 247), never from this cap.
+  "1w": 3660 * 86400,
+  "1mo": 3660 * 86400,
+  "1y": 3660 * 86400,
 };
 
 // Slice B caps -- kept in sync with analytics_api_service.py's

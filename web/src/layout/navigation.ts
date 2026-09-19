@@ -86,6 +86,42 @@ export function visibleNav(items: readonly NavItem[], permissions: readonly stri
   );
 }
 
+/**
+ * WiseWatts dashboard redesign -- the new primary shell navigation shown at
+ * the top of the sidebar. Deliberately a SEPARATE list from PRIMARY_NAV/
+ * SECONDARY_NAV above, which are untouched and keep rendering exactly as
+ * before, just relocated into a bottom "Archive" section by AppShell so nothing
+ * already shipped is deleted or broken.
+ *
+ * "Asset View" points at routes/assetView/AssetView.tsx, its own real
+ * screen (the earlier placeholder reuse of AssetsList was superseded once
+ * the real Asset View was built -- AssetsList itself is untouched and still
+ * exists, just no longer linked from primary nav). "Alerts" still reuses
+ * the already-implemented AlertsArea screen under its existing /features/*
+ * route -- no duplicate screen is built. "Analytics", "Single Line Diagram"
+ * and "Settings" have no implementation yet, so they route into the
+ * existing, honest /features/* catch-all (PlaceholderArea) exactly like
+ * every other not-yet-built feature area -- never a fabricated screen.
+ */
+export const SHELL_PRIMARY_NAV: readonly NavItem[] = [
+  {
+    key: "main-dashboard",
+    label: "Main Dashboard",
+    to: "/dashboard",
+    requiresAnyOf: ["dashboard.view"],
+  },
+  { key: "asset-view", label: "Asset View", to: "/asset-view", requiresAnyOf: ["dashboard.view"] },
+  { key: "analytics", label: "Analytics", to: "/features/analytics", requiresAnyOf: ["dashboard.view"] },
+  {
+    key: "single-line-diagram",
+    label: "Single Line Diagram",
+    to: "/features/single-line-diagram",
+    requiresAnyOf: ["dashboard.view"],
+  },
+  { key: "shell-alerts", label: "Alerts", to: "/features/alerts", requiresAnyOf: ["dashboard.view"] },
+  { key: "settings", label: "Settings", to: "/features/settings", requiresAnyOf: ["dashboard.view"] },
+];
+
 export type NavSection = {
   /** undefined for the trailing, not-yet-grouped items (e.g. "features"). */
   group: NavGroup | undefined;

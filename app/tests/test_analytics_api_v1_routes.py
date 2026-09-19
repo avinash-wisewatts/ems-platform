@@ -378,7 +378,7 @@ def _energy(portal_client, **overrides):
     )
 
 
-@pytest.mark.parametrize("bad", ["raw", "5m", "15m", "1w"])
+@pytest.mark.parametrize("bad", ["raw", "5m", "15m", "1q"])
 def test_energy_invalid_resolution(portal_client, monkeypatch, bad) -> None:
     _login_global_admin(portal_client, monkeypatch)
     response = _energy(portal_client, resolution=bad)
