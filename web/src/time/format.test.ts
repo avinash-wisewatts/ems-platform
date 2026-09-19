@@ -11,10 +11,14 @@ import {
 describe("formatInTimeZone", () => {
   it("renders an ISO instant in the given IANA timezone, not the runtime's local zone", () => {
     // 2026-01-15T18:30:00Z is 00:00 the next day in Asia/Kolkata (UTC+5:30).
+    // hourCycle: "h23" (not hour12: false) -- ICU's hour12:false can render
+    // midnight as "24:00" rather than "00:00" depending on Node/runtime ICU
+    // version (observed in CI); "h23" pins the 0-23 cycle unambiguously,
+    // the same fix startOfDayInTimeZone below already applies.
     const result = formatInTimeZone("2026-01-15T18:30:00Z", "Asia/Kolkata", {
       hour: "2-digit",
       minute: "2-digit",
-      hour12: false,
+      hourCycle: "h23",
       day: "2-digit",
       month: "short",
     });
