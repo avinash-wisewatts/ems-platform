@@ -33,6 +33,14 @@ DECLARE
     v_profile_id UUID;
     v_asset UUID;
     v_row RECORD;
+    v_persisted_interval_quality TEXT;
+    v_persisted_interval_source_method TEXT;
+    v_persisted_interval_demand_kw DOUBLE PRECISION;
+    v_persisted_interval_demand_kva DOUBLE PRECISION;
+    v_persisted_interval_source_device UUID;
+    v_persisted_state_quality TEXT;
+    v_persisted_state_demand_kw DOUBLE PRECISION;
+    v_persisted_state_source_device UUID;
     v_count INTEGER;
     v_counter_direction TEXT;
     v_start_value NUMERIC;
@@ -216,6 +224,80 @@ BEGIN
     END IF;
 
     -- ------------------------------------------------------------------
+    -- 2b. Persistence regression guard (migration 252): the exact
+    --     SOURCE_BOUNDARY row just computed above must actually persist
+    --     through analytics.demand_intervals' and analytics.demand_state's
+    --     CHECK constraints. Migration 250 introduced quality_status=
+    --     'SOURCE_BOUNDARY'/source_method='NONE', but -- contrary to its
+    --     own commentary ("quality_status has no CHECK constraint") --
+    --     both tables' pre-existing migration-011 constraints rejected
+    --     these values until migration 252. Never caught by cases 1-5
+    --     above because they only call calculate_demand_window/resolve_
+    --     demand_source_for_interval directly, never the real analytics.
+    --     demand_intervals/demand_state INSERT path (analytics.refresh_
+    --     demand_analytics) that migration 252 fixes.
+    -- ------------------------------------------------------------------
+    INSERT INTO analytics.demand_intervals(
+        interval_start, interval_end, organization_id, site_id, scope_type,
+        asset_id, demand_policy_id, source_device_id, demand_kw, demand_kva,
+        peak_power_kw, energy_kwh, source_method, expected_observations,
+        observed_observations, coverage_percent, quality_status
+    ) VALUES (
+        TIMESTAMPTZ '2026-08-10 11:00:00+00', TIMESTAMPTZ '2026-08-10 11:15:00+00',
+        v_row.organization_id, v_row.site_id, v_row.scope_type,
+        v_row.asset_id, v_row.demand_policy_id, v_row.source_device_id,
+        v_row.demand_kw, v_row.demand_kva, v_row.peak_power_kw, v_row.energy_kwh,
+        v_row.source_method, v_row.expected_observations, v_row.observed_observations,
+        v_row.coverage_percent, v_row.quality_status
+    );
+
+    SELECT quality_status, source_method, demand_kw, demand_kva, source_device_id
+    INTO v_persisted_interval_quality, v_persisted_interval_source_method,
+         v_persisted_interval_demand_kw, v_persisted_interval_demand_kva,
+         v_persisted_interval_source_device
+    FROM analytics.demand_intervals
+    WHERE asset_id = v_asset AND scope_type = 'ASSET'
+      AND interval_start = TIMESTAMPTZ '2026-08-10 11:00:00+00';
+
+    IF v_persisted_interval_quality IS DISTINCT FROM 'SOURCE_BOUNDARY'
+       OR v_persisted_interval_source_method IS DISTINCT FROM 'NONE'
+       OR v_persisted_interval_demand_kw IS NOT NULL
+       OR v_persisted_interval_demand_kva IS NOT NULL
+       OR v_persisted_interval_source_device IS NOT NULL
+    THEN
+        RAISE EXCEPTION 'Expected the persisted analytics.demand_intervals row to read back quality_status=SOURCE_BOUNDARY/source_method=NONE/demand_kw=NULL/demand_kva=NULL/source_device_id=NULL, got quality_status=%/source_method=%/demand_kw=%/demand_kva=%/source_device_id=%',
+            v_persisted_interval_quality, v_persisted_interval_source_method,
+            v_persisted_interval_demand_kw, v_persisted_interval_demand_kva,
+            v_persisted_interval_source_device;
+    END IF;
+
+    INSERT INTO analytics.demand_state(
+        site_id, scope_type, asset_id, demand_policy_id, source_device_id,
+        interval_start, interval_end, current_demand_kw, current_demand_kva,
+        expected_observations, observed_observations, coverage_percent,
+        quality_status
+    ) VALUES (
+        v_row.site_id, v_row.scope_type, v_row.asset_id, v_row.demand_policy_id, v_row.source_device_id,
+        TIMESTAMPTZ '2026-08-10 11:00:00+00', TIMESTAMPTZ '2026-08-10 11:15:00+00',
+        v_row.demand_kw, v_row.demand_kva,
+        v_row.expected_observations, v_row.observed_observations, v_row.coverage_percent,
+        v_row.quality_status
+    );
+
+    SELECT quality_status, current_demand_kw, source_device_id
+    INTO v_persisted_state_quality, v_persisted_state_demand_kw, v_persisted_state_source_device
+    FROM analytics.demand_state
+    WHERE asset_id = v_asset AND scope_type = 'ASSET';
+
+    IF v_persisted_state_quality IS DISTINCT FROM 'SOURCE_BOUNDARY'
+       OR v_persisted_state_demand_kw IS NOT NULL
+       OR v_persisted_state_source_device IS NOT NULL
+    THEN
+        RAISE EXCEPTION 'Expected the persisted analytics.demand_state row to read back quality_status=SOURCE_BOUNDARY/current_demand_kw=NULL/source_device_id=NULL, got quality_status=%/current_demand_kw=%/source_device_id=%',
+            v_persisted_state_quality, v_persisted_state_demand_kw, v_persisted_state_source_device;
+    END IF;
+
+    -- ------------------------------------------------------------------
     -- 3. Resume: the NEXT interval, fully covered by device B alone,
     --    resolves normally again.
     -- ------------------------------------------------------------------
@@ -267,6 +349,7 @@ $test$;
 \echo 'PASS: a stable, fully-covering single source resolves normally'
 \echo 'PASS: calculate_demand_window computes a real VALID/PROVISIONAL ENERGY_COUNTER_DELTA result end-to-end for that source (v_cap regression guard)'
 \echo 'PASS: a mid-interval source change resolves no source and yields SOURCE_BOUNDARY with NULL demand_kw/demand_kva/source_device_id -- no splicing'
+\echo 'PASS: the SOURCE_BOUNDARY row persists through analytics.demand_intervals and analytics.demand_state CHECK constraints (migration 252 regression guard)'
 \echo 'PASS: the interval immediately after the change, once fully covered by the new source, resolves normally -- calculation resumes'
 \echo 'PASS: an interval entirely before the change still resolves to the original source -- historical immutability'
 \echo 'PASS: an asset with no confirmed source resolves no row'
