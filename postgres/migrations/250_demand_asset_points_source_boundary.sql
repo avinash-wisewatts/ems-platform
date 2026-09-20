@@ -382,14 +382,21 @@ BEGIN
             RETURN;
         END IF;
 
-        v_cap.demand_policy_id := v_policy.policy_id;
-        v_cap.demand_basis := v_policy.demand_basis;
-        v_cap.demand_interval_seconds := v_policy.demand_interval_seconds;
-        v_cap.capability_ready := TRUE;
-        v_cap.source_device_id := v_source.device_id;
-        v_cap.source_logical_point_id := v_source.logical_point_id;
-        v_cap.source_profile_id := v_source.profile_id;
-        v_cap.selected_method := v_source.selected_method;
+        -- v_cap is an untyped RECORD; unlike the SITE branch (which gets its
+        -- structure from resolve_demand_capability's SELECT * INTO above),
+        -- it must be given a structure via a single SELECT INTO here --
+        -- field-by-field assignment on a not-yet-assigned RECORD is invalid
+        -- in PL/pgSQL.
+        SELECT
+            v_policy.policy_id               AS demand_policy_id,
+            v_policy.demand_basis            AS demand_basis,
+            v_policy.demand_interval_seconds AS demand_interval_seconds,
+            TRUE                             AS capability_ready,
+            v_source.device_id               AS source_device_id,
+            v_source.logical_point_id        AS source_logical_point_id,
+            v_source.profile_id              AS source_profile_id,
+            v_source.selected_method         AS selected_method
+        INTO v_cap;
     END IF;
 
     v_basis := v_cap.demand_basis;

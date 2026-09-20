@@ -10,12 +10,12 @@ printf '%s\n' '=== Demand source-boundary assertions (migration 250) ==='
 # analytics.calculate_demand_window's ASSET-scope gate directly against
 # real metadata.asset_points/config.device_point_configuration rows.
 # Focuses on the new containment/boundary logic itself (migration 250's
-# actual change); a full end-to-end ENERGY_COUNTER_DELTA numeric result
-# additionally requires config.energy_register_semantics fixtures and real
-# telemetry.energy_measurements register rows, exercised here for the
-# regression case only -- the boundary/no-source cases need no telemetry
-# at all, since calculate_demand_window short-circuits before any
-# calculation branch runs when no single source spans the interval.
+# actual change). The regression case (1b) additionally seeds real
+# telemetry.energy_measurements register rows and runs calculate_demand_
+# window end-to-end to a real VALID/PROVISIONAL ENERGY_COUNTER_DELTA
+# result -- the boundary/no-source cases need no telemetry at all, since
+# calculate_demand_window short-circuits before any calculation branch
+# runs when no single source spans the interval.
 docker compose -f "${PROJECT_ROOT}/compose.test.yaml" exec -T timescaledb-test \
 psql -X -v ON_ERROR_STOP=1 -U ems_admin -d ems_test <<'SQL'
 BEGIN;
@@ -34,6 +34,9 @@ DECLARE
     v_asset UUID;
     v_row RECORD;
     v_count INTEGER;
+    v_counter_direction TEXT;
+    v_start_value NUMERIC;
+    v_end_value NUMERIC;
 BEGIN
     SELECT id INTO v_energy_meter_category
     FROM config.device_categories WHERE lower(name) = 'energy meter' ORDER BY id LIMIT 1;
@@ -119,6 +122,50 @@ BEGIN
     IF v_row.device_id IS DISTINCT FROM v_device_a OR v_row.selected_method IS DISTINCT FROM 'ENERGY_COUNTER_DELTA' THEN
         RAISE EXCEPTION 'Expected device A / ENERGY_COUNTER_DELTA for a stable, fully-covering source, got device=%/method=%',
             v_row.device_id, v_row.selected_method;
+    END IF;
+
+    -- ------------------------------------------------------------------
+    -- 1b. The same stable source through calculate_demand_window's ASSET
+    --     success path end-to-end (not just resolve_demand_source_for_
+    --     interval in isolation). This is the exact path that crashed
+    --     unconditionally on an uninitialized v_cap RECORD whenever any
+    --     source actually resolved, caught via CI on PR #73 -- this
+    --     assertion is the regression guard for that fix.
+    -- ------------------------------------------------------------------
+    SELECT ers.counter_direction INTO v_counter_direction
+    FROM config.energy_register_semantics AS ers
+    WHERE ers.profile_id = v_profile_id AND ers.logical_point_id = v_energy_import_total_id AND ers.is_active
+    LIMIT 1;
+
+    IF v_counter_direction = 'DECREASING' THEN
+        v_start_value := 1000050; v_end_value := 1000000;
+    ELSE
+        v_start_value := 1000000; v_end_value := 1000050;
+    END IF;
+
+    INSERT INTO telemetry.energy_measurements(
+        bucket_start, received_at, source_timestamp,
+        organization_id, site_id, gateway_id, device_id, asset_id,
+        measurement_interval_seconds, quality_code, is_estimated,
+        import_energy_total_wh
+    ) VALUES
+        (TIMESTAMPTZ '2026-08-10 10:00:05+00', TIMESTAMPTZ '2026-08-10 10:00:10+00', TIMESTAMPTZ '2026-08-10 10:00:05+00',
+         v_org, v_site, v_gateway, v_device_a, v_asset, 60, 0, FALSE, v_start_value),
+        (TIMESTAMPTZ '2026-08-10 10:14:55+00', TIMESTAMPTZ '2026-08-10 10:15:00+00', TIMESTAMPTZ '2026-08-10 10:14:55+00',
+         v_org, v_site, v_gateway, v_device_a, v_asset, 60, 0, FALSE, v_end_value);
+
+    SELECT * INTO v_row
+    FROM analytics.calculate_demand_window(
+        v_site, 'ASSET', v_asset,
+        TIMESTAMPTZ '2026-08-10 10:00:00+00', TIMESTAMPTZ '2026-08-10 10:15:00+00',
+        TIMESTAMPTZ '2026-08-10 10:15:00+00', TRUE
+    );
+    IF v_row.source_device_id IS DISTINCT FROM v_device_a THEN
+        RAISE EXCEPTION 'Expected calculate_demand_window to resolve device A as the ASSET-scope source, got %', v_row.source_device_id;
+    END IF;
+    IF v_row.quality_status NOT IN ('VALID', 'PROVISIONAL') OR v_row.demand_kw IS NULL THEN
+        RAISE EXCEPTION 'Expected a computed VALID/PROVISIONAL ENERGY_COUNTER_DELTA result for a stable, fully-covering source, got quality_status=%/demand_kw=%',
+            v_row.quality_status, v_row.demand_kw;
     END IF;
 
     -- ------------------------------------------------------------------
@@ -218,6 +265,7 @@ END;
 $test$;
 
 \echo 'PASS: a stable, fully-covering single source resolves normally'
+\echo 'PASS: calculate_demand_window computes a real VALID/PROVISIONAL ENERGY_COUNTER_DELTA result end-to-end for that source (v_cap regression guard)'
 \echo 'PASS: a mid-interval source change resolves no source and yields SOURCE_BOUNDARY with NULL demand_kw/demand_kva/source_device_id -- no splicing'
 \echo 'PASS: the interval immediately after the change, once fully covered by the new source, resolves normally -- calculation resumes'
 \echo 'PASS: an interval entirely before the change still resolves to the original source -- historical immutability'
