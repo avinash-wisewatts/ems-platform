@@ -149,6 +149,15 @@ BEGIN
             INSERT INTO metadata.asset_devices(asset_id, device_id, relationship_type)
             VALUES (v_asset, v_dev, 'PRIMARY_METER');
 
+            -- analytics.refresh_demand_analytics's ASSET-scope enumeration/
+            -- resolution (migration 250) requires a confirmed metadata.
+            -- asset_points binding, not PRIMARY_METER/asset_devices alone.
+            -- Open-ended and comfortably before every fixture timestamp used
+            -- below (earliest is h-9 days in T-Refin-scope) so it covers the
+            -- whole suite, including the near-"now" T-WM-* windows.
+            INSERT INTO metadata.asset_points(asset_id, device_id, logical_point_id, organization_id, effective_from, effective_to)
+            VALUES (v_asset, v_dev, v_lp_active_power, v_org, v_h - INTERVAL '15 days', NULL);
+
             INSERT INTO t210(k,u) VALUES
                 ('org_'||v_tag, v_org), ('site_'||v_tag, v_site), ('gw_'||v_tag, v_gw),
                 ('asset_'||v_tag, v_asset), ('dev_'||v_tag, v_dev);

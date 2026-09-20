@@ -143,6 +143,14 @@ BEGIN
     INSERT INTO metadata.asset_devices(asset_id, device_id, relationship_type)
     VALUES (v_asset, v_device, 'PRIMARY_METER');
 
+    -- analytics.refresh_demand_analytics's ASSET-scope enumeration/resolution
+    -- (migration 250) now requires a confirmed metadata.asset_points binding,
+    -- not PRIMARY_METER/asset_devices alone. The profile above maps only
+    -- ACTIVE_POWER_TOTAL, which is exactly the point the TIME_WEIGHTED_POWER
+    -- fallback this fixture exercises requires.
+    INSERT INTO metadata.asset_points(asset_id, device_id, logical_point_id, organization_id, effective_from, effective_to)
+    VALUES (v_asset, v_device, v_lp_active_power, v_org, TIMESTAMPTZ '2026-08-10 00:00:00+00', NULL);
+
     SELECT selected_method, readiness_status
     INTO v_method, v_status
     FROM analytics.resolve_demand_capability(v_site, 'ASSET', v_asset, v_test_now);
