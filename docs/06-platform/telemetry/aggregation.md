@@ -1,7 +1,10 @@
 # Aggregation Architecture
 
-Status: CURRENT · Last reviewed: 2026-08-24
-Verification basis: Repository + Staging (live row counts, timestamps, capture-policy resolution)
+Status: CURRENT · Last reviewed: 2026-09-24
+Verification basis: Repository + Staging (live row counts, timestamps, capture-policy resolution; retention/refresh jobs re-read from `timescaledb_information.jobs` on 2026-09-23)
+
+Target architecture for all resolutions (UTC time basis, tiers, retention,
+windows): [ADR-019](../../00-governance/decisions/ADR-019-analytical-backbone-time-basis-and-tiers.md).
 
 ## Two parallel aggregation systems — do not confuse them
 
@@ -41,13 +44,63 @@ Verified for Meenaxy Pharma's site `UNIT_2` (`capture_interval_seconds=60`):
 if this isn't known** — check the site's capture-interval policy first;
 see [../../10-operations/troubleshooting.md](../../10-operations/troubleshooting.md).
 
-## No retention policy currently implemented
+## Retention and compression currently in force (staging, verified 2026-09-23)
 
-Explicitly stated in `postgres/ddl/143_*.sql`: "No retention policy yet.
-The semantic history remains authoritative until validated higher-
-resolution semantic rollups and their retention contracts have been
-implemented." Treat retention as **unknown/not implemented** for all five
-resolutions unless independently re-checked.
+**Correction:** this section used to say "No retention policy currently
+implemented", quoting `postgres/ddl/143_*.sql`'s header. That header is out
+of date. Staging's `timescaledb_information.jobs` shows these policies:
+
+| Object | Retention | Compression after |
+|---|---|---|
+| `analytics.energy_consumption_1min` | 180 days | 7 days |
+| `analytics.energy_consumption_5min` | 2 years | 14 days |
+| `analytics.energy_consumption_15min` | 2 years | 7 days |
+| `analytics.energy_consumption_hourly` | 5 years | 30 days |
+| `analytics.energy_consumption_daily` | none | 90 days |
+| `telemetry.normalized_points` | 90 days | 1 day |
+| `analytics.generic_telemetry_15m` / `_1h` (migration 185) | none | none |
+
+ADR-019 sets different targets (Energy 1m 90d, 15m 120d uncompressed, 1h 1y,
+1d 8y). Those Energy retention changes are **not applied**; they are an
+irreversible deployment gate (ADR-019 D6).
+
+## Generic point-telemetry tier: `analytics.point_telemetry_15m` (migration 264)
+
+Status: **implemented, not deployed** (ADR-019 M1).
+
+- Continuous aggregate over `telemetry.normalized_points`, UTC 15-minute
+  grid, grouped by organization/site/device/logical point. It stores
+  `sum_value`, `sample_count`, `min_value`, `max_value` over
+  `quality_code = 'GOOD'` numeric samples. Average = `sum_value /
+  sample_count` at read time. Keyed by device/point, not asset:
+  attribution resolves through `metadata.asset_points` when read.
+- Two disjoint, bounded refresh policies: `[now-2d, now-1m)` every 5 minutes,
+  and `[now-35d, now-2d)` daily at 21:30 UTC, which catches late or
+  recovered telemetry.
+- 120-day retention; no compression; `materialized_only`.
+- SELECT for `ems_app` and `ems_readonly` only (not `grafana_reader`: it is
+  not tenant-scoped).
+- Intended upstream of the future generic 30m (derived when read), 1h and 1d
+  tiers. The legacy Explorer aggregates `generic_telemetry_15m`/`_1h` remain
+  in service, unchanged, until the Explorer is repointed.
+
+**Never refresh with NULL bounds.** Refreshing a continuous aggregate over
+a window whose raw data has been dropped deletes the aggregate rows.
+`normalized_points` is kept 90 days and this tier 120, so
+`refresh_continuous_aggregate('analytics.point_telemetry_15m', NULL, NULL)`
+would destroy the 90–120-day history. For manual or initial backfill, use
+`CALL analytics.backfill_point_telemetry_15m(p_from, p_to[, p_slice])`
+(top-level CALL, `ems_admin`). It requires 15-minute-aligned, non-future
+bounds, commits per slice, and refuses to start before the oldest retained
+`normalized_points` chunk. The migration 185 and 046 headers suggest an
+unbounded refresh for their own aggregates; do not copy that pattern.
+
+**Initial backfill after deployment (operator step):** the two policies
+fill the last 35 days by themselves. The late-data policy's first run
+materializes about 33 days in committed batches, so run the backfill
+procedure first to spread that load. Older retained history (35 to about 90
+days) is filled once with the backfill procedure from the oldest
+`normalized_points` chunk start up to `now() - 35 days`, 15-minute aligned.
 
 ## Repository/live gap: canonical `ddl/` coverage
 
