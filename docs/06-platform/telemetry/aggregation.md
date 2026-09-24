@@ -138,6 +138,15 @@ unscheduled until migration 266.
 - **Not yet in `analytics.v_pipeline_health`.** Adding it means replacing an
   existing view, so it is left for a later step. Until then, monitor it with
   `telemetry.pipeline_state` and `analytics.pipeline_reconciliation_log`.
+- **Forward-job failures.** A run that fails, including partway through
+  the refresh, rolls back completely. No partial 1h rows are kept, and
+  `pipeline_state` keeps its previous checkpoint and status, because the
+  handler's `FAILED` write rolls back with the run. So `pipeline_state`
+  never shows a failure. The failure is recorded in
+  `timescaledb_information.job_stats` (`last_run_status = 'Failed'`) and
+  `job_errors`, and the next successful run retries the same window from the
+  unchanged checkpoint. A test in `app/tests/test_point_telemetry_1h.py`
+  proves this for both a direct call and a run by the scheduler.
 
 ## Repository/live gap: canonical `ddl/` coverage
 

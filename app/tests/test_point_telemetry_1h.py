@@ -11,6 +11,7 @@ tier is built only through the migration-265 routines. Tests that tamper with
 
 import os
 import re
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -775,6 +776,186 @@ def test_forward_rejects_bad_config_without_moving_checkpoint(conn, fx):
     with pytest.raises(psycopg.errors.RaiseException):
         _run_forward(conn, {"overlap": "-1 hour"})
     assert _checkpoint(conn)[0] == anchor
+
+
+FAIL_SEQ = "public.zz_265_forward_fail_seq"
+FAIL_FN = "public.zz_265_forward_fail_after_two_rows"
+FAIL_TRIGGER = "zz_265_forward_fail_after_two_rows"
+
+
+def _arm_mid_refresh_failure(conn):
+    """Test-only injection: the third row the refresh inserts into the 1h table
+    raises, so the INSERT fails partway through. The sequence is not
+    transactional, so it proves rows were being written before the failure."""
+    conn.execute(f"DROP SEQUENCE IF EXISTS {FAIL_SEQ}")
+    conn.execute(f"CREATE SEQUENCE {FAIL_SEQ}")
+    conn.execute(
+        f"""
+        CREATE OR REPLACE FUNCTION {FAIL_FN}() RETURNS trigger LANGUAGE plpgsql AS $f$
+        BEGIN
+            IF nextval('{FAIL_SEQ}') >= 3 THEN
+                RAISE EXCEPTION 'injected mid-refresh failure (test 265)';
+            END IF;
+            RETURN NEW;
+        END
+        $f$
+        """
+    )
+    conn.execute(
+        f"""
+        CREATE TRIGGER {FAIL_TRIGGER} BEFORE INSERT ON {TABLE}
+        FOR EACH ROW EXECUTE FUNCTION {FAIL_FN}()
+        """
+    )
+
+
+def _disarm_mid_refresh_failure(conn):
+    conn.execute(f"DROP TRIGGER IF EXISTS {FAIL_TRIGGER} ON {TABLE}")
+    conn.execute(f"DROP FUNCTION IF EXISTS {FAIL_FN}()")
+    conn.execute(f"DROP SEQUENCE IF EXISTS {FAIL_SEQ}")
+
+
+def _rows_in(conn, frm, to):
+    return _one(
+        conn,
+        f"SELECT count(*) FROM {TABLE} WHERE bucket_start >= %s AND bucket_start < %s",
+        (frm, to),
+    )[0]
+
+
+def _state(conn):
+    return _one(
+        conn,
+        """
+        SELECT last_received_at, last_status, last_inserted_rows, last_completed_at, last_error
+        FROM telemetry.pipeline_state WHERE pipeline_name = %s
+        """,
+        (PIPELINE,),
+    )
+
+
+def test_forward_failure_mid_refresh_rolls_back_is_recorded_and_retries(conn, fx):
+    lp = fx["lp"]
+    _run_15m_forward_policy(conn)
+    closed = _hour(_watermark(conn))
+    start = closed - timedelta(hours=3)          # checkpoint X
+    window_from = start - timedelta(hours=2)     # X - overlap
+
+    # Four new hours of data inside the forward window [X - 2h, closed).
+    for h in range(4):
+        _insert_raw(conn, lp, window_from + timedelta(hours=h, minutes=7), Decimal(200 + h))
+    _run_15m_forward_policy(conn)
+    closed = _hour(_watermark(conn))
+
+    # Treat the window as not yet built, and fix a known prior state.
+    conn.execute(f"DELETE FROM {TABLE} WHERE bucket_start >= %s", (window_from,))
+    conn.execute(
+        """
+        UPDATE telemetry.pipeline_state
+        SET last_received_at = %s, last_status = 'SUCCESS', last_error = NULL
+        WHERE pipeline_name = %s
+        """,
+        (start, PIPELINE),
+    )
+    before = _state(conn)
+
+    fwd_job = _one(
+        conn,
+        """
+        SELECT job_id FROM timescaledb_information.jobs
+        WHERE proc_schema = 'analytics' AND proc_name = 'run_point_telemetry_1h_job'
+        """,
+    )[0]
+
+    _arm_mid_refresh_failure(conn)
+    try:
+        # (A) Direct call: the failure surfaces to the caller, and the whole
+        # run -- partial 1h rows, RUNNING/FAILED status writes, checkpoint --
+        # rolls back atomically. Nothing is recorded as complete.
+        with pytest.raises(psycopg.errors.RaiseException, match="injected mid-refresh failure"):
+            _run_forward(conn)
+        assert _one(conn, f"SELECT last_value FROM {FAIL_SEQ}")[0] >= 3  # failed partway
+        assert _state(conn) == before
+        assert _rows_in(conn, window_from, closed + timedelta(hours=1)) == 0
+
+        # (B) The registered job run by the TimescaleDB scheduler: the failure
+        # is recorded in job_stats / job_errors; pipeline_state and the table
+        # are still untouched.
+        conn.execute(f"ALTER SEQUENCE {FAIL_SEQ} RESTART")
+        failures_before = _one(
+            conn, "SELECT total_failures FROM timescaledb_information.job_stats WHERE job_id = %s", (fwd_job,)
+        )[0]
+        conn.execute("SELECT alter_job(%s, scheduled => true, next_start => now())", (fwd_job,))
+        try:
+            deadline = time.monotonic() + 120
+            while time.monotonic() < deadline:
+                failures = _one(
+                    conn,
+                    "SELECT total_failures FROM timescaledb_information.job_stats WHERE job_id = %s",
+                    (fwd_job,),
+                )[0]
+                if failures > failures_before:
+                    break
+                time.sleep(1)
+            else:
+                pytest.fail("scheduler did not record the forward-job failure within 120 s")
+        finally:
+            conn.execute("SELECT alter_job(%s, scheduled => false)", (fwd_job,))
+
+        assert _one(
+            conn, "SELECT last_run_status FROM timescaledb_information.job_stats WHERE job_id = %s", (fwd_job,)
+        ) == ("Failed",)
+        assert "injected mid-refresh failure" in _one(
+            conn,
+            """
+            SELECT err_message FROM timescaledb_information.job_errors
+            WHERE job_id = %s ORDER BY finish_time DESC LIMIT 1
+            """,
+            (fwd_job,),
+        )[0]
+        assert _state(conn) == before
+        assert _rows_in(conn, window_from, closed + timedelta(hours=1)) == 0
+    finally:
+        _disarm_mid_refresh_failure(conn)
+
+    assert _one(
+        conn, "SELECT scheduled FROM timescaledb_information.jobs WHERE job_id = %s", (fwd_job,)
+    ) == (False,)
+
+    # A subsequent successful run retries the same window from the unchanged
+    # checkpoint and completes it exactly.
+    _run_forward(conn)
+    ckpt, status, rows, _, error = _state(conn)
+    assert status == "SUCCESS" and error is None and rows >= 4
+    assert ckpt > start and ckpt == _hour(ckpt)
+    for h in range(4):
+        hour = window_from + timedelta(hours=h)
+        assert _row(conn, fx, hour) is not None, hour  # every retried hour is now built
+    # ... and built exactly: every 1h row in the retried window equals its 15m parts.
+    mismatches = _one(
+        conn,
+        f"""
+        WITH src AS (
+            SELECT date_bin('1 hour', bucket_start, TIMESTAMPTZ '2000-01-01 00:00:00+00') AS b,
+                   organization_id, site_id, device_id, logical_point_id,
+                   sum(sum_value) s, sum(sample_count) n, min(min_value) mn, max(max_value) mx, count(*) c
+            FROM analytics.point_telemetry_15m
+            WHERE bucket_start >= %(f)s AND bucket_start < %(t)s
+            GROUP BY 1, 2, 3, 4, 5
+        ),
+        dst AS (
+            SELECT bucket_start AS b, organization_id, site_id, device_id, logical_point_id,
+                   sum_value s, sample_count n, min_value mn, max_value mx, source_bucket_count c
+            FROM {TABLE}
+            WHERE bucket_start >= %(f)s AND bucket_start < %(t)s
+        )
+        SELECT count(*) FROM src FULL JOIN dst USING (b, organization_id, site_id, device_id, logical_point_id)
+        WHERE src.b IS NULL OR dst.b IS NULL
+           OR (src.s, src.n, src.mn, src.mx, src.c) IS DISTINCT FROM (dst.s, dst.n, dst.mn, dst.mx, dst.c)
+        """,
+        {"f": window_from, "t": ckpt},
+    )[0]
+    assert mismatches == 0
 
 
 # ---------------------------------------------------------------------------
