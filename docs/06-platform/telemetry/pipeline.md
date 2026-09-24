@@ -79,6 +79,56 @@ Job 1000 was resumed from a ~15.5h backlog and **self-drained to a
 bounded +6h at ~2,840 rows/s; steady-state 1-minute cycles now complete in
 ~2s). See [../../10-operations/incident-history.md](../../10-operations/incident-history.md).
 
+### Routing window end: bounded to recent `event_time` (migration 267)
+
+**Status: implemented, not yet deployed.**
+
+The two routing loaders take `window_end` as
+`max(platform_received_at)` over `telemetry.normalized_points`. Until
+migration 267 this was a **global** max. `normalized_points` is partitioned
+on `event_time` and compressed after 1 day, and compressed chunks have no
+index on `platform_received_at`, so every routing run decompressed and
+sorted all compressed history.
+
+On staging (2026-09-24), one authorized `EXPLAIN (ANALYZE, BUFFERS)` of that
+lookup took **205.3 s** and decompressed **71.38M rows**, about 96% of its
+time. That was longer than a typical routing run. The 1-minute routing jobs
+had slipped to roughly one run every 2 minutes, with 3–6 minutes of lag,
+and the cost grew with every newly compressed weekly chunk.
+
+Migration 267 limits the lookup to `event_time >= now() - INTERVAL '1 day'`,
+which reads only uncompressed chunks. The original global lookup remains
+**only** as the fallback when the bounded result is NULL (no row with a
+recent `event_time`). Nothing else changes: the checkpoint, the 2-hour
+`p_max_window`, the effective 1-minute overlap, selection, upsert and
+rollback. The migration's postconditions prove both bodies are byte-identical
+outside the replaced block.
+
+- **No row can be skipped.** The bounded max is never above the global max.
+  It equals the global max in normal ingestion, and is only lower when the
+  newest receipt belongs to an old-`event_time` row (a device backlog). Then
+  routing is delayed, never skipped.
+- **The bound must stay at or below `compress_after`** for
+  `normalized_points`, currently 1 day. Migration 267 asserts this, and
+  `app/tests/test_routing_bounded_window_end.py` reads the live policy to
+  check it. Change the bound if the compression policy changes.
+- **Not the normalization checkpoint.** `pipeline_state('normalized_points').last_received_at`
+  is the raw-receipt frontier the normalizer *considered*. It runs ahead of
+  normalized rows while samples wait for capture-bucket finalization (62 s
+  ahead when measured on staging). Using it as the routing window end would
+  permanently skip those deferred rows.
+- **Environment loader source of truth.** It is generated. The change lives in
+  `scripts/codegen/templates/load_environment_measurements_incremental.sql.tmpl`,
+  and the artifact was regenerated with `scripts/codegen/generate_routing_procedure.py`.
+
+**Known, pre-existing, and out of scope:**
+- Rows re-created by failed-message recovery keep their original
+  `received_at`, so they fall behind the routing window and are not routed.
+- The routing overlap is effectively 1 minute, while the global capture
+  policy allows 900 s of late tolerance.
+
+Both need separate decisions.
+
 ### Failure quarantine and recovery (jobs 1076/1068/1077)
 
 Three further jobs sit alongside the loaders above: `run_raw_receipt_state_job`

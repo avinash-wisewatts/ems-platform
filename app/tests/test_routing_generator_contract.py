@@ -34,12 +34,38 @@ ARTIFACT = REPO / "scripts" / "codegen" / "generated" / "load_environment_measur
 MIG_226 = REPO / "postgres" / "migrations" / "226_environment_space_binding.sql"
 MIG_227 = REPO / "postgres" / "migrations" / "227_parameter_routing_foundation.sql"
 MIG_228 = REPO / "postgres" / "migrations" / "228_device_specific_asset_space_point_binding.sql"
+MIG_267 = REPO / "postgres" / "migrations" / "267_routing_bounded_window_end.sql"
 MANIFEST = REPO / "postgres" / "restructure_manifest.csv"
 
 # The Phase 2 amendment (migration 228) adds exactly one predicate to the
 # generated Space-resolution sub-select; every other token of the body is still
 # the verbatim migration-226 body.
 _MIG_228_EXTRA_TOKENS = ["AND", "sp", ".", "device_id", "=", "ranked", ".", "device_id"]
+
+# Migration 267 replaces exactly one block -- the window-end lookup -- with the
+# event_time-bounded lookup plus the global fallback. Reverting that block must
+# give back the pre-267 body exactly.
+_MIG_267_OLD_BLOCK = (
+    "    SELECT max(platform_received_at) INTO v_window_end\n"
+    "    FROM telemetry.normalized_points\n"
+    "    WHERE platform_received_at IS NOT NULL;"
+)
+_MIG_267_NEW_BLOCK = (
+    "    -- Migration 267: bound the window-end lookup to recent event_time so it only\n"
+    "    -- reads uncompressed chunks (normalized_points compress_after = 1 day). The\n"
+    "    -- bounded max can only be lower than the global max, which delays -- never\n"
+    "    -- skips -- rows; the global lookup remains the fallback when no row has a\n"
+    "    -- recent event_time.\n"
+    "    SELECT max(platform_received_at) INTO v_window_end\n"
+    "    FROM telemetry.normalized_points\n"
+    "    WHERE platform_received_at IS NOT NULL\n"
+    "      AND event_time >= now() - INTERVAL '1 day';\n"
+    "    IF v_window_end IS NULL THEN\n"
+    "      SELECT max(platform_received_at) INTO v_window_end\n"
+    "      FROM telemetry.normalized_points\n"
+    "      WHERE platform_received_at IS NOT NULL;\n"
+    "    END IF;"
+)
 
 
 def _find_sublist(hay: list[str], needle: list[str]) -> int:
@@ -88,6 +114,19 @@ def _strip_line_comments(sql: str) -> str:
     )
 
 
+def _revert_267_text(sql: str) -> str:
+    assert sql.count(_MIG_267_NEW_BLOCK) == 1, "the migration-267 window-end block must appear exactly once"
+    return sql.replace(_MIG_267_NEW_BLOCK, _MIG_267_OLD_BLOCK)
+
+
+def _revert_267_tokens(tokens: list[str]) -> list[str]:
+    new = _tokens(_strip_line_comments(_MIG_267_NEW_BLOCK))
+    old = _tokens(_MIG_267_OLD_BLOCK)
+    i = _find_sublist(tokens, new)
+    assert i != -1, "the migration-267 window-end block is missing from the generated body"
+    return tokens[:i] + old + tokens[i + len(new):]
+
+
 # --------------------------------------------------------------------------- #
 # generator output / determinism
 # --------------------------------------------------------------------------- #
@@ -116,13 +155,13 @@ def test_render_ignores_dict_key_order():
 # single migration-228 (Phase 2 amendment) device predicate and nothing else
 # --------------------------------------------------------------------------- #
 
-def test_generated_body_is_migration_226_plus_only_the_228_device_predicate():
+def test_generated_body_is_migration_226_plus_only_the_228_predicate_and_267_window_end():
     body226 = "\n".join(MIG_226.read_text(encoding="utf-8").splitlines()[110:413])
     gen_full = ARTIFACT.read_text(encoding="utf-8")
     b226, _ = _split_body_comment(body226)
     bgen, _ = _split_body_comment(gen_full)
     tb226 = _tokens(_strip_line_comments(b226))
-    tbgen = _tokens(_strip_line_comments(bgen))
+    tbgen = _revert_267_tokens(_tokens(_strip_line_comments(bgen)))
 
     i = _find_sublist(tbgen, _MIG_228_EXTRA_TOKENS)
     assert i != -1, (
@@ -295,14 +334,24 @@ def test_manifest_registers_migration_227():
     assert r["target_path"] == "postgres/migrations/227_parameter_routing_foundation.sql"
 
 
-def test_migration_228_embedded_body_equals_generated_artifact():
-    # Migration 228 (the Phase 2 amendment) now owns the deployed body: it
-    # CREATE OR REPLACEs the loader with the current generated artifact.
-    mig = MIG_228.read_text(encoding="utf-8")
+def test_migration_267_embedded_body_equals_generated_artifact():
+    # Migration 267 now owns the deployed body: it CREATE OR REPLACEs the
+    # loader with the current generated artifact, verbatim.
+    mig = MIG_267.read_text(encoding="utf-8")
     art = ARTIFACT.read_text(encoding="utf-8").rstrip("\n")
     start = mig.index("CREATE OR REPLACE PROCEDURE telemetry.load_environment_measurements_incremental")
     end = mig.index("read at runtime.';") + len("read at runtime.';")
     assert mig[start:end] == art
+
+
+def test_migration_228_embedded_body_is_the_artifact_before_the_267_window_end():
+    # Migration 228's embedded body is the pre-267 artifact: identical to the
+    # current generated artifact except for the migration-267 window-end block.
+    mig = MIG_228.read_text(encoding="utf-8")
+    art = ARTIFACT.read_text(encoding="utf-8").rstrip("\n")
+    start = mig.index("CREATE OR REPLACE PROCEDURE telemetry.load_environment_measurements_incremental")
+    end = mig.index("read at runtime.';") + len("read at runtime.';")
+    assert mig[start:end] == _revert_267_text(art)
 
 
 def test_migration_227_embedded_body_is_the_228_body_minus_the_device_predicate():
@@ -315,7 +364,7 @@ def test_migration_227_embedded_body_is_the_228_body_minus_the_device_predicate(
     body227, _ = _split_body_comment(mig[start:end])
     bgen, _ = _split_body_comment(ARTIFACT.read_text(encoding="utf-8"))
     t227 = _tokens(_strip_line_comments(body227))
-    tgen = _tokens(_strip_line_comments(bgen))
+    tgen = _revert_267_tokens(_tokens(_strip_line_comments(bgen)))
     i = _find_sublist(tgen, _MIG_228_EXTRA_TOKENS)
     assert i != -1
     assert tgen[:i] + tgen[i + len(_MIG_228_EXTRA_TOKENS):] == t227
