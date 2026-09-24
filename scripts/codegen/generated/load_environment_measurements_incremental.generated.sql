@@ -40,9 +40,20 @@ BEGIN
     SET last_started_at=clock_timestamp(), last_status='RUNNING', last_error=NULL, updated_at=now()
     WHERE pipeline_name=v_pipeline_name;
 
+    -- Migration 267: bound the window-end lookup to recent event_time so it only
+    -- reads uncompressed chunks (normalized_points compress_after = 1 day). The
+    -- bounded max can only be lower than the global max, which delays -- never
+    -- skips -- rows; the global lookup remains the fallback when no row has a
+    -- recent event_time.
     SELECT max(platform_received_at) INTO v_window_end
     FROM telemetry.normalized_points
-    WHERE platform_received_at IS NOT NULL;
+    WHERE platform_received_at IS NOT NULL
+      AND event_time >= now() - INTERVAL '1 day';
+    IF v_window_end IS NULL THEN
+      SELECT max(platform_received_at) INTO v_window_end
+      FROM telemetry.normalized_points
+      WHERE platform_received_at IS NOT NULL;
+    END IF;
     IF v_window_end IS NULL THEN
         UPDATE telemetry.pipeline_state
         SET last_completed_at=clock_timestamp(), last_inserted_rows=0,
