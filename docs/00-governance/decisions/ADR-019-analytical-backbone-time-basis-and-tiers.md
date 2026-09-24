@@ -1,8 +1,9 @@
 # ADR-019: Analytical Backbone — UTC Time Basis, Resolution Tiers, Retention
 
-Status: Decided (architecture). **M1 implemented, not deployed** (migration
-264, branch `feature/analytics-backbone-m1-point-telemetry-15m`). M2 onwards
-not implemented.
+Status: Decided (architecture). **M1 deployed to staging and backfilled**
+(migration 264, PR #75, 2026-09-24; not in production). **M2 stage 1
+implemented, not deployed** (migration 265; jobs unscheduled). M2 activation
+(migration 266) and M3 onwards not implemented.
 Date: 2026-09-24
 Decision owners: Product + Architecture
 Related: [ADR-007](ADR-007-analytics-api-boundary.md) (Analytics API is the
@@ -103,8 +104,10 @@ organization/site/device/logical point, over `numeric_value IS NOT NULL AND
 quality_code = 'GOOD'` samples.
 
 - Refresh: two disjoint, bounded policies: `[now-2d, now-1m)` every 5
-  minutes, and `[now-35d, now-2d)` daily (first run at 21:30 UTC) for
-  late/recovered data. Refresh is invalidation-driven and batched (10
+  minutes, and `[now-35d, now-2d)` daily at 21:30 UTC for late/recovered
+  data. Correction: migration 264's start-time expression put the first
+  late-data run one day later than its comments say. On staging it first
+  runs at 2026-09-25 21:30 UTC, not the evening of deployment. Refresh is invalidation-driven and batched (10
   buckets per committed batch by default).
 - Retention: 120 days. No compression. `materialized_only = true`.
 - `analytics.backfill_point_telemetry_15m(p_from, p_to, p_slice)`: the only
@@ -129,6 +132,72 @@ Energy routing layer requires `GOOD` on all 59 value fields. Partial
 coverage, gaps and data availability are handled by the downstream analytical
 read layer, not by this tier. The filter cannot change later without a
 rebuild, and a rebuild recovers only 90 days of raw telemetry.
+
+M1 staging state: deployed 2026-09-24 (merge `b847748`). Backfilled from
+2026-08-20 to 2026-09-22 12:00 IST in 1-day slices, then validated exactly
+against raw `normalized_points` for every day; no gaps.
+
+## M2 implementation (migration 265, stage 1 of 2)
+
+Decisions (2026-09-24): widen the reconcile-log tier CHECK additively; roll
+out in two stages (265 creates everything unscheduled, backfill and
+validate, 266 activates); keep `source_bucket_count`; NOT NULL identity
+with a plain unique index; the reconcile compares group count, total
+`sample_count`, total `sum_value`, MIN(`min_value`), MAX(`max_value`) and
+total `source_bucket_count`, and repairs any mismatch.
+
+`analytics.point_telemetry_1h`: a job-built hypertable (7-day chunks) on the
+UTC hour grid, which a CHECK constraint enforces. It is derived only from
+`analytics.point_telemetry_15m`: sum of `sum_value`, sum of `sample_count`,
+min of `min_value`, max of `max_value`, and `source_bucket_count` (1–4
+contributing 15m buckets). `source_bucket_count` is coverage metadata for
+the read layer, not a customer-facing field. Identity (`organization_id`,
+`site_id`, `device_id`, `logical_point_id`, `bucket_start`) is NOT NULL,
+with a plain unique index. It has no asset or timezone column.
+
+- `analytics.refresh_point_telemetry_1h(p_from, p_to)` is the only writer.
+  It requires hour-aligned bounds of at most 7 days, never past the last
+  closed 15m hour. It does a value-aware upsert (unchanged rows are not
+  rewritten) and never removes rows.
+- **Closed hours.** The 15m watermark
+  (`analytics.point_telemetry_15m_watermark()`) is TimescaleDB's
+  materialization watermark: the end of the newest materialized 15m bucket
+  that holds data. It is not a timeline position. The 15m refresh only
+  materializes buckets that lie fully inside its window, so a watermark at
+  or past an hour's end means all four of that hour's buckets were
+  materialized. If telemetry stops, the watermark stops and the forward job
+  reports `NO_SOURCE_DATA`.
+- **Forward job** `analytics.run_point_telemetry_1h_job`: every 15 minutes,
+  with `lookback` 2 days (first-run floor), `max_catchup_window` 2 days and
+  `overlap` 2 hours. It follows the migration 217 UTC-grid pattern and is
+  the only writer of `pipeline_state('point_telemetry_1h').last_received_at`.
+- **Reconcile** `analytics.reconcile_point_telemetry_1h`: daily at 22:30 UTC,
+  one hour after the 15m late-data policy. `reconcile_window` is 35 days
+  (capped at 35), `coarse` 1 day, `n_max` 7. It uses the read-only detector
+  `analytics.detect_point_telemetry_1h_deficits`, repairs each mismatching day
+  by re-running the refresh, then re-checks it. A mismatch the upsert cannot
+  clear is reported `FAILED` in `analytics.pipeline_reconciliation_log`;
+  that is a stored hour with no 15m source, or a NULL-identity 15m row. No
+  row is removed. The reconcile never writes `pipeline_state`.
+- **`analytics.backfill_point_telemetry_1h(p_from, p_to, p_slice)`**: hour
+  aligned, never past the closed 15m hour, never before the oldest retained
+  15m chunk, committed slices of 1 hour to 7 days, top-level `CALL` only.
+- **Policies:** retention 1 year; compression after 30 days, grouped by
+  `device_id, logical_point_id`.
+- **Scheduling:** all four jobs (forward, reconcile, retention, compression)
+  are registered **unscheduled**. Migration 266 activates them after the
+  backfill has been validated.
+- **Grants:** table SELECT to `ems_app` and `ems_readonly` (not
+  `grafana_reader`). Routines EXECUTE to `ems_admin` only.
+- **Additive:** it widens `pipeline_reconciliation_log_tier_chk` (migration
+  230 precedent). M1, the legacy Explorer aggregates and function, all
+  Energy tiers and jobs, `normalized_points` and `v_pipeline_health` are
+  unchanged.
+- **Test change:** the integration contract
+  `scripts/test/assert_analytical_reconciliation.sh` (assertion D) keeps an
+  exact allowlist of the routines that write `last_received_at`. It now
+  includes `analytics.run_point_telemetry_1h_job`, the same way migration
+  230 added its own forward job.
 
 ## Consequences
 
