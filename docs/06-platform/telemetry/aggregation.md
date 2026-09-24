@@ -66,7 +66,9 @@ irreversible deployment gate (ADR-019 D6).
 
 ## Generic point-telemetry tier: `analytics.point_telemetry_15m` (migration 264)
 
-Status: **implemented, not deployed** (ADR-019 M1).
+Status: **deployed to staging and backfilled** (ADR-019 M1, PR #75,
+2026-09-24; not in production). Backfilled 2026-08-20 to 2026-09-22 12:00
+IST and validated exactly against raw `normalized_points`.
 
 - Continuous aggregate over `telemetry.normalized_points`, UTC 15-minute
   grid, grouped by organization/site/device/logical point. It stores
@@ -76,7 +78,9 @@ Status: **implemented, not deployed** (ADR-019 M1).
   attribution resolves through `metadata.asset_points` when read.
 - Two disjoint, bounded refresh policies: `[now-2d, now-1m)` every 5 minutes,
   and `[now-35d, now-2d)` daily at 21:30 UTC, which catches late or
-  recovered telemetry.
+  recovered telemetry. Its first run on staging is 2026-09-25 21:30 UTC, one
+  day later than migration 264's comments state; the backfill already covers
+  that window.
 - 120-day retention; no compression; `materialized_only`.
 - SELECT for `ems_app` and `ems_readonly` only (not `grafana_reader`: it is
   not tenant-scoped).
@@ -101,6 +105,48 @@ materializes about 33 days in committed batches, so run the backfill
 procedure first to spread that load. Older retained history (35 to about 90
 days) is filled once with the backfill procedure from the oldest
 `normalized_points` chunk start up to `now() - 35 days`, 15-minute aligned.
+
+**Always bound 15m reads on `bucket_start`.** An unbounded whole-table
+GROUP BY on this aggregate ran for over 25 minutes on staging, doing
+IO-bound device-ordered scans.
+
+## Generic point-telemetry tier: `analytics.point_telemetry_1h` (migration 265)
+
+Status: **stage 1 implemented, not deployed** (ADR-019 M2). Every job is
+unscheduled until migration 266.
+
+- Job-built hypertable (7-day chunks) on the UTC hour grid, derived only
+  from `point_telemetry_15m`: sum of sums, sum of counts, min of mins, max of
+  maxes, and `source_bucket_count` (1–4). Identity is NOT NULL with a plain
+  unique index. There is no asset or timezone column: for IST sites, hour
+  buckets are HH:30 local.
+- Written only by `analytics.refresh_point_telemetry_1h` (bounded,
+  hour-aligned, value-aware upsert, never removes rows). It is called by:
+  - the forward job `run_point_telemetry_1h_job` (every 15 minutes, 2-hour
+    overlap; the only `pipeline_state('point_telemetry_1h')` writer);
+  - the 35-day reconcile `reconcile_point_telemetry_1h` (daily at 22:30 UTC,
+    1-day coarse buckets, `n_max` 7, logged to `pipeline_reconciliation_log`);
+  - `backfill_point_telemetry_1h`.
+- An hour is built only when the 15m materialization watermark has passed
+  its end. That watermark is the end of the newest materialized 15m bucket
+  that holds data, so the tier stops advancing when telemetry stops,
+  reporting `NO_SOURCE_DATA`.
+- 1-year retention; compression after 30 days (grouped by device and
+  logical point). Both policies are unscheduled until migration 266.
+- The legacy Explorer aggregate `generic_telemetry_1h` stays in service,
+  unchanged, until the Explorer is repointed.
+- **Not yet in `analytics.v_pipeline_health`.** Adding it means replacing an
+  existing view, so it is left for a later step. Until then, monitor it with
+  `telemetry.pipeline_state` and `analytics.pipeline_reconciliation_log`.
+- **Forward-job failures.** A run that fails, including partway through
+  the refresh, rolls back completely. No partial 1h rows are kept, and
+  `pipeline_state` keeps its previous checkpoint and status, because the
+  handler's `FAILED` write rolls back with the run. So `pipeline_state`
+  never shows a failure. The failure is recorded in
+  `timescaledb_information.job_stats` (`last_run_status = 'Failed'`) and
+  `job_errors`, and the next successful run retries the same window from the
+  unchanged checkpoint. A test in `app/tests/test_point_telemetry_1h.py`
+  proves this for both a direct call and a run by the scheduler.
 
 ## Repository/live gap: canonical `ddl/` coverage
 
