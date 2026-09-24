@@ -117,8 +117,17 @@ quality_code = 'GOOD'` samples.
 - Additive only: the legacy `generic_telemetry_*` aggregates, the Explorer,
   Energy tiers and `normalized_points` retention are unchanged.
 
-**Open for review:** the GOOD-only filter follows the Energy routing
-convention. A continuous aggregate's filter cannot change later without a
+**Analytical aggregate contract (approved 2026-09-24):** the aggregate
+includes only samples with `quality_code = 'GOOD'` and a non-null
+`numeric_value`. `sample_count` is the number of usable contributing
+measurements, not received messages. Evidence (read-only, staging): both
+`normalized_points` writers derive `quality_code` as `MISSING` (value
+absent), `INVALID_NUMERIC` (unparseable numeric value) or `GOOD`, and
+`numeric_value` is non-null only when the value parses. So every non-GOOD row
+has a NULL value. No existing path aggregates non-GOOD samples, and the
+Energy routing layer requires `GOOD` on all 59 value fields. Partial
+coverage, gaps and data availability are handled by the downstream analytical
+read layer, not by this tier. The filter cannot change later without a
 rebuild, and a rebuild recovers only 90 days of raw telemetry.
 
 ## Consequences
