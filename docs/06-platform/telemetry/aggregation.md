@@ -33,6 +33,41 @@ reset/rollover, at the native resolution), every coarser resolution
 aggregates the already-classified consumption — it never re-derives from
 raw cumulative registers a second time.
 
+## Late/recovered Energy reconstruction (ADR-020) — foundations only
+
+[ADR-020](../../00-governance/decisions/ADR-020-late-recovered-energy-reconstruction.md)
+decides that every valid register delta must reach Energy history and that a
+delta spanning a gap is distributed across the gap's native slots (in-gap
+active power where available, time-weighted otherwise), summing exactly to
+the measured delta. Today a `GAP` delta still lands whole in the bucket that
+closes the gap, and normalized rows that miss routing (job 1077 replays,
+late normalizations) are never routed.
+
+**Migration 268 (PR1) adds inert building blocks only — nothing uses them
+yet:**
+
+- `analytics.energy_consumption_1min` / `_5min`: `is_reconstructed`
+  (NOT NULL DEFAULT FALSE) and per-direction `import_/export_
+  reconstruction_role` (`GAP_END` | `INTERIOR`), `_reconstruction_method`
+  (`TIME_WEIGHTED` | `ACTIVE_POWER` | `MIXED`), `_gap_start`, `_gap_end`,
+  `_gap_delta_wh`. CHECK constraints (added NOT VALID, enforced for new
+  rows) keep each direction's metadata all-NULL or complete and consistent
+  with the row's bucket. No refresh function, view, reconcile, job or API
+  reads or writes these columns; every existing row holds the defaults.
+- `analytics.energy_gap_weights(numeric[])` and
+  `analytics.allocate_energy_delta(numeric, numeric[], integer)`: pure,
+  IMMUTABLE. Cumulative-difference rounding at 0.001 Wh gives an exact sum,
+  no negative share, and deterministic output.
+- `config.energy_reconstruction_scope` + `config.energy_reconstruction_
+  enabled(site_id, device_id)`: the switch (most specific DEVICE > SITE >
+  GLOBAL row wins; no row = OFF), seeded with GLOBAL `is_enabled = FALSE`.
+
+`scripts/test/assert_energy_consumption_calculated_at_value_aware.sh` (the
+migration-216 column-completeness guard) excludes exactly these columns on
+the 1min/5min tiers and asserts the inverse (no refresh function references
+them). ADR-020 PR3, which rewrites the 1min/5min refresh, must remove that
+exclusion.
+
 ## The fact that looks like a bug but isn't: `energy_consumption_5min` can legitimately be empty
 
 `postgres/ddl/143_persisted_validated_energy_consumption_5min.sql`'s own
