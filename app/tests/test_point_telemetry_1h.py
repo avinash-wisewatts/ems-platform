@@ -258,6 +258,42 @@ def fx(seed_grafana_tenant_fixture):
     return {"lp": lp, "h0": h0, "h1": h0 + timedelta(hours=1), "d1": d1}
 
 
+@pytest.fixture(scope="module", autouse=True)
+def quiesce_m2_jobs():
+    """Migration 266 activates the forward and reconcile jobs. These tests set
+    checkpoints and tamper with 1h rows, so pause both jobs for the duration
+    of the module (waiting out any in-flight run) and restore their exact
+    scheduled state and next_start afterwards."""
+    with psycopg.connect(CONNINFO, autocommit=True) as c:
+        jobs = _all(
+            c,
+            """
+            SELECT j.job_id, j.scheduled, s.next_start
+            FROM timescaledb_information.jobs AS j
+            JOIN timescaledb_information.job_stats AS s USING (job_id)
+            WHERE j.proc_schema = 'analytics'
+              AND j.proc_name IN ('run_point_telemetry_1h_job', 'reconcile_point_telemetry_1h')
+            """,
+        )
+        for job_id, _, _ in jobs:
+            c.execute("SELECT alter_job(%s, scheduled => false)", (job_id,))
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline and _one(
+            c,
+            "SELECT count(*) FROM timescaledb_information.job_stats WHERE job_id = ANY(%s) AND job_status = 'Running'",
+            ([j[0] for j in jobs],),
+        )[0]:
+            time.sleep(1)
+    yield
+    with psycopg.connect(CONNINFO, autocommit=True) as c:
+        for job_id, scheduled, next_start in jobs:
+            if scheduled:
+                c.execute(
+                    "SELECT alter_job(%s, scheduled => true, next_start => %s)",
+                    (job_id, next_start),
+                )
+
+
 EXPECTED_H0 = (Decimal("36"), 5, Decimal("1"), Decimal("20"), 3)
 EXPECTED_H1 = (Decimal("7"), 1, Decimal("7"), Decimal("7"), 1)
 EXPECTED_D1 = (Decimal("100"), 1, Decimal("100"), Decimal("100"), 1)
@@ -403,7 +439,10 @@ def test_hypertable_chunking_and_compression_settings(conn):
     ]
 
 
-def test_every_job_and_policy_is_registered_unscheduled(conn):
+def test_every_job_and_policy_is_registered_with_the_265_definition(conn):
+    """Migration 265 registered these four jobs unscheduled; whether they are
+    scheduled is owned by migration 266 and asserted in
+    test_point_telemetry_1h_activation.py."""
     rows = _all(
         conn,
         """
@@ -424,7 +463,6 @@ def test_every_job_and_policy_is_registered_unscheduled(conn):
         "reconcile_point_telemetry_1h",
         "run_point_telemetry_1h_job",
     }
-    assert all(scheduled is False for _, scheduled, *_ in rows)
     assert by_name["policy_retention"][3]["drop_after"] == "1 year"
     assert by_name["policy_compression"][3]["compress_after"] == "30 days"
     assert by_name["run_point_telemetry_1h_job"][2:] == (
@@ -740,7 +778,11 @@ def test_forward_overlap_absorbs_a_late_sample(conn, fx):
 
     _insert_raw(conn, lp, late_hour + timedelta(minutes=31), Decimal("60"))  # arrives late
     _run_15m_forward_policy(conn)
-    _set_checkpoint(conn, late_hour + timedelta(hours=2))  # overlap 2h re-derives late_hour
+    # Checkpoint one hour past late_hour: the 2h overlap re-derives late_hour,
+    # and the fixture's recent sample guarantees the closed-15m watermark is
+    # beyond late_hour + 1h at any minute of the hour (late_hour + 2h would
+    # need the current hour's first 15m bucket closed, i.e. minute >= ~16).
+    _set_checkpoint(conn, late_hour + timedelta(hours=1))
     _run_forward(conn)
     second = _row(conn, fx, late_hour)
     assert second[1] == first[1] + 1
@@ -918,6 +960,8 @@ def test_forward_failure_mid_refresh_rolls_back_is_recorded_and_retries(conn, fx
     finally:
         _disarm_mid_refresh_failure(conn)
 
+    # Back to the module's quiesced (paused) state; quiesce_m2_jobs restores
+    # the job's real scheduled state when the module finishes.
     assert _one(
         conn, "SELECT scheduled FROM timescaledb_information.jobs WHERE job_id = %s", (fwd_job,)
     ) == (False,)
