@@ -112,8 +112,11 @@ IO-bound device-ordered scans.
 
 ## Generic point-telemetry tier: `analytics.point_telemetry_1h` (migration 265)
 
-Status: **stage 1 implemented, not deployed** (ADR-019 M2). Every job is
-unscheduled until migration 266.
+Status: **deployed to staging and fully backfilled** (ADR-019 M2, PR #76,
+2026-09-24). Backfilled [2026-08-24 15:00, 2026-09-24 11:00) UTC and
+validated exactly against 15m. The four jobs are activated by migration 266
+(forward on the :07/:22/:37/:52 UTC grid, reconcile at 22:30 UTC); until 266
+is deployed they are paused.
 
 - Job-built hypertable (7-day chunks) on the UTC hour grid, derived only
   from `point_telemetry_15m`: sum of sums, sum of counts, min of mins, max of
@@ -132,7 +135,7 @@ unscheduled until migration 266.
   that holds data, so the tier stops advancing when telemetry stops,
   reporting `NO_SOURCE_DATA`.
 - 1-year retention; compression after 30 days (grouped by device and
-  logical point). Both policies are unscheduled until migration 266.
+  logical point). Both policies are activated by migration 266.
 - The legacy Explorer aggregate `generic_telemetry_1h` stays in service,
   unchanged, until the Explorer is repointed.
 - **Not yet in `analytics.v_pipeline_health`.** Adding it means replacing an

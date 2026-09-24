@@ -1,9 +1,10 @@
 # ADR-019: Analytical Backbone — UTC Time Basis, Resolution Tiers, Retention
 
 Status: Decided (architecture). **M1 deployed to staging and backfilled**
-(migration 264, PR #75, 2026-09-24; not in production). **M2 stage 1
-implemented, not deployed** (migration 265; jobs unscheduled). M2 activation
-(migration 266) and M3 onwards not implemented.
+(migration 264, PR #75, 2026-09-24; not in production). **M2 deployed to
+staging and fully backfilled** (migration 265, PR #76, 2026-09-24).
+**M2 activation implemented** (migration 266); it takes effect when 266 is
+deployed. M3 onwards not implemented. Nothing in production.
 Date: 2026-09-24
 Decision owners: Product + Architecture
 Related: [ADR-007](ADR-007-analytics-api-boundary.md) (Analytics API is the
@@ -198,6 +199,39 @@ with a plain unique index. It has no asset or timezone column.
   exact allowlist of the routines that write `last_received_at`. It now
   includes `analytics.run_point_telemetry_1h_job`, the same way migration
   230 added its own forward job.
+
+M2 staging state: deployed 2026-09-24 (merge `9ca461e`). A single-hour
+canary [2026-09-24 08:00, 09:00) UTC was run first, then the full bounded
+backfill [2026-08-24 15:00, 2026-09-24 11:00) UTC in 1-day slices:
+1,627,882 rows, validated per day against 15m with 0 mismatches on every
+compared column and no missing, extra, duplicate, NULL-identity or off-grid
+rows.
+
+## M2 activation (migration 266, stage 2 of 2)
+
+Migration 266 sets `scheduled = true` on exactly the four jobs migration 265
+registered. It changes nothing else, and verifies before and after that each
+job's schedule interval, config, runtime, retries, `fixed_schedule` and
+`initial_start` are exactly as 265 left them.
+
+- **`next_start`:** re-scheduling a fixed-schedule job whose `initial_start`
+  is in the past makes TimescaleDB pick a `next_start` in the past. So 266
+  sets each fixed-schedule job's `next_start` to the next slot on its own
+  grid: the forward job at :07/:22/:37/:52 UTC, the reconcile at 22:30 UTC.
+  The retention and compression policies run shortly after activation.
+- **Idempotent:** a job that is already scheduled is left unchanged.
+- **Scope:** no schema, data or `pipeline_state` change, and no refresh or
+  backfill. Every non-M2 job keeps its scheduled state; the migration checks
+  this against a snapshot taken inside the same transaction.
+- **After activation:** the forward job's first run starts from its 2-day
+  lookback (the checkpoint is NULL). It recomputes the most recent ~50 hours
+  but only rewrites rows whose values changed, then sets the checkpoint. The
+  first reconcile run (22:30 UTC) covers [checkpoint − 35 days, checkpoint).
+- **Tests:** `app/tests/test_point_telemetry_1h_activation.py`. The 265
+  test module now pauses the forward and reconcile jobs for its own duration
+  and restores them afterwards, so the scheduler can't race tests that set
+  checkpoints or tamper with rows. Its registration test now checks the 265
+  definition; the scheduled state belongs to 266.
 
 ## Consequences
 
