@@ -106,6 +106,10 @@ echo "[canonical-energy-read-pre-policy-range] Running canonical energy read pre
 "${SCRIPT_DIR}/assert_canonical_energy_read_pre_policy_range.sh"
 
 echo
+echo "[canonical-energy-read-asset-points-attribution] Running canonical energy read asset_points attribution (migration 263) assertions..."
+"${SCRIPT_DIR}/assert_canonical_energy_read_asset_points_attribution.sh"
+
+echo
 echo "[recovery-supersession-late-arrival-bound] Running recovery supersession late-arrival bound assertions..."
 "${SCRIPT_DIR}/assert_recovery_supersession_late_arrival_bound.sh"
 

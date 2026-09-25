@@ -61,6 +61,10 @@ DECLARE
 
     v_energy_category   UUID;
     v_device_model      UUID;
+
+    v_import_point_id   UUID;
+    v_export_point_id   UUID;
+    v_profile_id        UUID;
 BEGIN
     -- ------------------------------------------------------------------
     -- Shared fixture: one org/site/gateway/device/asset, PRIMARY_METER
@@ -81,6 +85,20 @@ BEGIN
         RAISE EXCEPTION 'Fixture requires an Energy Meter device category on the canonical database';
     END IF;
 
+    SELECT id INTO v_import_point_id FROM metadata.logical_points WHERE name = 'ENERGY_IMPORT_TOTAL';
+    SELECT id INTO v_export_point_id FROM metadata.logical_points WHERE name = 'ENERGY_EXPORT_TOTAL';
+
+    IF v_import_point_id IS NULL OR v_export_point_id IS NULL THEN
+        RAISE EXCEPTION 'Fixture requires ENERGY_IMPORT_TOTAL and ENERGY_EXPORT_TOTAL logical points';
+    END IF;
+
+    SELECT id INTO v_profile_id
+    FROM config.device_profiles WHERE profile_code = 'ENERGY_METER_ENISCOPE_V1';
+
+    IF v_profile_id IS NULL THEN
+        RAISE EXCEPTION 'Fixture requires the ENERGY_METER_ENISCOPE_V1 device profile (metadata.asset_points has an FK to config.device_point_configuration, populated only for profiled devices)';
+    END IF;
+
     INSERT INTO metadata.device_models(vendor, model, device_type, device_category_id)
     VALUES ('WiseWatts Test', 'Canonical Energy Read Test Meter', 'Energy Meter', v_energy_category)
     ON CONFLICT (lower(COALESCE(vendor, '')), lower(model))
@@ -99,8 +117,8 @@ BEGIN
     VALUES (v_org, v_site, 'Canonical Energy Read Test Gateway', 'CANON-ENERGY-GW')
     RETURNING id INTO v_gateway;
 
-    INSERT INTO metadata.devices(organization_id, gateway_id, device_model_id, name, external_id)
-    VALUES (v_org, v_gateway, v_device_model, 'Canonical Energy Read Test Device', 'CANON-ENERGY-DEV')
+    INSERT INTO metadata.devices(organization_id, gateway_id, device_model_id, profile_id, name, external_id)
+    VALUES (v_org, v_gateway, v_device_model, v_profile_id, 'Canonical Energy Read Test Device', 'CANON-ENERGY-DEV')
     RETURNING id INTO v_device;
 
     INSERT INTO metadata.assets(organization_id, site_id, name, external_id, metering_requirement, lifecycle_status)
@@ -109,6 +127,17 @@ BEGIN
 
     INSERT INTO metadata.asset_devices(asset_id, device_id, relationship_type)
     VALUES (v_asset, v_device, 'PRIMARY_METER');
+
+    -- Migration 263: attribution now reads metadata.asset_points, not
+    -- PRIMARY_METER (the asset_devices row above is left in place as
+    -- harmless, now-unused metadata). Effective from well before every
+    -- range this test exercises, open-ended, so it never adds any
+    -- additional clipping beyond what each TEST already expects from
+    -- capture-policy resolution alone.
+    INSERT INTO metadata.asset_points(asset_id, device_id, logical_point_id, organization_id, effective_from, effective_to)
+    VALUES
+        (v_asset, v_device, v_import_point_id, v_org, v_now - INTERVAL '10 years', NULL),
+        (v_asset, v_device, v_export_point_id, v_org, v_now - INTERVAL '10 years', NULL);
 
     INSERT INTO metadata.grafana_organization_map(grafana_org_id, organization_id, is_active)
     VALUES (v_grafana_org_id, v_org, TRUE);
@@ -225,8 +254,8 @@ BEGIN
     VALUES (v_org2, v_site2, 'Canonical Energy Read Gap Test Gateway', 'CANON-ENERGY-GW-GAP')
     RETURNING id INTO v_gateway2;
 
-    INSERT INTO metadata.devices(organization_id, gateway_id, device_model_id, name, external_id)
-    VALUES (v_org2, v_gateway2, v_device_model, 'Canonical Energy Read Gap Test Device', 'CANON-ENERGY-DEV-GAP')
+    INSERT INTO metadata.devices(organization_id, gateway_id, device_model_id, profile_id, name, external_id)
+    VALUES (v_org2, v_gateway2, v_device_model, v_profile_id, 'Canonical Energy Read Gap Test Device', 'CANON-ENERGY-DEV-GAP')
     RETURNING id INTO v_device2;
 
     INSERT INTO metadata.assets(organization_id, site_id, name, external_id, metering_requirement, lifecycle_status)
@@ -235,6 +264,11 @@ BEGIN
 
     INSERT INTO metadata.asset_devices(asset_id, device_id, relationship_type)
     VALUES (v_asset2, v_device2, 'PRIMARY_METER');
+
+    INSERT INTO metadata.asset_points(asset_id, device_id, logical_point_id, organization_id, effective_from, effective_to)
+    VALUES
+        (v_asset2, v_device2, v_import_point_id, v_org2, v_now - INTERVAL '10 years', NULL),
+        (v_asset2, v_device2, v_export_point_id, v_org2, v_now - INTERVAL '10 years', NULL);
 
     INSERT INTO metadata.grafana_organization_map(grafana_org_id, organization_id, is_active)
     VALUES (v_grafana_org_id2, v_org2, TRUE);

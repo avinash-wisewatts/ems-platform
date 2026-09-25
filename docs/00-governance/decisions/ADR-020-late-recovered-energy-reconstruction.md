@@ -96,7 +96,14 @@ Migrations 249 and 253–263 (uncommitted ADR-018 work) keep their numbers and
 land separately. PR2 (migration 269) was built on the deployed
 (PRIMARY_METER) `get_canonical_energy_read` because 263 has not landed;
 **263 must be rebased onto the migration-269 body before it lands** (a
-tripwire test fails otherwise).
+tripwire test fails otherwise). **Rebased 2026-09-25** (branch
+`feature/energy-canonical-read-asset-points-263`, not merged): 263 now
+requires 269 (precondition) and re-applies the 269 semantics to its
+per-direction import/export row sets in every tier; the golden baseline's
+canonical read is 263's original asset_points body; the regression check is
+behavioral; a source replacement during a reconstructed gap is tested (the
+incoming source owns a straddling aggregate bucket; reconstructed slots after
+the cutover are never attributed).
 
 ## PR1 status (migration 268)
 

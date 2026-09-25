@@ -606,3 +606,11 @@ Second ADR-020 slice ([ADR-020](../00-governance/decisions/ADR-020-late-recovere
 - **Review fixes (same PR #80)**: NOT VALID CHECK `ck_energy_consumption_1min/_5min_synthetic_direction` (a synthetic row may not claim a valid non-reconstructed direction); per-direction canonical-read status is `INVALID_INTERVALS` — never GOOD — when a direction has neither measured nor reconstructed intervals; rollup register first/last also exclude rows whose direction is inside a gap.
 - **New**: `app/tests/test_energy_reconstruction_read_hardening.py` (golden equivalence against the exact pre-269 chain in `app/tests/fixtures/energy_269_baseline.sql`, synthetic reconstructed-row cases, reconcile, tripwire for migration 263).
 - **Outcome**: Implemented on branch `feature/energy-reconstruction-read-hardening-269` (from a freshly fetched `origin/staging`); not merged, not deployed. STAGING and production untouched. Uncommitted ADR-018 migration 263 must be rebased onto the 269 `get_canonical_energy_read` body before it lands.
+
+### 2026-09-25 — Migration 263 rebased onto ADR-020 read-side hardening (269)
+
+- **Area**: Asset Energy canonical read (`analytics.get_canonical_energy_read`), ADR-018 Amendment 7 / ADR-020.
+- **What changed**: `postgres/migrations/263_asset_energy_consumption_asset_points_attribution.sql` (asset_points-based, per-direction Import/Export attribution, replacing PRIMARY_METER) now runs after 269 (manifest order), requires it (precondition), and re-applies 269's measured-vs-reconstructed semantics to its separate import/export row sets in every tier (native, 5m/15m, 1h, 1d); postconditions check the handling. 263's own assertions (`assert_canonical_energy_read_asset_points_attribution.sql`/`.sh`) are now registered in the integration runner; the pre-policy-range and daily-tier routing tests bind `asset_points`.
+- **Tests**: `test_energy_reconstruction_read_hardening.py` attributes through `asset_points`; the golden canonical-read predecessor is 263's original body; the 263/269 regression check is behavioral; source replacement during a reconstructed gap (bucket boundary and mid-bucket) is covered.
+- **Outcome**: branch `feature/energy-canonical-read-asset-points-263`, not merged, not deployed. Deployment still blocked on the ADR-018 decision for assets with no `asset_points` rows (0 on staging).
+
