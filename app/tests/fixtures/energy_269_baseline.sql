@@ -7,6 +7,9 @@
 -- the canonical test database (identical to staging modulo CR line endings).
 
 -- Do not edit by hand.
+-- zz269_old.get_canonical_energy_read is migration 263's ORIGINAL
+-- asset_points body (pre-269 semantics) -- the correct golden predecessor
+-- of the rebased migration 263 (which re-applies the 269 semantics).
 
 CREATE SCHEMA zz269_old;
 
@@ -1658,6 +1661,9 @@ CREATE OR REPLACE FUNCTION zz269_old.get_canonical_energy_read(p_grafana_org_id 
  SET search_path TO 'pg_catalog', 'analytics', 'metadata', 'telemetry', 'config'
 AS $function$
 DECLARE
+    -- Represents the IMPORT-side source device only (see migration 263
+    -- header). Never "the asset's single energy device" -- Export may be
+    -- confirmed on a different device and is not reflected here.
     v_device_id                 UUID;
     v_site_id                   UUID;
     v_device_name                TEXT;
@@ -1710,46 +1716,27 @@ BEGIN
     END IF;
 
     -- ------------------------------------------------------------------
-    -- Tenant authorization + asset + PRIMARY_METER device + gateway + site.
-    --
-    -- The existing proven Grafana pattern: grafana_organization_map ->
-    -- organization -> asset -> asset_devices, extended by one hop to
-    -- gateway -> site. Tenant mismatch, a non-existent asset, an asset
-    -- with no PRIMARY_METER, and a device with no gateway all collapse to
-    -- zero rows -- consistent with analytics.get_grafana_asset_energy_intervals
-    -- -- so this never leaks *why* resolution failed.
+    -- Tenant authorization + asset + site. Resolved directly from
+    -- metadata.assets.site_id -- no device-relationship dependency at all
+    -- (see migration 263 header for why). A tenant mismatch or a
+    -- nonexistent asset collapses to zero rows, exactly as before; this no
+    -- longer additionally requires the asset to have any device relationship.
     -- ------------------------------------------------------------------
 
     SELECT
-        d.id,
-        g.site_id,
-        d.name
+        a.site_id
     INTO
-        v_device_id,
-        v_site_id,
-        v_device_name
+        v_site_id
     FROM metadata.grafana_organization_map AS gom
 
     JOIN metadata.assets AS a
       ON a.organization_id = gom.organization_id
 
-    JOIN metadata.asset_devices AS ad
-      ON ad.asset_id = a.id
-     AND ad.relationship_type = 'PRIMARY_METER'
-
-    JOIN metadata.devices AS d
-      ON d.id = ad.device_id
-
-    JOIN metadata.gateways AS g
-      ON g.id = d.gateway_id
-
     WHERE gom.grafana_org_id = p_grafana_org_id
       AND gom.is_active
-      AND a.id = p_asset_id
+      AND a.id = p_asset_id;
 
-    LIMIT 1;
-
-    IF v_device_id IS NULL THEN
+    IF v_site_id IS NULL THEN
         RETURN;
     END IF;
 
@@ -1830,6 +1817,22 @@ BEGIN
                 v_site_id, v_effective_from;
         END IF;
     END IF;
+
+    -- ------------------------------------------------------------------
+    -- Import-side device metadata (resolved_device_id/device_name output
+    -- columns only -- see migration 263 header). The Import binding with
+    -- the latest effective_from within [v_effective_from, p_to) is used as
+    -- "the" device shown in these two columns; per-row consumption values
+    -- below are attributed independently and are unaffected by this.
+    -- NULL when Import is not confirmed at all -- no invented value.
+    -- ------------------------------------------------------------------
+
+    SELECT d.id, d.name
+    INTO v_device_id, v_device_name
+    FROM analytics.resolve_asset_energy_source_windows(p_asset_id, 'ENERGY_IMPORT_TOTAL', v_effective_from, p_to) AS w
+    JOIN metadata.devices AS d ON d.id = w.device_id
+    ORDER BY w.window_from DESC
+    LIMIT 1;
 
     -- ------------------------------------------------------------------
     -- Historical-time safety: reject ranges that cross a genuine change in
@@ -1974,288 +1977,434 @@ BEGIN
     END IF;
 
     -- ------------------------------------------------------------------
-    -- NATIVE: zz269_old.v_energy_consumption_native. One row per already-
-    -- classified native interval. No aggregation, no reclassification.
+    -- NATIVE: zz269_old.v_energy_consumption_native. Import and Export are
+    -- resolved independently (each via analytics.resolve_asset_energy_
+    -- source_windows) and combined per-bucket with a FULL OUTER JOIN --
+    -- never summed, never cross-attributed. is_partial_bucket stays the
+    -- unconditional FALSE it always was (native buckets are never partial
+    -- by construction, independent of data presence).
     -- ------------------------------------------------------------------
 
     IF v_actual = 'native' THEN
         RETURN QUERY
+        WITH import_windows AS (
+            SELECT * FROM analytics.resolve_asset_energy_source_windows(p_asset_id, 'ENERGY_IMPORT_TOTAL', v_effective_from, p_to)
+        ),
+        export_windows AS (
+            SELECT * FROM analytics.resolve_asset_energy_source_windows(p_asset_id, 'ENERGY_EXPORT_TOTAL', v_effective_from, p_to)
+        ),
+        import_rows AS (
+            -- Overlap-based (not start-containment): a binding's
+            -- effective_from is essentially never aligned to a bucket
+            -- boundary, so requiring the bucket to START at/after
+            -- window_from would wrongly exclude the bucket containing that
+            -- instant. DISTINCT ON, preferring the latest-starting window,
+            -- guarantees at most one row per bucket_start even if a
+            -- replacement cutover falls inside this bucket (the incoming
+            -- device wins that bucket; see migration 263 header).
+            SELECT DISTINCT ON (n.bucket_start) n.*
+            FROM zz269_old.v_energy_consumption_native n
+            JOIN import_windows w
+              ON w.device_id = n.device_id
+             AND n.bucket_start < w.window_to
+             AND n.bucket_start + make_interval(secs => n.native_resolution_seconds) > w.window_from
+            ORDER BY n.bucket_start, w.window_from DESC
+        ),
+        export_rows AS (
+            SELECT DISTINCT ON (n.bucket_start) n.*
+            FROM zz269_old.v_energy_consumption_native n
+            JOIN export_windows w
+              ON w.device_id = n.device_id
+             AND n.bucket_start < w.window_to
+             AND n.bucket_start + make_interval(secs => n.native_resolution_seconds) > w.window_from
+            ORDER BY n.bucket_start, w.window_from DESC
+        )
         SELECT
             p_requested_resolution,
             'native'::TEXT,
             v_capture_interval_seconds,
-            n.bucket_start,
-            n.bucket_start + make_interval(secs => n.native_resolution_seconds),
+            COALESCE(i.bucket_start, e.bucket_start),
+            COALESCE(i.bucket_start, e.bucket_start)
+                + make_interval(secs => COALESCE(i.native_resolution_seconds, e.native_resolution_seconds)),
             v_device_id,
             v_device_name,
 
-            n.import_consumption_kwh,
-            n.export_consumption_kwh,
+            i.import_consumption_kwh,
+            e.export_consumption_kwh,
 
             CASE
-                WHEN NOT n.import_is_valid THEN 'INVALID_INTERVALS'
-                WHEN n.import_reset_detected THEN 'RESET_DETECTED'
-                WHEN n.import_quality_code = 'GAP' THEN 'GAPS_DETECTED'
-                WHEN n.import_rollover_detected THEN 'ROLLOVER_DETECTED'
+                WHEN i.bucket_start IS NULL THEN NULL
+                WHEN NOT i.import_is_valid THEN 'INVALID_INTERVALS'
+                WHEN i.import_reset_detected THEN 'RESET_DETECTED'
+                WHEN i.import_quality_code = 'GAP' THEN 'GAPS_DETECTED'
+                WHEN i.import_rollover_detected THEN 'ROLLOVER_DETECTED'
                 ELSE 'GOOD'
             END,
             CASE
-                WHEN NOT n.export_is_valid THEN 'INVALID_INTERVALS'
-                WHEN n.export_reset_detected THEN 'RESET_DETECTED'
-                WHEN n.export_quality_code = 'GAP' THEN 'GAPS_DETECTED'
-                WHEN n.export_rollover_detected THEN 'ROLLOVER_DETECTED'
+                WHEN e.bucket_start IS NULL THEN NULL
+                WHEN NOT e.export_is_valid THEN 'INVALID_INTERVALS'
+                WHEN e.export_reset_detected THEN 'RESET_DETECTED'
+                WHEN e.export_quality_code = 'GAP' THEN 'GAPS_DETECTED'
+                WHEN e.export_rollover_detected THEN 'ROLLOVER_DETECTED'
                 ELSE 'GOOD'
             END,
 
-            1::BIGINT,
-            n.import_is_valid::INT::BIGINT,
-            (NOT n.import_is_valid)::INT::BIGINT,
-            n.export_is_valid::INT::BIGINT,
-            (NOT n.export_is_valid)::INT::BIGINT,
-            1.0::NUMERIC,
+            CASE WHEN i.bucket_start IS NOT NULL THEN 1::BIGINT ELSE NULL END,
+            i.import_is_valid::INT::BIGINT,
+            (NOT i.import_is_valid)::INT::BIGINT,
+            e.export_is_valid::INT::BIGINT,
+            (NOT e.export_is_valid)::INT::BIGINT,
+            CASE WHEN i.bucket_start IS NOT NULL THEN 1.0::NUMERIC ELSE NULL END,
 
-            n.gap_detected::INT::BIGINT,
-            n.reset_detected::INT::BIGINT,
-            n.rollover_detected::INT::BIGINT,
-            n.invalid_detected::INT::BIGINT,
+            i.gap_detected::INT::BIGINT,
+            i.reset_detected::INT::BIGINT,
+            i.rollover_detected::INT::BIGINT,
+            i.invalid_detected::INT::BIGINT,
 
-            n.bucket_start,
-            n.bucket_start,
+            i.bucket_start,
+            i.bucket_start,
             FALSE,
 
             v_fallback_applied,
             v_fallback_reason
 
-        FROM zz269_old.v_energy_consumption_native n
-        WHERE n.device_id = v_device_id
-          AND n.bucket_start >= v_effective_from
-          AND n.bucket_start < p_to
-        ORDER BY n.bucket_start;
+        FROM import_rows i
+        FULL OUTER JOIN export_rows e ON e.bucket_start = i.bucket_start
+        ORDER BY COALESCE(i.bucket_start, e.bucket_start);
         RETURN;
     END IF;
 
     -- ------------------------------------------------------------------
     -- 5m / 15m: zz269_old.v_energy_reporting_5min / _15min. Already
     -- tenant-scoped (security_barrier views joined to
-    -- grafana_organization_map); device_id filter additionally applied
-    -- since tenant was already proven above.
+    -- grafana_organization_map). Import/Export resolved and combined per
+    -- bucket exactly as the native tier above.
     -- ------------------------------------------------------------------
 
     IF v_actual IN ('5m', '15m') THEN
         RETURN QUERY
+        WITH import_windows AS (
+            SELECT * FROM analytics.resolve_asset_energy_source_windows(p_asset_id, 'ENERGY_IMPORT_TOTAL', v_effective_from, p_to)
+        ),
+        export_windows AS (
+            SELECT * FROM analytics.resolve_asset_energy_source_windows(p_asset_id, 'ENERGY_EXPORT_TOTAL', v_effective_from, p_to)
+        ),
+        base AS (
+            SELECT * FROM zz269_old.v_energy_reporting_5min WHERE v_actual = '5m'
+            UNION ALL
+            SELECT * FROM zz269_old.v_energy_reporting_15min WHERE v_actual = '15m'
+        ),
+        import_rows AS (
+            -- Overlap-based against the source window (see the native
+            -- tier's comment above for why), with DISTINCT ON preventing
+            -- a mid-bucket replacement cutover from fanning out into two
+            -- rows for the same bucket_start.
+            SELECT DISTINCT ON (r.bucket_start) r.*
+            FROM base r
+            JOIN import_windows w
+              ON w.device_id = r.device_id
+             AND r.bucket_start < w.window_to
+             AND r.bucket_start + (CASE WHEN v_actual = '5m' THEN INTERVAL '5 minutes' ELSE INTERVAL '15 minutes' END) > w.window_from
+            WHERE r.grafana_org_id = p_grafana_org_id
+              AND r.bucket_start >= date_bin(
+                      (CASE WHEN v_actual = '5m' THEN INTERVAL '5 minutes' ELSE INTERVAL '15 minutes' END),
+                      v_effective_from,
+                      TIMESTAMPTZ '2000-01-01 00:00:00+00'
+                  )
+              AND r.bucket_start < p_to
+            ORDER BY r.bucket_start, w.window_from DESC
+        ),
+        export_rows AS (
+            SELECT DISTINCT ON (r.bucket_start) r.*
+            FROM base r
+            JOIN export_windows w
+              ON w.device_id = r.device_id
+             AND r.bucket_start < w.window_to
+             AND r.bucket_start + (CASE WHEN v_actual = '5m' THEN INTERVAL '5 minutes' ELSE INTERVAL '15 minutes' END) > w.window_from
+            WHERE r.grafana_org_id = p_grafana_org_id
+              AND r.bucket_start >= date_bin(
+                      (CASE WHEN v_actual = '5m' THEN INTERVAL '5 minutes' ELSE INTERVAL '15 minutes' END),
+                      v_effective_from,
+                      TIMESTAMPTZ '2000-01-01 00:00:00+00'
+                  )
+              AND r.bucket_start < p_to
+            ORDER BY r.bucket_start, w.window_from DESC
+        )
         SELECT
             p_requested_resolution,
             v_actual,
             v_capture_interval_seconds,
-            r.bucket_start,
-            r.bucket_start + (CASE WHEN v_actual = '5m' THEN INTERVAL '5 minutes' ELSE INTERVAL '15 minutes' END),
+            COALESCE(i.bucket_start, e.bucket_start),
+            COALESCE(i.bucket_start, e.bucket_start) + (CASE WHEN v_actual = '5m' THEN INTERVAL '5 minutes' ELSE INTERVAL '15 minutes' END),
             v_device_id,
             v_device_name,
 
-            r.import_consumption_kwh,
-            r.export_consumption_kwh,
+            i.import_consumption_kwh,
+            e.export_consumption_kwh,
 
             CASE
-                WHEN r.invalid_import_intervals > 0 THEN 'INVALID_INTERVALS'
-                WHEN r.import_reset_intervals > 0 THEN 'RESET_DETECTED'
-                WHEN r.import_gap_intervals > 0 THEN 'GAPS_DETECTED'
-                WHEN r.import_rollover_intervals > 0 THEN 'ROLLOVER_DETECTED'
+                WHEN i.bucket_start IS NULL THEN NULL
+                WHEN i.invalid_import_intervals > 0 THEN 'INVALID_INTERVALS'
+                WHEN i.import_reset_intervals > 0 THEN 'RESET_DETECTED'
+                WHEN i.import_gap_intervals > 0 THEN 'GAPS_DETECTED'
+                WHEN i.import_rollover_intervals > 0 THEN 'ROLLOVER_DETECTED'
                 ELSE 'GOOD'
             END,
             CASE
-                WHEN r.invalid_export_intervals > 0 THEN 'INVALID_INTERVALS'
-                WHEN r.export_reset_intervals > 0 THEN 'RESET_DETECTED'
-                WHEN r.export_gap_intervals > 0 THEN 'GAPS_DETECTED'
-                WHEN r.export_rollover_intervals > 0 THEN 'ROLLOVER_DETECTED'
+                WHEN e.bucket_start IS NULL THEN NULL
+                WHEN e.invalid_export_intervals > 0 THEN 'INVALID_INTERVALS'
+                WHEN e.export_reset_intervals > 0 THEN 'RESET_DETECTED'
+                WHEN e.export_gap_intervals > 0 THEN 'GAPS_DETECTED'
+                WHEN e.export_rollover_intervals > 0 THEN 'ROLLOVER_DETECTED'
                 ELSE 'GOOD'
             END,
 
-            r.source_interval_count,
-            r.valid_import_intervals,
-            r.invalid_import_intervals,
-            r.valid_export_intervals,
-            r.invalid_export_intervals,
+            i.source_interval_count,
+            i.valid_import_intervals,
+            i.invalid_import_intervals,
+            e.valid_export_intervals,
+            e.invalid_export_intervals,
 
             (
-                r.source_interval_count::NUMERIC
+                i.source_interval_count::NUMERIC
                 / NULLIF(
                     (CASE WHEN v_actual = '5m' THEN 300 ELSE 900 END) / v_capture_interval_seconds,
                     0
                 )
             ),
 
-            r.gap_interval_count,
-            r.reset_interval_count,
-            r.rollover_interval_count,
-            r.invalid_interval_count,
+            i.gap_interval_count,
+            i.reset_interval_count,
+            i.rollover_interval_count,
+            i.invalid_interval_count,
 
-            r.first_native_bucket_start,
-            r.last_native_bucket_start,
+            i.first_native_bucket_start,
+            i.last_native_bucket_start,
 
-            (
-                r.source_interval_count < (CASE WHEN v_actual = '5m' THEN 300 ELSE 900 END) / v_capture_interval_seconds
-                OR r.bucket_start < v_effective_from
-                OR r.bucket_start + (CASE WHEN v_actual = '5m' THEN INTERVAL '5 minutes' ELSE INTERVAL '15 minutes' END) > p_to
-            ),
+            CASE WHEN i.bucket_start IS NULL THEN NULL ELSE (
+                i.source_interval_count < (CASE WHEN v_actual = '5m' THEN 300 ELSE 900 END) / v_capture_interval_seconds
+                OR i.bucket_start < v_effective_from
+                OR i.bucket_start + (CASE WHEN v_actual = '5m' THEN INTERVAL '5 minutes' ELSE INTERVAL '15 minutes' END) > p_to
+            ) END,
 
             v_fallback_applied,
             v_fallback_reason
 
-        FROM (
-            SELECT * FROM zz269_old.v_energy_reporting_5min WHERE v_actual = '5m'
-            UNION ALL
-            SELECT * FROM zz269_old.v_energy_reporting_15min WHERE v_actual = '15m'
-        ) r
-        WHERE r.device_id = v_device_id
-          AND r.grafana_org_id = p_grafana_org_id
-          AND r.bucket_start >= date_bin(
-                  (CASE WHEN v_actual = '5m' THEN INTERVAL '5 minutes' ELSE INTERVAL '15 minutes' END),
-                  v_effective_from,
-                  TIMESTAMPTZ '2000-01-01 00:00:00+00'
-              )
-          AND r.bucket_start < p_to
-        ORDER BY r.bucket_start;
+        FROM import_rows i
+        FULL OUTER JOIN export_rows e ON e.bucket_start = i.bucket_start
+        ORDER BY COALESCE(i.bucket_start, e.bucket_start);
         RETURN;
     END IF;
 
     -- ------------------------------------------------------------------
-    -- 1h: zz269_old.v_energy_reporting_hourly (migration 041). Already
-    -- tenant-scoped, site-timezone-aware, aggregated exclusively from the
-    -- validated 15-minute semantic contract. bucket_start is already a
-    -- real TIMESTAMPTZ (site-local hour start), so this mirrors the 1d
-    -- branch's direct-instant overlap filtering rather than 5m/15m's
-    -- date_bin pre-filter.
+    -- 1h: zz269_old.v_energy_reporting_hourly. Already tenant-scoped,
+    -- site-timezone-aware. Source-window matching is strict start-
+    -- containment (never overlap) to prevent one coarse bucket from
+    -- matching two different devices' windows across a mid-bucket source
+    -- replacement -- see migration 263 header. The original request-
+    -- boundary overlap filter against [v_effective_from, p_to) is kept
+    -- unchanged in addition.
     -- ------------------------------------------------------------------
 
     IF v_actual = '1h' THEN
         RETURN QUERY
+        WITH import_windows AS (
+            SELECT * FROM analytics.resolve_asset_energy_source_windows(p_asset_id, 'ENERGY_IMPORT_TOTAL', v_effective_from, p_to)
+        ),
+        export_windows AS (
+            SELECT * FROM analytics.resolve_asset_energy_source_windows(p_asset_id, 'ENERGY_EXPORT_TOTAL', v_effective_from, p_to)
+        ),
+        import_rows AS (
+            -- Overlap-based against the source window, DISTINCT ON
+            -- preventing fan-out on a mid-bucket cutover -- see the native
+            -- tier's comment above.
+            SELECT DISTINCT ON (h.bucket_start) h.*
+            FROM zz269_old.v_energy_reporting_hourly h
+            JOIN import_windows w
+              ON w.device_id = h.device_id
+             AND h.bucket_start < w.window_to
+             AND h.bucket_start + INTERVAL '1 hour' > w.window_from
+            WHERE h.grafana_org_id = p_grafana_org_id
+              AND h.bucket_start < p_to
+              AND h.bucket_start + INTERVAL '1 hour' > v_effective_from
+            ORDER BY h.bucket_start, w.window_from DESC
+        ),
+        export_rows AS (
+            SELECT DISTINCT ON (h.bucket_start) h.*
+            FROM zz269_old.v_energy_reporting_hourly h
+            JOIN export_windows w
+              ON w.device_id = h.device_id
+             AND h.bucket_start < w.window_to
+             AND h.bucket_start + INTERVAL '1 hour' > w.window_from
+            WHERE h.grafana_org_id = p_grafana_org_id
+              AND h.bucket_start < p_to
+              AND h.bucket_start + INTERVAL '1 hour' > v_effective_from
+            ORDER BY h.bucket_start, w.window_from DESC
+        )
         SELECT
             p_requested_resolution,
             '1h'::TEXT,
             v_capture_interval_seconds,
-            h.bucket_start,
-            h.bucket_start + INTERVAL '1 hour',
+            COALESCE(i.bucket_start, e.bucket_start),
+            COALESCE(i.bucket_start, e.bucket_start) + INTERVAL '1 hour',
             v_device_id,
             v_device_name,
 
-            h.import_consumption_kwh,
-            h.export_consumption_kwh,
+            i.import_consumption_kwh,
+            e.export_consumption_kwh,
 
             CASE
-                WHEN h.invalid_import_intervals > 0 THEN 'INVALID_INTERVALS'
-                WHEN h.import_reset_intervals > 0 THEN 'RESET_DETECTED'
-                WHEN h.import_gap_intervals > 0 THEN 'GAPS_DETECTED'
-                WHEN h.import_rollover_intervals > 0 THEN 'ROLLOVER_DETECTED'
+                WHEN i.bucket_start IS NULL THEN NULL
+                WHEN i.invalid_import_intervals > 0 THEN 'INVALID_INTERVALS'
+                WHEN i.import_reset_intervals > 0 THEN 'RESET_DETECTED'
+                WHEN i.import_gap_intervals > 0 THEN 'GAPS_DETECTED'
+                WHEN i.import_rollover_intervals > 0 THEN 'ROLLOVER_DETECTED'
                 ELSE 'GOOD'
             END,
             CASE
-                WHEN h.invalid_export_intervals > 0 THEN 'INVALID_INTERVALS'
-                WHEN h.export_reset_intervals > 0 THEN 'RESET_DETECTED'
-                WHEN h.export_gap_intervals > 0 THEN 'GAPS_DETECTED'
-                WHEN h.export_rollover_intervals > 0 THEN 'ROLLOVER_DETECTED'
+                WHEN e.bucket_start IS NULL THEN NULL
+                WHEN e.invalid_export_intervals > 0 THEN 'INVALID_INTERVALS'
+                WHEN e.export_reset_intervals > 0 THEN 'RESET_DETECTED'
+                WHEN e.export_gap_intervals > 0 THEN 'GAPS_DETECTED'
+                WHEN e.export_rollover_intervals > 0 THEN 'ROLLOVER_DETECTED'
                 ELSE 'GOOD'
             END,
 
-            h.source_interval_count::BIGINT,
-            h.valid_import_intervals::BIGINT,
-            h.invalid_import_intervals::BIGINT,
-            h.valid_export_intervals::BIGINT,
-            h.invalid_export_intervals::BIGINT,
+            i.source_interval_count::BIGINT,
+            i.valid_import_intervals::BIGINT,
+            i.invalid_import_intervals::BIGINT,
+            e.valid_export_intervals::BIGINT,
+            e.invalid_export_intervals::BIGINT,
 
-            (h.source_interval_count::NUMERIC / NULLIF(3600 / v_capture_interval_seconds, 0)),
+            (i.source_interval_count::NUMERIC / NULLIF(3600 / v_capture_interval_seconds, 0)),
 
-            h.gap_interval_count::BIGINT,
-            h.reset_interval_count::BIGINT,
-            h.rollover_interval_count::BIGINT,
-            h.invalid_interval_count::BIGINT,
+            i.gap_interval_count::BIGINT,
+            i.reset_interval_count::BIGINT,
+            i.rollover_interval_count::BIGINT,
+            i.invalid_interval_count::BIGINT,
 
-            h.first_native_bucket_start,
-            h.last_native_bucket_start,
+            i.first_native_bucket_start,
+            i.last_native_bucket_start,
 
-            (
-                h.source_interval_count < 3600 / v_capture_interval_seconds
-                OR h.bucket_start < v_effective_from
-                OR h.bucket_start + INTERVAL '1 hour' > p_to
-            ),
+            CASE WHEN i.bucket_start IS NULL THEN NULL ELSE (
+                i.source_interval_count < 3600 / v_capture_interval_seconds
+                OR i.bucket_start < v_effective_from
+                OR i.bucket_start + INTERVAL '1 hour' > p_to
+            ) END,
 
             v_fallback_applied,
             v_fallback_reason
 
-        FROM zz269_old.v_energy_reporting_hourly h
-        WHERE h.device_id = v_device_id
-          AND h.grafana_org_id = p_grafana_org_id
-          AND h.bucket_start < p_to
-          AND h.bucket_start + INTERVAL '1 hour' > v_effective_from
-        ORDER BY h.bucket_start;
+        FROM import_rows i
+        FULL OUTER JOIN export_rows e ON e.bucket_start = i.bucket_start
+        ORDER BY COALESCE(i.bucket_start, e.bucket_start);
         RETURN;
     END IF;
 
     -- ------------------------------------------------------------------
-    -- 1d: zz269_old.v_energy_reporting_daily. Site-timezone-aware,
-    -- aggregated from the validated 15-minute semantic contract.
+    -- 1d: zz269_old.v_energy_reporting_daily. Site-timezone-aware; joined
+    -- on the resolved site-local-day instant (not the raw DATE) so Import
+    -- and Export rows line up even if resolved independently. Same
+    -- start-containment source-window matching as every other tier.
     -- ------------------------------------------------------------------
 
     IF v_actual = '1d' THEN
         RETURN QUERY
+        WITH import_windows AS (
+            SELECT * FROM analytics.resolve_asset_energy_source_windows(p_asset_id, 'ENERGY_IMPORT_TOTAL', v_effective_from, p_to)
+        ),
+        export_windows AS (
+            SELECT * FROM analytics.resolve_asset_energy_source_windows(p_asset_id, 'ENERGY_EXPORT_TOTAL', v_effective_from, p_to)
+        ),
+        import_rows AS (
+            -- Overlap-based against the source window, DISTINCT ON
+            -- preventing fan-out on a mid-bucket cutover -- see the native
+            -- tier's comment above.
+            SELECT DISTINCT ON (day_start)
+                d.*,
+                (d.consumption_date::TIMESTAMP AT TIME ZONE d.site_timezone) AS day_start
+            FROM zz269_old.v_energy_reporting_daily d
+            JOIN import_windows w
+              ON w.device_id = d.device_id
+             AND (d.consumption_date::TIMESTAMP AT TIME ZONE d.site_timezone) < w.window_to
+             AND (d.consumption_date::TIMESTAMP AT TIME ZONE d.site_timezone) + INTERVAL '1 day' > w.window_from
+            WHERE d.grafana_org_id = p_grafana_org_id
+              AND (d.consumption_date::TIMESTAMP AT TIME ZONE d.site_timezone) < p_to
+              AND (d.consumption_date::TIMESTAMP AT TIME ZONE d.site_timezone) + INTERVAL '1 day' > v_effective_from
+            ORDER BY day_start, w.window_from DESC
+        ),
+        export_rows AS (
+            SELECT DISTINCT ON (day_start)
+                d.*,
+                (d.consumption_date::TIMESTAMP AT TIME ZONE d.site_timezone) AS day_start
+            FROM zz269_old.v_energy_reporting_daily d
+            JOIN export_windows w
+              ON w.device_id = d.device_id
+             AND (d.consumption_date::TIMESTAMP AT TIME ZONE d.site_timezone) < w.window_to
+             AND (d.consumption_date::TIMESTAMP AT TIME ZONE d.site_timezone) + INTERVAL '1 day' > w.window_from
+            WHERE d.grafana_org_id = p_grafana_org_id
+              AND (d.consumption_date::TIMESTAMP AT TIME ZONE d.site_timezone) < p_to
+              AND (d.consumption_date::TIMESTAMP AT TIME ZONE d.site_timezone) + INTERVAL '1 day' > v_effective_from
+            ORDER BY day_start, w.window_from DESC
+        )
         SELECT
             p_requested_resolution,
             '1d'::TEXT,
             v_capture_interval_seconds,
-            (d.consumption_date::TIMESTAMP AT TIME ZONE d.site_timezone),
-            (d.consumption_date::TIMESTAMP AT TIME ZONE d.site_timezone) + INTERVAL '1 day',
+            COALESCE(i.day_start, e.day_start),
+            COALESCE(i.day_start, e.day_start) + INTERVAL '1 day',
             v_device_id,
             v_device_name,
 
-            d.import_consumption_kwh,
-            d.export_consumption_kwh,
+            i.import_consumption_kwh,
+            e.export_consumption_kwh,
 
             CASE
-                WHEN d.invalid_import_intervals > 0 THEN 'INVALID_INTERVALS'
-                WHEN d.import_reset_intervals > 0 THEN 'RESET_DETECTED'
-                WHEN d.import_gap_intervals > 0 THEN 'GAPS_DETECTED'
-                WHEN d.import_rollover_intervals > 0 THEN 'ROLLOVER_DETECTED'
+                WHEN i.day_start IS NULL THEN NULL
+                WHEN i.invalid_import_intervals > 0 THEN 'INVALID_INTERVALS'
+                WHEN i.import_reset_intervals > 0 THEN 'RESET_DETECTED'
+                WHEN i.import_gap_intervals > 0 THEN 'GAPS_DETECTED'
+                WHEN i.import_rollover_intervals > 0 THEN 'ROLLOVER_DETECTED'
                 ELSE 'GOOD'
             END,
             CASE
-                WHEN d.invalid_export_intervals > 0 THEN 'INVALID_INTERVALS'
-                WHEN d.export_reset_intervals > 0 THEN 'RESET_DETECTED'
-                WHEN d.export_gap_intervals > 0 THEN 'GAPS_DETECTED'
-                WHEN d.export_rollover_intervals > 0 THEN 'ROLLOVER_DETECTED'
+                WHEN e.day_start IS NULL THEN NULL
+                WHEN e.invalid_export_intervals > 0 THEN 'INVALID_INTERVALS'
+                WHEN e.export_reset_intervals > 0 THEN 'RESET_DETECTED'
+                WHEN e.export_gap_intervals > 0 THEN 'GAPS_DETECTED'
+                WHEN e.export_rollover_intervals > 0 THEN 'ROLLOVER_DETECTED'
                 ELSE 'GOOD'
             END,
 
-            d.source_interval_count::BIGINT,
-            d.valid_import_intervals::BIGINT,
-            d.invalid_import_intervals::BIGINT,
-            d.valid_export_intervals::BIGINT,
-            d.invalid_export_intervals::BIGINT,
+            i.source_interval_count::BIGINT,
+            i.valid_import_intervals::BIGINT,
+            i.invalid_import_intervals::BIGINT,
+            e.valid_export_intervals::BIGINT,
+            e.invalid_export_intervals::BIGINT,
 
             -- Nominal 86400s day length; does not correct for DST transitions.
-            (d.source_interval_count::NUMERIC / NULLIF(86400 / v_capture_interval_seconds, 0)),
+            (i.source_interval_count::NUMERIC / NULLIF(86400 / v_capture_interval_seconds, 0)),
 
-            d.gap_interval_count::BIGINT,
-            d.reset_interval_count::BIGINT,
-            d.rollover_interval_count::BIGINT,
-            d.invalid_interval_count::BIGINT,
+            i.gap_interval_count::BIGINT,
+            i.reset_interval_count::BIGINT,
+            i.rollover_interval_count::BIGINT,
+            i.invalid_interval_count::BIGINT,
 
-            d.first_native_bucket_start,
-            d.last_native_bucket_start,
+            i.first_native_bucket_start,
+            i.last_native_bucket_start,
 
-            (
-                d.source_interval_count < 86400 / v_capture_interval_seconds
-                OR (d.consumption_date::TIMESTAMP AT TIME ZONE d.site_timezone) < v_effective_from
-                OR (d.consumption_date::TIMESTAMP AT TIME ZONE d.site_timezone) + INTERVAL '1 day' > p_to
-            ),
+            CASE WHEN i.day_start IS NULL THEN NULL ELSE (
+                i.source_interval_count < 86400 / v_capture_interval_seconds
+                OR i.day_start < v_effective_from
+                OR i.day_start + INTERVAL '1 day' > p_to
+            ) END,
 
             v_fallback_applied,
             v_fallback_reason
 
-        FROM zz269_old.v_energy_reporting_daily d
-        WHERE d.device_id = v_device_id
-          AND d.grafana_org_id = p_grafana_org_id
-          AND (d.consumption_date::TIMESTAMP AT TIME ZONE d.site_timezone) < p_to
-          AND (d.consumption_date::TIMESTAMP AT TIME ZONE d.site_timezone) + INTERVAL '1 day' > v_effective_from
-        ORDER BY d.consumption_date;
+        FROM import_rows i
+        FULL OUTER JOIN export_rows e ON e.day_start = i.day_start
+        ORDER BY COALESCE(i.day_start, e.day_start);
         RETURN;
     END IF;
 

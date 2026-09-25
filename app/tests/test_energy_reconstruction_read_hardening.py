@@ -132,12 +132,14 @@ def _tenant(cur, capture_interval_seconds=60):
         (org, site, f"M269 GW {suffix}", f"M269-GW-{suffix}"),
     )
     gateway = cur.fetchone()[0]
+    cur.execute("SELECT id FROM config.device_profiles WHERE profile_code = 'ENERGY_METER_ENISCOPE_V1'")
+    profile = cur.fetchone()[0]
     devices = []
     for label in ("A", "B"):
         cur.execute(
-            "INSERT INTO metadata.devices(organization_id, gateway_id, device_model_id, name, external_id) "
-            "VALUES (%s, %s, %s, %s, %s) RETURNING id",
-            (org, gateway, model, f"M269 Device {label} {suffix}", f"M269-DEV-{label}-{suffix}"),
+            "INSERT INTO metadata.devices(organization_id, gateway_id, device_model_id, profile_id, name, external_id) "
+            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+            (org, gateway, model, profile, f"M269 Device {label} {suffix}", f"M269-DEV-{label}-{suffix}"),
         )
         devices.append(cur.fetchone()[0])
     cur.execute(
@@ -154,12 +156,26 @@ def _tenant(cur, capture_interval_seconds=60):
         "INSERT INTO metadata.grafana_organization_map(grafana_org_id, organization_id, is_active) VALUES (%s, %s, TRUE)",
         (grafana_org_id, org),
     )
+    # Migration 263: the canonical read attributes Import/Export through
+    # confirmed metadata.asset_points (the PRIMARY_METER link above only
+    # feeds the legacy daily/asset/hierarchy views).
+    _bind(cur, org, asset, devices[0], datetime(2025, 1, 1, tzinfo=UTC), None)
     cur.execute(
         "INSERT INTO config.telemetry_capture_policies(site_id, capture_interval_seconds, alignment_mode, "
         "late_arrival_tolerance_seconds, effective_from, is_enabled) VALUES (%s, %s, 'WALL_CLOCK', 60, %s, TRUE)",
         (site, capture_interval_seconds, datetime(2025, 1, 1, tzinfo=UTC)),
     )
     return {"org": org, "site": site, "device": devices[0], "device_b": devices[1], "asset": asset, "gorg": grafana_org_id}
+
+
+def _bind(cur, org, asset, device, effective_from, effective_to):
+    cur.execute(
+        "INSERT INTO metadata.asset_points(asset_id, device_id, logical_point_id, organization_id, effective_from, effective_to) "
+        "SELECT %s, %s, lp.id, %s, %s, %s FROM metadata.logical_points lp "
+        "WHERE lp.name IN ('ENERGY_IMPORT_TOTAL', 'ENERGY_EXPORT_TOTAL')",
+        (asset, device, org, effective_from, effective_to),
+    )
+    assert cur.rowcount == 2
 
 
 def _row(t, ts, device, **kw):
@@ -288,13 +304,16 @@ def _assert_same(cur, new_sql, old_sql, params):
 # ---------------------------------------------------------------------------
 
 
-def test_manifest_row_follows_268_and_is_last():
+def test_manifest_row_directly_follows_268_and_precedes_263():
+    """269 directly follows 268. The rebased migration 263 (asset_points
+    attribution) is applied AFTER 269 because it re-applies 269's semantics."""
     with MANIFEST.open(newline="") as handle:
         rows = [r for r in csv.DictReader(handle) if r["target_category"] == "migration"]
     names = [r["source_file"] for r in rows]
-    assert names[-2] == "268_energy_reconstruction_foundations.sql"
-    assert names[-1] == "269_energy_reconstruction_read_hardening.sql"
-    assert rows[-1]["target_path"] == "postgres/migrations/269_energy_reconstruction_read_hardening.sql"
+    idx = names.index("269_energy_reconstruction_read_hardening.sql")
+    assert names[idx - 1] == "268_energy_reconstruction_foundations.sql"
+    assert rows[idx]["target_path"] == "postgres/migrations/269_energy_reconstruction_read_hardening.sql"
+    assert names.index("263_asset_energy_consumption_asset_points_attribution.sql") > idx
 
 
 def test_migration_touches_only_the_declared_objects():
@@ -333,15 +352,30 @@ def test_live_views_keep_security_barrier_and_privileges(conn):
             assert _one(cur, "SELECT has_table_privilege('grafana_reader', %s, 'SELECT')", (f"analytics.{v}",))[0]
 
 
-def test_canonical_read_handles_reconstruction_in_every_tier(conn):
-    """Tripwire: fails if a later CREATE OR REPLACE (e.g. the uncommitted
-    ADR-018 migration 263) drops the migration-269 handling."""
-    with conn.cursor() as cur:
-        body = _one(cur, "SELECT pg_get_functiondef('analytics.get_canonical_energy_read(bigint,uuid,timestamptz,timestamptz,text,text)'::regprocedure)")[0]
-    assert body.count("RECONSTRUCTED_TIMING") == 8
-    for token in ("n.is_measured_interval::INT::BIGINT", "r.import_reconstructed_intervals",
-                  "h.export_reconstructed_intervals", "d.import_reconstructed_intervals"):
-        assert token in body, token
+@pytest.mark.parametrize("tier", ["native", "5m", "15m", "1h", "1d"])
+def test_canonical_read_handles_reconstruction_in_every_tier(tx, tier):
+    """Behavioral regression check for the 263/269 interaction: through the
+    asset_points-attributed canonical read, reconstructed energy is in the
+    totals, never counted as measured, and never reported GOOD -- in every
+    tier. Fails if any later CREATE OR REPLACE drops the 269 handling."""
+    with tx.cursor() as cur:
+        t = _tenant(cur)
+        _gap_fixture(cur, t)
+        cur.execute(
+            "SELECT import_quality_status, source_interval_count, import_consumption_kwh "
+            "FROM analytics.get_canonical_energy_read(%s, %s, %s, %s, %s, 'strict')",
+            (t["gorg"], t["asset"], datetime(2025, 3, 9, tzinfo=UTC), datetime(2025, 3, 12, tzinfo=UTC), tier),
+        )
+        rows = cur.fetchall()
+        assert rows, tier
+        assert sum(r[2] for r in rows) == Decimal("0.450")  # measured register delta, fully included
+        assert sum(r[1] for r in rows) == 9                  # measured intervals only (45 rows, 36 synthetic)
+        statuses = {r[0] for r in rows}
+        assert statuses & {"RECONSTRUCTED_TIMING", "GAPS_DETECTED"}
+        if tier != "1d":
+            assert "RECONSTRUCTED_TIMING" in statuses
+        # Only buckets made purely of measured rows may be GOOD; this fixture has none.
+        assert "GOOD" not in statuses or tier == "native"
 
 
 def test_switch_still_off(conn):
@@ -842,3 +876,95 @@ def test_register_selection_skips_inside_gap_rows_first_and_last(tx):
         assert r["previous_export_register_wh"] == Decimal(11)     # export not inside a gap: first row
         assert r["export_register_wh"] == Decimal(99)              # export not inside a gap: last row
         assert r["source_interval_count"] == 15 and r["valid_import_intervals"] == 13
+
+
+# ---------------------------------------------------------------------------
+# Source replacement DURING a reconstructed gap (migration 263 asset_points
+# attribution + migration 269 semantics)
+# ---------------------------------------------------------------------------
+
+
+def _replace_source_mid_gap(cur, t, cutover):
+    """Device A carries the reconstructed gap of _gap_fixture (06:00-06:44).
+    The asset's Import/Export binding moves from A to B at `cutover`; B has
+    measured GOOD rows from the cutover onward (20 Wh per minute)."""
+    _gap_fixture(cur, t)
+    cur.execute(
+        "UPDATE metadata.asset_points SET effective_to = %s WHERE asset_id = %s AND device_id = %s",
+        (cutover, t["asset"], t["device"]),
+    )
+    assert cur.rowcount == 2
+    _bind(cur, t["org"], t["asset"], t["device_b"], cutover, None)
+    rows = []
+    start_minute = int((cutover - G0).total_seconds() // 60)
+    for k in range(start_minute, 45):
+        ts = G0 + timedelta(minutes=k)
+        rows.append(_row(t, ts, t["device_b"], import_register_wh=Decimal(9000 + 20 * k),
+                         previous_import_register_wh=Decimal(9000 + 20 * (k - 1)),
+                         import_consumption_wh=Decimal(20), import_consumption_kwh=Decimal("0.020")))
+    _insert(cur, "energy_consumption_1min", rows)
+    return start_minute
+
+
+def _canon(cur, t, tier):
+    cur.execute(
+        "SELECT interval_start, resolved_device_id, import_quality_status, import_consumption_kwh, source_interval_count "
+        "FROM analytics.get_canonical_energy_read(%s, %s, %s, %s, %s, 'strict') ORDER BY interval_start",
+        (t["gorg"], t["asset"], datetime(2025, 3, 10, 5, 0, tzinfo=UTC), datetime(2025, 3, 10, 8, 0, tzinfo=UTC), tier),
+    )
+    return cur.fetchall()
+
+
+@pytest.mark.parametrize("cutover_minute", [15, 10])  # 15-minute boundary, and mid-bucket
+def test_source_replacement_during_reconstructed_gap_native(tx, cutover_minute):
+    with tx.cursor() as cur:
+        t = _tenant(cur)
+        cutover = G0 + timedelta(minutes=cutover_minute)
+        _replace_source_mid_gap(cur, t, cutover)
+        rows = _canon(cur, t, "native")
+        starts = [r[0] for r in rows]
+        assert len(starts) == len(set(starts)) == 45  # every native slot exactly once: no double count
+        before = [r for r in rows if r[0] < cutover]
+        after = [r for r in rows if r[0] >= cutover]
+        # Before the cutover: device A's measured + reconstructed rows only.
+        assert {r[2] for r in before} <= {"GOOD", "RECONSTRUCTED_TIMING"}
+        assert "RECONSTRUCTED_TIMING" in {r[2] for r in before}
+        assert sum(r[3] for r in before) == Decimal("0.010") * cutover_minute
+        # From the cutover: device B's measured rows only -- A's reconstructed
+        # slots after the cutover are never attributed to the asset.
+        assert {r[2] for r in after} == {"GOOD"}
+        assert sum(r[3] for r in after) == Decimal("0.020") * (45 - cutover_minute)
+        assert sum(r[4] for r in after) == 45 - cutover_minute
+
+
+def test_source_replacement_on_bucket_boundary_aggregate_tiers(tx):
+    """Cutover on a 15-minute boundary: each 15-minute bucket belongs wholly to
+    one source, so the 15m total equals the native total exactly and the
+    reconstructed bucket keeps RECONSTRUCTED_TIMING."""
+    with tx.cursor() as cur:
+        t = _tenant(cur)
+        cutover = G0 + timedelta(minutes=15)
+        _replace_source_mid_gap(cur, t, cutover)
+        native_total = sum(r[3] for r in _canon(cur, t, "native"))
+        q = {int((r[0] - G0).total_seconds() // 60): r for r in _canon(cur, t, "15m")}
+        assert set(q) == {0, 15, 30}
+        assert q[0][2] == "RECONSTRUCTED_TIMING" and q[0][4] == 3      # device A: 3 measured + 12 synthetic
+        assert q[15][2] == "GOOD" and q[30][2] == "GOOD"               # device B, measured
+        assert sum(r[3] for r in q.values()) == native_total == Decimal("0.150") + Decimal("0.600")
+
+
+def test_source_replacement_mid_bucket_incoming_source_wins_without_double_count(tx):
+    """Cutover inside a 15-minute bucket: 263's rule -- the incoming source
+    owns the straddling aggregate bucket -- still holds with 269 semantics:
+    the bucket is B's measured data (GOOD), never a blend of A's reconstructed
+    energy and B's measured energy."""
+    with tx.cursor() as cur:
+        t = _tenant(cur)
+        cutover = G0 + timedelta(minutes=10)
+        _replace_source_mid_gap(cur, t, cutover)
+        q = {int((r[0] - G0).total_seconds() // 60): r for r in _canon(cur, t, "15m")}
+        assert q[0][1] == t["device_b"]
+        assert q[0][2] == "GOOD"
+        assert q[0][3] == Decimal("0.020") * 5 and q[0][4] == 5          # B's 06:10-06:14 only
+        assert all(r[1] == t["device_b"] and r[2] == "GOOD" for r in q.values())
+        assert sum(r[3] for r in q.values()) == Decimal("0.020") * 35     # no A energy blended in

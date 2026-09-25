@@ -50,10 +50,20 @@ SELECT '96250000-0000-0000-0000-000000000001', 'Routing Contract Test Vendor', '
 FROM config.device_categories dc
 WHERE lower(dc.name) = 'energy meter';
 
-INSERT INTO metadata.devices (id, organization_id, gateway_id, device_model_id, name, external_id)
-VALUES
-    ('96300000-0000-0000-0000-000000000001', '96000000-0000-0000-0000-000000000001', '96200000-0000-0000-0000-000000000001', '96250000-0000-0000-0000-000000000001', 'Hourly Regression Device', 'GRC_DEVICE_HOURLY'),
-    ('96300000-0000-0000-0000-000000000002', '96000000-0000-0000-0000-000000000001', '96200000-0000-0000-0000-000000000001', '96250000-0000-0000-0000-000000000001', 'Daily End-to-End Device', 'GRC_DEVICE_DAILY');
+-- Migration 263: analytics.get_canonical_energy_read now attributes via
+-- metadata.asset_points, not PRIMARY_METER, so these devices need a
+-- profile (asset_points has an FK to config.device_point_configuration,
+-- populated only for profiled devices via the sync trigger).
+INSERT INTO metadata.devices (id, organization_id, gateway_id, device_model_id, profile_id, name, external_id)
+SELECT
+    v.id, '96000000-0000-0000-0000-000000000001', '96200000-0000-0000-0000-000000000001', '96250000-0000-0000-0000-000000000001',
+    (SELECT id FROM config.device_profiles WHERE profile_code = 'ENERGY_METER_ENISCOPE_V1'),
+    v.name, v.external_id
+FROM (
+    VALUES
+        ('96300000-0000-0000-0000-000000000001'::uuid, 'Hourly Regression Device', 'GRC_DEVICE_HOURLY'),
+        ('96300000-0000-0000-0000-000000000002'::uuid, 'Daily End-to-End Device', 'GRC_DEVICE_DAILY')
+) AS v(id, name, external_id);
 
 INSERT INTO metadata.assets (id, organization_id, site_id, name, external_id, metering_requirement)
 VALUES
@@ -64,6 +74,19 @@ INSERT INTO metadata.asset_devices (asset_id, device_id, relationship_type)
 VALUES
     ('96400000-0000-0000-0000-000000000001', '96300000-0000-0000-0000-000000000001', 'PRIMARY_METER'),
     ('96400000-0000-0000-0000-000000000002', '96300000-0000-0000-0000-000000000002', 'PRIMARY_METER');
+
+-- Migration 263 attribution: confirm both ENERGY_IMPORT_TOTAL and
+-- ENERGY_EXPORT_TOTAL on each asset's own device, open-ended and well
+-- before every range this test exercises.
+INSERT INTO metadata.asset_points (asset_id, device_id, logical_point_id, organization_id, effective_from, effective_to)
+SELECT a.asset_id, a.device_id, lp.id, '96000000-0000-0000-0000-000000000001', TIMESTAMPTZ '2026-06-01 00:00:00+00' - INTERVAL '2000 days', NULL
+FROM (
+    VALUES
+        ('96400000-0000-0000-0000-000000000001'::uuid, '96300000-0000-0000-0000-000000000001'::uuid),
+        ('96400000-0000-0000-0000-000000000002'::uuid, '96300000-0000-0000-0000-000000000002'::uuid)
+) AS a(asset_id, device_id)
+CROSS JOIN metadata.logical_points lp
+WHERE lp.name IN ('ENERGY_IMPORT_TOTAL', 'ENERGY_EXPORT_TOTAL');
 
 INSERT INTO metadata.grafana_organization_map (grafana_org_id, organization_id, is_active)
 VALUES
