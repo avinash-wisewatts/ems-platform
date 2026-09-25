@@ -701,3 +701,144 @@ def test_hierarchy_never_reports_reconstructed_only_day_good(tx):
         d = _one(cur, "SELECT valid_import_intervals, reconstructed_interval_count FROM analytics.v_energy_consumption_daily "
                       "WHERE device_id = %s AND consumption_date = DATE '2025-03-12'", (t["device"],))
         assert d[0] == 0 and d[1] > 0
+
+
+# ---------------------------------------------------------------------------
+# Per-direction status never falls through to GOOD; register selection;
+# synthetic-row contract constraint (PR #80 review fixes)
+# ---------------------------------------------------------------------------
+
+H0 = datetime(2025, 3, 10, 9, 0, tzinfo=UTC)  # 14:30 IST; IST hour 08:30-09:30 UTC holds only these rows
+TIER_WINDOWS = {
+    "native": (datetime(2025, 3, 10, 8, 0, tzinfo=UTC), datetime(2025, 3, 10, 11, 0, tzinfo=UTC)),
+    "5m": (datetime(2025, 3, 10, 8, 0, tzinfo=UTC), datetime(2025, 3, 10, 11, 0, tzinfo=UTC)),
+    "15m": (datetime(2025, 3, 10, 8, 0, tzinfo=UTC), datetime(2025, 3, 10, 11, 0, tzinfo=UTC)),
+    "1h": (datetime(2025, 3, 10, 8, 0, tzinfo=UTC), datetime(2025, 3, 10, 11, 0, tzinfo=UTC)),
+    "1d": (datetime(2025, 3, 9, 0, 0, tzinfo=UTC), datetime(2025, 3, 12, 0, 0, tzinfo=UTC)),
+}
+
+
+def _import_only_reconstruction(t, ts, synthetic, export_valid):
+    """Import reconstructed (INTERIOR); export NOT reconstructed."""
+    return _row(
+        t, ts, t["device"],
+        source_sample_count=0 if synthetic else 1,
+        import_register_wh=None, previous_import_register_wh=None,
+        export_register_wh=None if synthetic else Decimal("5"),
+        previous_export_register_wh=None if synthetic else Decimal("5"),
+        import_quality_code="RECONSTRUCTED",
+        export_quality_code="GOOD" if export_valid else "MISSING_REGISTER",
+        export_is_valid=export_valid,
+        export_consumption_wh=Decimal(0) if export_valid else None,
+        export_consumption_kwh=Decimal(0) if export_valid else None,
+        is_reconstructed=True, import_reconstruction_role="INTERIOR",
+        import_reconstruction_method="TIME_WEIGHTED", import_gap_start=H0 - timedelta(minutes=1),
+        import_gap_end=H0 + timedelta(minutes=30), import_gap_delta_wh=Decimal(310),
+    )
+
+
+def _tier_statuses(cur, t, tier):
+    frm, to = TIER_WINDOWS[tier]
+    cur.execute(
+        "SELECT import_quality_status, export_quality_status, source_interval_count, valid_export_intervals "
+        "FROM analytics.get_canonical_energy_read(%s, %s, %s, %s, %s, 'strict') ORDER BY interval_start",
+        (t["gorg"], t["asset"], frm, to, tier),
+    )
+    return cur.fetchall()
+
+
+@pytest.mark.parametrize("tier", ["native", "5m", "15m", "1h", "1d"])
+def test_reconstructed_import_with_valid_measured_export(tx, tier):
+    """Measured rows (samples) whose import slot is inside a gap and whose
+    export is a valid measurement: import RECONSTRUCTED_TIMING, export GOOD
+    (it genuinely is a measurement) and counted as a valid export interval."""
+    with tx.cursor() as cur:
+        t = _tenant(cur)
+        _insert(cur, "energy_consumption_1min",
+                [_import_only_reconstruction(t, H0 + timedelta(minutes=k), synthetic=False, export_valid=True) for k in range(15)])
+        rows = _tier_statuses(cur, t, tier)
+        assert rows, tier
+        assert {r[0] for r in rows} == {"RECONSTRUCTED_TIMING"}
+        assert {r[1] for r in rows} == {"GOOD"}
+        assert sum(r[3] for r in rows) == 15  # measured export intervals
+        assert sum(r[2] for r in rows) == 15  # measured intervals (rows with samples)
+
+
+@pytest.mark.parametrize("tier", ["native", "5m", "15m", "1h", "1d"])
+def test_reconstructed_import_with_invalid_export_is_never_good(tx, tier):
+    """Synthetic rows (no samples): import reconstructed, export neither
+    measured nor reconstructed. Export must report INVALID_INTERVALS in every
+    tier -- never fall through to GOOD -- and nothing counts as measured."""
+    with tx.cursor() as cur:
+        t = _tenant(cur)
+        _insert(cur, "energy_consumption_1min",
+                [_import_only_reconstruction(t, H0 + timedelta(minutes=k), synthetic=True, export_valid=False) for k in range(15)])
+        rows = _tier_statuses(cur, t, tier)
+        assert rows, tier
+        assert {r[0] for r in rows} == {"RECONSTRUCTED_TIMING"}
+        assert {r[1] for r in rows} == {"INVALID_INTERVALS"}
+        assert all(r[2] == 0 and r[3] == 0 for r in rows)
+
+
+@pytest.mark.parametrize("table", ["energy_consumption_1min", "energy_consumption_5min"])
+def test_constraint_rejects_synthetic_row_with_valid_non_reconstructed_direction(tx, table):
+    with tx.cursor() as cur:
+        t = _tenant(cur)
+        row = _import_only_reconstruction(t, H0, synthetic=True, export_valid=True)
+        with pytest.raises(psycopg.errors.CheckViolation) as exc:
+            _insert(cur, table, [row])
+        assert f"ck_{table}_synthetic_direction" in str(exc.value)
+
+
+@pytest.mark.parametrize("table", ["energy_consumption_1min", "energy_consumption_5min"])
+def test_constraint_accepts_contract_rows(tx, table):
+    with tx.cursor() as cur:
+        t = _tenant(cur)
+        _insert(cur, table, [
+            _import_only_reconstruction(t, H0, synthetic=True, export_valid=False),  # synthetic, export invalid
+            _import_only_reconstruction(t, H0 + timedelta(minutes=5), synthetic=False, export_valid=True),  # measured
+            _row(t, H0 + timedelta(minutes=10), t["device"]),  # ordinary measured row
+        ])
+
+
+def test_constraint_is_not_valid_and_leaves_existing_rows_untouched(conn):
+    with conn.cursor() as cur:
+        rows = _all(cur, "SELECT conrelid::regclass::text, convalidated, pg_get_constraintdef(oid) FROM pg_constraint "
+                         "WHERE conname LIKE 'ck_energy_consumption_%%_synthetic_direction' ORDER BY 1")
+    assert [(r[0], r[1]) for r in rows] == [
+        ("analytics.energy_consumption_1min", False),
+        ("analytics.energy_consumption_5min", False),
+    ]
+    for _, _, definition in rows:
+        assert "NOT VALID" in definition
+        assert "COALESCE(source_sample_count, (0)::bigint) = 0" in definition
+        assert "(import_reconstruction_role IS NOT NULL) OR (NOT import_is_valid)" in definition
+        assert "(export_reconstruction_role IS NOT NULL) OR (NOT export_is_valid)" in definition
+
+
+def test_register_selection_skips_inside_gap_rows_first_and_last(tx):
+    """An inside-gap measured row (import INTERIOR, NULL import register) that
+    is FIRST and another that is LAST in a 15-minute bucket must not supply
+    the bucket's import registers; export (not inside a gap on those rows)
+    still takes them."""
+    b = datetime(2025, 3, 10, 10, 0, tzinfo=UTC)
+    with tx.cursor() as cur:
+        t = _tenant(cur)
+        first = _import_only_reconstruction(t, b, synthetic=False, export_valid=True)
+        first.update(import_gap_start=b - timedelta(minutes=1), import_gap_end=b + timedelta(minutes=1),
+                     previous_export_register_wh=Decimal(11))
+        last = _import_only_reconstruction(t, b + timedelta(minutes=14), synthetic=False, export_valid=True)
+        last.update(import_gap_start=b + timedelta(minutes=13), import_gap_end=b + timedelta(minutes=16),
+                    export_register_wh=Decimal(99))
+        middle = [
+            _row(t, b + timedelta(minutes=k), t["device"],
+                 import_register_wh=Decimal(7000 + 10 * k), previous_import_register_wh=Decimal(7000 + 10 * (k - 1)))
+            for k in range(1, 14)
+        ]
+        _insert(cur, "energy_consumption_1min", [first] + middle + [last])
+        r = _rollup(cur, t, b)
+        assert r["previous_import_register_wh"] == Decimal(7000)   # first NON-inside-gap measured row
+        assert r["import_register_wh"] == Decimal(7130)            # last NON-inside-gap measured row
+        assert r["previous_export_register_wh"] == Decimal(11)     # export not inside a gap: first row
+        assert r["export_register_wh"] == Decimal(99)              # export not inside a gap: last row
+        assert r["source_interval_count"] == 15 and r["valid_import_intervals"] == 13

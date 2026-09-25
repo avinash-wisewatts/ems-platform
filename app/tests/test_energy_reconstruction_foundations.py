@@ -427,12 +427,16 @@ def test_legacy_column_list_insert_gets_inert_defaults(tx, table):
 @pytest.mark.parametrize(
     "extra, ok",
     [
-        # Consistent complete GAP_END import metadata: accepted.
-        ({"is_reconstructed": True, "import_reconstruction_role": "GAP_END",
+        # Consistent complete GAP_END import metadata: accepted. (A GAP_END
+        # row is a MEASURED row, so it carries a source sample -- migration
+        # 269's synthetic-row contract forbids a sample-less reconstructed
+        # row from claiming the valid, non-reconstructed export direction.)
+        ({"is_reconstructed": True, "source_sample_count": 1, "import_reconstruction_role": "GAP_END",
           "import_reconstruction_method": "TIME_WEIGHTED", "import_gap_start": "2025-12-31 23:00:00+00",
           "import_gap_end": "BUCKET", "import_gap_delta_wh": 10}, True),
-        # INTERIOR row strictly inside the gap: accepted.
-        ({"is_reconstructed": True, "export_reconstruction_role": "INTERIOR",
+        # INTERIOR row strictly inside the gap: accepted (measured row whose
+        # export slot is inside a gap; import is a valid measurement).
+        ({"is_reconstructed": True, "source_sample_count": 1, "export_reconstruction_role": "INTERIOR",
           "export_reconstruction_method": "MIXED", "export_gap_start": "2025-12-31 23:00:00+00",
           "export_gap_end": "2026-01-01 01:00:00+00", "export_gap_delta_wh": 0}, True),
         # Flag without metadata: rejected.

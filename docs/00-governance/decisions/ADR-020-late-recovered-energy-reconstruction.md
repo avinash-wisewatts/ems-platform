@@ -128,6 +128,17 @@ chain).
   slot with no measurement. Per direction, `*_reconstruction_role =
   'INTERIOR'` is not a measurement of that direction; `GAP_END` rows are
   measured and keep quality code `GAP`.
+- **Synthetic-row contract (enforced)**: a synthetic row may not claim a
+  valid direction unless that direction was reconstructed — NOT VALID CHECK
+  `ck_energy_consumption_1min_synthetic_direction` /
+  `ck_energy_consumption_5min_synthetic_direction` (existing rows untouched;
+  enforced for new rows).
+- **Never GOOD without evidence**: per direction, a bucket (canonical 5m/15m,
+  1h, 1d) with neither measured nor reconstructed intervals, or a synthetic
+  native row's non-reconstructed direction, reports `INVALID_INTERVALS`
+  (unreachable for pre-269 data).
+- **Register first/last** exclude synthetic rows and rows whose direction is
+  `INTERIOR`.
 - **Measured-only**: `source_interval_count`, `valid_*`/`invalid_*`
   intervals, gap/reset/rollover/invalid counts, register first/last, quality
   code arrays and first/last native bucket (rollups); the canonical read's

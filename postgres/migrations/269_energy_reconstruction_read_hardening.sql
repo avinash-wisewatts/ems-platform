@@ -30,6 +30,12 @@
 --   * New counters: reconstructed_interval_count, <dir>_reconstructed_
 --     intervals, <dir>_reconstructed_wh/_kwh (the part of the total whose
 --     timing was reconstructed).
+--   * A synthetic row may not claim a valid direction unless that direction
+--     was reconstructed (NOT VALID CHECK ck_energy_consumption_1min/_5min_
+--     synthetic_direction). Per direction, a bucket (or synthetic native row)
+--     with neither measured nor reconstructed intervals reports
+--     INVALID_INTERVALS -- it can never fall through to GOOD. Register
+--     first/last exclude synthetic rows and rows whose direction is INTERIOR.
 --   * Status: a bucket with reconstructed intervals and no higher-priority
 --     condition reports RECONSTRUCTED_TIMING -- never GOOD. Priority:
 --     INVALID_INTERVALS > RESET_DETECTED > GAPS_DETECTED >
@@ -116,6 +122,41 @@ BEGIN
     END LOOP;
 END;
 $cols$;
+
+
+-- ----------------------------------------------------------------------------
+-- 1b. Native tiers: enforce the PR3 synthetic-row contract. A synthetic row
+--     (reconstructed, no source sample) may not claim a VALID direction
+--     unless that direction itself was reconstructed -- otherwise it would
+--     contribute unmeasured energy as if it were measured. NOT VALID: no
+--     existing row is scanned or modified (none is synthetic -- the switch is
+--     OFF); enforced for every row written from now on.
+-- ----------------------------------------------------------------------------
+DO $synthetic$
+DECLARE
+    v_table TEXT;
+BEGIN
+    FOREACH v_table IN ARRAY ARRAY['energy_consumption_1min', 'energy_consumption_5min']
+    LOOP
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint
+            WHERE conrelid = format('analytics.%I', v_table)::regclass
+              AND conname = 'ck_' || v_table || '_synthetic_direction'
+        ) THEN
+            EXECUTE format($sql$
+                ALTER TABLE analytics.%1$I
+                ADD CONSTRAINT %2$I CHECK (
+                    NOT (is_reconstructed AND COALESCE(source_sample_count, 0) = 0)
+                    OR (
+                        (import_reconstruction_role IS NOT NULL OR NOT import_is_valid)
+                        AND (export_reconstruction_role IS NOT NULL OR NOT export_is_valid)
+                    )
+                ) NOT VALID
+            $sql$, v_table, 'ck_' || v_table || '_synthetic_direction');
+        END IF;
+    END LOOP;
+END;
+$synthetic$;
 
 
 -- ----------------------------------------------------------------------------
@@ -252,10 +293,10 @@ CREATE OR REPLACE VIEW analytics.v_energy_semantic_rollup_5min AS
             min(n.bucket_start) FILTER (WHERE n.is_measured_interval) AS first_native_bucket_start,
             max(n.bucket_start) FILTER (WHERE n.is_measured_interval) AS last_native_bucket_start,
             (array_agg(n.previous_bucket_start ORDER BY n.bucket_start) FILTER (WHERE n.is_measured_interval))[1] AS first_previous_bucket_start,
-            (array_agg(n.previous_import_register_wh ORDER BY n.bucket_start) FILTER (WHERE n.is_measured_interval))[1] AS previous_import_register_wh,
-            (array_agg(n.import_register_wh ORDER BY n.bucket_start DESC) FILTER (WHERE n.is_measured_interval))[1] AS import_register_wh,
-            (array_agg(n.previous_export_register_wh ORDER BY n.bucket_start) FILTER (WHERE n.is_measured_interval))[1] AS previous_export_register_wh,
-            (array_agg(n.export_register_wh ORDER BY n.bucket_start DESC) FILTER (WHERE n.is_measured_interval))[1] AS export_register_wh,
+            (array_agg(n.previous_import_register_wh ORDER BY n.bucket_start) FILTER (WHERE n.is_measured_interval AND NOT n.import_is_interior))[1] AS previous_import_register_wh,
+            (array_agg(n.import_register_wh ORDER BY n.bucket_start DESC) FILTER (WHERE n.is_measured_interval AND NOT n.import_is_interior))[1] AS import_register_wh,
+            (array_agg(n.previous_export_register_wh ORDER BY n.bucket_start) FILTER (WHERE n.is_measured_interval AND NOT n.export_is_interior))[1] AS previous_export_register_wh,
+            (array_agg(n.export_register_wh ORDER BY n.bucket_start DESC) FILTER (WHERE n.is_measured_interval AND NOT n.export_is_interior))[1] AS export_register_wh,
             array_agg(DISTINCT n.import_quality_code ORDER BY n.import_quality_code) FILTER (WHERE n.is_measured_interval) AS import_quality_codes,
             array_agg(DISTINCT n.export_quality_code ORDER BY n.export_quality_code) FILTER (WHERE n.is_measured_interval) AS export_quality_codes,
             min(n.native_resolution_seconds) AS minimum_native_resolution_seconds,
@@ -351,10 +392,10 @@ CREATE OR REPLACE VIEW analytics.v_energy_semantic_rollup_15min AS
             min(n.bucket_start) FILTER (WHERE n.is_measured_interval) AS first_native_bucket_start,
             max(n.bucket_start) FILTER (WHERE n.is_measured_interval) AS last_native_bucket_start,
             (array_agg(n.previous_bucket_start ORDER BY n.bucket_start) FILTER (WHERE n.is_measured_interval))[1] AS first_previous_bucket_start,
-            (array_agg(n.previous_import_register_wh ORDER BY n.bucket_start) FILTER (WHERE n.is_measured_interval))[1] AS previous_import_register_wh,
-            (array_agg(n.import_register_wh ORDER BY n.bucket_start DESC) FILTER (WHERE n.is_measured_interval))[1] AS import_register_wh,
-            (array_agg(n.previous_export_register_wh ORDER BY n.bucket_start) FILTER (WHERE n.is_measured_interval))[1] AS previous_export_register_wh,
-            (array_agg(n.export_register_wh ORDER BY n.bucket_start DESC) FILTER (WHERE n.is_measured_interval))[1] AS export_register_wh,
+            (array_agg(n.previous_import_register_wh ORDER BY n.bucket_start) FILTER (WHERE n.is_measured_interval AND NOT n.import_is_interior))[1] AS previous_import_register_wh,
+            (array_agg(n.import_register_wh ORDER BY n.bucket_start DESC) FILTER (WHERE n.is_measured_interval AND NOT n.import_is_interior))[1] AS import_register_wh,
+            (array_agg(n.previous_export_register_wh ORDER BY n.bucket_start) FILTER (WHERE n.is_measured_interval AND NOT n.export_is_interior))[1] AS previous_export_register_wh,
+            (array_agg(n.export_register_wh ORDER BY n.bucket_start DESC) FILTER (WHERE n.is_measured_interval AND NOT n.export_is_interior))[1] AS export_register_wh,
             array_agg(DISTINCT n.import_quality_code ORDER BY n.import_quality_code) FILTER (WHERE n.is_measured_interval) AS import_quality_codes,
             array_agg(DISTINCT n.export_quality_code ORDER BY n.export_quality_code) FILTER (WHERE n.is_measured_interval) AS export_quality_codes,
             min(n.native_resolution_seconds) AS minimum_native_resolution_seconds,
@@ -2359,6 +2400,7 @@ BEGIN
             n.export_consumption_kwh,
 
             CASE
+                WHEN NOT n.is_measured_interval AND n.import_reconstruction_role IS NULL THEN 'INVALID_INTERVALS'
                 WHEN NOT n.import_is_valid THEN 'INVALID_INTERVALS'
                 WHEN n.import_reset_detected THEN 'RESET_DETECTED'
                 WHEN n.import_quality_code = 'GAP' THEN 'GAPS_DETECTED'
@@ -2367,6 +2409,7 @@ BEGIN
                 ELSE 'GOOD'
             END,
             CASE
+                WHEN NOT n.is_measured_interval AND n.export_reconstruction_role IS NULL THEN 'INVALID_INTERVALS'
                 WHEN NOT n.export_is_valid THEN 'INVALID_INTERVALS'
                 WHEN n.export_reset_detected THEN 'RESET_DETECTED'
                 WHEN n.export_quality_code = 'GAP' THEN 'GAPS_DETECTED'
@@ -2429,6 +2472,7 @@ BEGIN
                 WHEN r.import_gap_intervals > 0 THEN 'GAPS_DETECTED'
                 WHEN r.import_reconstructed_intervals > 0 THEN 'RECONSTRUCTED_TIMING'
                 WHEN r.import_rollover_intervals > 0 THEN 'ROLLOVER_DETECTED'
+                WHEN r.valid_import_intervals = 0 AND r.invalid_import_intervals = 0 AND r.import_reconstructed_intervals = 0 THEN 'INVALID_INTERVALS'
                 ELSE 'GOOD'
             END,
             CASE
@@ -2437,6 +2481,7 @@ BEGIN
                 WHEN r.export_gap_intervals > 0 THEN 'GAPS_DETECTED'
                 WHEN r.export_reconstructed_intervals > 0 THEN 'RECONSTRUCTED_TIMING'
                 WHEN r.export_rollover_intervals > 0 THEN 'ROLLOVER_DETECTED'
+                WHEN r.valid_export_intervals = 0 AND r.invalid_export_intervals = 0 AND r.export_reconstructed_intervals = 0 THEN 'INVALID_INTERVALS'
                 ELSE 'GOOD'
             END,
 
@@ -2517,6 +2562,7 @@ BEGIN
                 WHEN h.import_gap_intervals > 0 THEN 'GAPS_DETECTED'
                 WHEN h.import_reconstructed_intervals > 0 THEN 'RECONSTRUCTED_TIMING'
                 WHEN h.import_rollover_intervals > 0 THEN 'ROLLOVER_DETECTED'
+                WHEN h.valid_import_intervals = 0 AND h.invalid_import_intervals = 0 AND h.import_reconstructed_intervals = 0 THEN 'INVALID_INTERVALS'
                 ELSE 'GOOD'
             END,
             CASE
@@ -2525,6 +2571,7 @@ BEGIN
                 WHEN h.export_gap_intervals > 0 THEN 'GAPS_DETECTED'
                 WHEN h.export_reconstructed_intervals > 0 THEN 'RECONSTRUCTED_TIMING'
                 WHEN h.export_rollover_intervals > 0 THEN 'ROLLOVER_DETECTED'
+                WHEN h.valid_export_intervals = 0 AND h.invalid_export_intervals = 0 AND h.export_reconstructed_intervals = 0 THEN 'INVALID_INTERVALS'
                 ELSE 'GOOD'
             END,
 
@@ -2587,6 +2634,7 @@ BEGIN
                 WHEN d.import_gap_intervals > 0 THEN 'GAPS_DETECTED'
                 WHEN d.import_reconstructed_intervals > 0 THEN 'RECONSTRUCTED_TIMING'
                 WHEN d.import_rollover_intervals > 0 THEN 'ROLLOVER_DETECTED'
+                WHEN d.valid_import_intervals = 0 AND d.invalid_import_intervals = 0 AND d.import_reconstructed_intervals = 0 THEN 'INVALID_INTERVALS'
                 ELSE 'GOOD'
             END,
             CASE
@@ -2595,6 +2643,7 @@ BEGIN
                 WHEN d.export_gap_intervals > 0 THEN 'GAPS_DETECTED'
                 WHEN d.export_reconstructed_intervals > 0 THEN 'RECONSTRUCTED_TIMING'
                 WHEN d.export_rollover_intervals > 0 THEN 'ROLLOVER_DETECTED'
+                WHEN d.valid_export_intervals = 0 AND d.invalid_export_intervals = 0 AND d.export_reconstructed_intervals = 0 THEN 'INVALID_INTERVALS'
                 ELSE 'GOOD'
             END,
 
@@ -2676,6 +2725,18 @@ BEGIN
         END IF;
     END LOOP;
 
+    -- PR3 synthetic-row contract constraint (NOT VALID; enforced for new rows).
+    IF (
+        SELECT count(*) FROM pg_constraint
+        WHERE conname IN ('ck_energy_consumption_1min_synthetic_direction',
+                          'ck_energy_consumption_5min_synthetic_direction')
+          AND contype = 'c' AND NOT convalidated
+          AND conrelid IN ('analytics.energy_consumption_1min'::regclass,
+                           'analytics.energy_consumption_5min'::regclass)
+    ) <> 2 THEN
+        RAISE EXCEPTION 'Migration 269 postcondition failed: synthetic-direction constraints missing';
+    END IF;
+
     -- View options and privileges preserved by CREATE OR REPLACE VIEW.
     SELECT string_agg(s.view_name, ', ') INTO v_bad
     FROM migration_269_view_state s
@@ -2717,7 +2778,9 @@ BEGIN
     -- reports RECONSTRUCTED_TIMING; native counters are measured-only.
     v_def := pg_get_functiondef('analytics.get_canonical_energy_read(bigint,uuid,timestamptz,timestamptz,text,text)'::regprocedure);
     IF (length(v_def) - length(replace(v_def, 'RECONSTRUCTED_TIMING', ''))) / length('RECONSTRUCTED_TIMING') <> 8
-       OR position('n.is_measured_interval::INT::BIGINT' IN v_def) = 0 THEN
+       OR position('n.is_measured_interval::INT::BIGINT' IN v_def) = 0
+       OR (length(v_def) - length(replace(v_def, '_reconstructed_intervals = 0 THEN ''INVALID_INTERVALS''', ''))) / length('_reconstructed_intervals = 0 THEN ''INVALID_INTERVALS''') <> 6
+       OR (length(v_def) - length(replace(v_def, '_reconstruction_role IS NULL THEN ''INVALID_INTERVALS''', ''))) / length('_reconstruction_role IS NULL THEN ''INVALID_INTERVALS''') <> 2 THEN
         RAISE EXCEPTION 'Migration 269 postcondition failed: get_canonical_energy_read reconstruction handling incomplete';
     END IF;
 
