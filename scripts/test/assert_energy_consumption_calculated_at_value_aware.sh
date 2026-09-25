@@ -88,10 +88,30 @@ BEGIN
         -- completeness + value-write: EVERY non-PK / non-calculated_at column of
         -- the tier table must appear as  <tbl>.<col>  AND  EXCLUDED.<col>
         -- (comparison, both sides) AND  <col> =  EXCLUDED.<col>  (value write).
+        --
+        -- Migration 268 (ADR-020 PR1) staged exception: the late/recovered
+        -- Energy reconstruction columns on the 1min/5min tiers are added
+        -- inert and are deliberately NOT written by the refresh functions
+        -- until the ADR-020 consumption-engine slice (PR3) takes them over.
+        -- They hold only their defaults, so an upsert that leaves them
+        -- untouched cannot leave a stale value. PR3 MUST delete this
+        -- exclusion so the completeness guard covers them again; until
+        -- then the inverse is asserted below (the refresh must not
+        -- reference them yet).
         FOR v_col IN
             SELECT column_name FROM information_schema.columns
             WHERE table_schema='analytics' AND table_name=v_tbl
               AND column_name NOT IN ('device_id','bucket_start','calculated_at')
+              AND NOT (
+                  v_tier IN ('1min','5min')
+                  AND column_name IN (
+                      'is_reconstructed',
+                      'import_reconstruction_role','import_reconstruction_method',
+                      'import_gap_start','import_gap_end','import_gap_delta_wh',
+                      'export_reconstruction_role','export_reconstruction_method',
+                      'export_gap_start','export_gap_end','export_gap_delta_wh'
+                  )
+              )
         LOOP
             IF position(v_tbl||'.'||v_col IN v_def) = 0 THEN
                 v_fail := v_fail || (v_tbl||': CASE omits stored column '||v_col);
@@ -104,6 +124,14 @@ BEGIN
                 v_fail := v_fail || (v_tbl||': DO UPDATE SET no longer writes '||v_col||' (ROW_COUNT contract at risk)');
             END IF;
         END LOOP;
+
+        -- Migration 268 staged exception, inverse side: until ADR-020 PR3,
+        -- no 1min/5min refresh function may read or write a reconstruction
+        -- column.
+        IF v_tier IN ('1min','5min')
+           AND v_def ~* '(is_reconstructed|_reconstruction_role|_reconstruction_method|_gap_start|_gap_end|_gap_delta_wh)' THEN
+            v_fail := v_fail || (v_tbl||': references an ADR-020 reconstruction column before PR3 -- remove the migration-268 exclusion above');
+        END IF;
 
         -- return contract: still GET DIAGNOSTICS ... = ROW_COUNT and RETURN it
         IF v_def !~ 'GET DIAGNOSTICS\s+\S+\s*=\s*ROW_COUNT' THEN
