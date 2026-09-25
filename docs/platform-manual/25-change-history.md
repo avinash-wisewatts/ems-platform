@@ -596,3 +596,12 @@ Read-only investigation of the failed-message recovery routing gap (COIMBATORE, 
 - **Test change**: `scripts/test/assert_energy_consumption_calculated_at_value_aware.sh` excludes exactly the new columns from the migration-216 column-completeness guard (1min/5min only) and asserts that no refresh function references them; ADR-020 PR3 removes the exclusion.
 - **New**: `app/tests/test_energy_reconstruction_foundations.py` (static inertness/manifest/positional-insert proofs; database schema, constraint, switch, privilege and exact-allocation tests including a seeded property test).
 - **Outcome**: Implemented on branch `feature/energy-reconstruction-foundations-268` (from a freshly fetched `origin/staging`); not merged, not deployed. STAGING and production untouched.
+
+### 2026-09-25 — Late/recovered Energy read-side hardening (ADR-020 PR2, migration 269)
+
+Second ADR-020 slice ([ADR-020](../00-governance/decisions/ADR-020-late-recovered-energy-reconstruction.md)); PR1 (migration 268) is deployed to staging with the switch OFF.
+
+- **Area**: Energy consumption read layers ([aggregation.md](../06-platform/telemetry/aggregation.md)).
+- **What changed** (`postgres/migrations/269_energy_reconstruction_read_hardening.sql` + manifest row): the native, semantic-rollup, reporting and legacy daily/asset/hierarchy views, the persisted 15m/hourly/daily tiers and refresh functions, the 15-minute reconcile detection and `get_canonical_energy_read` distinguish reconstructed timing — measured coverage/counters/registers from measured rows only, totals include reconstructed energy, new reconstructed counters, internal status `RECONSTRUCTED_TIMING` (never GOOD). Signatures, return types, column order, `security_barrier` options and privileges preserved.
+- **New**: `app/tests/test_energy_reconstruction_read_hardening.py` (golden equivalence against the exact pre-269 chain in `app/tests/fixtures/energy_269_baseline.sql`, synthetic reconstructed-row cases, reconcile, tripwire for migration 263).
+- **Outcome**: Implemented on branch `feature/energy-reconstruction-read-hardening-269` (from a freshly fetched `origin/staging`); not merged, not deployed. STAGING and production untouched. Uncommitted ADR-018 migration 263 must be rebased onto the 269 `get_canonical_energy_read` body before it lands.
