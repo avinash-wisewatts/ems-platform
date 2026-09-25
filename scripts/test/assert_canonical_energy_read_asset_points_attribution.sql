@@ -69,6 +69,12 @@ DECLARE
     v_asset_tiers          UUID;
 
     v_now                TIMESTAMPTZ := date_trunc('minute', now()) - INTERVAL '1 hour';
+    -- Scenario 8 only: anchored to the start of an hour (HH:05 and HH:06), so
+    -- its two one-minute rows always share one 5m, 15m, UTC/site-local hourly
+    -- and site-local daily bucket regardless of when the test runs. (A
+    -- minute-relative anchor split them across buckets whenever the run's
+    -- minute ended in 4 or 9.)
+    v_tiers_t0           TIMESTAMPTZ := date_trunc('hour', now()) - INTERVAL '2 hours' + INTERVAL '5 minutes';
     v_policy_from        TIMESTAMPTZ;
 
     v_result_count       INT;
@@ -415,43 +421,43 @@ BEGIN
         export_consumption_kwh, export_quality_code, export_is_valid, export_reset_detected, export_rollover_detected,
         gap_detected
     ) VALUES
-        (v_now,                       v_org, v_site, v_device_tiers, 2.0, 'GOOD', TRUE, FALSE, FALSE, 0.5, 'GOOD', TRUE, FALSE, FALSE, FALSE),
-        (v_now + INTERVAL '1 minute', v_org, v_site, v_device_tiers, 2.1, 'GOOD', TRUE, FALSE, FALSE, 0.6, 'GOOD', TRUE, FALSE, FALSE, FALSE);
+        (v_tiers_t0,                       v_org, v_site, v_device_tiers, 2.0, 'GOOD', TRUE, FALSE, FALSE, 0.5, 'GOOD', TRUE, FALSE, FALSE, FALSE),
+        (v_tiers_t0 + INTERVAL '1 minute', v_org, v_site, v_device_tiers, 2.1, 'GOOD', TRUE, FALSE, FALSE, 0.6, 'GOOD', TRUE, FALSE, FALSE, FALSE);
 
-    -- v_device_tiers has 2 one-minute rows at v_now/v_now+1min (import
+    -- v_device_tiers has 2 one-minute rows at v_tiers_t0/v_tiers_t0+1min (import
     -- 2.0+2.1=4.1 kWh, export 0.5+0.6=1.1 kWh in total).
     SELECT count(*) INTO v_result_count
-    FROM analytics.get_canonical_energy_read(v_grafana_org_id, v_asset_tiers, v_now, v_now + INTERVAL '2 minutes', 'native', 'strict');
+    FROM analytics.get_canonical_energy_read(v_grafana_org_id, v_asset_tiers, v_tiers_t0, v_tiers_t0 + INTERVAL '2 minutes', 'native', 'strict');
     IF v_result_count <> 2 THEN
         RAISE EXCEPTION 'SCENARIO 8 FAILED: native tier expected 2 rows, got %', v_result_count;
     END IF;
 
     SELECT count(*) INTO v_result_count
-    FROM analytics.get_canonical_energy_read(v_grafana_org_id, v_asset_tiers, v_now, v_now + INTERVAL '5 minutes', '5m', 'native');
+    FROM analytics.get_canonical_energy_read(v_grafana_org_id, v_asset_tiers, v_tiers_t0, v_tiers_t0 + INTERVAL '5 minutes', '5m', 'native');
     IF v_result_count <> 1 THEN
         RAISE EXCEPTION 'SCENARIO 8 FAILED: 5m tier expected 1 bucket, got %', v_result_count;
     END IF;
 
     SELECT * INTO v_row
-    FROM analytics.get_canonical_energy_read(v_grafana_org_id, v_asset_tiers, v_now, v_now + INTERVAL '5 minutes', '5m', 'native');
+    FROM analytics.get_canonical_energy_read(v_grafana_org_id, v_asset_tiers, v_tiers_t0, v_tiers_t0 + INTERVAL '5 minutes', '5m', 'native');
     IF round(v_row.import_consumption_kwh::numeric, 2) IS DISTINCT FROM 4.1 OR round(v_row.export_consumption_kwh::numeric, 2) IS DISTINCT FROM 1.1 THEN
         RAISE EXCEPTION 'SCENARIO 8 FAILED: 5m tier expected import=4.1/export=1.1, got import=%/export=%', v_row.import_consumption_kwh, v_row.export_consumption_kwh;
     END IF;
 
     SELECT count(*) INTO v_result_count
-    FROM analytics.get_canonical_energy_read(v_grafana_org_id, v_asset_tiers, v_now, v_now + INTERVAL '15 minutes', '15m', 'native');
+    FROM analytics.get_canonical_energy_read(v_grafana_org_id, v_asset_tiers, v_tiers_t0, v_tiers_t0 + INTERVAL '15 minutes', '15m', 'native');
     IF v_result_count <> 1 THEN
         RAISE EXCEPTION 'SCENARIO 8 FAILED: 15m tier expected 1 bucket, got %', v_result_count;
     END IF;
 
     SELECT count(*) INTO v_result_count
-    FROM analytics.get_canonical_energy_read(v_grafana_org_id, v_asset_tiers, v_now, v_now + INTERVAL '1 hour', '1h', 'native');
+    FROM analytics.get_canonical_energy_read(v_grafana_org_id, v_asset_tiers, v_tiers_t0, v_tiers_t0 + INTERVAL '1 hour', '1h', 'native');
     IF v_result_count <> 1 THEN
         RAISE EXCEPTION 'SCENARIO 8 FAILED: 1h tier expected 1 bucket, got %', v_result_count;
     END IF;
 
     SELECT count(*) INTO v_result_count
-    FROM analytics.get_canonical_energy_read(v_grafana_org_id, v_asset_tiers, v_now, v_now + INTERVAL '1 day', '1d', 'native');
+    FROM analytics.get_canonical_energy_read(v_grafana_org_id, v_asset_tiers, v_tiers_t0, v_tiers_t0 + INTERVAL '1 day', '1d', 'native');
     IF v_result_count <> 1 THEN
         RAISE EXCEPTION 'SCENARIO 8 FAILED: 1d tier expected 1 bucket, got %', v_result_count;
     END IF;
