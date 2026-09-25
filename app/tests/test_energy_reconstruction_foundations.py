@@ -161,14 +161,14 @@ def test_migration_file_exists_and_number_is_unique():
     assert len(numbers) == len(set(numbers))
 
 
-def test_manifest_row_follows_267_and_is_last_migration_row():
+def test_manifest_row_directly_follows_267():
     with MANIFEST.open(newline="") as handle:
         rows = [r for r in csv.DictReader(handle) if r["target_category"] == "migration"]
     names = [r["source_file"] for r in rows]
-    assert names[-2] == "267_routing_bounded_window_end.sql"
-    assert names[-1] == "268_energy_reconstruction_foundations.sql"
-    assert rows[-1]["target_path"] == "postgres/migrations/268_energy_reconstruction_foundations.sql"
     assert names.count("268_energy_reconstruction_foundations.sql") == 1
+    idx = names.index("268_energy_reconstruction_foundations.sql")
+    assert names[idx - 1] == "267_routing_bounded_window_end.sql"
+    assert rows[idx]["target_path"] == "postgres/migrations/268_energy_reconstruction_foundations.sql"
 
 
 def test_migration_creates_only_new_functions_and_no_views_jobs_or_drops():
@@ -334,8 +334,11 @@ def test_no_reconstructed_rows_exist(conn, table):
     )
 
 
-def test_no_view_or_rule_depends_on_the_new_columns(conn):
-    """A view that selected a new column would be a behavior change."""
+def test_only_the_native_view_depends_on_the_new_columns(conn):
+    """PR1 shipped these columns with no dependents. ADR-020 PR2 (migration
+    269) deliberately exposes them through v_energy_consumption_native only;
+    every rollup/reporting view reads them via that view. Any other direct
+    dependent would be an unreviewed behavior change."""
     rows = _all(
         conn,
         """
@@ -349,11 +352,15 @@ def test_no_view_or_rule_depends_on_the_new_columns(conn):
         """,
         (list(NEW_COLUMNS),),
     )
-    assert rows == []
+    assert sorted(rows) == sorted(
+        [("analytics.v_energy_consumption_native", c) for c in NEW_COLUMNS]
+    )
 
 
-def test_no_existing_routine_references_migration_268_objects(conn):
-    """Only the three new functions may mention the new objects."""
+def test_only_approved_routines_reference_migration_268_objects(conn):
+    """PR1: only the three new functions. ADR-020 PR2 (migration 269) adds
+    exactly the canonical read and the 15-minute reconcile detection. The
+    1min/5min refresh functions must not reference them until PR3."""
     rows = _all(
         conn,
         r"""
@@ -374,6 +381,8 @@ def test_no_existing_routine_references_migration_268_objects(conn):
             "analytics.allocate_energy_delta(numeric,numeric[],integer)",
             "analytics.energy_gap_weights(numeric[])",
             "config.energy_reconstruction_enabled(uuid,uuid)",
+            "analytics.get_canonical_energy_read(bigint,uuid,timestamp with time zone,timestamp with time zone,text,text)",
+            "analytics.reconcile_energy_deficits(text,timestamp with time zone,timestamp with time zone,interval,integer)",
         ]
     )
 
@@ -418,12 +427,16 @@ def test_legacy_column_list_insert_gets_inert_defaults(tx, table):
 @pytest.mark.parametrize(
     "extra, ok",
     [
-        # Consistent complete GAP_END import metadata: accepted.
-        ({"is_reconstructed": True, "import_reconstruction_role": "GAP_END",
+        # Consistent complete GAP_END import metadata: accepted. (A GAP_END
+        # row is a MEASURED row, so it carries a source sample -- migration
+        # 269's synthetic-row contract forbids a sample-less reconstructed
+        # row from claiming the valid, non-reconstructed export direction.)
+        ({"is_reconstructed": True, "source_sample_count": 1, "import_reconstruction_role": "GAP_END",
           "import_reconstruction_method": "TIME_WEIGHTED", "import_gap_start": "2025-12-31 23:00:00+00",
           "import_gap_end": "BUCKET", "import_gap_delta_wh": 10}, True),
-        # INTERIOR row strictly inside the gap: accepted.
-        ({"is_reconstructed": True, "export_reconstruction_role": "INTERIOR",
+        # INTERIOR row strictly inside the gap: accepted (measured row whose
+        # export slot is inside a gap; import is a valid measurement).
+        ({"is_reconstructed": True, "source_sample_count": 1, "export_reconstruction_role": "INTERIOR",
           "export_reconstruction_method": "MIXED", "export_gap_start": "2025-12-31 23:00:00+00",
           "export_gap_end": "2026-01-01 01:00:00+00", "export_gap_delta_wh": 0}, True),
         # Flag without metadata: rejected.

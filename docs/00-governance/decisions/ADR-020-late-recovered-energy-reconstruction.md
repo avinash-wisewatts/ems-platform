@@ -1,8 +1,10 @@
 # ADR-020: Late/Recovered Energy — Measured Totals, Reconstructed Timing
 
-Status: Decided (product + architecture). **PR1 foundations implemented**
-(migration 268: inert columns, pure allocation functions, switch seeded
-OFF). PR2–PR6 not implemented. Nothing deployed; nothing in production.
+Status: Decided (product + architecture). **PR1 foundations deployed to
+staging** (migration 268, PR #79, 2026-09-25: inert columns, pure
+allocation functions, switch seeded OFF). **PR2 read-side hardening
+implemented** (migration 269; not merged, not deployed). PR3–PR6 not
+implemented. Nothing in production.
 Date: 2026-09-25
 Decision owners: Product + Architecture
 Related: [ADR-018](ADR-018-asset-point-assignment-and-commissioning.md)
@@ -91,7 +93,10 @@ For one gap of n native slots (slot n = the gap-end bucket):
 | PR6 Activation | 274 | Only after a COIMBATORE canary and explicit authorization. |
 
 Migrations 249 and 253–263 (uncommitted ADR-018 work) keep their numbers and
-land separately; PR2 builds on migration 263's `get_canonical_energy_read`.
+land separately. PR2 (migration 269) was built on the deployed
+(PRIMARY_METER) `get_canonical_energy_read` because 263 has not landed;
+**263 must be rebased onto the migration-269 body before it lands** (a
+tripwire test fails otherwise).
 
 ## PR1 status (migration 268)
 
@@ -110,11 +115,56 @@ land separately; PR2 builds on migration 263's `get_canonical_energy_read`.
   carries an explicit, PR3-scoped exclusion for these columns plus an
   inverse assertion that no refresh function references them yet.
 
+## PR2 status (migration 269) — read-side row contract
+
+Implemented, not deployed. Every Energy read layer now distinguishes
+reconstructed timing; with no reconstructed rows (the switch is OFF) every
+pre-existing output is identical (golden-tested against the exact pre-269
+chain).
+
+- **Measured interval**: `is_measured_interval = NOT is_reconstructed OR
+  COALESCE(source_sample_count, 0) > 0`. PR3 writes a *synthetic* row
+  (reconstructed, `source_sample_count = 0`, NULL registers) only for a gap
+  slot with no measurement. Per direction, `*_reconstruction_role =
+  'INTERIOR'` is not a measurement of that direction; `GAP_END` rows are
+  measured and keep quality code `GAP`.
+- **Synthetic-row contract (enforced)**: a synthetic row may not claim a
+  valid direction unless that direction was reconstructed — NOT VALID CHECK
+  `ck_energy_consumption_1min_synthetic_direction` /
+  `ck_energy_consumption_5min_synthetic_direction` (existing rows untouched;
+  enforced for new rows).
+- **Never GOOD without evidence**: per direction, a bucket (canonical 5m/15m,
+  1h, 1d) with neither measured nor reconstructed intervals, or a synthetic
+  native row's non-reconstructed direction, reports `INVALID_INTERVALS`
+  (unreachable for pre-269 data).
+- **Register first/last** exclude synthetic rows and rows whose direction is
+  `INTERIOR`.
+- **Measured-only**: `source_interval_count`, `valid_*`/`invalid_*`
+  intervals, gap/reset/rollover/invalid counts, register first/last, quality
+  code arrays and first/last native bucket (rollups); the canonical read's
+  native counters and coverage.
+- **Totals include reconstructed energy**; new counters
+  `reconstructed_interval_count`, `*_reconstructed_intervals`,
+  `*_reconstructed_wh/_kwh` on the rollup/reporting views and (NOT NULL
+  DEFAULT 0) on `energy_consumption_15min/hourly/daily`, written and compared
+  by their refresh functions (no `calculated_at` churn).
+- **Status** `RECONSTRUCTED_TIMING` (internal code; never GOOD). Priority
+  INVALID_INTERVALS > RESET_DETECTED > GAPS_DETECTED > RECONSTRUCTED_TIMING >
+  ROLLOVER_DETECTED > GOOD — rollup, reporting hourly/daily, every
+  canonical-read tier, and the legacy `v_asset_hierarchy_rollup_daily`
+  (via a counter carried through `v_energy_consumption_daily` /
+  `v_asset_consumption_daily`).
+- **Reconcile**: `reconcile_energy_deficits` 15-minute branch counts measured
+  native rows only; hourly/daily reconciles already compare persisted sums.
+- Unchanged: 1min/5min refresh, jobs, portal site Energy read functions and
+  alert materiality (they read the corrected persisted counters/totals).
+
 ## Open decisions (before the named PR)
 
-- PR2/PR4: status label and priority for reconstructed buckets; whether the
-  Grafana asset-overview panel (plots only `GOOD`) shows reconstructed
-  energy; final disclosure wording.
+- PR4: customer wording for reconstructed timing; whether the Grafana
+  asset-overview panel (plots only `GOOD`, so it hides `GAP` and
+  `RECONSTRUCTED_TIMING` energy) shows reconstructed energy. The internal
+  status code and priority above were chosen in PR2 and can be revisited.
 - PR3: confirm export stays time-weighted.
 - Historical recompute of existing ordinary GAP rows (distribution-only).
 - Demand/alert re-evaluation for repaired periods (out of scope unless

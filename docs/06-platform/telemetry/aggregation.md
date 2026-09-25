@@ -68,6 +68,35 @@ the 1min/5min tiers and asserts the inverse (no refresh function references
 them). ADR-020 PR3, which rewrites the 1min/5min refresh, must remove that
 exclusion.
 
+### Read-side hardening (migration 269, ADR-020 PR2)
+
+Every Energy read layer now distinguishes reconstructed timing. With the
+switch OFF there are no reconstructed rows and every existing output is
+unchanged (golden-tested).
+
+- `v_energy_consumption_native` adds `is_measured_interval` (`NOT
+  is_reconstructed OR source_sample_count > 0`), `import_/export_is_interior`
+  and the reconstruction columns; `invalid_detected` never counts a
+  reconstructed-only interval.
+- `v_energy_semantic_rollup_5min/15min`: `source_interval_count`,
+  `valid_*`/`invalid_*`, gap/reset/rollover/invalid counts, register
+  first/last, quality-code arrays and first/last native bucket come from
+  measured rows (non-interior directions) only; `import/export_consumption_*`
+  still include reconstructed energy; new `reconstructed_interval_count`,
+  `*_reconstructed_intervals`, `*_reconstructed_wh/_kwh`; status
+  `RECONSTRUCTED_TIMING` (after `GAPS_DETECTED`, before `ROLLOVER_DETECTED`;
+  never `GOOD`).
+- Reporting 5m/15m/hourly/daily pass/sum the new counters (hourly/daily
+  status too). `energy_consumption_15min/hourly/daily` gain the 5 counters
+  (NOT NULL DEFAULT 0), written and value-compared by their refresh
+  functions. The 15-minute `reconcile_energy_deficits` branch counts measured
+  native rows only.
+- `get_canonical_energy_read`: every tier reports `RECONSTRUCTED_TIMING`;
+  native counters/coverage are measured-only.
+- The legacy `v_energy_consumption_daily` → `v_asset_consumption_daily` →
+  `v_asset_hierarchy_rollup_daily` chain carries `reconstructed_interval_count`
+  so a reconstructed-only day is never reported `GOOD`.
+
 ## The fact that looks like a bug but isn't: `energy_consumption_5min` can legitimately be empty
 
 `postgres/ddl/143_persisted_validated_energy_consumption_5min.sql`'s own
