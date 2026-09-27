@@ -359,8 +359,11 @@ def test_only_the_native_view_depends_on_the_new_columns(conn):
 
 def test_only_approved_routines_reference_migration_268_objects(conn):
     """PR1: only the three new functions. ADR-020 PR2 (migration 269) adds
-    exactly the canonical read and the 15-minute reconcile detection. The
-    1min/5min refresh functions must not reference them until PR3."""
+    exactly the canonical read and the 15-minute reconcile detection.
+    Migration 279 adds the persisted-tier asset Energy read, which reads the
+    native view's reconstruction role (read-only, as the canonical read does)
+    to reproduce its 1-minute status. The 1min/5min refresh functions must
+    not reference them until PR3."""
     rows = _all(
         conn,
         r"""
@@ -382,6 +385,7 @@ def test_only_approved_routines_reference_migration_268_objects(conn):
             "analytics.energy_gap_weights(numeric[])",
             "config.energy_reconstruction_enabled(uuid,uuid)",
             "analytics.get_canonical_energy_read(bigint,uuid,timestamp with time zone,timestamp with time zone,text,text)",
+            "analytics.get_portal_asset_energy_series(bigint,uuid,uuid[],timestamp with time zone,timestamp with time zone,text)",
             "analytics.reconcile_energy_deficits(text,timestamp with time zone,timestamp with time zone,interval,integer)",
         ]
     )

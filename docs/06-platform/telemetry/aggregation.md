@@ -128,6 +128,46 @@ ADR-019 sets different targets (Energy 1m 90d, 15m 120d uncompressed, 1h 1y,
 1d 8y). Those Energy retention changes are **not applied**; they are an
 irreversible deployment gate (ADR-019 D6).
 
+## Reading asset Energy: the canonical read vs the persisted-tier read (migration 279)
+
+Two functions return asset-attributed Energy (`metadata.asset_points`,
+Import and Export resolved independently through
+`analytics.resolve_asset_energy_source_windows`):
+
+- **`analytics.get_canonical_energy_read`** (migrations 263/269/270) — used
+  by Grafana (`asset-overview`) and, through
+  `get_grafana_asset_energy_intervals` / `get_portal_asset_energy_intervals`,
+  by the Asset View Energy tile. It is keyed on
+  `metadata.grafana_organization_map` (written only by Grafana provisioning).
+  **Every tier is aggregated at read time from the raw
+  `energy_consumption_1min` / `_5min` rows** through
+  `v_energy_consumption_native` → `v_energy_semantic_rollup_5min/_15min` →
+  `v_energy_reporting_5min/_15min` (Grafana-scoped) →
+  `v_energy_reporting_hourly/_daily` (site-local hours/days). It never reads
+  the persisted 15min/hourly/daily tables, so it cannot return anything older
+  than raw retention (180 days above).
+- **`analytics.get_portal_asset_energy_series`** (migration 279, ADR-022
+  Option B) — portal/organization scoped, never Grafana-keyed, **reads the
+  persisted tiers**: 15m `energy_consumption_15min`; 30m from 15m; 1h
+  `energy_consumption_hourly` (UTC hours); 1d `energy_consumption_daily`
+  (site-local days, DST-exact ends); 1m raw only within raw retention. Each
+  persisted tier is trusted only up to its own `telemetry.pipeline_state`
+  checkpoint; newer hours/days are summed from 15-minute rows, and 15-minute
+  rows newer than the 15m checkpoint come from
+  `v_energy_semantic_rollup_15min` (the persisted 15m tier's own source), so
+  the read is as fresh as raw data. Hourly/daily rows are used whole only
+  inside exactly one binding window; otherwise the bucket is summed from its
+  attributed 15-minute rows (incoming source owns a straddling 15-minute
+  bucket, as in the canonical read). Status uses the canonical precedence
+  (`analytics.energy_direction_status`). Nothing reads it yet; Analytics will
+  switch to it only after staging parity.
+
+Lineage that makes the two agree for processed buckets:
+`refresh_energy_consumption_15min` writes `v_energy_semantic_rollup_15min`;
+`_hourly` sums persisted 15min on the UTC hour grid; `_daily` sums persisted
+15min per site-local day. The persisted daily row of a day the daily pipeline
+has not processed yet can be partial — the persisted-tier read never uses it.
+
 ## Generic point-telemetry tier: `analytics.point_telemetry_15m` (migration 264)
 
 Status: **deployed to staging and backfilled** (ADR-019 M1, PR #75,
