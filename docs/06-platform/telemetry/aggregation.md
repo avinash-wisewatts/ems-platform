@@ -159,8 +159,12 @@ Import and Export resolved independently through
   inside exactly one binding window; otherwise the bucket is summed from its
   attributed 15-minute rows (incoming source owns a straddling 15-minute
   bucket, as in the canonical read). Status uses the canonical precedence
-  (`analytics.energy_direction_status`). Nothing reads it yet; Analytics will
-  switch to it only after staging parity.
+  (`analytics.energy_direction_status`). Deployed to staging 2026-09-27; the
+  staging parity gate against the canonical read passed with zero mismatches.
+  Analytics switches to it in migration 280 (not deployed), which also adds
+  `analytics.get_analytics_energy_resolution_floors()` (earliest instant each
+  Analytics resolution's Energy tier retains, from the live retention
+  policies).
 
 Lineage that makes the two agree for processed buckets:
 `refresh_energy_consumption_15min` writes `v_energy_semantic_rollup_15min`;

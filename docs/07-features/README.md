@@ -20,6 +20,7 @@ content.
 | [site-overview/](site-overview/README.md) | MVP-3 | **DONE** |
 | [attention/](attention/README.md) | MVP-3 | **DONE** (Energy only; Demand/PQ informational, by decision) |
 | [site-performance-report/](site-performance-report/README.md) | MVP-6 | **IMPLEMENTED, not deployed** (2026-09-14, ADR-015) — the one decided Q76 report type; broader Reporting scope remains undecided |
+| [analytics/](analytics/README.md) | Analytics v1 | **DECIDED, implementation in progress** (2026-09-27, ADR-022) — Energy-only pilot; non-Energy data points await Asset Data Point Assignment |
 | [alerts/](alerts/README.md) | MVP-7 | **IMPLEMENTED, staging validation pending** (2026-09-14, ADR-016/ADR-017) — Site-level Energy Attention only; Space/Asset alerts await a separate condition decision |
 
 Evaluated but not given a dedicated document here because it would only
