@@ -153,7 +153,8 @@ Import and Export resolved independently through
   (site-local days, DST-exact ends); 1m raw only within raw retention. Each
   persisted tier is trusted only up to its own `telemetry.pipeline_state`
   checkpoint; newer hours/days are summed from 15-minute rows, and 15-minute
-  rows newer than the 15m checkpoint come from
+  rows newer than the 15m checkpoint (floored to the 15-minute grid, since the
+  15-minute job's checkpoint can fall inside a bucket — migration 281) come from
   `v_energy_semantic_rollup_15min` (the persisted 15m tier's own source), so
   the read is as fresh as raw data. Hourly/daily rows are used whole only
   inside exactly one binding window; otherwise the bucket is summed from its

@@ -282,6 +282,46 @@ def test_15m_tail_after_the_checkpoint_comes_from_the_semantic_rollup(tx):
     assert [_d(r[3]) for r in rows] == [_d("1.5")] * 4
 
 
+def test_15m_checkpoint_inside_a_bucket_serves_that_bucket_from_the_fresh_path(tx):
+    """Migration 281 regression (staging PT-5, 2026-09-27): the 15-minute
+    checkpoint can fall inside a bucket, whose persisted row is then partial.
+    Here the checkpoint is T0+40 min, inside [T0+30, T0+45); the persisted row
+    for that bucket is made partial (as the pipeline leaves it) and must not be
+    used -- the bucket comes from the semantic rollup with all 15 intervals,
+    and buckets that had ended at the checkpoint still come from the
+    persisted tier."""
+
+    with tx.cursor() as cur:
+        t = Tenant(cur)
+        asset, device = t.simple_asset("Mid-bucket checkpoint")
+        t.seed(device, T0, T0 + timedelta(hours=1))
+        t.refresh(T0, T0 + timedelta(hours=1))
+        straddling = T0 + timedelta(minutes=30)
+        checkpoints(cur, c15=T0 + timedelta(minutes=40), ch=T0)
+        cur.execute(
+            "UPDATE analytics.energy_consumption_15min "
+            "SET import_consumption_kwh = 1.0, valid_import_intervals = 10, source_interval_count = 10 "
+            "WHERE device_id = %s AND bucket_start = %s",
+            (device, straddling),
+        )
+        cur.execute(
+            "UPDATE analytics.energy_consumption_15min SET import_consumption_kwh = 1.4 "
+            "WHERE device_id = %s AND bucket_start = %s",
+            (device, T0),
+        )
+        q = t.read([asset], T0, T0 + timedelta(hours=1), "15m")
+        h = t.read([asset], T0, T0 + timedelta(hours=1), "1h")
+
+    assert [r[1] for r in q] == [T0 + timedelta(minutes=15 * i) for i in range(4)]
+    # T0 had ended at the checkpoint: still the persisted row (altered to 1.4 to prove it).
+    assert _d(q[0][3]) == _d("1.4")
+    # The straddling bucket and the newer one come from the fresh path: complete.
+    assert [(_d(r[3]), r[7]) for r in q[2:]] == [(_d("1.5"), 15), (_d("1.5"), 15)]
+    assert _d(q[1][3]) == _d("1.5")
+    # The hour is summed from those 15-minute rows (hourly checkpoint at T0).
+    assert (_d(h[0][3]), h[0][7]) == (_d("5.9"), 60)
+
+
 def test_nothing_processed_yet_is_served_entirely_from_the_rollup(tx):
     with tx.cursor() as cur:
         t = Tenant(cur)
