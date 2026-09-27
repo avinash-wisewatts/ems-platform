@@ -149,13 +149,18 @@ migration 276) lists the ACTIVE assets of the site with the curated semantic
 data points their currently effective metadata.asset_points bindings
 provide -- never device capability or PRIMARY_METER (ADR-018 decision 1).
 The read model's internal attribution_basis is not exposed. Each data point
-carries its data availability bounds (migration 277).
+carries its data availability bounds (migration 277, aligned with the
+persisted Energy tiers by migration 280).
 
-GET /api/v1/sites/{site_id}/analytics/series (Analytics v1, ADR-022,
-migration 278) returns one series per explicit selection=<asset_id>:<DATA_POINT>
-pair -- never a cross-product -- on the Analytics bucket grid. Energy values
-come only from analytics.get_canonical_energy_read; 1h is the UTC hour grid
-and 1d the site-local calendar day.
+GET /api/v1/sites/{site_id}/analytics/series (Analytics v1, ADR-022) returns
+one series per explicit selection=<asset_id>:<DATA_POINT> pair -- never a
+cross-product -- on the Analytics bucket grid. Energy values come from the
+persisted Energy tiers through analytics.get_portal_asset_energy_series
+(migration 279; portal/organization scoped, never keyed on the Grafana
+organization mapping); 1h is the UTC hour grid and 1d the site-local calendar
+day. A request starting before its resolution's retention floor
+(analytics.get_analytics_energy_resolution_floors, migration 280) is
+RESOLUTION_UNAVAILABLE.
 """
 
 from __future__ import annotations
@@ -174,8 +179,10 @@ from src.analytics_trends_service import (
     build_analytics_catalog_response,
     build_analytics_series_response,
     energy_asset_ids,
+    energy_resolution_retained,
     fetch_analytics_catalog,
     fetch_analytics_energy_availability,
+    fetch_analytics_energy_resolution_floors,
     fetch_analytics_energy_series,
     fetch_analytics_site,
     parse_series_request,
@@ -1140,8 +1147,10 @@ async def get_site_analytics_series(
     """Validates the whole request (resolution, ADR-019 maximum windows,
     phase, selections and ADR-022 limits) before any database access. A
     selection the site's catalogue cannot serve is returned with status
-    NOT_AVAILABLE, never dropped. Energy selections read
-    analytics.get_portal_analytics_energy_series (migration 278)."""
+    NOT_AVAILABLE, never dropped. Energy selections read the persisted
+    Energy tiers through analytics.get_portal_asset_energy_series (migration
+    279); a request starting before the resolution's retention floor is
+    RESOLUTION_UNAVAILABLE without reading them."""
 
     user = _require_portal_user(request)
 
@@ -1165,23 +1174,26 @@ async def get_site_analytics_series(
 
     catalog_rows = await fetch_analytics_catalog(user.portal_user_id, site_id)
     asset_ids = energy_asset_ids(series_request, catalog_rows)
-    energy_rows = (
-        await fetch_analytics_energy_series(
-            user.portal_user_id,
-            site_id,
-            asset_ids,
-            series_request.dt_from,
-            series_request.dt_to,
-            series_request.resolution,
-        )
-        if asset_ids
-        else []
-    )
+    retained = True
+    energy_rows: list = []
+    if asset_ids:
+        floors = await fetch_analytics_energy_resolution_floors()
+        retained = energy_resolution_retained(series_request, floors)
+        if retained:
+            energy_rows = await fetch_analytics_energy_series(
+                user.portal_user_id,
+                site_id,
+                asset_ids,
+                series_request.dt_from,
+                series_request.dt_to,
+                series_request.resolution,
+            )
     return build_analytics_series_response(
         site=site,
         request=series_request,
         catalog_rows=catalog_rows,
         energy_rows=energy_rows,
+        energy_resolution_available=retained,
     )
 
 

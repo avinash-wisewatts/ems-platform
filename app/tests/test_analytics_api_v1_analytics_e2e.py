@@ -1,7 +1,9 @@
 """Analytics v1 (ADR-022) end-to-end slice: HTTP -> router -> service ->
 analytics.get_portal_analytics_catalog / _energy_availability /
-_energy_series -> analytics.get_canonical_energy_read -> Energy tier tables,
-against the disposable ems_test database with NO data-layer mocking.
+get_analytics_energy_resolution_floors / get_portal_asset_energy_series ->
+persisted Energy tier tables, against the disposable ems_test database with NO
+data-layer mocking. The fixture organization has NO Grafana organization
+mapping: the Analytics Energy path does not depend on one (migrations 279/280).
 
 Only authentication is faked (as in every /api/v1 route test); the portal
 user it returns is a real admin.portal_users row, so tenant scoping is
@@ -40,7 +42,6 @@ DEVICE = "00000000-0000-0000-0000-0000000005e2"
 ASSET = "00000000-0000-0000-0000-0000000006e2"
 DRAFT_ASSET = "00000000-0000-0000-0000-0000000007e2"
 DRAFT_DEVICE = "00000000-0000-0000-0000-0000000008e2"
-GRAFANA_ORG = 9102
 USER = "analytics-e2e@test"
 OTHER_USER = "analytics-e2e-other@test"
 UTC = timezone.utc
@@ -98,11 +99,9 @@ def users() -> dict[str, int]:
                 "AND NOT EXISTS (SELECT 1 FROM metadata.asset_points ap WHERE ap.asset_id = %s AND ap.logical_point_id = lp.id)",
                 (asset, device, ORG, asset),
             )
-        cur.execute(
-            "INSERT INTO metadata.grafana_organization_map (grafana_org_id, organization_id, is_active) "
-            "VALUES (%s, %s, TRUE) ON CONFLICT (grafana_org_id) DO NOTHING",
-            (GRAFANA_ORG, ORG),
-        )
+        # The Analytics Energy path must not need a Grafana organization
+        # mapping; remove one a pre-280 run of this fixture may have left.
+        cur.execute("DELETE FROM metadata.grafana_organization_map WHERE organization_id = %s", (ORG,))
         cur.execute(
             "INSERT INTO config.telemetry_capture_policies "
             "(site_id, capture_interval_seconds, alignment_mode, late_arrival_tolerance_seconds, effective_from, is_enabled) "
@@ -208,7 +207,6 @@ def test_series_end_to_end_every_resolution_agrees(live_client, monkeypatch, use
     totals = {}
     for resolution, start, stop in (
         ("15m", T0, end), ("30m", T0, end), ("1h", T0, end),
-        ("1m", T0, T0 + timedelta(hours=2)),
         ("1d", T0, end),
     ):
         response = _series(live_client, resolution, start, stop,
@@ -219,14 +217,33 @@ def test_series_end_to_end_every_resolution_agrees(live_client, monkeypatch, use
         imp, exp, draft = body["series"]
         assert (imp["status"], exp["status"], draft["status"]) == ("OK", "OK", "NOT_AVAILABLE")
         totals[resolution] = (imp["summary"]["total"], exp["summary"]["total"])
-        if resolution in ("15m", "30m", "1h", "1m"):
+        if resolution in ("15m", "30m", "1h"):
             assert imp["summary"]["coverage_ratio"] == 1.0
             assert {p["evidence_status"] for p in imp["points"]} == {"GOOD"}
 
     full = (IMPORT_PER_MIN * 60 * HOURS, EXPORT_PER_MIN * 60 * HOURS)
     for resolution in ("15m", "30m", "1h", "1d"):
         assert totals[resolution] == pytest.approx(full), resolution
-    assert totals["1m"] == pytest.approx((IMPORT_PER_MIN * 120, EXPORT_PER_MIN * 120))
+
+
+def test_series_end_to_end_1m_beyond_raw_retention_is_resolution_unavailable(live_client, monkeypatch, users) -> None:
+    """The fixture day lies further back than the raw 1-minute retention
+    window, so 1m is RESOLUTION_UNAVAILABLE while every coarser resolution is
+    still served from the persisted tiers (asserted above)."""
+
+    _login_as(live_client, monkeypatch, users[USER], ORG)
+    response = _series(live_client, "1m", T0, T0 + timedelta(hours=2), f"{ASSET}:ENERGY_IMPORT")
+    assert response.status_code == 200
+    series = response.json()["series"][0]
+    assert (series["status"], series["points"]) == ("RESOLUTION_UNAVAILABLE", [])
+
+
+def test_fixture_organization_has_no_grafana_mapping(users) -> None:
+    with psycopg.connect(CONNINFO) as conn:
+        count = conn.execute(
+            "SELECT count(*) FROM metadata.grafana_organization_map WHERE organization_id = %s", (ORG,)
+        ).fetchone()[0]
+    assert count == 0
 
 
 def test_series_1h_is_utc_grid_and_1d_is_ist_local_days(live_client, monkeypatch, users) -> None:

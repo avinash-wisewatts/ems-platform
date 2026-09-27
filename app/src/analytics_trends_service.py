@@ -7,9 +7,11 @@ B2  GET /api/v1/sites/{site_id}/analytics/series (Energy data points)
 
 Every value comes from a portal-scoped SECURITY DEFINER read:
 analytics.get_portal_analytics_catalog (migration 276),
-analytics.get_portal_analytics_energy_availability (277) and
-analytics.get_portal_analytics_energy_series (278, which itself reads only
-analytics.get_canonical_energy_read). This module adds the curated registry
+analytics.get_portal_analytics_energy_availability (277, aligned with the
+persisted Energy tiers by 280), analytics.get_analytics_energy_resolution_floors
+(280) and analytics.get_portal_asset_energy_series (279: the persisted Energy
+tiers, portal/organization scoped, never keyed on the Grafana organization
+mapping -- ADR-022 Option B). This module adds the curated registry
 (which semantic parameters Analytics v1 can chart, and how), request
 validation, and response shaping. It never derives availability from device
 capability or PRIMARY_METER (ADR-018 decision 1), and it never exposes the
@@ -35,8 +37,8 @@ from src.analytics_api_service import ApiContractError, _read_rows, parse_time_r
 # A confirmed asset_points binding appears in the customer catalogue only if
 # its parameter is listed here AND its qualifier is one this registry can
 # serve. v1 is the Energy-only pilot (ADR-022 decision 3): Active Energy
-# Import and Export, System (TOTAL) only -- the canonical Energy read that
-# serves them resolves only the *_TOTAL logical points, so per-phase Energy
+# Import and Export, System (TOTAL) only -- the Energy tiers that serve them
+# are attributed through the *_TOTAL logical points, so per-phase Energy
 # is not offered even where L1/L2/L3 points exist. Adding a parameter here is
 # gated on the open Product Owner questions recorded in
 # docs/07-features/analytics/README.md.
@@ -51,7 +53,7 @@ class DataPointDefinition:
     chart_kind: str          # "bar" | "line"
     aggregation: str         # "sum" | "mean"
     qualifiers: tuple[str, ...]
-    energy_direction: str | None = None   # "import" | "export" for canonical Energy
+    energy_direction: str | None = None   # "import" | "export" for the Energy tiers
 
 
 ANALYTICS_DATA_POINTS: dict[str, DataPointDefinition] = {
@@ -170,7 +172,7 @@ class AnalyticsSeriesPoint(BaseModel):
     min: float | None = None
     max: float | None = None
     coverage_ratio: float | None = None
-    # Energy only: the canonical Energy read's evidence status (GOOD,
+    # Energy only: the Energy tiers' evidence status (GOOD,
     # GAPS_DETECTED, RECONSTRUCTED_TIMING, RESET_DETECTED, ROLLOVER_DETECTED,
     # INVALID_INTERVALS); null for an empty bucket. Energy is not mapped onto
     # the five-value quality lattice (MVP-4 decision pack).
@@ -390,10 +392,30 @@ async def fetch_analytics_energy_series(
             asset_id, bucket_start, bucket_end, import_kwh, export_kwh,
             import_status, export_status, import_intervals, export_intervals,
             expected_intervals, is_partial, unavailable_reason
-        FROM analytics.get_portal_analytics_energy_series(%s, %s, %s::uuid[], %s, %s, %s)
+        FROM analytics.get_portal_asset_energy_series(%s, %s, %s::uuid[], %s, %s, %s)
         """,
         (portal_user_id, str(site_id), [str(a) for a in asset_ids], dt_from, dt_to, resolution),
     )
+
+
+async def fetch_analytics_energy_resolution_floors() -> dict[str, datetime | None]:
+    """Earliest instant each resolution's Energy tier still retains (None =
+    no retention policy), from analytics.get_analytics_energy_resolution_floors."""
+
+    rows = await _read_rows(
+        "SELECT resolution, earliest_available FROM analytics.get_analytics_energy_resolution_floors()",
+        (),
+    )
+    return {row["resolution"]: row["earliest_available"] for row in rows}
+
+
+def energy_resolution_retained(request: SeriesRequest, floors: dict[str, datetime | None]) -> bool:
+    """False when the request starts before the resolved resolution's Energy
+    tier retention floor: that series is RESOLUTION_UNAVAILABLE rather than
+    a run of silently empty buckets."""
+
+    floor = floors.get(request.resolution)
+    return floor is None or request.dt_from >= floor
 
 
 # ---------------------------------------------------------------------------
@@ -617,6 +639,7 @@ def build_analytics_series_response(
     request: SeriesRequest,
     catalog_rows: list[dict[str, Any]],
     energy_rows: list[dict[str, Any]],
+    energy_resolution_available: bool = True,
 ) -> AnalyticsSeriesResponse:
     """One series per selection, in request order. A selection the
     catalogue cannot serve (asset not an ACTIVE asset of this site, or data
@@ -645,6 +668,10 @@ def build_analytics_series_response(
                     summary=AnalyticsSeriesSummary(),
                 )
             )
+            continue
+        if not energy_resolution_available:
+            rows = [{"unavailable_reason": "RESOLUTION_UNAVAILABLE"}]
+            series.append(_energy_series(selection, catalog_row, definition, rows))
             continue
         rows = sorted(
             energy_by_asset.get(str(selection.asset_id), []),

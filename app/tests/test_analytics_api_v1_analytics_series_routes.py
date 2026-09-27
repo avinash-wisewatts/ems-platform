@@ -92,7 +92,7 @@ def _login(portal_client, monkeypatch: pytest.MonkeyPatch) -> None:
     assert response.status_code == 303
 
 
-def _patch(monkeypatch, *, allowed=True, catalog=None, energy=None, calls=None):
+def _patch(monkeypatch, *, allowed=True, catalog=None, energy=None, calls=None, floors=None):
     calls = calls if calls is not None else []
 
     async def access(portal_user_id, site_id):
@@ -113,7 +113,12 @@ def _patch(monkeypatch, *, allowed=True, catalog=None, energy=None, calls=None):
     monkeypatch.setattr("src.routers.analytics_api.portal_user_can_access_site", access)
     monkeypatch.setattr("src.routers.analytics_api.fetch_analytics_site", fetch_site)
     monkeypatch.setattr("src.routers.analytics_api.fetch_analytics_catalog", fetch_catalog)
+    async def fetch_floors():
+        calls.append("floors")
+        return floors if floors is not None else {r: None for r in ("1m", "15m", "30m", "1h", "1d")}
+
     monkeypatch.setattr("src.routers.analytics_api.fetch_analytics_energy_series", fetch_energy)
+    monkeypatch.setattr("src.routers.analytics_api.fetch_analytics_energy_resolution_floors", fetch_floors)
     return calls
 
 
@@ -359,3 +364,44 @@ def test_limits_on_data_points_and_expanded_series(monkeypatch) -> None:
     with pytest.raises(ApiContractError) as excinfo:
         parse_series_request(**base, phase="three_phase", selections=nine)   # 27 series
     assert excinfo.value.code == "too_many_series"
+
+
+# ---------------------------------------------------------------------------
+# Retention floors (migration 280)
+# ---------------------------------------------------------------------------
+
+
+def test_request_before_the_resolution_retention_floor_is_resolution_unavailable(portal_client, monkeypatch) -> None:
+    """A request starting before its resolution's Energy tier retention floor
+    is RESOLUTION_UNAVAILABLE -- and the Energy tiers are not read."""
+
+    _login(portal_client, monkeypatch)
+    calls = _patch(monkeypatch, energy=[_energy_row(ASSET_A, 0, 1.0, 0.1)],
+                   floors={"1m": None, "15m": None, "30m": None, "1d": None,
+                           "1h": T0 + timedelta(minutes=1)})
+    response = _series(portal_client, f"{ASSET_A}:ENERGY_IMPORT", f"{ASSET_X}:ENERGY_IMPORT")
+    assert response.status_code == 200
+    series = response.json()["series"]
+    assert [(s["asset_id"], s["status"]) for s in series] == [
+        (ASSET_A, "RESOLUTION_UNAVAILABLE"),
+        (ASSET_X, "NOT_AVAILABLE"),
+    ]
+    assert series[0]["points"] == [] and series[0]["label"] == "Active Energy Import"
+    assert "floors" in calls
+    assert not any(isinstance(c, tuple) for c in calls)
+
+
+def test_request_at_or_after_the_floor_is_served(portal_client, monkeypatch) -> None:
+    _login(portal_client, monkeypatch)
+    calls = _patch(monkeypatch, energy=[_energy_row(ASSET_A, 0, 1.0, 0.1)],
+                   floors={"1m": None, "15m": None, "30m": None, "1d": None, "1h": T0})
+    series = _series(portal_client, f"{ASSET_A}:ENERGY_IMPORT").json()["series"][0]
+    assert series["status"] == "OK"
+    assert ("energy", (ASSET_A,), "1h") in calls
+
+
+def test_floors_are_not_read_when_nothing_is_available(portal_client, monkeypatch) -> None:
+    _login(portal_client, monkeypatch)
+    calls = _patch(monkeypatch)
+    assert _series(portal_client, f"{ASSET_X}:ENERGY_IMPORT").status_code == 200
+    assert "floors" not in calls
