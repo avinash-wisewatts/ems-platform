@@ -58,6 +58,16 @@ def test_asset_device_error_is_actionable():
     )
 
 
+def test_site_timezone_guard_error_is_actionable():
+    """Migration 275 (ADR-019 D2) raises this exact primary message."""
+
+    assert translate(
+        "Site timezone cannot be changed once the site has telemetry."
+    ) == (
+        "The site timezone cannot be changed because this site already has telemetry."
+    )
+
+
 def test_unknown_database_message_uses_safe_fallback():
     assert translate("syntax error at or near secret_table") == (
         "The database rejected the request."

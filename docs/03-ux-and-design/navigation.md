@@ -34,7 +34,7 @@ CUSTOMER EMS
 │   ├── Asset Overview
 │   ├── Asset Performance        ← Post-MVP
 │   └── Asset Measurements
-├── Analytics
+├── Analytics                    ← Trends: Analytics v1 decided 2026-09-27 (ADR-022), implementation in progress; shell entry "Analytics"
 │   ├── Trends
 │   ├── Comparisons
 │   └── Correlations             ← curated only, never a free-form query builder

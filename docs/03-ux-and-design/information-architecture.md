@@ -107,6 +107,7 @@ and [ADR-004](../00-governance/decisions/ADR-004-site-overview-primary-destinati
 ## Analytics — Trends · Comparisons · Correlations  *(curated only)*
 
 - **Trends:** one or more **named** semantic series on aligned timelines; series come from a curated catalogue — never a free-form query builder. `PLANNED (MVP-2)`.
+  - **2026-09-27 — Analytics v1 decided ([ADR-022](../00-governance/decisions/ADR-022-analytics-v1-scope-and-contract.md)), implementation in progress.** The catalogue is the site's confirmed `metadata.asset_points` for ACTIVE assets (Energy Import/Export in the pilot); up to 5 data points, 10 assets and 25 series; Auto/1m/15m/30m/1h/1d; per-series statistics; CSV. Multi-type trends are allowed — the fairness rule below applies to Comparisons only. Asset-only: Space/Environmental series are not part of v1. Screen specification: [../07-features/analytics/README.md](../07-features/analytics/README.md).
 - **Comparisons:** periods, sites, spaces, or same-type assets — fairness rule: asset comparisons only within one `asset_type_id`. `PLANNED (Post-MVP)`.
 - **Correlations:** curated pairs only (e.g. energy vs. outside temperature) — never arbitrary metric-vs-metric. `MISSING`/`PLANNED (Post-MVP)`.
 

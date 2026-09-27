@@ -153,14 +153,19 @@ Import and Export resolved independently through
   (site-local days, DST-exact ends); 1m raw only within raw retention. Each
   persisted tier is trusted only up to its own `telemetry.pipeline_state`
   checkpoint; newer hours/days are summed from 15-minute rows, and 15-minute
-  rows newer than the 15m checkpoint come from
+  rows newer than the 15m checkpoint (floored to the 15-minute grid, since the
+  15-minute job's checkpoint can fall inside a bucket — migration 281) come from
   `v_energy_semantic_rollup_15min` (the persisted 15m tier's own source), so
   the read is as fresh as raw data. Hourly/daily rows are used whole only
   inside exactly one binding window; otherwise the bucket is summed from its
   attributed 15-minute rows (incoming source owns a straddling 15-minute
   bucket, as in the canonical read). Status uses the canonical precedence
-  (`analytics.energy_direction_status`). Nothing reads it yet; Analytics will
-  switch to it only after staging parity.
+  (`analytics.energy_direction_status`). Deployed to staging 2026-09-27; the
+  staging parity gate against the canonical read passed with zero mismatches.
+  Analytics switches to it in migration 280 (not deployed), which also adds
+  `analytics.get_analytics_energy_resolution_floors()` (earliest instant each
+  Analytics resolution's Energy tier retains, from the live retention
+  policies).
 
 Lineage that makes the two agree for processed buckets:
 `refresh_energy_consumption_15min` writes `v_energy_semantic_rollup_15min`;

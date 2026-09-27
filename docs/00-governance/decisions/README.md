@@ -61,3 +61,4 @@ ADR with its status and date.
 | [ADR-016](ADR-016-q77-mvp7-basic-alerts.md) | MVP-7 Basic Alerts (Q77) — decided in full detail; implemented, not yet deployed |
 | [ADR-017](ADR-017-mvp7-alert-architecture.md) | MVP-7 Alert architecture — evaluation mechanism (TimescaleDB job) and domain concept (Alert, DDS 10→11) decided; implemented, not yet deployed |
 | [ADR-018](ADR-018-asset-point-assignment-and-commissioning.md) | Asset ↔ data point assignment and the commissioning gate for Analytics — `metadata.asset_points` as sole authoritative source, Automatic-candidate + Admin-adjustment commissioning model, backfill/no-backfill/move/immutability rules; decided, not implemented |
+| [ADR-022](ADR-022-analytics-v1-scope-and-contract.md) | Analytics v1 scope, catalogue and series contract — decided; implementation in progress |

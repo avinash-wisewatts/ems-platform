@@ -46,6 +46,10 @@ _OWNERSHIP_MESSAGES: tuple[tuple[str, str], ...] = (
         "must belong to the same organization and site",
         "The selected asset and device must belong to the same organization and site.",
     ),
+    (
+        "site timezone cannot be changed",
+        "The site timezone cannot be changed because this site already has telemetry.",
+    ),
 )
 
 

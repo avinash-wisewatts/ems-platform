@@ -1,6 +1,6 @@
 # Requirements Traceability
 
-Status: CURRENT · Last reviewed: 2026-09-13 · Owner: Product + Engineering
+Status: CURRENT · Last reviewed: 2026-09-27 · Owner: Product + Engineering
 Source of truth: `ems-requirements-traceability.md` v0.2 (archived), consolidated here.
 
 > **Status update (2026-09-13):** the tables below were built from a
@@ -439,3 +439,29 @@ This does not alter §6's or §11's own historical snapshots, preserved per
 rewrite rule. §11's implementation record remains the accurate account of
 what was built and verified 2026-09-15 (morning); this section records
 the same-day correction.
+
+## 13. Status update (2026-09-27) — Analytics v1 decided (ADR-022); B0/B1 in progress
+
+The Product Owner defined Analytics v1
+([ADR-022](../00-governance/decisions/ADR-022-analytics-v1-scope-and-contract.md)).
+Requirements EMS-REQ-129 – EMS-REQ-139 are new and refine EMS-REQ-037
+(Trends). The feature is specified in
+[../07-features/analytics/README.md](../07-features/analytics/README.md).
+The Product Owner's Analytics PDF was a design reference only and is not a
+repository document.
+
+| Requirement | Screen | API capability | Semantic / data capability | Status (2026-09-27) |
+|---|---|---|---|---|
+| EMS-REQ-129, 130, 131 | Analytics (`/analytics`) | `GET /sites/{id}/analytics/catalog` | `metadata.asset_points` (currently effective) → `metadata.logical_points` → `config.parameters`; ACTIVE assets only | API `IMPLEMENTED`, not deployed (B1, migration 276); screen `PLANNED`. On staging: Energy Import/Export for 53 ACTIVE assets, backed by staging-only parity-bridge rows (ADR-022 decision 4). Production: no assignments. |
+| EMS-REQ-132 | Analytics | series `phase` | per-phase `asset_points` | `BLOCKED` — Asset Data Point Assignment (ADR-018 Amendments 5-8) not deployed. |
+| EMS-REQ-133, 134 | Analytics | catalogue `available_from`/`available_to`; `GET /sites/{id}/analytics/series` (`resolution`, `from`, `to`) | ADR-019 tiers; `analytics.point_telemetry_1d` (new, B4); ADR-019 D2 | Energy: availability (B1b, migration 277) and every resolution incl. DST-correct 1d (B2, migration 278) `IMPLEMENTED`, not deployed; D2 guard `IMPLEMENTED` (B0, migration 275), not deployed; non-Energy `PLANNED` (B3/B4). |
+| EMS-REQ-135, 136, 137, 138, 139 | Analytics | series `points` / `summary` | persisted Energy tiers via `analytics.get_portal_asset_energy_series` (migration 279, deployed to staging; Analytics switched by 280, not deployed); `point_telemetry_15m`/`1h` | Energy series data, per-series statistics and coverage/evidence `IMPLEMENTED` in the API, not deployed (B2); chart, table, CSV and options `PLANNED` (F1–F8). |
+
+Corrections to earlier statements, recorded rather than rewritten: staging
+`metadata.asset_points` is not empty (the migration 263 change-history entry
+and ADR-018's "0 rows on staging" predate the parity-bridge rows written
+2026-09-25); those rows are not commissioning (ADR-022 decision 4).
+
+This does not alter §2–§12's historical snapshots, preserved per
+[source-of-truth.md](../00-governance/source-of-truth.md)'s no-silent-rewrite
+rule.
