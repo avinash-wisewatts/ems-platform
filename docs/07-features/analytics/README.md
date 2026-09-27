@@ -99,26 +99,30 @@ bars; Comparison (shown as a disabled placeholder [REF]); cost. The PDF's
    [IMPL]).
 8. **Resolution.** Auto: range < 5 days → 15m; < 30 days → 1h; otherwise 1d.
    Maximum windows: 1m 3 days; 15m 30 days; 30m 60 days; 1h 180 days; 1d 3
-   years (ADR-019) [C]. 30m buckets are on the UTC grid [IMPL].
+   years (ADR-019) [C]. 30m buckets are on the UTC grid [IMPL]. A request that
+   starts before the resolution's retention floor -- the earliest instant its
+   Energy tier still holds, from the live retention policies (1m raw 1-minute,
+   15m/30m persisted 15-minute, 1h persisted hourly; the daily tier has none)
+   -- is `RESOLUTION_UNAVAILABLE` rather than silently empty [IMPL, migration
+   280].
 9. **1 day.** One bucket per site-local calendar day,
    `[local midnight, next local midnight)`, so a bucket is 23, 24 or 25
    hours on DST transition days. Derived from the 15-minute tier, which nests
    exactly in every IANA local day (ADR-019). Requires the site timezone to be
-   immutable once telemetry exists (ADR-019 D2). For Energy, days the daily
-   pipeline has finalized (day end <= its `pipeline_state` checkpoint) come
-   from the canonical 1d tier; later days, including today, are the canonical
-   15-minute rows summed per local day, because the persisted daily row for a
-   not-yet-finalized day is only partially computed (verified on staging,
-   2026-09-27) [IMPL].
+   immutable once telemetry exists (ADR-019 D2). For Energy, a day comes from
+   the persisted daily tier once the daily pipeline has processed it (day end
+   <= its `pipeline_state` checkpoint) and exactly one binding window covers
+   it; otherwise -- including today, whose persisted daily row can be partial
+   -- it is the day's attributed 15-minute rows summed [IMPL, migration 279].
 10. **Aggregation.** Energy: kWh consumed per bucket (register delta from the
-    canonical Energy read, ADR-020 semantics preserved); series Total is the
+    persisted Energy tiers, ADR-020 semantics preserved); series Total is the
     sum of buckets. Other data points: bucket value is the exact mean
     (Σ sum ÷ Σ sample count over `GOOD` samples), with the bucket's minimum and
     maximum sample.
 11. **Quality and coverage.** Every bucket carries `coverage_ratio` (measured
     intervals / expected intervals for that bucket, per direction for Energy)
     and `is_partial` (the bucket has not ended yet). Energy buckets carry the
-    canonical Energy read's own evidence status (`GOOD`, `GAPS_DETECTED`,
+    Energy tiers' own evidence status (`GOOD`, `GAPS_DETECTED`,
     `RECONSTRUCTED_TIMING`, `RESET_DETECTED`, `ROLLOVER_DETECTED`,
     `INVALID_INTERVALS`; for a coarser bucket, the most severe of its 15-minute
     constituents) and are **not** mapped onto the five-value lattice: the
@@ -197,8 +201,9 @@ Query: `from`, `to` (ISO-8601 UTC, half-open), `resolution`
   `NOT_AVAILABLE` (asset not an ACTIVE asset of this site, or data point not
   in that asset's catalogue — indistinguishable by design, so nothing leaks
   across tenants); `RESOLUTION_UNAVAILABLE` (the resolution is finer than
-  the site's capture interval); `DATA_UNAVAILABLE` (the range crosses a
-  capture-interval change, or the Energy read cannot serve the site).
+  the site's capture interval, or the range starts before the resolution's
+  retention floor); `DATA_UNAVAILABLE` (the range crosses a capture-interval
+  change, or a persisted daily row in range was computed in another timezone).
   Unavailable series have no points.
 - 422 codes (existing `/api/v1` codes reused where they exist):
   `invalid_selection`, `duplicate_selection`, `unknown_data_point` (not in
@@ -217,19 +222,24 @@ Query: `from`, `to` (ISO-8601 UTC, half-open), `resolution`
 
 | Resolution | Energy (Import / Export) | Other data points |
 |---|---|---|
-| 1m | canonical Energy read `native` (60 s capture on every current site) | `telemetry.normalized_points` (`GOOD`), 90-day retention |
-| 15m | canonical Energy read `15m` | `analytics.point_telemetry_15m` |
-| 30m | canonical 15m, summed in UTC-grid pairs | derived from `point_telemetry_15m` |
-| 1h | canonical 15m, summed in UTC hours (**not** the site-local `v_energy_reporting_hourly`) | `analytics.point_telemetry_1h` |
-| 1d | site-local days: finalized days from canonical `1d`, later days from canonical `15m` summed per local day | new `analytics.point_telemetry_1d` (site-local days, from 15m), plus the open day from 15m |
+| 1m | raw `v_energy_consumption_native` (60 s capture on every current site), only within raw retention | `telemetry.normalized_points` (`GOOD`), 90-day retention |
+| 15m | persisted `analytics.energy_consumption_15min`; newer than its checkpoint, `v_energy_semantic_rollup_15min` | `analytics.point_telemetry_15m` |
+| 30m | the 15-minute rows, summed in UTC-grid pairs | derived from `point_telemetry_15m` |
+| 1h | persisted `analytics.energy_consumption_hourly` (UTC hours; **not** the site-local `v_energy_reporting_hourly`); newer hours and hours a binding changes inside are summed from 15m | `analytics.point_telemetry_1h` |
+| 1d | persisted `analytics.energy_consumption_daily` (site-local days, DST-exact); unprocessed days and days a binding changes inside are summed from 15m | new `analytics.point_telemetry_1d` (site-local days, from 15m), plus the open day from 15m |
 
 Asset attribution for every row resolves through effective-dated
 `metadata.asset_points` windows (ADR-018 Amendment 7).
 
 Database reads: `analytics.get_portal_analytics_catalog` (migration 276),
-`analytics.get_portal_analytics_energy_availability` (277),
-`analytics.get_portal_analytics_energy_series` (278, which reads only
-`analytics.get_canonical_energy_read`).
+`analytics.get_portal_analytics_energy_availability` (277, aligned with the
+persisted tiers by 280: start from the daily tier, end at the latest persisted
+15-minute or raw 1-minute bucket), `analytics.get_analytics_energy_resolution_floors`
+(280) and `analytics.get_portal_asset_energy_series` (279 — portal/organization
+scoped, **never keyed on the Grafana organization mapping**). The
+canonical-read-era `analytics.get_portal_analytics_energy_series` (278) is
+dropped by 280; `analytics.get_canonical_energy_read` stays for Grafana and
+the Asset View only ([ADR-022 amendment](../../00-governance/decisions/ADR-022-analytics-v1-scope-and-contract.md#amendment-1-2026-09-27-option-b--analytics-energy-from-the-persisted-tiers)).
 
 ## Implementation plan
 
@@ -238,7 +248,9 @@ Database reads: `analytics.get_portal_analytics_catalog` (migration 276),
 | B0 | ADR-019 D2: block site timezone changes once a site has telemetry | Implemented (migration 275), not deployed |
 | B1 | Catalogue read function + `GET …/analytics/catalog` | Implemented (migration 276, `app/src/analytics_trends_service.py`), not deployed |
 | B1b | Data availability bounds per catalogue data point | Implemented for Energy (migration 277), not deployed; non-Energy bounds come with B3 |
-| B2 | Energy series path (portal wrapper over the canonical Energy read; 30m/1h UTC derivation; DST-correct 1d) + `GET …/analytics/series` | Implemented (migration 278), not deployed — first end-to-end slice, under review |
+| B2 | Energy series + `GET …/analytics/series` | Implemented (migration 278), not deployed; its Energy source replaced by Option B (below) |
+| Option B | Persisted-tier Energy read, portal/organization scoped, not Grafana-keyed | Migration 279 **deployed to staging** 2026-09-27 (PR #85); staging parity gate PT-1–PT-11 passed with zero mismatches |
+| 280 | Switch Analytics Energy to 279; drop 278's function; availability aligned; resolution retention floors | Implemented, not deployed |
 | B3 | Generic series path (1m / 15m / 30m / 1h) | Planned — returns `NOT_AVAILABLE` until non-Energy assignments exist |
 | B4 | `analytics.point_telemetry_1d` persisted tier (job-built from 15m, upsert-only, 35-day reconcile, backfill, 8-year retention, compression after 90 days; ADR-019 D1/D5) and the 1d read path | Planned — must be live before the first `point_telemetry_15m` chunks age out of 120-day retention |
 | F1–F8 | Frontend: time-range defect fixes (ADR-019), route, API layer, date/time picker, filter panel, ChartFrame extension, table/CSV/states, verification against staging through the tunnel | Planned |
@@ -284,9 +296,10 @@ grouping, and customer-meaningful data point names.
 
 - B0: `app/tests/test_site_timezone_immutable_with_telemetry.py`, `app/tests/test_database_error_messages.py`.
 - B1: `app/tests/test_analytics_catalog_read.py` (database read: lifecycle, effective-dating, parity-bridge classification, semantic-only, tenant isolation) and `app/tests/test_analytics_api_v1_analytics_catalog_routes.py` (route contract, registry filtering, no `attribution_basis` exposure).
-- B1b/B2: `app/tests/test_analytics_energy_series_read.py` (database reads: UTC 15m/30m/1h grids, IST hour grid, 1m, gap-filling, 1d across the 25-hour Europe/London DST day from both the finalized-daily and 15-minute paths, finalized/open split, parity-bridge rows untouched, lifecycle and tenant scope, every unavailable reason, availability bounds), `app/tests/test_analytics_api_v1_analytics_series_routes.py` (validation, limits, statuses, Energy mapping, summary) and `app/tests/test_analytics_api_v1_analytics_e2e.py` (HTTP to database with no data-layer mocking: catalogue, every resolution agreeing on totals, UTC hour grid, IST days, tenant isolation).
-- Read-only staging checks (2026-09-27): the availability query for Coimbatore (31 ACTIVE assets x 2 directions) ran in 0.83 s; canonical reads per asset: 1m over 3 days 0.15 s, 15m over 30 days 0.34 s, 1d over the full history 0.15 s; canonical 1d over finalized days equals canonical 15m summed per local day (46,732.224 kWh), so the 1d composition rule holds on real data.
-- Full backend suite passed locally (1769 tests, 2026-09-27). Not deployed; not validated on staging through the API.
+- Energy read (migration 279): `app/tests/test_asset_energy_tier_read.py` (30) — tiers, checkpoint composition, DST, source boundaries, reconstruction, retention, unmapped organization, tenant isolation, exact parity with the canonical read. Staging parity gate PT-1–PT-11 (2026-09-27, read-only): zero mismatches over 112,806 15-minute buckets, 56,510 30-minute buckets, 28,387 hours, 1,448 days, 211,817 minutes and 318 fingerprints (details in the platform-manual change history).
+- B1b/280: `app/tests/test_analytics_energy_availability_read.py` (278's function dropped; availability and floors contracts; floors equal the live retention policies; availability from the daily start to the raw tail, beyond raw retention, binding start, parity-bridge rows unchanged).
+- B2/280: `app/tests/test_analytics_api_v1_analytics_series_routes.py` (validation, limits, statuses, Energy mapping, summary, retention floors) and `app/tests/test_analytics_api_v1_analytics_e2e.py` (HTTP to database with no data-layer mocking and **no Grafana mapping**: catalogue, every resolution agreeing on totals, UTC hour grid, IST days, 1m beyond raw retention `RESOLUTION_UNAVAILABLE`, tenant isolation).
+- Full backend suite passed locally (1798 tests, 2026-09-27). Migration 280 not deployed.
 
 ## Release status
 
@@ -297,12 +310,12 @@ Not released. Nothing deployed.
 - Hourly Energy in Analytics (UTC grid) differs from hourly Energy on the
   existing Energy screens (site-local hours) for half-hour-offset sites;
   daily totals agree.
-- The canonical Energy read is keyed on the organization's active Grafana
-  organization mapping; an organization without one gets `DATA_UNAVAILABLE`
-  for Energy (the same dependency the Asset View Energy tile has).
-- Worst-case series latency is roughly 3-4 s (10 assets x 15-minute source
-  over 30 days, measured per asset on staging); it scales with selected
-  assets.
+- Latency baseline of the Energy read on staging (one 10-asset request at
+  each resolution's maximum window): 1m / 3 days 2.66 s; 15m / 30 days
+  0.88 s; 30m / 60 days 0.67 s; 1h / 180 days 0.48 s; 1d / 3 years 0.36 s.
+  1m, 15m and 30m exceed a 500 ms per-request target; not yet optimized.
+- The Asset View Energy tile still reads the canonical, Grafana-keyed Energy
+  read; moving it is a separate, parity-gated change.
 
 ## Future scope
 

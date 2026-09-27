@@ -130,8 +130,43 @@ commissioning and an assignment made for another purpose.
 - B1: `postgres/migrations/276_analytics_api_catalog.sql`, `app/src/analytics_trends_service.py`, `GET /api/v1/sites/{site_id}/analytics/catalog`.
 - B1b: `postgres/migrations/277_analytics_api_energy_availability.sql` (availability bounds per Energy data point, in the catalogue).
 - B2: `postgres/migrations/278_analytics_api_energy_series.sql`, `GET /api/v1/sites/{site_id}/analytics/series` (explicit selections; Energy only; UTC-grid 1h; DST-correct site-local 1d).
+- Amendment 1: `postgres/migrations/279_asset_energy_tier_read.sql` (deployed to staging, PR #85), `postgres/migrations/280_analytics_energy_persisted_tier_switch.sql` (not deployed).
 - Remaining steps: [the Analytics feature document](../../07-features/analytics/README.md#implementation-plan).
 
 ## Validation references
 
 Local only (2026-09-27): see the feature document's Validation section. Not deployed.
+
+---
+
+## Amendment 1 (2026-09-27): Option B — Analytics Energy from the persisted tiers
+
+**Decision (Product Owner, 2026-09-27).** Customer Energy reads for Analytics
+are keyed on the portal user and the asset's organization, never on
+`metadata.grafana_organization_map`. Analytics Energy reads ADR-019's
+persisted Energy tiers: `energy_consumption_15min` (15m; 30m derived from it),
+`energy_consumption_hourly` (UTC hours), `energy_consumption_daily`
+(site-local days) and raw 1-minute data only within raw retention.
+
+**Why.** A read-only investigation found that `analytics.get_canonical_energy_read`
+— the source of the first B2 implementation — is keyed on the Grafana
+organization mapping, which only Grafana provisioning writes (staging: 2
+mappings for 3 organizations), and aggregates every tier at request time from
+raw 1-minute/5-minute rows, so it cannot return anything older than raw
+retention (180 days). Option A (an organization-keyed core inside the
+canonical read) was rejected because it keeps both the retention limit and the
+request-time aggregation cost.
+
+**Delivery, parity-gated.**
+1. Migration 279 — `analytics.get_portal_asset_energy_series`, additive.
+   Deployed to staging 2026-09-27 (PR #85, `5ca62b0`). Read-only staging parity
+   gate PT-1–PT-11 against the canonical read: zero mismatches at every
+   resolution; the 108 parity-bridge rows unchanged.
+2. Migration 280 — Analytics switches to 279 (the canonical-read-era Analytics
+   series function from 278 is dropped); availability aligned with the same
+   tiers; per-resolution retention floors make out-of-retention requests
+   `RESOLUTION_UNAVAILABLE`. HTTP contract unchanged.
+
+**Unchanged.** `analytics.get_canonical_energy_read`, every Grafana path and
+the Asset View Energy tile; moving the Asset View off the Grafana-keyed read is
+a separate, parity-gated decision.
