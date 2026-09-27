@@ -177,8 +177,8 @@ a separate, parity-gated decision.
 
 **Context.** The committed decisions already fix the resolution default
 (Auto, EMS-REQ-134 / ADR-019), reload on **Update** only and the date
-picker's Apply / Cancel (EMS-REQ-133), the empty state ("no series selected →
-prompt with suggested series for the current context", IA §4.16), explicit
+picker's Apply / Cancel (EMS-REQ-133), an empty state when no series is
+selected (IA §4.16), explicit
 (asset, data point) selections with no server-chosen series (decision 14),
 and site-local presentation over a UTC API (ADR-019). ADR-019 defines
 per-resolution default windows but not the Analytics page's initial range,
@@ -192,22 +192,42 @@ Analytics page:
 2. **Resolution** is **Auto**.
 3. Auto resolves Today (a range under 5 days) to **15-minute** buckets.
 4. **No series is selected.** No asset and no data point is pre-selected.
-5. The page shows the IA §4.16 empty-state prompt with **suggested series
-   for the current context**.
-6. Suggestions may help populate the pickers, but they never select a series
-   or load data implicitly. A series is selected only by an explicit user
-   action.
+5. The page shows the Analytics empty state defined by
+   [Amendment 3](#amendment-3-2026-09-27-analytics-ui-decision-2--empty-state).
+6. A series is selected only by an explicit user action.
 7. **The chart does not load on page arrival.** No series request is made
    until the user presses **Update**.
 8. The date picker keeps **Apply / Cancel**.
 
-**Not decided by this amendment.** Which series the empty-state prompt
-suggests. No "main asset" or other default-asset rule is implied, and none
-is taken from the Analytics reference PDF's mockups, which do not override
-the committed IA and ADR decisions (feature document, open question 7).
+No "main asset" or other default-asset rule is implied, and none is taken
+from the Analytics reference PDF's mockups, which do not override the
+committed IA and ADR decisions.
 
 **Consequences.** The Today range depends on the site-local day
 computation, so the frontend defect ADR-019 records in
 `web/src/time/ranges.ts` (`resolveRange("TODAY")` uses UTC midnight) must be
 fixed before or with the Analytics page (feature plan step F1). This
+amendment makes no API, migration or backend change.
+
+---
+
+## Amendment 3 (2026-09-27): Analytics UI Decision 2 — empty state
+
+**Decision (Product Owner, 2026-09-27).** When the Analytics page has no
+selected series (including on first load, Amendment 2):
+
+1. Nothing is selected.
+2. Nothing is suggested.
+3. No chart data is loaded.
+4. The page displays exactly:
+
+   > **Select data to explore**
+   >
+   > Choose an asset and data point to get started.
+
+The user explicitly selects an asset and a data point, then presses
+**Update**. This replaces the previous IA §4.16 empty-state wording; IA §4.16
+is updated to match (IA v0.1.3).
+
+**Consequences.** No suggestion logic or suggestion source is needed. This
 amendment makes no API, migration or backend change.

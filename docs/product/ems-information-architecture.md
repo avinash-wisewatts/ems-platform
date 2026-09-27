@@ -1,6 +1,6 @@
 # WiseWatts EMS — Information Architecture / UX Blueprint
 
-> **Status:** WORKING DRAFT  ·  **Version:** 0.1.2  ·  **Owner:** Product  ·  **Last updated:** 2026-09-12 (§4.5/§4.7 data-model correction only — see Version History; no product decision altered)
+> **Status:** WORKING DRAFT  ·  **Version:** 0.1.3  ·  **Owner:** Product  ·  **Last updated:** 2026-09-27 (§4.16 empty state per ADR-022 Amendment 3 — see Version History)
 >
 > **Source basis:** product-owner brief (§5–§8, §13, §16), `ems-product-definition.md`, DDS §F / §F.0 / §B.2–B.5 / §E, roadmap Phases 7–17, ZeroWatt technical overview (reference only).
 >
@@ -347,7 +347,7 @@ Each screen: **Purpose · Customer question · Primary information · Secondary 
 - **Filters:** series picker (from a **curated list of semantic metrics**, not a tag browser); range; resolution (clamped); comparison period.
 - **Time context:** shared control; aligned timelines across series `[ZEROWATT-OBSERVED]` (capability #1).
 - **Drill-down:** a region → the underlying measurements; → the area screen for that metric.
-- **Empty state:** no series selected → prompt with suggested series for the current context.
+- **Empty state:** no series selected → nothing is selected, nothing is suggested and no chart data loads; the page shows exactly "**Select data to explore**" / "Choose an asset and data point to get started." The user selects an asset and a data point, then presses Update. `[WISEWATTS-DECISION]` (ADR-022 Amendment 3).
 - **No-data / Error:** per-series no-data shown inline; the chart still renders other series.
 - **Future considerations:** saved trend views; annotations; shift/production overlays (LATER).
 - **API dependency:** `PLANNED (Phase 9–10)`. **Constraint:** series come from a curated catalogue; **no free-form query builder, no dynamic SQL** (non-goal, gap PA-5).
@@ -470,3 +470,4 @@ Each screen: **Purpose · Customer question · Primary information · Secondary 
 | 0.1 | 2026-09-10 | Initial working draft. Navigation hypothesis, cross-cutting UX, ~21 screen breakdowns with 12-field template + API-dependency status, journey-stage map, open IA decisions. |
 | 0.1.1 | 2026-09-11 | **IMPLEMENTATION STATUS UPDATE.** §6 open-decision items marked resolved/still-open against `ems-product-owner-workshop-baseline.md` Q49–Q101. No screen definition or IA decision was altered. |
 | 0.1.2 | 2026-09-12 | **DATA-MODEL CORRECTION (MVP-1 closeout).** §4.5 (Space detail) and §4.7 (Asset Overview) corrected: `asset_space_relationships` does not exist as an implemented table — it is a DDS future-state design only. Today's only live asset↔space relationship is `metadata.assets.space_id`, a single nullable FK (1:1), read-only via `GET /api/v1/sites/{site_id}/assets` (Slice 0, migration 232). Component-tree (`asset_relationships`) and the M:N "serves" model both remain explicitly deferred/Post-MVP — no table was created, no schema changed. Screen intent/scope unaltered. |
+| 0.1.3 | 2026-09-27 | **PRODUCT OWNER DECISION.** §4.16 (Analytics — Trends) empty state replaced: with no selected series nothing is selected or suggested and no chart data loads; the page shows exactly "Select data to explore" / "Choose an asset and data point to get started." (ADR-022 Amendment 3). No other screen altered. |

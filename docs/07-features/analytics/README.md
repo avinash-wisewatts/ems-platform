@@ -75,15 +75,25 @@ On arrival at the page:
 1. The range is the site's local **Today** (site IANA timezone, DST-correct).
 2. The resolution is **Auto**, so Today shows **15-minute** bars.
 3. No series is selected: no asset and no data point.
-4. The IA empty state is shown: a prompt with suggested series for the
-   current context [C: IA "Analytics — Trends"]. Suggestions may help
-   populate the pickers but never select a series or load data implicitly.
+4. The empty state is shown (below). Nothing is suggested.
 5. The chart does not load; no series request is made until the user presses
    **Update**.
 6. The date picker keeps Apply / Cancel.
 
-Which series are suggested is not decided (open question 7); there is no
-"main asset" default.
+There is no "main asset" default.
+
+### Empty state
+
+[PO] ([ADR-022 Amendment 3](../../00-governance/decisions/ADR-022-analytics-v1-scope-and-contract.md#amendment-3-2026-09-27-analytics-ui-decision-2--empty-state)).
+With no selected series, nothing is selected, nothing is suggested and no
+chart data is loaded. The page displays exactly:
+
+> **Select data to explore**
+>
+> Choose an asset and data point to get started.
+
+The user explicitly selects an asset and a data point, then presses
+**Update**.
 
 ## Business rules
 
@@ -309,9 +319,6 @@ grouping, and customer-meaningful data point names.
 6. **Production release gate.** Is a production release of Analytics held
    until real assets are commissioned there, given the catalogue would
    otherwise be empty?
-7. **Suggested series.** Which series does the first-load empty-state prompt
-   suggest for the current context (ADR-022 Amendment 2)? No default-asset
-   ("main asset") rule exists.
 
 ## Validation
 
