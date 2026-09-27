@@ -1,6 +1,6 @@
 # Requirements Traceability
 
-Status: CURRENT · Last reviewed: 2026-09-13 · Owner: Product + Engineering
+Status: CURRENT · Last reviewed: 2026-09-27 · Owner: Product + Engineering
 Source of truth: `ems-requirements-traceability.md` v0.2 (archived), consolidated here.
 
 > **Status update (2026-09-13):** the tables below were built from a
@@ -439,3 +439,29 @@ This does not alter §6's or §11's own historical snapshots, preserved per
 rewrite rule. §11's implementation record remains the accurate account of
 what was built and verified 2026-09-15 (morning); this section records
 the same-day correction.
+
+## 13. Status update (2026-09-27) — Analytics v1 decided (ADR-022); B0/B1 in progress
+
+The Product Owner defined Analytics v1
+([ADR-022](../00-governance/decisions/ADR-022-analytics-v1-scope-and-contract.md)).
+Requirements EMS-REQ-129 – EMS-REQ-139 are new and refine EMS-REQ-037
+(Trends). The feature is specified in
+[../07-features/analytics/README.md](../07-features/analytics/README.md).
+The Product Owner's Analytics PDF was a design reference only and is not a
+repository document.
+
+| Requirement | Screen | API capability | Semantic / data capability | Status (2026-09-27) |
+|---|---|---|---|---|
+| EMS-REQ-129, 130, 131 | Analytics (`/analytics`) | `GET /sites/{id}/analytics/catalog` | `metadata.asset_points` (currently effective) → `metadata.logical_points` → `config.parameters`; ACTIVE assets only | `IN PROGRESS` (B1). On staging: Energy Import/Export for 53 ACTIVE assets, backed by staging-only parity-bridge rows (ADR-022 decision 4). Production: no assignments. |
+| EMS-REQ-132 | Analytics | series `phase` | per-phase `asset_points` | `BLOCKED` — Asset Data Point Assignment (ADR-018 Amendments 5-8) not deployed. |
+| EMS-REQ-133, 134 | Analytics | `GET /sites/{id}/analytics/series` (`resolution`, `from`, `to`) | ADR-019 tiers; `analytics.point_telemetry_1d` (new); ADR-019 D2 | `PLANNED` (B2–B4); D2 guard `IN PROGRESS` (B0). |
+| EMS-REQ-135, 136, 137, 138, 139 | Analytics | series `points` / `summary` | canonical Energy read (migration 270); `point_telemetry_15m`/`1h` | `PLANNED` (B2–B3, F1–F8). |
+
+Corrections to earlier statements, recorded rather than rewritten: staging
+`metadata.asset_points` is not empty (the migration 263 change-history entry
+and ADR-018's "0 rows on staging" predate the parity-bridge rows written
+2026-09-25); those rows are not commissioning (ADR-022 decision 4).
+
+This does not alter §2–§12's historical snapshots, preserved per
+[source-of-truth.md](../00-governance/source-of-truth.md)'s no-silent-rewrite
+rule.

@@ -288,16 +288,37 @@ shared `EMS-REQ` numbering space.
 | EMS-REQ-115 | **No history, email, or sharing.** No report history is retained; no email delivery; no share links. "Change" (return to configuration) and "Generate another report" controls exist. | "Can I go back and try a different report?" | SHOULD | PRODUCT_OWNER | MVP-6 | READY-FOR-DESIGN | Q76; ADR-015 Decision (controls, non-goals) | |
 | EMS-REQ-116 | **Error handling.** A clear generation-error state with retry. A PDF-generation failure leaves the already-generated in-app report intact — it is never discarded or invalidated by a failed PDF attempt. | "What happens if generation fails?" | MUST (of this report) | PRODUCT_OWNER | MVP-6 | READY-FOR-DESIGN | Q76; ADR-015 Decision (error handling); ADR-011 (no-data/error discipline extended here) | |
 
+## Analytics v1 (ADR-022)
+
+Refines EMS-REQ-037 (Trends) for the EMS Web App Analytics page. Origin of
+each item (Product Owner decision, committed ADR, or the uncommitted
+Analytics reference PDF confirmed by ADR-022) is recorded per requirement in
+[../07-features/analytics/README.md](../07-features/analytics/README.md#requirements).
+
+| ID | Title / description | Customer question | Priority | Source | Phase | Status | Dependencies | Notes |
+|---|---|---|---|---|---|---|---|---|
+| EMS-REQ-129 | **Analytics page.** Site-scoped "&lt;site name&gt; Analytics"; a curated, semantic Trends explorer — not a raw-tag browser or query builder. | "How have these measurements moved together?" | MUST | PRODUCT_OWNER | Analytics v1 | READY-FOR-DESIGN | EMS-REQ-037; ADR-022 decisions 1-2 | EMS-REQ-901/903 unchanged. |
+| EMS-REQ-130 | **Asset selection.** ACTIVE assets with at least one catalogue data point; search; Select all / Clear all; group by asset type (default) or area; group checkbox; groups collapsed; "N of M"; max 10. | "Which equipment do I want to look at?" | MUST | PRODUCT_OWNER | Analytics v1 | READY-FOR-DESIGN | ADR-022 decisions 5-7 | Multi-type selection allowed (ADR-022 decision 5). |
+| EMS-REQ-131 | **Data point selection.** Semantic data points from confirmed `metadata.asset_points` only; grouped by category; search; max 5 distinct; Energy Import and Energy Export separate. | "Which measurements?" | MUST | PRODUCT_OWNER, ARCHITECTURE | Analytics v1 | READY-FOR-DESIGN | ADR-018 decision 1; ADR-022 decisions 2, 7, 8 | v1 registry is Energy Import/Export; further entries are an open PO question. |
+| EMS-REQ-132 | **Phase selection.** System or 3 phase, where the data point has per-phase values. | "Per phase or overall?" | SHOULD | PRODUCT_OWNER | Analytics v1 | BLOCKED | Asset Data Point Assignment (ADR-018 Amendments 5-8) | No per-phase point is assigned anywhere yet. |
+| EMS-REQ-133 | **Shared date/time range.** Two-month calendar, quick ranges, optional time-of-day, Apply/Cancel; reload on Update only; bounded by data availability; site-local and DST-correct. | "For which period?" | MUST | PRODUCT_OWNER | Analytics v1 | READY-FOR-DESIGN | ADR-019 time basis | Quick-range list details are an open PO question. |
+| EMS-REQ-134 | **Resolution.** Auto (default), 1m, 15m, 30m, 1h, 1d; Auto rule and maximum windows per ADR-019; 1h on the UTC grid; 1d = site-local calendar day. | "At what detail?" | MUST | PRODUCT_OWNER, ARCHITECTURE | Analytics v1 | READY-FOR-DESIGN | ADR-019; ADR-022 decisions 9, 13 | 1d requires ADR-019 D2 and the persisted `point_telemetry_1d` tier. |
+| EMS-REQ-135 | **Chart.** Energy grouped bars, other data points lines; one Y axis per unit; drag-zoom, reset, range slider; legend per asset – data point (– phase); max 25 series. | "What does it look like over time?" | MUST | PRODUCT_OWNER | Analytics v1 | READY-FOR-DESIGN | ADR-022 decisions 7, 12 | |
+| EMS-REQ-136 | **Per-series statistics.** Total (Energy only), Average, Minimum, Maximum per asset × data point × phase series; no cross-asset aggregates. | "What were the totals and extremes?" | MUST | PRODUCT_OWNER | Analytics v1 | READY-FOR-DESIGN | ADR-022 decision 11 | Tab layout is an open PO question. |
+| EMS-REQ-137 | **CSV download.** The displayed chart data, one row per series per bucket, with context fields; client-side. | "Give me the numbers." | SHOULD | PRODUCT_OWNER | Analytics v1 | READY-FOR-DESIGN | ADR-014 pattern | |
+| EMS-REQ-138 | **Coverage and quality.** Per-bucket coverage and quality; unavailable or empty selections shown inline, never dropped. | "Can I trust this?" | MUST | PRODUCT_OWNER, ARCHITECTURE | Analytics v1 | READY-FOR-DESIGN | ADR-011; terminology quality vocabulary | Chart presentation is an open PO question. |
+| EMS-REQ-139 | **Chart options.** CSV download and collapse only; no Administration App function (no "+ Add Meter"). | — | MUST | PRODUCT_OWNER, ARCHITECTURE | Analytics v1 | READY-FOR-DESIGN | ADR-006 | |
+
 ## Priority summary
 
 **MUST (near-term):** 001–008, 010–015, 020–024, 027, 030, 031, 034, 037,
-040, 050, 051, 060, 070, 071, 074. (+ 041/022 as MUST/SHOULD depending on the
+040, 050, 051, 060, 070, 071, 074, 129–131, 133–136, 138, 139. (+ 041/022 as MUST/SHOULD depending on the
 demand-endpoint schedule.) See
 [non-functional-requirements.md](non-functional-requirements.md) for the
 cross-cutting MUST set (100–105, 109).
 
 **SHOULD:** 016–019, 025, 026, 028, 032, 033, 035, 036, 038, 041–043, 052,
-054, 061–064, 072, 073, 080, 081, 090–093, 094–099, 110–116.
+054, 061–064, 072, 073, 080, 081, 090–093, 094–099, 110–116, 132, 137.
 
 **COULD:** 053, 065, 083, 106 (see non-functional).
 

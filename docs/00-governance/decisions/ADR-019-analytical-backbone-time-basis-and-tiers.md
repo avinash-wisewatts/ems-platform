@@ -5,6 +5,16 @@ Status: Decided (architecture). **M1 deployed to staging and backfilled**
 staging and fully backfilled** (migration 265, PR #76, 2026-09-24).
 **M2 activation implemented** (migration 266); it takes effect when 266 is
 deployed. M3 onwards not implemented. Nothing in production.
+
+> **2026-09-27 status note.** Read-only staging verification: migration 266
+> is applied on staging (ledger, 2026-09-24 17:43 IST). D2 is decided but
+> was not implemented — `admin.update_site_workspace` accepted a timezone
+> change at any time; its implementation is Analytics v1 step B0. The
+> generic 1d tier (M3's `point_telemetry_1d`, D1) is pulled into Analytics
+> v1 by Product Owner decision ([ADR-022](ADR-022-analytics-v1-scope-and-contract.md)
+> decision 13) and is no longer deferred. The tier table, D1–D6 and the
+> retention plan below are unchanged.
+
 Date: 2026-09-24
 Decision owners: Product + Architecture
 Related: [ADR-007](ADR-007-analytics-api-boundary.md) (Analytics API is the
