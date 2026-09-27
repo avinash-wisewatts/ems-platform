@@ -126,8 +126,8 @@ commissioning and an assignment made for another purpose.
 
 ## Implementation references
 
-- B0: `postgres/migrations/271_site_timezone_immutable_with_telemetry.sql` (ADR-019 D2).
-- B1: `postgres/migrations/272_analytics_api_catalog.sql`, `app/src/analytics_trends_service.py`, `GET /api/v1/sites/{site_id}/analytics/catalog`.
+- B0: `postgres/migrations/275_site_timezone_immutable_with_telemetry.sql` (ADR-019 D2).
+- B1: `postgres/migrations/276_analytics_api_catalog.sql`, `app/src/analytics_trends_service.py`, `GET /api/v1/sites/{site_id}/analytics/catalog`.
 - Remaining steps: [the Analytics feature document](../../07-features/analytics/README.md#implementation-plan).
 
 ## Validation references

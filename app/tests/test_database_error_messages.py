@@ -59,7 +59,7 @@ def test_asset_device_error_is_actionable():
 
 
 def test_site_timezone_guard_error_is_actionable():
-    """Migration 271 (ADR-019 D2) raises this exact primary message."""
+    """Migration 275 (ADR-019 D2) raises this exact primary message."""
 
     assert translate(
         "Site timezone cannot be changed once the site has telemetry."

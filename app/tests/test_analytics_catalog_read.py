@@ -1,4 +1,4 @@
-"""Contract and functional tests for migration 272: the Analytics v1
+"""Contract and functional tests for migration 276: the Analytics v1
 catalogue read, analytics.get_portal_analytics_catalog (ADR-022 step B1).
 
 Runs against the disposable ems_test database (see conftest.py). Each

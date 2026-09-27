@@ -1,5 +1,5 @@
 -- ============================================================================
--- Migration 272
+-- Migration 276
 -- Analytics v1 catalogue read (ADR-022, step B1): the portal-scoped read
 -- behind GET /api/v1/sites/{site_id}/analytics/catalog.
 --
@@ -35,22 +35,22 @@
 DO $pre$
 BEGIN
     IF to_regprocedure('admin.portal_user_can_access_site(bigint, uuid)') IS NULL THEN
-        RAISE EXCEPTION 'Migration 272 precondition failed: admin.portal_user_can_access_site(bigint, uuid) is missing.';
+        RAISE EXCEPTION 'Migration 276 precondition failed: admin.portal_user_can_access_site(bigint, uuid) is missing.';
     END IF;
     IF to_regprocedure('admin.list_accessible_assets(bigint)') IS NULL THEN
-        RAISE EXCEPTION 'Migration 272 precondition failed: admin.list_accessible_assets(bigint) is missing.';
+        RAISE EXCEPTION 'Migration 276 precondition failed: admin.list_accessible_assets(bigint) is missing.';
     END IF;
     IF NOT EXISTS (
         SELECT 1 FROM information_schema.columns
         WHERE table_schema = 'metadata' AND table_name = 'asset_points' AND column_name = 'device_id'
     ) THEN
-        RAISE EXCEPTION 'Migration 272 precondition failed: metadata.asset_points.device_id is missing (migration 228).';
+        RAISE EXCEPTION 'Migration 276 precondition failed: metadata.asset_points.device_id is missing (migration 228).';
     END IF;
     IF NOT EXISTS (
         SELECT 1 FROM information_schema.columns
         WHERE table_schema = 'metadata' AND table_name = 'logical_points' AND column_name = 'qualifier'
     ) THEN
-        RAISE EXCEPTION 'Migration 272 precondition failed: metadata.logical_points.qualifier is missing (migration 223).';
+        RAISE EXCEPTION 'Migration 276 precondition failed: metadata.logical_points.qualifier is missing (migration 223).';
     END IF;
 END;
 $pre$;
@@ -138,7 +138,7 @@ REVOKE ALL ON FUNCTION analytics.get_portal_analytics_catalog(BIGINT, UUID) FROM
 GRANT EXECUTE ON FUNCTION analytics.get_portal_analytics_catalog(BIGINT, UUID) TO ems_app;
 
 COMMENT ON FUNCTION analytics.get_portal_analytics_catalog(BIGINT, UUID) IS
-'Analytics v1 catalogue (migration 272, ADR-022): one row per ACTIVE asset of the site x semantic parameter x qualifier bound by a currently effective metadata.asset_points row. Portal-scoped (portal_user_can_access_site + list_accessible_assets). attribution_basis (CONFIRMED | PARITY_BRIDGE) is internal read-model metadata and is not exposed by the customer API. Read-only.';
+'Analytics v1 catalogue (migration 276, ADR-022): one row per ACTIVE asset of the site x semantic parameter x qualifier bound by a currently effective metadata.asset_points row. Portal-scoped (portal_user_can_access_site + list_accessible_assets). attribution_basis (CONFIRMED | PARITY_BRIDGE) is internal read-model metadata and is not exposed by the customer API. Read-only.';
 
 DO $post$
 DECLARE
@@ -146,7 +146,7 @@ DECLARE
     v_body TEXT;
 BEGIN
     IF to_regprocedure(v_sig) IS NULL THEN
-        RAISE EXCEPTION 'Migration 272 postcondition failed: % was not created.', v_sig;
+        RAISE EXCEPTION 'Migration 276 postcondition failed: % was not created.', v_sig;
     END IF;
     IF NOT EXISTS (
         SELECT 1 FROM pg_proc p
@@ -157,13 +157,13 @@ BEGIN
           AND r.rolname = 'ems_admin'
           AND p.proconfig IS NOT NULL
     ) THEN
-        RAISE EXCEPTION 'Migration 272 postcondition failed: % is not SECURITY DEFINER / STABLE / owned by ems_admin / search_path-pinned.', v_sig;
+        RAISE EXCEPTION 'Migration 276 postcondition failed: % is not SECURITY DEFINER / STABLE / owned by ems_admin / search_path-pinned.', v_sig;
     END IF;
     IF has_function_privilege('public', v_sig, 'EXECUTE') THEN
-        RAISE EXCEPTION 'Migration 272 postcondition failed: % is executable by PUBLIC.', v_sig;
+        RAISE EXCEPTION 'Migration 276 postcondition failed: % is executable by PUBLIC.', v_sig;
     END IF;
     IF NOT has_function_privilege('ems_app', v_sig, 'EXECUTE') THEN
-        RAISE EXCEPTION 'Migration 272 postcondition failed: % is not executable by ems_app.', v_sig;
+        RAISE EXCEPTION 'Migration 276 postcondition failed: % is not executable by ems_app.', v_sig;
     END IF;
     v_body := lower(pg_get_functiondef(v_sig::regprocedure));
     IF position('insert into' IN v_body) > 0
@@ -172,19 +172,19 @@ BEGIN
        OR position(' merge ' IN v_body) > 0
        OR position('execute ' IN v_body) > 0
        OR position('format(' IN v_body) > 0 THEN
-        RAISE EXCEPTION 'Migration 272 postcondition failed: the catalogue function contains a write statement or dynamic SQL.';
+        RAISE EXCEPTION 'Migration 276 postcondition failed: the catalogue function contains a write statement or dynamic SQL.';
     END IF;
     IF position('primary_meter' IN v_body) > 0
        OR position('asset_devices' IN v_body) > 0
        OR position('device_point_configuration' IN v_body) > 0
        OR position('v_grafana_asset_point_selector' IN v_body) > 0 THEN
-        RAISE EXCEPTION 'Migration 272 postcondition failed: the catalogue must derive availability from metadata.asset_points only (ADR-018 decision 1).';
+        RAISE EXCEPTION 'Migration 276 postcondition failed: the catalogue must derive availability from metadata.asset_points only (ADR-018 decision 1).';
     END IF;
     IF position('portal_user_can_access_site' IN v_body) = 0
        OR position('list_accessible_assets' IN v_body) = 0
        OR position('lifecycle_status = ''active''' IN v_body) = 0 THEN
-        RAISE EXCEPTION 'Migration 272 postcondition failed: the catalogue must be portal-scoped and ACTIVE-only.';
+        RAISE EXCEPTION 'Migration 276 postcondition failed: the catalogue must be portal-scoped and ACTIVE-only.';
     END IF;
-    RAISE NOTICE 'Migration 272: all postconditions passed (portal-scoped Analytics catalogue read function created; read-only).';
+    RAISE NOTICE 'Migration 276: all postconditions passed (portal-scoped Analytics catalogue read function created; read-only).';
 END;
 $post$;

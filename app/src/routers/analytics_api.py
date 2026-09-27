@@ -144,7 +144,7 @@ time, never a stored counter. See ADR-016/ADR-017 for the full decision
 record.
 
 GET /api/v1/sites/{site_id}/analytics/catalog (Analytics v1, ADR-022,
-migration 272) lists the ACTIVE assets of the site with the curated semantic
+migration 276) lists the ACTIVE assets of the site with the curated semantic
 data points their currently effective metadata.asset_points bindings
 provide -- never device capability or PRIMARY_METER (ADR-018 decision 1).
 The read model's internal attribution_basis is not exposed.
@@ -1071,7 +1071,7 @@ async def get_site_telemetry_freshness(
 async def get_site_analytics_catalog(
     request: Request, site_id: UUID
 ) -> AnalyticsCatalogResponse:
-    """Reads analytics.get_portal_analytics_catalog (migration 272): the
+    """Reads analytics.get_portal_analytics_catalog (migration 276): the
     currently effective metadata.asset_points bindings of the site's ACTIVE
     assets, filtered to the curated Analytics data-point registry. Also
     returns the request limits and the ADR-019 resolution windows the page

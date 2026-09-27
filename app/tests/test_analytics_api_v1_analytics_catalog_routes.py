@@ -4,7 +4,7 @@ route contract and response building.
 Every route test monkeypatches the two data-access functions the route
 uses (fetch_analytics_site / fetch_analytics_catalog, backed by
 admin.list_accessible_sites and analytics.get_portal_analytics_catalog --
-migration 272), mirroring test_analytics_api_v1_energy_availability_routes.py.
+migration 276), mirroring test_analytics_api_v1_energy_availability_routes.py.
 The database behaviour of the catalogue read is covered separately by
 test_analytics_catalog_read.py.
 """

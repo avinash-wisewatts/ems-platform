@@ -201,8 +201,8 @@ Asset attribution for every row resolves through effective-dated
 
 | Step | Scope | Status |
 |---|---|---|
-| B0 | ADR-019 D2: block site timezone changes once a site has telemetry | Implemented (migration 271), not deployed |
-| B1 | Catalogue read function + `GET …/analytics/catalog` | Implemented (migration 272, `app/src/analytics_trends_service.py`), not deployed |
+| B0 | ADR-019 D2: block site timezone changes once a site has telemetry | Implemented (migration 275), not deployed |
+| B1 | Catalogue read function + `GET …/analytics/catalog` | Implemented (migration 276, `app/src/analytics_trends_service.py`), not deployed |
 | B1b | Data availability bounds per catalogue data point | Planned |
 | B2 | Energy series path (portal wrapper over the canonical Energy read; 30m/1h UTC derivation) + `GET …/analytics/series` | Planned |
 | B3 | Generic series path (1m / 15m / 30m / 1h) | Planned — returns `NOT_AVAILABLE` until non-Energy assignments exist |

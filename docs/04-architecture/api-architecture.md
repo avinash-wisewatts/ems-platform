@@ -38,7 +38,7 @@ UX-only.
 | `GET /api/v1/sites/{site_id}/demand/current` | Current demand | MVP-2/Slice B. |
 | `GET /api/v1/sites/{site_id}/power-quality` | Power Quality (PF/THD) series | MVP-2/Slice B — landed PR #48. |
 | `GET /api/v1/spaces/{space_id}/measurements` | Environmental series | `parameter` ∈ {TEMPERATURE, HUMIDITY, DEW_POINT}, `resolution` ∈ {raw, 1h}; `no_data` normal 200; inaccessible/unknown → 404 with no existence leak. DEW_POINT is consumed from the persisted tier — never recalculated in the browser. |
-| `GET /api/v1/sites/{site_id}/analytics/catalog` | Analytics v1 catalogue — ACTIVE assets and their confirmed semantic data points, request limits, ADR-019 resolution windows | Added 2026-09-27 (migration 272, [ADR-022](../00-governance/decisions/ADR-022-analytics-v1-scope-and-contract.md)); not yet deployed. From `metadata.asset_points` only (ADR-018); inaccessible/unknown site → 404; no assignments → empty `assets`. See [../07-features/analytics/README.md](../07-features/analytics/README.md#api-contract). |
+| `GET /api/v1/sites/{site_id}/analytics/catalog` | Analytics v1 catalogue — ACTIVE assets and their confirmed semantic data points, request limits, ADR-019 resolution windows | Added 2026-09-27 (migration 276, [ADR-022](../00-governance/decisions/ADR-022-analytics-v1-scope-and-contract.md)); not yet deployed. From `metadata.asset_points` only (ADR-018); inaccessible/unknown site → 404; no assignments → empty `assets`. See [../07-features/analytics/README.md](../07-features/analytics/README.md#api-contract). |
 
 ## Extension model
 

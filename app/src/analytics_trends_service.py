@@ -4,7 +4,7 @@ data-point registry and data access.
 Step B1: the catalogue behind GET /api/v1/sites/{site_id}/analytics/catalog.
 
 Every catalogue row comes from analytics.get_portal_analytics_catalog
-(migration 272): currently effective metadata.asset_points bindings of ACTIVE
+(migration 276): currently effective metadata.asset_points bindings of ACTIVE
 assets on the site, portal-scoped in the database. This module adds only the
 curated registry (which semantic parameters Analytics v1 can chart, and how)
 and shapes the response. It never derives availability from device

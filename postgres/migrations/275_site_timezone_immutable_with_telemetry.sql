@@ -1,5 +1,5 @@
 -- ============================================================================
--- Migration 271
+-- Migration 275
 -- ADR-019 D2: a site's timezone cannot be changed once the site has
 -- telemetry. Analytics v1 step B0 (ADR-022).
 --
@@ -59,23 +59,23 @@ BEGIN
         SELECT 1 FROM information_schema.columns
         WHERE table_schema = 'metadata' AND table_name = 'sites' AND column_name = 'timezone'
     ) THEN
-        RAISE EXCEPTION 'Migration 271 precondition failed: metadata.sites.timezone is missing.';
+        RAISE EXCEPTION 'Migration 275 precondition failed: metadata.sites.timezone is missing.';
     END IF;
     IF to_regclass('telemetry.normalized_points') IS NULL THEN
-        RAISE EXCEPTION 'Migration 271 precondition failed: telemetry.normalized_points is missing.';
+        RAISE EXCEPTION 'Migration 275 precondition failed: telemetry.normalized_points is missing.';
     END IF;
     IF to_regclass('analytics.point_telemetry_1h') IS NULL THEN
-        RAISE EXCEPTION 'Migration 271 precondition failed: analytics.point_telemetry_1h is missing (migration 265).';
+        RAISE EXCEPTION 'Migration 275 precondition failed: analytics.point_telemetry_1h is missing (migration 265).';
     END IF;
     IF to_regclass('analytics.energy_consumption_daily') IS NULL THEN
-        RAISE EXCEPTION 'Migration 271 precondition failed: analytics.energy_consumption_daily is missing (migration 183).';
+        RAISE EXCEPTION 'Migration 275 precondition failed: analytics.energy_consumption_daily is missing (migration 183).';
     END IF;
     IF EXISTS (
         SELECT 1 FROM pg_trigger
         WHERE tgrelid = 'metadata.sites'::regclass
           AND tgname = 'sites_prevent_timezone_change_with_telemetry'
     ) THEN
-        RAISE EXCEPTION 'Migration 271 precondition failed: trigger sites_prevent_timezone_change_with_telemetry already exists.';
+        RAISE EXCEPTION 'Migration 275 precondition failed: trigger sites_prevent_timezone_change_with_telemetry already exists.';
     END IF;
 END;
 $pre$;
@@ -135,7 +135,7 @@ ALTER FUNCTION metadata.prevent_site_timezone_change_with_telemetry() OWNER TO e
 REVOKE ALL ON FUNCTION metadata.prevent_site_timezone_change_with_telemetry() FROM PUBLIC;
 
 COMMENT ON FUNCTION metadata.prevent_site_timezone_change_with_telemetry() IS
-'ADR-019 D2 (migration 271): rejects a change to metadata.sites.timezone once the site has telemetry (normalized_points or point_telemetry_1h rows from its current devices, or any energy_consumption_daily row for the site). SQLSTATE 23514. No override: effective-dated timezone history is a separate future decision.';
+'ADR-019 D2 (migration 275): rejects a change to metadata.sites.timezone once the site has telemetry (normalized_points or point_telemetry_1h rows from its current devices, or any energy_consumption_daily row for the site). SQLSTATE 23514. No override: effective-dated timezone history is a separate future decision.';
 
 CREATE TRIGGER sites_prevent_timezone_change_with_telemetry
 BEFORE UPDATE OF timezone ON metadata.sites
@@ -155,7 +155,7 @@ BEGIN
           AND tgfoid = v_sig::regprocedure
           AND tgenabled = 'O'
     ) THEN
-        RAISE EXCEPTION 'Migration 271 postcondition failed: the timezone guard trigger is missing or disabled.';
+        RAISE EXCEPTION 'Migration 275 postcondition failed: the timezone guard trigger is missing or disabled.';
     END IF;
     IF NOT EXISTS (
         SELECT 1 FROM pg_proc p
@@ -165,24 +165,24 @@ BEGIN
           AND r.rolname = 'ems_admin'
           AND p.proconfig IS NOT NULL
     ) THEN
-        RAISE EXCEPTION 'Migration 271 postcondition failed: % is not SECURITY DEFINER / owned by ems_admin / search_path-pinned.', v_sig;
+        RAISE EXCEPTION 'Migration 275 postcondition failed: % is not SECURITY DEFINER / owned by ems_admin / search_path-pinned.', v_sig;
     END IF;
     IF has_function_privilege('public', v_sig, 'EXECUTE') THEN
-        RAISE EXCEPTION 'Migration 271 postcondition failed: % is executable by PUBLIC.', v_sig;
+        RAISE EXCEPTION 'Migration 275 postcondition failed: % is executable by PUBLIC.', v_sig;
     END IF;
     v_body := lower(pg_get_functiondef(v_sig::regprocedure));
     IF position('insert into' IN v_body) > 0
        OR position('delete from' IN v_body) > 0
        OR position('execute ' IN v_body) > 0 THEN
-        RAISE EXCEPTION 'Migration 271 postcondition failed: the guard contains a write statement or dynamic SQL.';
+        RAISE EXCEPTION 'Migration 275 postcondition failed: the guard contains a write statement or dynamic SQL.';
     END IF;
     IF NOT EXISTS (
         SELECT 1 FROM pg_trigger
         WHERE tgrelid = 'metadata.sites'::regclass
           AND tgname = 'sites_prevent_organization_change'
     ) THEN
-        RAISE EXCEPTION 'Migration 271 postcondition failed: the existing organization-change guard is missing.';
+        RAISE EXCEPTION 'Migration 275 postcondition failed: the existing organization-change guard is missing.';
     END IF;
-    RAISE NOTICE 'Migration 271: all postconditions passed (site timezone guard installed; ADR-019 D2).';
+    RAISE NOTICE 'Migration 275: all postconditions passed (site timezone guard installed; ADR-019 D2).';
 END;
 $post$;

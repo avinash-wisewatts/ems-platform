@@ -1,4 +1,4 @@
-"""Contract and functional tests for migration 271 (ADR-019 D2, Analytics v1
+"""Contract and functional tests for migration 275 (ADR-019 D2, Analytics v1
 step B0): a site's timezone cannot change once the site has telemetry.
 
 Runs against the disposable ems_test database (see conftest.py). Every
@@ -154,7 +154,7 @@ def test_guard_function_is_security_definer_owned_and_not_public():
 def test_migration_is_recorded_in_ledger():
     with psycopg.connect(CONNINFO) as connection:
         row = connection.execute(
-            "SELECT 1 FROM admin.schema_migrations WHERE migration_id = '271_site_timezone_immutable_with_telemetry'"
+            "SELECT 1 FROM admin.schema_migrations WHERE migration_id = '275_site_timezone_immutable_with_telemetry'"
         ).fetchone()
     assert row is not None
 
