@@ -452,10 +452,10 @@ repository document.
 
 | Requirement | Screen | API capability | Semantic / data capability | Status (2026-09-27) |
 |---|---|---|---|---|
-| EMS-REQ-129, 130, 131 | Analytics (`/analytics`) | `GET /sites/{id}/analytics/catalog` | `metadata.asset_points` (currently effective) → `metadata.logical_points` → `config.parameters`; ACTIVE assets only | `IN PROGRESS` (B1). On staging: Energy Import/Export for 53 ACTIVE assets, backed by staging-only parity-bridge rows (ADR-022 decision 4). Production: no assignments. |
+| EMS-REQ-129, 130, 131 | Analytics (`/analytics`) | `GET /sites/{id}/analytics/catalog` | `metadata.asset_points` (currently effective) → `metadata.logical_points` → `config.parameters`; ACTIVE assets only | API `IMPLEMENTED`, not deployed (B1, migration 276); screen `PLANNED`. On staging: Energy Import/Export for 53 ACTIVE assets, backed by staging-only parity-bridge rows (ADR-022 decision 4). Production: no assignments. |
 | EMS-REQ-132 | Analytics | series `phase` | per-phase `asset_points` | `BLOCKED` — Asset Data Point Assignment (ADR-018 Amendments 5-8) not deployed. |
-| EMS-REQ-133, 134 | Analytics | `GET /sites/{id}/analytics/series` (`resolution`, `from`, `to`) | ADR-019 tiers; `analytics.point_telemetry_1d` (new); ADR-019 D2 | `PLANNED` (B2–B4); D2 guard `IN PROGRESS` (B0). |
-| EMS-REQ-135, 136, 137, 138, 139 | Analytics | series `points` / `summary` | canonical Energy read (migration 270); `point_telemetry_15m`/`1h` | `PLANNED` (B2–B3, F1–F8). |
+| EMS-REQ-133, 134 | Analytics | catalogue `available_from`/`available_to`; `GET /sites/{id}/analytics/series` (`resolution`, `from`, `to`) | ADR-019 tiers; `analytics.point_telemetry_1d` (new, B4); ADR-019 D2 | Energy: availability (B1b, migration 277) and every resolution incl. DST-correct 1d (B2, migration 278) `IMPLEMENTED`, not deployed; D2 guard `IMPLEMENTED` (B0, migration 275), not deployed; non-Energy `PLANNED` (B3/B4). |
+| EMS-REQ-135, 136, 137, 138, 139 | Analytics | series `points` / `summary` | canonical Energy read (migrations 263/269/270); `point_telemetry_15m`/`1h` | Energy series data, per-series statistics and coverage/evidence `IMPLEMENTED` in the API, not deployed (B2); chart, table, CSV and options `PLANNED` (F1–F8). |
 
 Corrections to earlier statements, recorded rather than rewritten: staging
 `metadata.asset_points` is not empty (the migration 263 change-history entry

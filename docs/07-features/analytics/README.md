@@ -87,7 +87,10 @@ bars; Comparison (shown as a disabled placeholder [REF]); cost. The PDF's
    `asset_points`.
 5. **Explicit selections.** A request names each (asset, data point) pair;
    the server never forms a cross-product [PO]. Phase expands each pair into
-   one series (System: `TOTAL`) or three (3 phase: `L1`, `L2`, `L3`).
+   one series (System: `TOTAL`) or three (3 phase: `L1`, `L2`, `L3`). Under 3
+   phase, a data point without per-phase values returns its System series
+   [REF: the reference mockup shows single-phase assets as System series
+   under 3 phase]. Energy is System-only in v1.
 6. **Limits.** ≤ 5 distinct data points, ≤ 10 distinct assets, ≤ 25 series
    after phase expansion, enforced by the server [PO].
 7. **Time basis.** Transport is UTC; presentation is site-local
@@ -101,15 +104,28 @@ bars; Comparison (shown as a disabled placeholder [REF]); cost. The PDF's
    `[local midnight, next local midnight)`, so a bucket is 23, 24 or 25
    hours on DST transition days. Derived from the 15-minute tier, which nests
    exactly in every IANA local day (ADR-019). Requires the site timezone to be
-   immutable once telemetry exists (ADR-019 D2).
+   immutable once telemetry exists (ADR-019 D2). For Energy, days the daily
+   pipeline has finalized (day end <= its `pipeline_state` checkpoint) come
+   from the canonical 1d tier; later days, including today, are the canonical
+   15-minute rows summed per local day, because the persisted daily row for a
+   not-yet-finalized day is only partially computed (verified on staging,
+   2026-09-27) [IMPL].
 10. **Aggregation.** Energy: kWh consumed per bucket (register delta from the
     canonical Energy read, ADR-020 semantics preserved); series Total is the
     sum of buckets. Other data points: bucket value is the exact mean
     (Σ sum ÷ Σ sample count over `GOOD` samples), with the bucket's minimum and
     maximum sample.
-11. **Quality vocabulary.** Reuses the existing lattice `GOOD / GAP /
-    ESTIMATED / INVALID / PARTIAL` ([terminology](../../01-product/terminology.md)).
-    No new quality classification is invented.
+11. **Quality and coverage.** Every bucket carries `coverage_ratio` (measured
+    intervals / expected intervals for that bucket, per direction for Energy)
+    and `is_partial` (the bucket has not ended yet). Energy buckets carry the
+    canonical Energy read's own evidence status (`GOOD`, `GAPS_DETECTED`,
+    `RECONSTRUCTED_TIMING`, `RESET_DETECTED`, `ROLLOVER_DETECTED`,
+    `INVALID_INTERVALS`; for a coarser bucket, the most severe of its 15-minute
+    constituents) and are **not** mapped onto the five-value lattice: the
+    MVP-4 decision pack keeps Energy evidence separate from it [C]. Non-Energy
+    buckets will use the existing lattice `GOOD / GAP / ESTIMATED / INVALID /
+    PARTIAL` ([terminology](../../01-product/terminology.md)). No new quality
+    classification is invented.
 
 ## API contract
 
@@ -139,15 +155,17 @@ server-side, and return 404 for an inaccessible or unknown site
       "data_point": "ENERGY_IMPORT", "label": "Active Energy Import",
       "category": "Energy", "unit": "kWh",
       "chart_kind": "bar", "aggregation": "sum",
-      "phases": {"system": true, "three_phase": false}
+      "phases": {"system": true, "three_phase": false},
+      "available_from": "…Z|null", "available_to": "…Z|null"
     }]
   }]
 }
 ```
 
 Only ACTIVE assets with at least one registry data point are listed.
-Data availability bounds are added to each data point in a later increment
-(additive fields).
+`available_from` / `available_to` bound the data the asset has for that data
+point across all of its bindings (null = no data yet); the date picker uses
+them (EMS-REQ-133).
 
 ### `GET /api/v1/sites/{site_id}/analytics/series`
 
@@ -166,23 +184,34 @@ Query: `from`, `to` (ISO-8601 UTC, half-open), `resolution`
     "status": "OK",
     "points": [{"bucket_start": "…Z", "bucket_end": "…Z", "value": 12.4,
                 "min": null, "max": null, "coverage_ratio": 1.0,
-                "quality": "GOOD", "is_partial": false}],
+                "evidence_status": "GOOD", "quality": null, "is_partial": false}],
     "summary": {"total": 298.1, "average": 12.4, "min": 3.2, "min_at": "…Z",
                 "max": 20.9, "max_at": "…Z", "coverage_ratio": 0.98}
   }]
 }
 ```
 
-- `status`: `OK`, `NO_DATA` (selection valid, no data in range),
+- One series per selection, in request order; every bucket of the grid is
+  returned (empty buckets have `value: null`, `coverage_ratio: 0`).
+- `status`: `OK`; `NO_DATA` (selection valid, no data in range);
   `NOT_AVAILABLE` (asset not an ACTIVE asset of this site, or data point not
   in that asset's catalogue — indistinguishable by design, so nothing leaks
-  across tenants), `PHASE_NOT_AVAILABLE`.
-- 422 codes: `invalid_selection`, `duplicate_selection`,
-  `unknown_data_point` (not in the registry), `too_many_data_points`,
-  `too_many_assets`, `too_many_series`, `invalid_resolution`,
-  `invalid_phase`, `invalid_time_range`, `window_too_large`.
+  across tenants); `RESOLUTION_UNAVAILABLE` (the resolution is finer than
+  the site's capture interval); `DATA_UNAVAILABLE` (the range crosses a
+  capture-interval change, or the Energy read cannot serve the site).
+  Unavailable series have no points.
+- 422 codes (existing `/api/v1` codes reused where they exist):
+  `invalid_selection`, `duplicate_selection`, `unknown_data_point` (not in
+  the registry), `too_many_data_points`, `too_many_assets`,
+  `too_many_series`, `invalid_resolution`, `invalid_phase`,
+  `invalid_time_range`, `time_range_too_large`. The whole request is
+  validated before any access check or read.
 - Energy `min`/`max` per bucket are `null` (a bucket is a sum); series
-  `summary.min`/`max` are the smallest and largest bucket values.
+  `summary.min`/`max` are the smallest and largest bucket values;
+  `summary.average` is the mean of buckets with a value; `summary.coverage_ratio`
+  is measured / expected intervals over the whole grid.
+- All timestamps are UTC (ADR-019), independent of the database session
+  timezone.
 
 ## Data / API dependencies
 
@@ -192,10 +221,15 @@ Query: `from`, `to` (ISO-8601 UTC, half-open), `resolution`
 | 15m | canonical Energy read `15m` | `analytics.point_telemetry_15m` |
 | 30m | canonical 15m, summed in UTC-grid pairs | derived from `point_telemetry_15m` |
 | 1h | canonical 15m, summed in UTC hours (**not** the site-local `v_energy_reporting_hourly`) | `analytics.point_telemetry_1h` |
-| 1d | canonical Energy read `1d` (site-local days) | new `analytics.point_telemetry_1d` (site-local days, from 15m), plus the open day from 15m |
+| 1d | site-local days: finalized days from canonical `1d`, later days from canonical `15m` summed per local day | new `analytics.point_telemetry_1d` (site-local days, from 15m), plus the open day from 15m |
 
 Asset attribution for every row resolves through effective-dated
 `metadata.asset_points` windows (ADR-018 Amendment 7).
+
+Database reads: `analytics.get_portal_analytics_catalog` (migration 276),
+`analytics.get_portal_analytics_energy_availability` (277),
+`analytics.get_portal_analytics_energy_series` (278, which reads only
+`analytics.get_canonical_energy_read`).
 
 ## Implementation plan
 
@@ -203,8 +237,8 @@ Asset attribution for every row resolves through effective-dated
 |---|---|---|
 | B0 | ADR-019 D2: block site timezone changes once a site has telemetry | Implemented (migration 275), not deployed |
 | B1 | Catalogue read function + `GET …/analytics/catalog` | Implemented (migration 276, `app/src/analytics_trends_service.py`), not deployed |
-| B1b | Data availability bounds per catalogue data point | Planned |
-| B2 | Energy series path (portal wrapper over the canonical Energy read; 30m/1h UTC derivation) + `GET …/analytics/series` | Planned |
+| B1b | Data availability bounds per catalogue data point | Implemented for Energy (migration 277), not deployed; non-Energy bounds come with B3 |
+| B2 | Energy series path (portal wrapper over the canonical Energy read; 30m/1h UTC derivation; DST-correct 1d) + `GET …/analytics/series` | Implemented (migration 278), not deployed — first end-to-end slice, under review |
 | B3 | Generic series path (1m / 15m / 30m / 1h) | Planned — returns `NOT_AVAILABLE` until non-Energy assignments exist |
 | B4 | `analytics.point_telemetry_1d` persisted tier (job-built from 15m, upsert-only, 35-day reconcile, backfill, 8-year retention, compression after 90 days; ADR-019 D1/D5) and the 1d read path | Planned — must be live before the first `point_telemetry_15m` chunks age out of 120-day retention |
 | F1–F8 | Frontend: time-range defect fixes (ADR-019), route, API layer, date/time picker, filter panel, ChartFrame extension, table/CSV/states, verification against staging through the tunnel | Planned |
@@ -250,7 +284,9 @@ grouping, and customer-meaningful data point names.
 
 - B0: `app/tests/test_site_timezone_immutable_with_telemetry.py`, `app/tests/test_database_error_messages.py`.
 - B1: `app/tests/test_analytics_catalog_read.py` (database read: lifecycle, effective-dating, parity-bridge classification, semantic-only, tenant isolation) and `app/tests/test_analytics_api_v1_analytics_catalog_routes.py` (route contract, registry filtering, no `attribution_basis` exposure).
-- Full backend suite passed locally (1713 tests, 2026-09-27). Not validated on staging.
+- B1b/B2: `app/tests/test_analytics_energy_series_read.py` (database reads: UTC 15m/30m/1h grids, IST hour grid, 1m, gap-filling, 1d across the 25-hour Europe/London DST day from both the finalized-daily and 15-minute paths, finalized/open split, parity-bridge rows untouched, lifecycle and tenant scope, every unavailable reason, availability bounds), `app/tests/test_analytics_api_v1_analytics_series_routes.py` (validation, limits, statuses, Energy mapping, summary) and `app/tests/test_analytics_api_v1_analytics_e2e.py` (HTTP to database with no data-layer mocking: catalogue, every resolution agreeing on totals, UTC hour grid, IST days, tenant isolation).
+- Read-only staging checks (2026-09-27): the availability query for Coimbatore (31 ACTIVE assets x 2 directions) ran in 0.83 s; canonical reads per asset: 1m over 3 days 0.15 s, 15m over 30 days 0.34 s, 1d over the full history 0.15 s; canonical 1d over finalized days equals canonical 15m summed per local day (46,732.224 kWh), so the 1d composition rule holds on real data.
+- Full backend suite passed locally (1769 tests, 2026-09-27). Not deployed; not validated on staging through the API.
 
 ## Release status
 
@@ -261,6 +297,12 @@ Not released. Nothing deployed.
 - Hourly Energy in Analytics (UTC grid) differs from hourly Energy on the
   existing Energy screens (site-local hours) for half-hour-offset sites;
   daily totals agree.
+- The canonical Energy read is keyed on the organization's active Grafana
+  organization mapping; an organization without one gets `DATA_UNAVAILABLE`
+  for Energy (the same dependency the Asset View Energy tile has).
+- Worst-case series latency is roughly 3-4 s (10 assets x 15-minute source
+  over 30 days, measured per asset on staging); it scales with selected
+  assets.
 
 ## Future scope
 

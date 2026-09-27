@@ -128,6 +128,8 @@ commissioning and an assignment made for another purpose.
 
 - B0: `postgres/migrations/275_site_timezone_immutable_with_telemetry.sql` (ADR-019 D2).
 - B1: `postgres/migrations/276_analytics_api_catalog.sql`, `app/src/analytics_trends_service.py`, `GET /api/v1/sites/{site_id}/analytics/catalog`.
+- B1b: `postgres/migrations/277_analytics_api_energy_availability.sql` (availability bounds per Energy data point, in the catalogue).
+- B2: `postgres/migrations/278_analytics_api_energy_series.sql`, `GET /api/v1/sites/{site_id}/analytics/series` (explicit selections; Energy only; UTC-grid 1h; DST-correct site-local 1d).
 - Remaining steps: [the Analytics feature document](../../07-features/analytics/README.md#implementation-plan).
 
 ## Validation references
