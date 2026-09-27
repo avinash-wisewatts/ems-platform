@@ -837,8 +837,13 @@ def test_constraint_accepts_contract_rows(tx, table):
 
 def test_constraint_is_not_valid_and_leaves_existing_rows_untouched(conn):
     with conn.cursor() as cur:
+        # Scoped to the two hypertables: TimescaleDB copies the constraint
+        # onto every chunk created afterwards (validated there), so chunks
+        # created by any committed Energy fixture must not change this check.
         rows = _all(cur, "SELECT conrelid::regclass::text, convalidated, pg_get_constraintdef(oid) FROM pg_constraint "
-                         "WHERE conname LIKE 'ck_energy_consumption_%%_synthetic_direction' ORDER BY 1")
+                         "WHERE conname LIKE 'ck_energy_consumption_%%_synthetic_direction' "
+                         "AND conrelid IN ('analytics.energy_consumption_1min'::regclass, "
+                         "'analytics.energy_consumption_5min'::regclass) ORDER BY 1")
     assert [(r[0], r[1]) for r in rows] == [
         ("analytics.energy_consumption_1min", False),
         ("analytics.energy_consumption_5min", False),
