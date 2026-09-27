@@ -22,6 +22,7 @@ Read-only endpoints consumed by the EMS web application:
     GET /api/v1/sites/{site_id}/alerts                    (MVP-7: Basic Alerts)
     GET /api/v1/alerts/{alert_id}                          (MVP-7: Basic Alerts)
     GET /api/v1/sites/{site_id}/analytics/catalog          (Analytics v1, ADR-022)
+    GET /api/v1/sites/{site_id}/analytics/series           (Analytics v1, ADR-022)
 
 Every endpoint requires the existing authenticated portal session. Tenant /
 site / space access is enforced server-side inside the database boundary
@@ -147,7 +148,14 @@ GET /api/v1/sites/{site_id}/analytics/catalog (Analytics v1, ADR-022,
 migration 276) lists the ACTIVE assets of the site with the curated semantic
 data points their currently effective metadata.asset_points bindings
 provide -- never device capability or PRIMARY_METER (ADR-018 decision 1).
-The read model's internal attribution_basis is not exposed.
+The read model's internal attribution_basis is not exposed. Each data point
+carries its data availability bounds (migration 277).
+
+GET /api/v1/sites/{site_id}/analytics/series (Analytics v1, ADR-022,
+migration 278) returns one series per explicit selection=<asset_id>:<DATA_POINT>
+pair -- never a cross-product -- on the Analytics bucket grid. Energy values
+come only from analytics.get_canonical_energy_read; 1h is the UTC hour grid
+and 1d the site-local calendar day.
 """
 
 from __future__ import annotations
@@ -162,9 +170,15 @@ from src.auth.dependencies import get_authenticated_portal_user
 from src.auth.models import AuthenticatedPortalUser
 from src.analytics_trends_service import (
     AnalyticsCatalogResponse,
+    AnalyticsSeriesResponse,
     build_analytics_catalog_response,
+    build_analytics_series_response,
+    energy_asset_ids,
     fetch_analytics_catalog,
+    fetch_analytics_energy_availability,
+    fetch_analytics_energy_series,
     fetch_analytics_site,
+    parse_series_request,
 )
 from src.analytics_api_service import (
     ASSET_ENERGY_MAX_WINDOW,
@@ -1088,7 +1102,87 @@ async def get_site_analytics_catalog(
         raise _not_found("Site")
 
     rows = await fetch_analytics_catalog(user.portal_user_id, site_id)
-    return build_analytics_catalog_response(site=site, rows=rows)
+    availability = await fetch_analytics_energy_availability(user.portal_user_id, site_id)
+    return build_analytics_catalog_response(site=site, rows=rows, availability=availability)
+
+
+@router.get(
+    "/sites/{site_id}/analytics/series",
+    response_model=AnalyticsSeriesResponse,
+    response_model_by_alias=True,
+    summary="Analytics v1 series for explicit asset/data point selections",
+    operation_id="getSiteAnalyticsSeries",
+    responses=_RESOURCE_RESPONSES,
+)
+async def get_site_analytics_series(
+    request: Request,
+    site_id: UUID,
+    range_from: str = Query(
+        ...,
+        alias="from",
+        description="Inclusive ISO-8601 start of the window (UTC).",
+    ),
+    range_to: str = Query(
+        ...,
+        alias="to",
+        description="Exclusive ISO-8601 end of the window (UTC).",
+    ),
+    resolution: str | None = Query(
+        None,
+        description="auto (default), 1m, 15m, 30m, 1h or 1d. 1h is the UTC hour grid; 1d the site-local day.",
+    ),
+    phase: str | None = Query(None, description="system (default) or three_phase."),
+    selection: list[str] | None = Query(
+        None,
+        description="Repeated <asset_id>:<DATA_POINT> pair, one per selected series.",
+    ),
+) -> AnalyticsSeriesResponse:
+    """Validates the whole request (resolution, ADR-019 maximum windows,
+    phase, selections and ADR-022 limits) before any database access. A
+    selection the site's catalogue cannot serve is returned with status
+    NOT_AVAILABLE, never dropped. Energy selections read
+    analytics.get_portal_analytics_energy_series (migration 278)."""
+
+    user = _require_portal_user(request)
+
+    try:
+        series_request = parse_series_request(
+            range_from=range_from,
+            range_to=range_to,
+            resolution=resolution,
+            phase=phase,
+            selections=selection,
+        )
+    except ApiContractError as exc:
+        raise _contract_error(exc)
+
+    if not await portal_user_can_access_site(user.portal_user_id, site_id):
+        raise _not_found("Site")
+
+    site = await fetch_analytics_site(user.portal_user_id, site_id)
+    if site is None:
+        raise _not_found("Site")
+
+    catalog_rows = await fetch_analytics_catalog(user.portal_user_id, site_id)
+    asset_ids = energy_asset_ids(series_request, catalog_rows)
+    energy_rows = (
+        await fetch_analytics_energy_series(
+            user.portal_user_id,
+            site_id,
+            asset_ids,
+            series_request.dt_from,
+            series_request.dt_to,
+            series_request.resolution,
+        )
+        if asset_ids
+        else []
+    )
+    return build_analytics_series_response(
+        site=site,
+        request=series_request,
+        catalog_rows=catalog_rows,
+        energy_rows=energy_rows,
+    )
 
 
 @router.get(

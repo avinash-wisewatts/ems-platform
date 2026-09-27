@@ -81,7 +81,7 @@ def _login_global_admin(portal_client, monkeypatch: pytest.MonkeyPatch) -> None:
     assert response.status_code == 303
 
 
-def _patch(monkeypatch, *, allowed=True, site=SITE, rows=None, calls=None):
+def _patch(monkeypatch, *, allowed=True, site=SITE, rows=None, calls=None, availability=None):
     async def access(portal_user_id, site_id):
         return allowed(site_id) if callable(allowed) else allowed
 
@@ -95,9 +95,15 @@ def _patch(monkeypatch, *, allowed=True, site=SITE, rows=None, calls=None):
             calls.append("catalog")
         return rows if rows is not None else []
 
+    async def fetch_availability(portal_user_id, site_id):
+        if calls is not None:
+            calls.append("availability")
+        return availability if availability is not None else []
+
     monkeypatch.setattr("src.routers.analytics_api.portal_user_can_access_site", access)
     monkeypatch.setattr("src.routers.analytics_api.fetch_analytics_site", fetch_site)
     monkeypatch.setattr("src.routers.analytics_api.fetch_analytics_catalog", fetch_catalog)
+    monkeypatch.setattr("src.routers.analytics_api.fetch_analytics_energy_availability", fetch_availability)
 
 
 def _catalog(portal_client, site_id: str = SITE_ID):
@@ -157,6 +163,8 @@ def test_catalog_returns_energy_pilot_shape(portal_client, monkeypatch) -> None:
         "chart_kind": "bar",
         "aggregation": "sum",
         "phases": {"system": True, "three_phase": False},
+        "available_from": None,
+        "available_to": None,
     }
 
 
@@ -278,3 +286,25 @@ def test_asset_fields_are_carried_for_grouping() -> None:
     assert (asset.asset_type_name, asset.space_name, asset.location_path) == (
         "AHU", "Plant Room", "Main / Ground / Plant Room",
     )
+
+
+def test_catalog_attaches_availability_bounds_per_data_point(portal_client, monkeypatch) -> None:
+    """B1b: the date picker is bounded per data point; a point with no data
+    yet reports null bounds (never a fabricated date)."""
+
+    _login_global_admin(portal_client, monkeypatch)
+    _patch(
+        monkeypatch,
+        rows=[_row(ASSET_A, "Chiller 1", "ENERGY_IMPORT"), _row(ASSET_A, "Chiller 1", "ENERGY_EXPORT")],
+        availability=[
+            {"asset_id": ASSET_A, "data_point": "ENERGY_IMPORT",
+             "available_from": "2026-08-28T18:30:00Z", "available_to": "2026-09-27T10:30:00Z"},
+            {"asset_id": ASSET_A, "data_point": "ENERGY_EXPORT", "available_from": None, "available_to": None},
+        ],
+    )
+
+    points = _catalog(portal_client).json()["assets"][0]["data_points"]
+    assert (points[0]["available_from"], points[0]["available_to"]) == (
+        "2026-08-28T18:30:00Z", "2026-09-27T10:30:00Z",
+    )
+    assert (points[1]["available_from"], points[1]["available_to"]) == (None, None)
