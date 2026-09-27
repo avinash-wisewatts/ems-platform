@@ -170,3 +170,44 @@ request-time aggregation cost.
 **Unchanged.** `analytics.get_canonical_energy_read`, every Grafana path and
 the Asset View Energy tile; moving the Asset View off the Grafana-keyed read is
 a separate, parity-gated decision.
+
+---
+
+## Amendment 2 (2026-09-27): Analytics UI Decision 1 — first load
+
+**Context.** The committed decisions already fix the resolution default
+(Auto, EMS-REQ-134 / ADR-019), reload on **Update** only and the date
+picker's Apply / Cancel (EMS-REQ-133), the empty state ("no series selected →
+prompt with suggested series for the current context", IA §4.16), explicit
+(asset, data point) selections with no server-chosen series (decision 14),
+and site-local presentation over a UTC API (ADR-019). ADR-019 defines
+per-resolution default windows but not the Analytics page's initial range,
+and no committed rule defined an initial series selection.
+
+**Decision (Product Owner, 2026-09-27).** When a user arrives on the
+Analytics page:
+
+1. **Initial range** is the site's local **Today**: the current calendar day
+   in the site's IANA timezone, DST-correct (ADR-019 time basis).
+2. **Resolution** is **Auto**.
+3. Auto resolves Today (a range under 5 days) to **15-minute** buckets.
+4. **No series is selected.** No asset and no data point is pre-selected.
+5. The page shows the IA §4.16 empty-state prompt with **suggested series
+   for the current context**.
+6. Suggestions may help populate the pickers, but they never select a series
+   or load data implicitly. A series is selected only by an explicit user
+   action.
+7. **The chart does not load on page arrival.** No series request is made
+   until the user presses **Update**.
+8. The date picker keeps **Apply / Cancel**.
+
+**Not decided by this amendment.** Which series the empty-state prompt
+suggests. No "main asset" or other default-asset rule is implied, and none
+is taken from the Analytics reference PDF's mockups, which do not override
+the committed IA and ADR decisions (feature document, open question 7).
+
+**Consequences.** The Today range depends on the site-local day
+computation, so the frontend defect ADR-019 records in
+`web/src/time/ranges.ts` (`resolveRange("TODAY")` uses UTC midnight) must be
+fixed before or with the Analytics page (feature plan step F1). This
+amendment makes no API, migration or backend change.
