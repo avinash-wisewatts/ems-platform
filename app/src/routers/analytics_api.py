@@ -21,6 +21,7 @@ Read-only endpoints consumed by the EMS web application:
     GET /api/v1/sites/{site_id}/telemetry-freshness      (MVP-4: Data Quality & Freshness)
     GET /api/v1/sites/{site_id}/alerts                    (MVP-7: Basic Alerts)
     GET /api/v1/alerts/{alert_id}                          (MVP-7: Basic Alerts)
+    GET /api/v1/sites/{site_id}/analytics/catalog          (Analytics v1, ADR-022)
 
 Every endpoint requires the existing authenticated portal session. Tenant /
 site / space access is enforced server-side inside the database boundary
@@ -141,6 +142,12 @@ never written by this router. In-product only (no email/SMS/WhatsApp/
 sharing, ADR-016); no analytical deep links; recurrence is derived at read
 time, never a stored counter. See ADR-016/ADR-017 for the full decision
 record.
+
+GET /api/v1/sites/{site_id}/analytics/catalog (Analytics v1, ADR-022,
+migration 272) lists the ACTIVE assets of the site with the curated semantic
+data points their currently effective metadata.asset_points bindings
+provide -- never device capability or PRIMARY_METER (ADR-018 decision 1).
+The read model's internal attribution_basis is not exposed.
 """
 
 from __future__ import annotations
@@ -153,6 +160,12 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 from src.auth.authorization import ROLE_PERMISSIONS, portal_role
 from src.auth.dependencies import get_authenticated_portal_user
 from src.auth.models import AuthenticatedPortalUser
+from src.analytics_trends_service import (
+    AnalyticsCatalogResponse,
+    build_analytics_catalog_response,
+    fetch_analytics_catalog,
+    fetch_analytics_site,
+)
 from src.analytics_api_service import (
     ASSET_ENERGY_MAX_WINDOW,
     ENERGY_PERIODIC_RESOLUTION_MAX_WINDOW,
@@ -1046,6 +1059,36 @@ async def get_site_telemetry_freshness(
 
     row = await fetch_site_telemetry_freshness(user.portal_user_id, site_id)
     return build_site_telemetry_freshness_response(site_id=site_id, row=row)
+
+
+@router.get(
+    "/sites/{site_id}/analytics/catalog",
+    response_model=AnalyticsCatalogResponse,
+    summary="Analytics v1 catalogue: ACTIVE assets and their confirmed semantic data points",
+    operation_id="getSiteAnalyticsCatalog",
+    responses=_RESOURCE_RESPONSES,
+)
+async def get_site_analytics_catalog(
+    request: Request, site_id: UUID
+) -> AnalyticsCatalogResponse:
+    """Reads analytics.get_portal_analytics_catalog (migration 272): the
+    currently effective metadata.asset_points bindings of the site's ACTIVE
+    assets, filtered to the curated Analytics data-point registry. Also
+    returns the request limits and the ADR-019 resolution windows the page
+    uses to bound its controls. An accessible site with no assignments
+    returns an empty asset list, not an error."""
+
+    user = _require_portal_user(request)
+
+    if not await portal_user_can_access_site(user.portal_user_id, site_id):
+        raise _not_found("Site")
+
+    site = await fetch_analytics_site(user.portal_user_id, site_id)
+    if site is None:
+        raise _not_found("Site")
+
+    rows = await fetch_analytics_catalog(user.portal_user_id, site_id)
+    return build_analytics_catalog_response(site=site, rows=rows)
 
 
 @router.get(
