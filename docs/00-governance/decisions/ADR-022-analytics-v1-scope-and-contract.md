@@ -1,6 +1,6 @@
 # ADR-022: Analytics v1 — scope, catalogue and series contract
 
-Status: Decided (Product Owner, 2026-09-27); implementation in progress (B0/B1 first — see [Analytics feature](../../07-features/analytics/README.md#implementation-plan)).
+Status: Decided (Product Owner, 2026-09-27; Amendments 1–6 to 2026-09-29); backend (migrations 275–285) deployed to staging; UI not implemented — see [Analytics feature](../../07-features/analytics/README.md#implementation-plan).
 Date: 2026-09-27
 Decision owners: Product Owner
 Related requirements: EMS-REQ-037 (Trends, refined here), EMS-REQ-129 – EMS-REQ-139 (new, Analytics v1), EMS-REQ-901 / EMS-REQ-903 (unchanged exclusions).
@@ -109,7 +109,10 @@ commissioning and an assignment made for another purpose.
 - Production has no `asset_points` rows (decision 4 scopes the 108 rows to
   staging). Until the Asset Data Point Assignment workflow is deployed and
   real assets are commissioned there, the production Analytics catalogue is
-  empty. See open question 6 in the feature document.
+  empty. See open question 6 in the feature document. *(Answered 2026-09-29 by
+  [Amendment 5](#amendment-5-2026-09-29-analytics-ui-decisions-d3d84), D84: a
+  production release is not blocked; an empty production catalogue is
+  acceptable.)*
 - Non-Energy data points, 3-phase selection and Power / Power Quality grouping
   remain blocked on the Asset Data Point Assignment workflow.
 - ADR-019 D2 must be implemented before any persisted site-local-day tier
@@ -117,6 +120,8 @@ commissioning and an assignment made for another purpose.
 - Analytics hourly Energy bars for half-hour-offset sites (all current sites
   are `Asia/Kolkata`) start on the half hour and differ from the site-local
   hourly bars on the existing Energy screens; daily totals are unaffected.
+  **Superseded 2026-09-29 by [Amendment 4](#amendment-4-2026-09-29-data-quality-read-contract-migration-282)**
+  (D24): Analytics 30m and 1h are on the site-local grid.
 
 ## Evidence / references
 
@@ -133,8 +138,9 @@ commissioning and an assignment made for another purpose.
 - B1: `postgres/migrations/276_analytics_api_catalog.sql`, `app/src/analytics_trends_service.py`, `GET /api/v1/sites/{site_id}/analytics/catalog`.
 - B1b: `postgres/migrations/277_analytics_api_energy_availability.sql` (availability bounds per Energy data point, in the catalogue).
 - B2: `postgres/migrations/278_analytics_api_energy_series.sql`, `GET /api/v1/sites/{site_id}/analytics/series` (explicit selections; Energy only; UTC-grid 1h; DST-correct site-local 1d).
-- Amendment 1: `postgres/migrations/279_asset_energy_tier_read.sql` (deployed to staging, PR #85), `postgres/migrations/280_analytics_energy_persisted_tier_switch.sql` (not deployed).
-- Amendment 4: `postgres/migrations/282_analytics_energy_series_data_quality.sql`, `app/src/analytics_trends_service.py`, `app/src/routers/analytics_api.py` (implemented, not deployed).
+- Amendment 1: `postgres/migrations/279_asset_energy_tier_read.sql` (deployed to staging, PR #85), `postgres/migrations/280_analytics_energy_persisted_tier_switch.sql` (deployed to staging 2026-09-27).
+- Amendment 4: `postgres/migrations/282_analytics_energy_series_data_quality.sql`, `app/src/analytics_trends_service.py`, `app/src/routers/analytics_api.py` (deployed to staging 2026-09-29, PR #90).
+- Amendments 2, 3, 5, 6: no code yet; the screen specification is the feature document's [User experience](../../07-features/analytics/README.md#user-experience) section.
 - Remaining steps: [the Analytics feature document](../../07-features/analytics/README.md#implementation-plan).
 
 ## Validation references
@@ -181,10 +187,75 @@ a separate, parity-gated decision.
 
 ---
 
+## Amendment 2 (2026-09-27): Analytics UI Decision 1 — first load
+
+**Context.** The committed decisions already fix the resolution default
+(Auto, EMS-REQ-134 / ADR-019), reload on **Update** only and the date
+picker's Apply / Cancel (EMS-REQ-133), explicit (asset, data point)
+selections with no server-chosen series (decision 14), and site-local
+presentation over a UTC API (ADR-019). ADR-019 defines per-resolution default
+windows but not the Analytics page's initial range, and no committed rule
+defined an initial series selection.
+
+**Decision (Product Owner, 2026-09-27).** When a user arrives on the
+Analytics page:
+
+1. **Initial range** is the site's local **Today**: the current calendar day
+   in the site's IANA timezone, DST-correct (ADR-019 time basis).
+2. **Resolution** is **Auto**.
+3. Auto resolves Today (a range under 5 days) to **15-minute** buckets.
+4. **No series is selected.** No asset and no data point is pre-selected.
+5. The page shows the Analytics empty state defined by
+   [Amendment 3](#amendment-3-2026-09-27-analytics-ui-decision-2--empty-state).
+6. A series is selected only by an explicit user action.
+7. **The chart does not load on page arrival.** No series request is made
+   until the user presses **Update**.
+8. The date picker keeps **Apply / Cancel**.
+
+No "main asset" or other default-asset rule is implied, and none is taken
+from the Analytics reference PDF's mockups, which do not override the
+committed IA and ADR decisions.
+
+**Consequences.** The Today range depends on the site-local day
+computation, so the frontend defect ADR-019 records in
+`web/src/time/ranges.ts` (`resolveRange("TODAY")` uses UTC midnight) must be
+fixed before or with the Analytics page (feature plan step F1). This
+amendment makes no API, migration or backend change.
+
+*Recorded first on PR #89 (not merged); carried here unchanged except for
+the information-architecture reference in Amendment 3.*
+
+---
+
+## Amendment 3 (2026-09-27): Analytics UI Decision 2 — empty state
+
+**Decision (Product Owner, 2026-09-27).** When the Analytics page has no
+selected series (including on first load, Amendment 2):
+
+1. Nothing is selected.
+2. Nothing is suggested.
+3. No chart data is loaded.
+4. The page displays exactly:
+
+   > **Select data to explore**
+   >
+   > Choose an asset and data point to get started.
+
+The user explicitly selects an asset and a data point, then presses
+**Update**. This replaces the "prompt with suggested series" empty state of
+the superseded product IA (`docs/99-archive/superseded-product/`); the
+canonical [information architecture](../../03-ux-and-design/information-architecture.md)
+and the feature document record the new empty state.
+
+**Consequences.** No suggestion logic or suggestion source is needed. This
+amendment makes no API, migration or backend change.
+
+---
+
 ## Amendment 4 (2026-09-29): Data Quality read contract (migration 282)
 
 Numbering note: Amendments 2 and 3 (Analytics UI decisions 1 and 2, first
-load and empty state) are recorded on the unmerged PR #89 branch.
+load and empty state) are recorded above.
 
 **Decision.** The Analytics series read returns the evidence the Data Quality
 section needs, computed server-side from existing data, with no storage or
@@ -235,4 +306,93 @@ retention.
 
 **Evidence.** `app/tests/test_analytics_energy_series_data_quality.py` and the
 updated Analytics tests; full backend suite 1835 passed locally (2026-09-29).
-Not deployed.
+Deployed to staging 2026-09-29 (PR #90, `ea6892f`); read-only validation and
+the read-latency follow-ups (migrations 283–285) are in the feature document.
+
+---
+
+## Amendment 5 (2026-09-29): Analytics UI decisions D3–D84
+
+**Decision (Product Owner, 2026-09-27 to 2026-09-29).** The Analytics page
+behaves as specified in the feature document's
+[User experience](../../07-features/analytics/README.md#user-experience) section, which records every decision
+with its number. In summary:
+
+- **Fresh state** (D3, D35, D56, D69): every visit and every site change
+  starts at Today, Auto, System, no selections and no request — an explicit
+  exception to Workshop Q89's resume rule.
+- **Selectors** (D4, D5, D37–D44, D59, D65–D67, D70–D72, D75): assets grouped
+  by Space (default) or Asset Type, with group checkboxes, Select All / Clear
+  All and a 10-asset limit filled in visual order; data points from the full
+  site catalogue in organizational groups without group checkboxes, at most 5;
+  25 rendered series after phase expansion, enforced on Update.
+- **Time** (D8, D10–D17, D24, D25, D60–D62, D76): calendar quick ranges
+  shared application-wide (Today, 7 Days, 30 Days, 3 Months, 1 Year; month-end
+  rule; Sunday week start), date-first selection with optional time-of-day,
+  the exact site-local time axis.
+- **Phase** (D53–D58, D63, D74, D83): System and 3 Phase; phase series P1–P3,
+  E1–E3, Ex1–Ex3 etc.; System fallback without a label; qualifiers never
+  shown.
+- **Query behaviour** (D6, D7, D9, D45–D51, D68, D78, D80): explicit Update,
+  "Changes not applied", one validation message, the previous chart kept while
+  loading and on failure, a small notice when an unavailable resolution
+  switches to Auto.
+- **Page elements** (D18–D23, D26–D34, D36, D52, D64, D77, D81, D82):
+  Statistics then Data quality below the chart, hidden until the first
+  Update; no site header; visual-only zoom; toolbar Export CSV and Collapse
+  only; wide CSV with local and UTC timestamps; filter panel order and
+  narrow-screen drawer; the navigation entry opens Trends directly.
+- **Terminology** (D73): "Energy" and "Energy Export" (implemented in
+  Amendment 4).
+- **Release** (D84): production release is not blocked by an empty
+  production catalogue.
+
+**Supersedes:** the feature document's "&lt;site name&gt; Analytics" header
+(EMS-REQ-129), asset-type default grouping and data-point group checkboxes
+(EMS-REQ-130/131), inline no-data series (EMS-REQ-138), the long-format CSV
+(EMS-REQ-137), and the open presentation questions they answered.
+
+**Recorded 2026-09-29:** the resolution auto-switch notice ("Resolution changed to Auto because the selected resolution is not available for this range."); the
+chart keeps a two-handle range slider alongside drag-to-zoom, both visual-only
+(EMS-REQ-135).
+
+**Still open:** the limit-reached wording, CSV quality context and the
+smaller items listed in the feature document's open questions.
+
+---
+
+## Amendment 6 (2026-09-29): Data quality presentation (DQ1–DQ23)
+
+**Decision (Product Owner, 2026-09-28/29).**
+
+1. **Semantics** (DQ1–DQ7): stale is data latency, not connectivity;
+   Incomplete is any expected, elapsed interval without an accepted reading,
+   with zero tolerance, excluding only the device's first-ever `INITIAL`
+   reading; the value where readings resume after a gap gets a timing
+   disclosure, not Incomplete. The read contract (DQ15–DQ22) is Amendment 4.
+2. **Presentation** (DQ8, DQ9, DQ23): conditions are shown as independent
+   groups in a fixed order — 1 Series not shown in chart · 2 Incomplete data ·
+   3 Meter resets and rollovers · 4 No recent data · 5 Values after missing
+   readings · 6 Reconstructed timing · 7 Shown as System values. "Series not
+   shown" is always expanded; other groups are collapsed unless only one is
+   present.
+3. **"Series not shown in chart"** · {n} (approved 2026-09-29): always
+   expanded; each affected series once, in selection order; one customer
+   reason line per status/reason as tabulated in the feature document; no
+   internal status or reason codes.
+4. **General rule:** a conditional section or group is shown only when it has
+   useful content. When no condition applies the Data quality section is
+   absent — this supersedes DQ8's single healthy statement.
+5. **Wording** (DQ10–DQ14, DQ23, D79, D80): as tabulated in the feature
+   document. Meter resets and rollovers share one group (DQ23). Reconstructed
+   timing uses D79's text and stays inactive while reconstruction is OFF. This
+   settles ADR-020's open "customer wording for reconstructed timing" for
+   Analytics only.
+
+**Backend mapping (read-only check, 2026-09-29):** group 2 from the bucket
+counts (`assigned_expected_intervals`, `valid_intervals`, `invalid_intervals`,
+`reconstructed_intervals`); group 3 from the `RESET_DETECTED` /
+`ROLLOVER_DETECTED` evidence flags (no API-level test covers these two yet);
+group 4 from series `stale` and `last_data_at`; group 5 from `GAPS_DETECTED`;
+group 6 from `RECONSTRUCTED_TIMING`; group 7 from `phase = three_phase` with a
+`TOTAL` qualifier; group 1 from series `status` / `status_reasons`.

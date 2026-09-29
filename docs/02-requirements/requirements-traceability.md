@@ -465,3 +465,16 @@ and ADR-018's "0 rows on staging" predate the parity-bridge rows written
 This does not alter §2–§12's historical snapshots, preserved per
 [source-of-truth.md](../00-governance/source-of-truth.md)'s no-silent-rewrite
 rule.
+
+## 14. Status update (2026-09-29) — Analytics v1 UI decisions recorded; backend on staging
+
+- The Analytics backend (migrations 275–285) is deployed to staging; the
+  Analytics page (frontend) is not implemented.
+- The Product Owner's UI decisions are recorded in ADR-022 Amendments 2, 3, 5
+  and 6 and specified in the feature document's User experience section.
+  EMS-REQ-129–133 and 135–138 were updated accordingly (section 13 above is
+  kept as dated).
+- EMS-REQ-132 is no longer `BLOCKED`: the Phase type selector (System / 3
+  Phase) is functional in v1 (D53). Per-phase values still need per-phase
+  `asset_points` assignments (ADR-018 Amendments 5-8); until then every series
+  is shown as System and disclosed in Data quality.

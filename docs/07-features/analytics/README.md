@@ -1,6 +1,6 @@
 # Feature: Analytics (v1)
 
-Status: DECIDED, implementation in progress (2026-09-27) · Owner: Product ·
+Status: DECIDED (UI decisions recorded 2026-09-29), implementation in progress · Owner: Product ·
 Decision record: [ADR-022](../../00-governance/decisions/ADR-022-analytics-v1-scope-and-contract.md)
 
 ## Purpose
@@ -41,16 +41,16 @@ EMS-REQ-129 – EMS-REQ-139 refine EMS-REQ-037 (Trends, MUST).
 
 | ID | Requirement | Origin |
 |---|---|---|
-| EMS-REQ-129 | Site-scoped Analytics page titled "&lt;site name&gt; Analytics"; a curated semantic Trends explorer. | [REF] title · [PO] curated explorer · [C] EMS-REQ-037, Q62 site context |
-| EMS-REQ-130 | Asset selection: only ACTIVE assets that have at least one catalogue data point; search by name; Select all / Clear all; group by asset type (default) or area; a group checkbox selects the group; groups collapsed by default; "N of M" count; at most 10 selected. | [REF] controls · [PO] ACTIVE only, 10 assets |
-| EMS-REQ-131 | Data point selection: semantic data points from the confirmed `asset_points` catalogue only, grouped by category; search; Select all / Clear all; count; at most 5 distinct data points. Energy Import and Energy Export are separate data points. | [REF] controls · [PO] 5 points, Energy directions · [C] ADR-018 decision 1 |
-| EMS-REQ-132 | Phase selection: System or 3 phase, applied where the data point has per-phase values. | [REF] |
-| EMS-REQ-133 | Shared date/time range: two-month calendar, quick-range buttons, optional time-of-day selector (00:00 bounds when off), Apply / Cancel / click-outside to close; the chart reloads only on **Update**; selectable dates bounded by data availability. All ranges are site-local (site IANA timezone, DST-correct). | [REF] controls · [C] ADR-019 time basis |
+| EMS-REQ-129 | Site-scoped Analytics page: a curated semantic Trends explorer. No site-name page header; the navigation entry opens Trends directly. | [PO] curated explorer, D32, D81 · [C] EMS-REQ-037, Q62 site context |
+| EMS-REQ-130 | Asset selection: only ACTIVE assets that have at least one catalogue data point; search by name; Select All / Clear All; group by Space (default; "Unassigned" at the bottom) or Asset Type ("Other"); group checkboxes; groups collapsed by default; selected count; at most 10, filled in the current visual order. | [REF] controls · [PO] ACTIVE only, 10 assets, D37, D38, D44, D65, D71, D72 |
+| EMS-REQ-131 | Data point selection: semantic data points from the confirmed `asset_points` catalogue only, independent of the assets; organizational groups without group checkboxes, collapsed by default; search; Select All / Clear All; count; at most 5 distinct data points. "Energy" and "Energy Export" are separate data points. | [REF] controls · [PO] 5 points, Energy directions, D39, D42, D59, D66, D67, D73, D75 · [C] ADR-018 decision 1 |
+| EMS-REQ-132 | Phase selection: System (default) or 3 Phase. 3 Phase expands a data point into phase series (P1–P3, E1–E3, Ex1–Ex3 …); without per-phase values the System value is shown under the normal name; qualifiers are never shown. | [REF] · [PO] D53–D58, D63, D74, D83 |
+| EMS-REQ-133 | Shared date/time range: two-month calendar; quick ranges Today, 7 Days, 30 Days, 3 Months, 1 Year (calendar-based, application-wide, Sunday week start); date-first with an optional time-of-day refinement that a quick range resets; Apply / Cancel / click-outside to close; the chart reloads only on **Update**; selectable dates bounded by data availability. All ranges are site-local (site IANA timezone, DST-correct). | [REF] controls · [C] ADR-019 time basis · [PO] D8, D10–D15, D60–D62, D76 |
 | EMS-REQ-134 | Resolution: exactly one of Auto (default), 1 minute, 15 minutes, 30 minutes, 1 hour, 1 day. Auto and the per-resolution maximum windows follow ADR-019; options whose maximum window the range exceeds are unavailable. 30 minutes and 1 hour are on the site-local grid (superseding "1 hour is on the UTC grid"); 1 day is the site-local calendar day. Auto never selects a resolution whose retention floor is after the range start. | [REF] options, Auto default · [C] ADR-019 · [PO] site-local 30m/1h (D24, supersedes 1h UTC grid), 1d required in v1 |
-| EMS-REQ-135 | Chart: Energy as grouped bars, every other data point as a line; one Y axis per unit, auto-scaled; drag-to-zoom, "show all" reset and a two-handle range slider; a legend entry per asset – data point (– phase); at most 25 rendered series. | [REF] chart behaviour · [PO] grouped bars, 25 series |
-| EMS-REQ-136 | Statistics table: one row per asset × data point × phase series with Total (Energy only), Average, Minimum and Maximum. No cross-asset aggregate totals. | [PO] |
-| EMS-REQ-137 | CSV download of the data the chart displays: one row per series per bucket, with site, time range, resolution, data point, unit, phase and quality context. Generated client-side. | [REF] download · [C] ADR-014 export pattern |
-| EMS-REQ-138 | Data quality and coverage: every bucket carries its interval counts, bucket and data state and evidence flags (business rule 11; the per-bucket coverage ratio was removed); a selection with no data, or no longer available, is shown as such inline with its reason and never dropped silently; the chart still renders the other series. | [C] IA "Analytics — Trends" no-data rule, terminology quality vocabulary, ADR-011 |
+| EMS-REQ-135 | Chart: Energy as grouped bars, every other data point as a line; one Y axis per unit, auto-scaled; visual-only drag-to-zoom, "show all" reset and a two-handle range slider; a legend entry per rendered series; a selected series with no data is omitted; at most 25 rendered series. | [REF] chart behaviour · [PO] grouped bars, 25 series, D6, D26 |
+| EMS-REQ-136 | Statistics table: one compact table, one row per rendered series, with Total (Energy only), Average, Minimum and Maximum (Min/Max with site-local times); full applied range. No cross-asset aggregate totals. | [PO] D19–D21, D26 |
+| EMS-REQ-137 | CSV download: full applied range; wide format, one row per timestamp with site-local and UTC timestamps and one column per rendered series; missing values and no-data series blank; filename with the site name. Generated client-side. | [REF] download · [C] ADR-014 export pattern · [PO] D28–D31, D77 |
+| EMS-REQ-138 | Data quality and coverage: every bucket carries its interval counts, bucket and data state and evidence flags (business rule 11; the per-bucket coverage ratio was removed); a Data quality section lists conditions in seven fixed groups; a selection with no data, or no longer available, is omitted from the chart and listed under "Series not shown" with its reason, never dropped; the section is absent when nothing applies. | [C] ADR-011 · [PO] D6, DQ1–DQ23 |
 | EMS-REQ-139 | Chart options: CSV download and collapse-to-header only. No Administration App functionality on this page. | [REF] · [C] ADR-006 |
 
 **Out of scope for v1** [PO]: Environmental / Space data
@@ -60,12 +60,256 @@ bars; Comparison (shown as a disabled placeholder [REF]); cost. The PDF's
 
 ## User experience
 
-- Header: "&lt;site name&gt; Analytics".
-- Right-hand filter panel, top to bottom: Update, Assets, Data points,
-  Resolution, Phase type, Comparison (disabled placeholder).
-- Main area: chart card (title "&lt;N assets | asset name&gt;, &lt;range&gt; – &lt;resolution&gt;,
-  &lt;phase&gt;", options: download CSV, collapse), then the statistics table.
-- Changing a filter never reloads by itself; **Update** does.
+The screen specification. Every rule below is a Product Owner decision
+recorded in [ADR-022](../../00-governance/decisions/ADR-022-analytics-v1-scope-and-contract.md) Amendments 2, 3, 5 and 6; the numbers in brackets
+(D1–D84, DQ1–DQ23) are the Product Owner's decision numbers.
+
+**General rule** (2026-09-29): a conditional section, group, indicator or
+message is shown only when it has useful content; otherwise it is absent.
+
+### Page, navigation and filter panel
+
+- The Analytics navigation entry opens Trends directly; there is no Trends
+  sub-item (D81).
+- No site-name page header; the site comes from the global site selector
+  (D32).
+- Main area, top to bottom: chart card, **Statistics**, **Data quality**
+  (D19). Chart card title "&lt;N assets | asset name&gt;, &lt;range&gt; –
+  &lt;resolution&gt;, &lt;phase&gt;" [REF].
+- Right-hand filter panel, visible by default, collapsible with **Hide
+  Filters** / **Show Filters**, independent of the chart's collapse. Its
+  collapsed state is not persisted: it is visible on every visit (D33, D34).
+  On narrow screens it is a drawer/overlay opened with **Show Filters** (D82).
+- Filter order: 1 Update · 2 Assets · 3 Data points · 4 Resolution · 5 Phase
+  type · 6 Comparison (D36). Comparison is visible, disabled and marked as
+  unavailable in v1 (D52).
+
+### First load, return visits and site change
+
+- **Every visit starts fresh** (D1, D3): range Today, resolution Auto, phase
+  System, no assets, no data points, no chart request. Nothing from a previous
+  visit is restored — an Analytics-specific exception to Workshop Q89.
+- **Empty state** (D2): nothing is selected or suggested and no chart data
+  loads. The page shows exactly:
+
+  > **Select data to explore**
+  >
+  > Choose an asset and data point to get started.
+
+- Statistics and Data quality are hidden until the first successful Update
+  (D64).
+- **Site change** (D35, D69): switch immediately and reset completely, as on
+  a fresh visit, with the filters visible and Statistics and Data quality
+  hidden. No Analytics state is carried across sites.
+
+### Assets
+
+- ACTIVE assets with at least one catalogue data point, listed directly in
+  the panel: search, individual checkboxes, selected count (D37).
+- Two views: **Group by Space** (default) and **Group by Asset Type**.
+  Switching views never changes the selection. Assets without a Space are in
+  an **Unassigned** group at the bottom; assets without an Asset Type are in
+  an **Other** group. Groups are collapsed by default (D38, D65, D71, D72).
+- Group-level checkboxes and **Select All / Clear All**. At most **10**
+  assets, enforced while selecting. When a group selection or Select All
+  would exceed 10, assets are selected top to bottom in the current visual
+  order up to the limit, the rest stay unselected, the group checkbox shows a
+  partial state and the UI indicates that the limit was reached (D5, D44,
+  D65).
+
+### Data points
+
+- The full site catalogue, independent of the selected assets; assets and
+  data points can be selected in either order, and any combination may be
+  chosen (combinations without data are handled after Update) (D4, D42, D43).
+- At most **5** semantic data points, enforced while selecting; phase
+  expansion does not count (D5, D66, D70).
+- Groups are organizational only: collapsed by default, **no** group-level
+  checkbox; **Select All / Clear All** and search (D39, D59, D66).
+- Groups and members (D67, as revised by D75). A group appears only where
+  the catalogue has points for it; theoretical, device-profile, Grafana,
+  Eniscope-only or unavailable points are never shown (D40, D66).
+  - **Frequently Used** (fixed, not personalised; selecting an item selects
+    the same underlying point): Current; Energy; Power; Power Factor; Voltage.
+  - **Power:** 1/2 Phase Angle; 1/3 Phase Angle; Amp Hour; Apparent Energy;
+    Apparent Power; Apparent Power Peak; Current Peak; Export Energy;
+    Frequency; Line to Line Voltage; Line to Line Voltage Peak; Maximum System
+    Current Total Harmonic Distortion; Neutral Current; Reactive Energy;
+    Reactive Export Energy; Reactive Power; Reactive Power Peak; Total
+    Harmonic Distortion. Energy and Energy Export belong here, not in a
+    separate Energy group.
+  - **Input/Output:** Analog Input; Digital Input Counter; PIR; Pulse; Time
+    Since Last Count Event; Time Since Last Pulse Event.
+  - **Environmental:** Light Level; Relative Humidity; Temperature
+    (Temperature is not in Frequently Used).
+  - **Conversion:** BTU; Carbon.
+  - **Misc/Other:** Battery Voltage; Flow Temperature; Signal Strength;
+    Volume; Volume Flow.
+- Customer labels: **Energy** (consumed/imported) and **Energy Export**
+  (D73). The v1 registry serves only these two (business rule 2).
+
+### Resolution and phase type
+
+- Options per EMS-REQ-134 (Auto default). When the range changes and a
+  manually chosen resolution becomes unavailable, it switches to Auto with a
+  small, non-blocking notice (D9, D68): "Resolution changed to Auto because the selected resolution is not available for this range."
+- Phase type: **System** (default) and **3 Phase**, functional in v1 (D53,
+  D54). "System" is the canonical system-level measurement; qualifiers such as
+  TOTAL or AVG are never shown (D83). It resets to System on every visit and
+  site change (D56).
+- 3 Phase expands each selected semantic point (still one catalogue item)
+  into phase series labelled P1–P3 (Active Power), I1–I3 (Current), V1–V3
+  (Voltage), PF1–PF3 (Power Factor), E1–E3 (Energy) and Ex1–Ex3 (Energy
+  Export), named e.g. `Main Incomer - P1` (D55, D63, D74). Each phase series
+  counts toward the 25-series limit (D70).
+- Without per-phase values the System value is shown under the normal
+  series name with no visible label; it is disclosed in Data quality
+  ("Shown as System values") (D57, D58, D63).
+
+### Date and time range
+
+- Quick ranges, shared application-wide: **Today, 7 Days, 30 Days, 3 Months,
+  1 Year**; no "Last 24 Hours" (D10, D61).
+- Calendar semantics in the site's IANA timezone (D8, D11, D12, D61, D62):
+  - Today = the whole current local day, local midnight to next local
+    midnight (not shortened to "now").
+  - 7 Days / 30 Days = today plus the preceding 6 / 29 local days.
+  - 3 Months / 1 Year = the same day-of-month 3 months / 1 year back; when
+    that month has no such day, its last valid day (31 May → 28 Feb; 29 Feb
+    2028 → 28 Feb 2027).
+  - The end is the exclusive next local midnight. The week starts on Sunday
+    (D13).
+- Date-first selection with an optional time-of-day refinement; by default
+  local day start to next local day start. Choosing a quick range resets any
+  time-of-day refinement (D60, revising D14). Two-month calendar with Apply /
+  Cancel (D1, EMS-REQ-133).
+- Display: inclusive dates, e.g. `01 Sep 2026 – 30 Sep 2026`; with a
+  time-of-day refinement the time is shown under the date selector (D15,
+  D76).
+- The chart shows exactly the requested site-local range: never the UTC
+  bucket grid or UTC-derived `:30` labels (D24, implemented by migration
+  282); label density adapts to the range (D25). Future periods are shown
+  empty (D16); the current in-progress period is shown (D17).
+
+### Update, validation, loading and errors
+
+- Changing a filter never reloads by itself; **Update** does. Update is
+  enabled whenever there are unapplied changes, and a small **"Changes not
+  applied"** indicator is shown until they are applied (D46, D47).
+- Validation happens before any request, as one message beside/above Update
+  (D48): "Select at least one asset and one data point to update the chart."
+  / "Select at least one data point to update the chart." / "Select at least
+  one asset to update the chart." More than 25 series after phase expansion:
+  "You can display up to 25 series at a time. Reduce your selections and try
+  again." (D45, D78). A failed validation keeps the selections as they are
+  (D49).
+- While loading, the current chart stays visible with a loading indication
+  and is replaced only when the result is ready (D7).
+- Request failure: the previous chart and the selections are kept, with
+  "Unable to load selected data. Please try again." near Update; no technical
+  details (D50, D80).
+- Partial failure: whatever loaded is kept and the rest is reported in Data
+  quality with "Some data could not be loaded for the selected range." (D51,
+  D80). The series endpoint is currently all-or-nothing, so this cannot occur
+  yet.
+
+### Chart
+
+- Energy as grouped bars, other data points as lines, one Y axis per unit
+  (EMS-REQ-135). A legend entry per rendered series.
+- A selected series with no data is omitted from the chart and the legend
+  and reported in Data quality (D6).
+- Two visual-only ways to explore: **drag-to-zoom** on the chart and a
+  **two-handle range slider** (useful for long ranges such as 3 Months or 1
+  Year). Both change only the visible window, never the applied range,
+  Statistics or CSV; **Show all / Reset** restores the full applied range
+  (D26; range slider decided 2026-09-29, EMS-REQ-135). Toolbar: **Export CSV** and **Collapse /
+  Expand** only — no print, share or previous/next (D27).
+- Tooltip: series name, value and unit, site-local date/time, and that
+  period's Data quality lines in group order; no technical details (D22,
+  DQ9). No quality marks on the chart; edge periods get no special treatment
+  (D23).
+
+### Statistics
+
+- One compact table, one row per rendered series: **Series · Total (Energy
+  only) · Average · Minimum · Maximum**, with Minimum and Maximum showing
+  their site-local time beneath the value (e.g. `892.4 kW` / `14:15 · 10 Sep
+  2026`). No cross-asset totals. Always the full applied range, never the
+  zoomed window (D19, D20, D21, D26).
+
+### Data quality
+
+- Hidden until the first successful Update (D64). It describes the applied
+  query: rebuilt on each successful Update (expansion reset), unchanged on a
+  failed Update or while changes are not applied, fully reset on site change
+  or a new visit (DQ9).
+- **Absent when no condition applies** — no healthy statement (general
+  rule, superseding DQ8's healthy statement). Each group appears only when
+  its condition is present.
+- **Fixed group order** (DQ9, DQ23): 1 Series not shown in chart · 2
+  Incomplete data · 3 Meter resets and rollovers · 4 No recent data · 5
+  Values after missing readings · 6 Reconstructed timing · 7 Shown as System
+  values.
+- **Expansion:** "Series not shown" is always expanded; the other groups are
+  collapsed with heading and series count visible; a group that is the only
+  one present is expanded. No truncation (at most 25 series). Within a group
+  series follow the Statistics order ("Series not shown": selection order).
+  A series not shown appears only in that group; a charted series can appear
+  in any of groups 2–7 (DQ9).
+- **Semantics** (DQ1–DQ7): Incomplete = at least one expected, elapsed
+  interval with no accepted reading (missing or rejected), zero tolerance;
+  reconstructed intervals count as accounted for; the device's first-ever
+  `INITIAL` reading, unassigned periods, periods before the first or after the
+  latest data, future periods and the stale tail are not expected. "No recent
+  data" is data latency (business rule 12), not device connectivity. The
+  value where readings resume after a gap carries a timing disclosure, not
+  Incomplete.
+- **Wording.** Vocabulary is "readings" and "periods", never internal terms.
+  Durations = intervals × the site's capture interval, two largest units
+  ("2 h 15 min"). Times are site-local, `h:mm · DD Mon YYYY`. A period range
+  reads "{time} – {time} · {k} periods" (single: "{time} · 1 period").
+
+| # | Group heading | Explanation | Per series | Tooltip |
+|---|---|---|---|---|
+| 1 | **Series not shown in chart** · {n} | — | Series name and one reason line (table below) | — |
+| 2 | **Incomplete data** · {n} series | "Data is incomplete for the selected range. Some expected meter readings were not received or could not be used." Energy series only, also: "Energy used while readings were missing can appear in the next value after readings resume. Energy from readings that could not be used is not included." | "Not received: {duration}" · "Could not be used: {duration}" (each only when above zero); period range | "Incomplete: some readings not received" / "…could not be used" / "…not received or could not be used" / "Incomplete: no readings received" / "Incomplete: readings could not be used" |
+| 3 | **Meter resets and rollovers** · {n} series | "The meter's cumulative Energy register changed unexpectedly or rolled over during the selected range. Energy values around these events may be affected." | "Meter reset · {date/time}" · "Meter rollover · {date/time}" | "Meter reset" · "Meter rollover" |
+| 4 | **No recent data** · {n} series | "The latest available data for these series is older than expected. The chart has no values after the time shown." | "Latest data: {h:mm · DD Mon YYYY}" · "{duration} before the chart was updated" | Elapsed periods after the latest data: "No data available after {h:mm · DD Mon YYYY}" |
+| 5 | **Values after missing readings** · {n} series | "After missing readings, the next value includes Energy used while readings were missing. It is shown in the period when readings resumed, because when that Energy was used is not known." | Period range (no duration or kWh) | "Includes Energy used while readings were missing" |
+| 6 | **Reconstructed timing** · {n} series | "Some Energy values are reconstructed when valid meter data arrives late or after a data gap. Totals come from the meter; only the timing is reconstructed." (D79) | "Timing reconstructed: {duration}"; period range; no kWh | "Timing reconstructed" |
+| 7 | **Shown as System values** · {n} series | "3 Phase is selected, but per-phase values are not available for these series. Their System values are shown." | Series name only | — |
+
+- **"Series not shown in chart" reasons** (approved 2026-09-29). Always
+  expanded; each affected series appears once, in selection order; internal
+  status and reason codes are never shown.
+
+  | API status / reason | Reason line |
+  |---|---|
+  | `NO_DATA` / `NOT_ASSIGNED_IN_RANGE` | "This data point was not assigned to the asset during the selected range." |
+  | `NO_DATA` / `RANGE_IN_FUTURE` | "The selected range is in the future." |
+  | `NO_DATA` / any other reason (`NO_DATA_EVER`, `RANGE_BEFORE_DATA`, `RANGE_AFTER_LATEST_DATA`, `NO_DATA_IN_RANGE`) | "No data available for the selected range." |
+  | `NOT_AVAILABLE` | "This selection is not available." |
+  | `RESOLUTION_UNAVAILABLE` / `BEFORE_RETENTION_FLOOR` | "Data is not available at this resolution for the full selected range. Data is available from {date}." ({date} = `resolution_available_from`, site-local) |
+  | `RESOLUTION_UNAVAILABLE` / `CAPTURE_INTERVAL_TOO_COARSE` | "Data is not available at the selected resolution for this site." |
+  | `DATA_UNAVAILABLE` / `CAPTURE_POLICY_GAP` | "Data is unavailable for part of the selected range." |
+  | `DATA_UNAVAILABLE` / `CAPTURE_POLICY_CHANGE` | "Data availability changed during the selected range." |
+  | `DATA_UNAVAILABLE` / `TIMEZONE_MISMATCH` | "Daily data is not available consistently for the selected range." |
+
+- Reset and rollover events share group 3 and never show reason codes or
+  register values (DQ23). Reconstructed timing stays inactive while
+  reconstruction is OFF (ADR-020 PR3); values after missing readings are
+  active today. Stale and Incomplete never count the same period.
+
+### CSV
+
+- Always the full applied range, independent of zoom (D28).
+- Wide format: one row per timestamp; columns `Timestamp local`, `Timestamp
+  UTC`, then one column per rendered series, e.g. `Chiller 1 · Active Power
+  (kW)`. Missing observations are blank, not zero; a selected series with no
+  data stays as a blank column (D29, D30, D77).
+- Filename with the normalized site name, e.g.
+  `Radisson_Blu_analytics_27-Sep-2026_to_30-Sep-2026.csv` (D31).
 
 ## Business rules
 
@@ -90,7 +334,9 @@ bars; Comparison (shown as a disabled placeholder [REF]); cost. The PDF's
    one series (System: `TOTAL`) or three (3 phase: `L1`, `L2`, `L3`). Under 3
    phase, a data point without per-phase values returns its System series
    [REF: the reference mockup shows single-phase assets as System series
-   under 3 phase]. Energy is System-only in v1.
+   under 3 phase]. Energy is System-only in v1. The customer never sees
+   qualifiers: System is shown as the normal series name and phases as P1–P3,
+   E1–E3, Ex1–Ex3 etc. (D63, D74, D83; see User experience).
 6. **Limits.** ≤ 5 distinct data points, ≤ 10 distinct assets, ≤ 25 series
    after phase expansion, enforced by the server [PO].
 7. **Time basis.** Transport is UTC; presentation is site-local
@@ -310,13 +556,13 @@ the Asset View only ([ADR-022 amendment](../../00-governance/decisions/ADR-022-a
 
 | Step | Scope | Status |
 |---|---|---|
-| B0 | ADR-019 D2: block site timezone changes once a site has telemetry | Implemented (migration 275), not deployed |
-| B1 | Catalogue read function + `GET …/analytics/catalog` | Implemented (migration 276, `app/src/analytics_trends_service.py`), not deployed |
-| B1b | Data availability bounds per catalogue data point | Implemented for Energy (migration 277), not deployed; non-Energy bounds come with B3 |
-| B2 | Energy series + `GET …/analytics/series` | Implemented (migration 278), not deployed; its Energy source replaced by Option B (below) |
+| B0 | ADR-019 D2: block site timezone changes once a site has telemetry | Implemented (migration 275); deployed to staging 2026-09-27 |
+| B1 | Catalogue read function + `GET …/analytics/catalog` | Implemented (migration 276, `app/src/analytics_trends_service.py`); deployed to staging 2026-09-27 |
+| B1b | Data availability bounds per catalogue data point | Implemented for Energy (migration 277); deployed to staging 2026-09-27; non-Energy bounds come with B3 |
+| B2 | Energy series + `GET …/analytics/series` | Implemented (migration 278); deployed to staging 2026-09-27; its Energy source replaced by Option B (below) |
 | Option B | Persisted-tier Energy read, portal/organization scoped, not Grafana-keyed | Migration 279 **deployed to staging** 2026-09-27 (PR #85); staging parity gate PT-1–PT-11 passed with zero mismatches |
-| 280 | Switch Analytics Energy to 279; drop 278's function; availability aligned; resolution retention floors | Implemented, not deployed |
-| 282 | Data Quality read contract ([ADR-022 Amendment 4](../../00-governance/decisions/ADR-022-analytics-v1-scope-and-contract.md#amendment-4-2026-09-29-data-quality-read-contract-migration-282)): `as_of`, site-local 30m/1h, interval counts, bucket/data state, evidence flags, status reasons, data bounds, stale, site-aware floors, floor-aware Auto, D73 labels, `coverage_ratio` removed | Implemented, not deployed; staging parity and latency gate pending |
+| 280 | Switch Analytics Energy to 279; drop 278's function; availability aligned; resolution retention floors | Deployed to staging 2026-09-27 (with 281: the 15-minute checkpoint is floored to the 15-minute grid) |
+| 282 | Data Quality read contract ([ADR-022 Amendment 4](../../00-governance/decisions/ADR-022-analytics-v1-scope-and-contract.md#amendment-4-2026-09-29-data-quality-read-contract-migration-282)): `as_of`, site-local 30m/1h, interval counts, bucket/data state, evidence flags, status reasons, data bounds, stale, site-aware floors, floor-aware Auto, D73 labels, `coverage_ratio` removed | Deployed to staging 2026-09-29 (PR #90, `ea6892f`); latency addressed by 283–285 |
 | 283 | Read latency, Option 1: the fresh 15-minute tail is read through `analytics.energy_semantic_rollup_15min_range` (the rollup view bounded to a whole-bucket UTC range before grouping, so chunk exclusion applies); results unchanged | Deployed to staging 2026-09-29 (`e6754de`, PR #91). Read-only validation: helper↔view parity on live data 0 differing rows; value and Data Quality snapshot 282→283 identical (140,132 rows, 36 columns); tail read pruned to the current chunk |
 | 284 | Read latency, Option 2: the per-bucket Data Quality subqueries of 282 (NOT_ASSIGNED, the device-first INITIAL count, assigned expected intervals) are replaced by set-based, request-level computation (computed once per request and joined to the bucket grid); 7-argument API, Energy values, Data Quality semantics, 283's tail pruning, views, tiers, jobs and storage unchanged | Implemented, not deployed. Local validation: 283→284 parity 0 differences across the randomised scenario matrix; full backend suite 1843 passed. Staging validation pending |
 | B3 | Generic series path (1m / 15m / 30m / 1h) | Planned — returns `NOT_AVAILABLE` until non-Energy assignments exist |
@@ -338,29 +584,29 @@ grouping, and customer-meaningful data point names.
 
 ## Open Product Owner questions
 
-1. **Summary vs Individual tabs.** With no cross-asset aggregates in v1, does
-   the page show one per-series statistics table, or keep a "Summary" tab with
-   different content?
-2. **Curated non-Energy registry.** Which parameters join the registry once
-   assignments exist (the reference lists Current, Power, Power Factor,
-   Voltage, and a Power list)? Cumulative registers other than Active Energy
+Answered and removed (2026-09-29): Summary vs Individual tabs (one
+per-series table, D21); the "System" qualifier (D83); Energy labels (D73);
+presentation details — quick ranges and week start (D10, D13, D61), time
+refinement (D60), controls (D27, D33), the "group by area" level (Space,
+D65), quality on the chart (D23 and Data quality); production release gate
+(not blocked; an empty production catalogue is acceptable, D84); the
+"Series not shown" wording and the resolution auto-switch notice (approved
+2026-09-29); the range slider (kept, visual-only, 2026-09-29).
+
+1. **Curated non-Energy registry.** Which parameters join the registry once
+   assignments exist? Cumulative registers other than Active Energy
    Import/Export (apparent and reactive energy) cannot be shown as averages;
-   they need a delta calculation first.
-3. **"System" phase for non-Energy points.** Which qualifier is "System" for
-   Current and Voltage (`TOTAL`, `AVG`, line-to-line)?
-4. **Data point labels.** Parameter names ("Active Energy Import") or shorter
-   customer wording ("Energy Import")? *Resolved for Energy (D73, implemented
-   with migration 282): "Energy" and "Energy Export". Labels for future
-   non-Energy points remain open.*
-5. **Presentation details.** Coverage/quality rendering on the chart; week
-   start day for This / Last Week; whether "Last 24 Hours" is a quick range;
-   minute granularity of the time selector; the reference mockups' stepping
-   arrows, "Hide Filters", print, share and expand controls; which location
-   level "group by area" uses (space, floor or building — the catalogue
-   returns all three and the location path).
-6. **Production release gate.** Is a production release of Analytics held
-   until real assets are commissioned there, given the catalogue would
-   otherwise be empty?
+   they need a delta calculation first. Labels for non-Energy points are part
+   of this question.
+2. **Limit-reached indication** (D65): wording not decided.
+3. **CSV quality context.** Whether the wide CSV carries any coverage or
+   quality information (EMS-REQ-137, ADR-014).
+4. **Smaller open items:** the position of the "Other" asset group (D72);
+   "Export Energy" in the Power list (D67) versus "Energy Export" (D73);
+   whether D73's platform-wide "Energy" replaces the customer term
+   "Consumption" outside Analytics; the time-of-day refinement's granularity
+   (D60); phase labels for other quantities (D63); a hint near Phase type
+   before Update when per-phase values are unavailable (DQ14).
 
 ## Validation
 
@@ -369,8 +615,8 @@ grouping, and customer-meaningful data point names.
 - Energy read (migration 279): `app/tests/test_asset_energy_tier_read.py` (30) — tiers, checkpoint composition, DST, source boundaries, reconstruction, retention, unmapped organization, tenant isolation, exact parity with the canonical read. Staging parity gate PT-1–PT-11 (2026-09-27, read-only): zero mismatches over 112,806 15-minute buckets, 56,510 30-minute buckets, 28,387 hours, 1,448 days, 211,817 minutes and 318 fingerprints (details in the platform-manual change history).
 - B1b/280: `app/tests/test_analytics_energy_availability_read.py` (278's function dropped; availability and floors contracts; floors equal the live retention policies; availability from the daily start to the raw tail, beyond raw retention, binding start, parity-bridge rows unchanged).
 - B2/280: `app/tests/test_analytics_api_v1_analytics_series_routes.py` (validation, limits, statuses, Energy mapping, summary, retention floors) and `app/tests/test_analytics_api_v1_analytics_e2e.py` (HTTP to database with no data-layer mocking and **no Grafana mapping**: catalogue, every resolution agreeing on totals, UTC hour grid, IST days, 1m beyond raw retention `RESOLUTION_UNAVAILABLE`, tenant isolation).
-- Full backend suite passed locally (1798 tests, 2026-09-27). Migration 280 not deployed.
-- 282: `app/tests/test_analytics_energy_series_data_quality.py` (18: IST local 1h equals its 15m rows with the UTC hourly tier unused, Kathmandu +05:45 30m/1h, DST days of 23/25 local hours, in-progress/future buckets, assignment boundaries, device-first vs later `INITIAL`, missing/rejected/gap and all-rejected buckets, stale at 7 and 21 minutes, policy at `last_data_at`, unscheduled stage, 900 s capture → null, site-aware floors, reconstruction off, tenancy, function security); `test_asset_energy_tier_read.py` values unchanged (tenant default UTC for hourly-tier composition; reasons now named); series route tests (reasons, NO_DATA reasons, one `as_of`, floor-aware Auto, evidence flags, bucket state, no `coverage_ratio`, 3-phase fallback); e2e (IST local hours, 1d, floors). Full backend suite 1835 passed locally (2026-09-29). Not deployed.
+- Full backend suite passed locally (1798 tests, 2026-09-27). Migration 280 deployed to staging 2026-09-27.
+- 282: `app/tests/test_analytics_energy_series_data_quality.py` (18: IST local 1h equals its 15m rows with the UTC hourly tier unused, Kathmandu +05:45 30m/1h, DST days of 23/25 local hours, in-progress/future buckets, assignment boundaries, device-first vs later `INITIAL`, missing/rejected/gap and all-rejected buckets, stale at 7 and 21 minutes, policy at `last_data_at`, unscheduled stage, 900 s capture → null, site-aware floors, reconstruction off, tenancy, function security); `test_asset_energy_tier_read.py` values unchanged (tenant default UTC for hourly-tier composition; reasons now named); series route tests (reasons, NO_DATA reasons, one `as_of`, floor-aware Auto, evidence flags, bucket state, no `coverage_ratio`, 3-phase fallback); e2e (IST local hours, 1d, floors). Full backend suite 1835 passed locally (2026-09-29). Deployed to staging 2026-09-29.
 
 - 283: `app/tests/test_energy_rollup_range.py` (5: helper security and inlinability, helper = view definition plus the bounded `WHERE`, series function = 282 with only the tail line changed, `bucket_start` pruning in the plan, helper rows equal the view's rows on all 43 columns for on-grid, off-grid, empty, infinite and no-data ranges, 1-minute and 5-minute native rows, and another organization's device). Existing Analytics suites pass unchanged in values. Full backend suite 1840 passed locally (2026-09-29). Staging (2026-09-29, after deployment of `e6754de`, read-only): helper↔view parity on live data for every bound device in both organizations — last 6 hours including the fresh tail, last 3 days, an off-grid range and an empty range — 0 differing rows in either direction; 282→283 snapshot (5 resolutions, 53 assets, fixed `as_of`) identical on all 140,132 rows and 36 columns; the tail read scans only the current `energy_consumption_1min` chunk via `(device_id, bucket_start)` (0.24 ms, against up to 1,565 ms per asset before).
 
@@ -378,7 +624,8 @@ grouping, and customer-meaningful data point names.
 
 ## Release status
 
-Not released. Nothing deployed.
+Not released to production. The backend (migrations 275–285) is deployed to
+staging; the Analytics page (frontend) is not implemented yet.
 
 ## Known limitations
 

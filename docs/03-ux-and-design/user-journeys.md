@@ -43,6 +43,11 @@ last Portfolio, last Site, last time range, last analytical view. Current
 context always stays clearly visible. This is a usability feature, not
 customer configuration or intelligence.
 
+**Exception — Analytics** (ADR-022 Amendment 5, D3/D69): every Analytics
+visit and every site change starts fresh (Today, Auto, System, nothing
+selected, no request); no previous range, resolution or selection is
+restored.
+
 ## Search / quick navigation (Workshop Q90)
 
 MVP includes search across the customer hierarchy (e.g. "Chiller 2 → Site →
