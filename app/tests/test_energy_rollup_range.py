@@ -23,7 +23,6 @@ SERIES_SIG = "analytics.get_portal_asset_energy_series(bigint, uuid, uuid[], tim
 OLD_LINE = "            FROM analytics.v_energy_semantic_rollup_15min AS r"
 NEW_LINE = ("            FROM analytics.energy_semantic_rollup_15min_range(v_org, v_all_devs, "
             "GREATEST(v_c15, v_fine_from), v_grid_to) AS r")
-M282_MD5 = "4d3ead0684b9b75938126020455d15d3"
 
 
 @pytest.fixture
@@ -74,7 +73,11 @@ def test_helper_is_the_view_definition_plus_only_the_bounded_where():
         assert required in where
 
 
-def test_series_function_is_migration_282_with_only_the_tail_line_changed():
+def test_series_function_reads_the_fresh_tail_through_the_helper():
+    """Migration 283 changed only this line of migration 282's function (its
+    byte-for-byte pin was retired by migration 284, whose output is compared
+    with migration 283's function in test_energy_series_set_based_quality.py)."""
+
     with psycopg.connect(CONNINFO) as connection:
         definition, secdef, owner, ems_app, grafana = connection.execute(
             """
@@ -85,11 +88,7 @@ def test_series_function_is_migration_282_with_only_the_tail_line_changed():
             """,
             (SERIES_SIG,),
         ).fetchone()
-        reverted_md5 = connection.execute(
-            "SELECT md5(replace(%s, %s, %s))", (definition, NEW_LINE, OLD_LINE)
-        ).fetchone()[0]
     assert NEW_LINE in definition and OLD_LINE not in definition
-    assert reverted_md5 == M282_MD5
     assert (secdef, owner, ems_app, grafana) == (True, "ems_admin", True, False)
 
 
