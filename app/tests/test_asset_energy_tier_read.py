@@ -1,5 +1,14 @@
-"""Contract and functional tests for migration 279: analytics.get_portal_asset_energy_series,
-the persisted-tier, portal/organization-scoped asset Energy read (ADR-022 Option B).
+"""Contract and functional tests for analytics.get_portal_asset_energy_series:
+the persisted-tier, portal/organization-scoped asset Energy read (ADR-022
+Option B; migration 279, corrected by 281, Data Quality contract by 282).
+
+These tests cover the Energy VALUES and tier composition, which migration 282
+leaves unchanged; READ_SQL projects 282's output back onto the 279 shape
+(valid + invalid intervals, reasons joined). Tenants default to a UTC site:
+since 282 (D24) the UTC hourly tier serves 1h only where local hours are UTC
+hours, so tier-composition assertions need such a site. The site-local grid,
+interval counts, data state, data bounds and stale are covered by
+test_analytics_energy_series_data_quality.py.
 
 Runs against the disposable ems_test database (see conftest.py). Every test
 builds its own tenant, seeds analytics.energy_consumption_1min, runs the real
@@ -24,13 +33,15 @@ CONNINFO = (
     f"password={os.environ['EMS_APP_DB_PASSWORD']}"
 )
 
-SIG = "analytics.get_portal_asset_energy_series(bigint, uuid, uuid[], timestamptz, timestamptz, text)"
+SIG = "analytics.get_portal_asset_energy_series(bigint, uuid, uuid[], timestamptz, timestamptz, text, timestamptz)"
 HELPER = "analytics.energy_direction_status(bigint, bigint, bigint, bigint, bigint, bigint)"
 READ_SQL = """
     SELECT asset_id::text, bucket_start, bucket_end, import_kwh, export_kwh,
-           import_status, export_status, import_intervals, export_intervals,
-           expected_intervals, is_partial, unavailable_reason
-    FROM analytics.get_portal_asset_energy_series(%s, %s, %s::uuid[], %s, %s, %s)
+           import_status, export_status,
+           import_valid_intervals + import_invalid_intervals,
+           export_valid_intervals + export_invalid_intervals,
+           expected_intervals, is_partial, array_to_string(unavailable_reasons, ',')
+    FROM analytics.get_portal_asset_energy_series(%s, %s, %s::uuid[], %s, %s, %s, %s)
 """
 UTC = timezone.utc
 T0 = datetime(2025, 6, 2, 0, 0, tzinfo=UTC)
@@ -45,7 +56,7 @@ def _d(value) -> Decimal:
 
 
 class Tenant:
-    def __init__(self, cur, *, tz: str = "Asia/Kolkata", capture: int = 60, grafana_map: bool = False):
+    def __init__(self, cur, *, tz: str = "UTC", capture: int = 60, grafana_map: bool = False):
         self.cur = cur
         self.tag = uuid.uuid4().hex[:8].upper()
         cur.execute("SELECT id FROM config.device_profiles WHERE profile_code = 'ENERGY_METER_ENISCOPE_V1'")
@@ -148,8 +159,8 @@ class Tenant:
         for tier in ("5min", "15min", "hourly", "daily"):
             self.cur.execute(f"SELECT analytics.refresh_energy_consumption_{tier}(%s, %s)", (lo, hi))
 
-    def read(self, assets, start, end, resolution, *, user=None):
-        self.cur.execute(READ_SQL, (user or self.user, self.site, list(assets), start, end, resolution))
+    def read(self, assets, start, end, resolution, *, user=None, as_of=None):
+        self.cur.execute(READ_SQL, (user or self.user, self.site, list(assets), start, end, resolution, as_of))
         return self.cur.fetchall()
 
 
@@ -473,7 +484,8 @@ def test_capture_reasons(tx):
         fifteen = coarse.read([coarse_asset], T0, T0 + timedelta(hours=1), "15m")
         crossing = changing.read([changing_asset], T0, T0 + timedelta(hours=2), "1h")
 
-    assert [(r[1], r[11]) for r in one_minute] == [(None, "RESOLUTION_UNAVAILABLE")]
+    # Migration 282 names the cause (281 reported both as RESOLUTION_UNAVAILABLE).
+    assert [(r[1], r[11]) for r in one_minute] == [(None, "CAPTURE_INTERVAL_TOO_COARSE")]
     assert len(fifteen) == 4 and {r[11] for r in fifteen} == {None}
     assert [(r[1], r[11]) for r in crossing] == [(None, "CAPTURE_POLICY_CHANGE")]
 
@@ -490,7 +502,7 @@ def test_1m_is_raw_and_only_within_raw_retention(tx):
     assert len(within) == 10
     assert {_d(r[3]) for r in within} == {_d("0.1")}
     assert {(r[7], r[9]) for r in within} == {(1, 1)}
-    assert [(r[1], r[11]) for r in outside] == [(None, "RESOLUTION_UNAVAILABLE")]
+    assert [(r[1], r[11]) for r in outside] == [(None, "BEFORE_RETENTION_FLOOR")]
 
 
 def test_persisted_history_survives_raw_retention(tx):

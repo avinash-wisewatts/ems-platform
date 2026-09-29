@@ -1,9 +1,12 @@
-"""Analytics v1 (ADR-022, step B2) -- GET /api/v1/sites/{site_id}/analytics/series
-route contract, request validation and response building.
+"""Analytics v1 (ADR-022) -- GET /api/v1/sites/{site_id}/analytics/series
+route contract, request validation and response building, including the
+Data Quality contract (migration 282; Data Quality decisions 1-22).
 
 Route tests monkeypatch the data-access functions the route uses
-(fetch_analytics_site, fetch_analytics_catalog, fetch_analytics_energy_series).
-The database reads themselves are covered by test_analytics_energy_series_read.py.
+(fetch_analytics_site, fetch_analytics_catalog, fetch_analytics_as_of,
+fetch_analytics_energy_resolution_floors, fetch_analytics_energy_series).
+The database reads themselves are covered by test_asset_energy_tier_read.py
+and test_analytics_energy_series_data_quality.py.
 """
 
 from __future__ import annotations
@@ -17,6 +20,9 @@ import src.analytics_trends_service as trends
 from src.analytics_api_service import ApiContractError
 from src.analytics_trends_service import (
     DataPointDefinition,
+    SeriesRequest,
+    Selection,
+    apply_floor_aware_auto,
     parse_series_request,
     resolve_auto_resolution,
 )
@@ -32,6 +38,8 @@ ASSET_X = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"   # not in the site's catalogue
 SITE = {"site_id": SITE_ID, "site_name": "Coimbatore", "timezone": "Asia/Kolkata"}
 T0 = datetime(2026, 9, 20, 0, 0, tzinfo=timezone.utc)
 FROM, TO = "2026-09-20T00:00:00Z", "2026-09-20T02:00:00Z"
+AS_OF = datetime(2026, 9, 28, 12, 0, tzinfo=timezone.utc)
+NO_FLOORS = {r: None for r in ("1m", "15m", "30m", "1h", "1d")}
 
 
 def _catalog_row(asset_id: str, name: str, data_point: str, qualifier: str = "TOTAL") -> dict:
@@ -51,27 +59,46 @@ CATALOG = [
 ]
 
 
-def _energy_row(asset_id, hour, imp, exp, *, imp_n=60, exp_n=60, expected=60,
-                imp_status="GOOD", exp_status="GOOD", partial=False) -> dict:
+def _direction(prefix: str, *, kwh, valid, invalid=0, reconstructed=0, gap=0, reset=0, rollover=0,
+               status="GOOD", data_state=None, assigned_expected=None) -> dict:
+    return {
+        f"{prefix}_kwh": None if kwh is None else Decimal(str(kwh)),
+        f"{prefix}_status": status if kwh is not None else None,
+        f"{prefix}_valid_intervals": valid, f"{prefix}_invalid_intervals": invalid,
+        f"{prefix}_reconstructed_intervals": reconstructed, f"{prefix}_gap_intervals": gap,
+        f"{prefix}_reset_intervals": reset, f"{prefix}_rollover_intervals": rollover,
+        f"{prefix}_assigned_expected_intervals": valid + invalid + reconstructed if assigned_expected is None else assigned_expected,
+        f"{prefix}_data_state": data_state or ("MEASURED" if kwh is not None else "GAP"),
+    }
+
+
+def _series_fields(*, first=T0 - timedelta(days=30), last=AS_OF - timedelta(minutes=2),
+                   in_range=True, stale=False) -> dict:
+    out = {}
+    for prefix in ("import", "export"):
+        out.update({
+            f"{prefix}_first_data_at": first, f"{prefix}_last_data_at": last,
+            f"{prefix}_assigned_in_range": in_range, f"{prefix}_stale": stale,
+        })
+    return out
+
+
+def _energy_row(asset_id, hour, imp, exp, *, imp_n=60, exp_n=60, expected=60, imp_kw=None, exp_kw=None,
+                series=None) -> dict:
     start = T0 + timedelta(hours=hour)
-    return {
+    row = {
         "asset_id": asset_id, "bucket_start": start, "bucket_end": start + timedelta(hours=1),
-        "import_kwh": None if imp is None else Decimal(str(imp)),
-        "export_kwh": None if exp is None else Decimal(str(exp)),
-        "import_status": imp_status if imp is not None else None,
-        "export_status": exp_status if exp is not None else None,
-        "import_intervals": imp_n, "export_intervals": exp_n, "expected_intervals": expected,
-        "is_partial": partial, "unavailable_reason": None,
+        "expected_intervals": expected, "is_partial": start + timedelta(hours=1) > AS_OF,
+        "unavailable_reasons": None,
     }
+    row.update(_direction("import", kwh=imp, valid=imp_n, **(imp_kw or {})))
+    row.update(_direction("export", kwh=exp, valid=exp_n, **(exp_kw or {})))
+    row.update(series or _series_fields())
+    return row
 
 
-def _marker(asset_id, reason) -> dict:
-    return {
-        "asset_id": asset_id, "bucket_start": None, "bucket_end": None, "import_kwh": None,
-        "export_kwh": None, "import_status": None, "export_status": None, "import_intervals": None,
-        "export_intervals": None, "expected_intervals": None, "is_partial": None,
-        "unavailable_reason": reason,
-    }
+def _marker(asset_id, *reasons) -> dict:
+    return {"asset_id": asset_id, "bucket_start": None, "bucket_end": None, "unavailable_reasons": list(reasons)}
 
 
 def _login(portal_client, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -92,7 +119,7 @@ def _login(portal_client, monkeypatch: pytest.MonkeyPatch) -> None:
     assert response.status_code == 303
 
 
-def _patch(monkeypatch, *, allowed=True, catalog=None, energy=None, calls=None, floors=None):
+def _patch(monkeypatch, *, allowed=True, catalog=None, energy=None, calls=None, floors=None, as_of=AS_OF):
     calls = calls if calls is not None else []
 
     async def access(portal_user_id, site_id):
@@ -102,21 +129,26 @@ def _patch(monkeypatch, *, allowed=True, catalog=None, energy=None, calls=None, 
     async def fetch_site(portal_user_id, site_id):
         return SITE
 
+    async def fetch_as_of():
+        calls.append("as_of")
+        return as_of
+
     async def fetch_catalog(portal_user_id, site_id):
         calls.append("catalog")
         return CATALOG if catalog is None else catalog
 
-    async def fetch_energy(portal_user_id, site_id, asset_ids, dt_from, dt_to, resolution):
-        calls.append(("energy", tuple(str(a) for a in asset_ids), resolution))
+    async def fetch_energy(portal_user_id, site_id, asset_ids, dt_from, dt_to, resolution, read_as_of):
+        calls.append(("energy", tuple(str(a) for a in asset_ids), resolution, read_as_of))
         return energy or []
+
+    async def fetch_floors(site_id, read_as_of=None):
+        calls.append(("floors", read_as_of))
+        return floors if floors is not None else NO_FLOORS
 
     monkeypatch.setattr("src.routers.analytics_api.portal_user_can_access_site", access)
     monkeypatch.setattr("src.routers.analytics_api.fetch_analytics_site", fetch_site)
+    monkeypatch.setattr("src.routers.analytics_api.fetch_analytics_as_of", fetch_as_of)
     monkeypatch.setattr("src.routers.analytics_api.fetch_analytics_catalog", fetch_catalog)
-    async def fetch_floors():
-        calls.append("floors")
-        return floors if floors is not None else {r: None for r in ("1m", "15m", "30m", "1h", "1d")}
-
     monkeypatch.setattr("src.routers.analytics_api.fetch_analytics_energy_series", fetch_energy)
     monkeypatch.setattr("src.routers.analytics_api.fetch_analytics_energy_resolution_floors", fetch_floors)
     return calls
@@ -127,6 +159,10 @@ def _series(portal_client, *selections, **params):
     query_list = [(k, v) for k, v in query.items() if v is not None]
     query_list += [("selection", s) for s in selections]
     return portal_client.get(f"/api/v1/sites/{SITE_ID}/analytics/series", params=query_list)
+
+
+def _energy_calls(calls):
+    return [c for c in calls if isinstance(c, tuple) and c[0] == "energy"]
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +252,8 @@ def test_unavailable_selections_are_not_available_and_not_read(portal_client, mo
         (ASSET_B, "ENERGY_EXPORT", "NOT_AVAILABLE"),   # AHU 2 has no Export assignment
     ]
     assert series[0]["points"] == [] and series[0]["asset_name"] is None
-    assert ("energy", (ASSET_A,), "1h") in calls
+    assert series[0]["status_reasons"] == []
+    assert _energy_calls(calls) == [("energy", (ASSET_A,), "1h", AS_OF)]
 
 
 def test_no_energy_read_when_nothing_is_available(portal_client, monkeypatch) -> None:
@@ -224,79 +261,150 @@ def test_no_energy_read_when_nothing_is_available(portal_client, monkeypatch) ->
     calls = _patch(monkeypatch)
     response = _series(portal_client, f"{ASSET_X}:ENERGY_IMPORT")
     assert response.status_code == 200
-    assert not any(isinstance(c, tuple) for c in calls)
+    assert _energy_calls(calls) == []
+    assert response.json()["as_of"] == "2026-09-28T12:00:00Z"
 
 
-def test_energy_series_values_coverage_evidence_and_summary(portal_client, monkeypatch) -> None:
+def test_one_as_of_is_read_once_and_passed_to_every_read(portal_client, monkeypatch) -> None:
+    _login(portal_client, monkeypatch)
+    calls = _patch(monkeypatch, energy=[_energy_row(ASSET_A, 0, 1.0, 0.1)])
+    body = _series(portal_client, f"{ASSET_A}:ENERGY_IMPORT").json()
+    assert calls.count("as_of") == 1
+    assert ("floors", AS_OF) in calls
+    assert _energy_calls(calls) == [("energy", (ASSET_A,), "1h", AS_OF)]
+    assert body["as_of"] == "2026-09-28T12:00:00Z"
+
+
+def test_energy_series_values_evidence_counts_and_summary(portal_client, monkeypatch) -> None:
     _login(portal_client, monkeypatch)
     _patch(monkeypatch, energy=[
         _energy_row(ASSET_A, 0, 1.5, 0.2, imp_n=60, exp_n=30),
-        _energy_row(ASSET_A, 1, 4.5, None, imp_n=45, exp_n=0, imp_status="GAPS_DETECTED", partial=True),
+        _energy_row(ASSET_A, 1, 4.5, None, imp_n=44, exp_n=0,
+                    imp_kw={"invalid": 1, "gap": 2, "status": "INVALID_INTERVALS", "assigned_expected": 60}),
     ])
     response = _series(portal_client, f"{ASSET_A}:ENERGY_IMPORT", f"{ASSET_A}:ENERGY_EXPORT")
     body = response.json()
     imp, exp = body["series"]
 
     assert (imp["label"], imp["unit"], imp["chart_kind"], imp["aggregation"], imp["qualifier"]) == (
-        "Active Energy Import", "kWh", "bar", "sum", "TOTAL",
+        "Energy", "kWh", "bar", "sum", "TOTAL",
     )
+    assert exp["label"] == "Energy Export"
     assert [p["value"] for p in imp["points"]] == [1.5, 4.5]
-    assert [p["coverage_ratio"] for p in imp["points"]] == [1.0, 0.75]
-    assert [p["evidence_status"] for p in imp["points"]] == ["GOOD", "GAPS_DETECTED"]
-    assert [p["is_partial"] for p in imp["points"]] == [False, True]
+    assert [p["valid_intervals"] for p in imp["points"]] == [60, 44]
+    assert [p["invalid_intervals"] for p in imp["points"]] == [0, 1]
+    assert [p["assigned_expected_intervals"] for p in imp["points"]] == [60, 60]
+    assert [p["expected_intervals"] for p in imp["points"]] == [60, 60]
+    # Every condition present, not only the worst; evidence_status kept for compatibility.
+    assert [p["evidence_flags"] for p in imp["points"]] == [[], ["INVALID_INTERVALS", "GAPS_DETECTED"]]
+    assert [p["evidence_status"] for p in imp["points"]] == ["GOOD", "INVALID_INTERVALS"]
+    assert [p["bucket_state"] for p in imp["points"]] == ["COMPLETE", "COMPLETE"]
+    assert [p["is_partial"] for p in imp["points"]] == [False, False]
     assert {(p["min"], p["max"], p["quality"]) for p in imp["points"]} == {(None, None, None)}
     assert imp["summary"] == {
         "total": 6.0, "average": 3.0, "min": 1.5, "min_at": "2026-09-20T00:00:00Z",
-        "max": 4.5, "max_at": "2026-09-20T01:00:00Z", "coverage_ratio": 0.875,
+        "max": 4.5, "max_at": "2026-09-20T01:00:00Z",
     }
+    assert imp["stale"] is False and imp["status_reasons"] == []
 
     assert [p["value"] for p in exp["points"]] == [0.2, None]
+    assert [p["data_state"] for p in exp["points"]] == ["MEASURED", "GAP"]
     assert [p["evidence_status"] for p in exp["points"]] == ["GOOD", None]
     assert exp["summary"]["total"] == pytest.approx(0.2)
-    assert exp["summary"]["coverage_ratio"] == 0.25
 
 
-def test_all_empty_buckets_is_no_data(portal_client, monkeypatch) -> None:
+def test_coverage_ratio_is_not_in_the_response(portal_client, monkeypatch) -> None:
     _login(portal_client, monkeypatch)
-    _patch(monkeypatch, energy=[
-        _energy_row(ASSET_A, 0, None, None, imp_n=0, exp_n=0),
-        _energy_row(ASSET_A, 1, None, None, imp_n=0, exp_n=0),
-    ])
+    _patch(monkeypatch, energy=[_energy_row(ASSET_A, 0, 1.0, 0.1)])
+    response = _series(portal_client, f"{ASSET_A}:ENERGY_IMPORT")
+    assert "coverage_ratio" not in response.text
+
+
+def test_bucket_state_follows_as_of(portal_client, monkeypatch) -> None:
+    _login(portal_client, monkeypatch)
+    as_of = T0 + timedelta(minutes=90)
+    rows = [_energy_row(ASSET_A, h, v, None) for h, v in ((0, 1.0), (1, 0.5), (2, None))]
+    rows[2]["import_data_state"] = "FUTURE"
+    _patch(monkeypatch, energy=rows, as_of=as_of)
+    points = _series(portal_client, f"{ASSET_A}:ENERGY_IMPORT", to="2026-09-20T03:00:00Z").json()["series"][0]["points"]
+    assert [p["bucket_state"] for p in points] == ["COMPLETE", "IN_PROGRESS", "FUTURE"]
+    assert [p["is_partial"] for p in points] == [False, True, True]
+    assert points[2]["data_state"] == "FUTURE"
+
+
+def test_stale_and_data_bounds_are_passed_through(portal_client, monkeypatch) -> None:
+    _login(portal_client, monkeypatch)
+    last = T0 + timedelta(minutes=70)
+    fields = _series_fields(first=T0 - timedelta(days=2), last=last, stale=True)
+    _patch(monkeypatch, energy=[_energy_row(ASSET_A, 0, 1.0, 0.1, series=fields),
+                                _energy_row(ASSET_A, 1, 0.2, 0.0, series=fields)])
     series = _series(portal_client, f"{ASSET_A}:ENERGY_IMPORT").json()["series"][0]
-    assert series["status"] == "NO_DATA"
-    assert len(series["points"]) == 2
-    assert series["summary"]["total"] is None
-    assert series["summary"]["coverage_ratio"] == 0.0
+    assert (series["status"], series["stale"]) == ("OK", True)
+    assert series["first_data_at"] == "2026-09-18T00:00:00Z"
+    assert series["last_data_at"] == "2026-09-20T01:10:00Z"
+    assert "threshold" not in str(series) and "schedule" not in str(series)
+
+
+# ---------------------------------------------------------------------------
+# NO_DATA reasons and unavailability
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
-    ("reason", "status"),
+    ("fields", "range_", "reason"),
     [
-        ("RESOLUTION_UNAVAILABLE", "RESOLUTION_UNAVAILABLE"),
-        ("CAPTURE_POLICY_CHANGE", "DATA_UNAVAILABLE"),
-        ("NO_TENANT_MAPPING", "DATA_UNAVAILABLE"),
-        ("ENERGY_READ_FAILED", "DATA_UNAVAILABLE"),
+        ({"in_range": False}, (FROM, TO), "NOT_ASSIGNED_IN_RANGE"),
+        ({"first": None, "last": None}, (FROM, TO), "NO_DATA_EVER"),
+        ({}, ("2026-09-29T00:00:00Z", "2026-09-29T02:00:00Z"), "RANGE_IN_FUTURE"),
+        ({"first": T0 + timedelta(hours=5)}, (FROM, TO), "RANGE_BEFORE_DATA"),
+        ({"first": T0 - timedelta(days=9), "last": T0 - timedelta(days=1)}, (FROM, TO), "RANGE_AFTER_LATEST_DATA"),
+        ({"first": T0 - timedelta(days=9), "last": AS_OF - timedelta(minutes=2)}, (FROM, TO), "NO_DATA_IN_RANGE"),
     ],
 )
-def test_unavailable_reasons_map_to_customer_statuses(portal_client, monkeypatch, reason, status) -> None:
+def test_no_data_reasons(portal_client, monkeypatch, fields, range_, reason) -> None:
     _login(portal_client, monkeypatch)
-    _patch(monkeypatch, energy=[_marker(ASSET_A, reason)])
-    response = _series(portal_client, f"{ASSET_A}:ENERGY_IMPORT")
-    series = response.json()["series"][0]
+    series_fields = _series_fields(**fields)
+    _patch(monkeypatch, energy=[
+        _energy_row(ASSET_A, 0, None, None, imp_n=0, exp_n=0, series=series_fields),
+        _energy_row(ASSET_A, 1, None, None, imp_n=0, exp_n=0, series=series_fields),
+    ])
+    series = _series(portal_client, f"{ASSET_A}:ENERGY_IMPORT", **{"from": range_[0], "to": range_[1]}).json()["series"][0]
+    assert series["status"] == "NO_DATA"
+    assert series["status_reasons"] == [reason]
+    assert len(series["points"]) == 2
+    assert series["summary"]["total"] is None
+
+
+@pytest.mark.parametrize(
+    ("reasons", "status"),
+    [
+        (["BEFORE_RETENTION_FLOOR"], "RESOLUTION_UNAVAILABLE"),
+        (["CAPTURE_INTERVAL_TOO_COARSE"], "RESOLUTION_UNAVAILABLE"),
+        (["CAPTURE_POLICY_CHANGE"], "DATA_UNAVAILABLE"),
+        (["CAPTURE_POLICY_GAP"], "DATA_UNAVAILABLE"),
+        (["CAPTURE_POLICY_GAP", "CAPTURE_POLICY_CHANGE"], "DATA_UNAVAILABLE"),
+        (["TIMEZONE_MISMATCH"], "DATA_UNAVAILABLE"),
+    ],
+)
+def test_unavailable_reasons_map_to_statuses_and_are_all_returned(portal_client, monkeypatch, reasons, status) -> None:
+    _login(portal_client, monkeypatch)
+    _patch(monkeypatch, energy=[_marker(ASSET_A, *reasons)])
+    series = _series(portal_client, f"{ASSET_A}:ENERGY_IMPORT").json()["series"][0]
     assert series["status"] == status
+    assert series["status_reasons"] == reasons
     assert series["points"] == []
-    assert reason not in response.text or reason == status
 
 
 def test_three_phase_on_a_system_only_point_returns_the_system_series(portal_client, monkeypatch) -> None:
-    """Reference mockup: under 3 phase, a point without per-phase values is
-    shown as its System series."""
+    """3-phase fallback is phase = three_phase with qualifier TOTAL; no
+    separate fallback field (Data Quality decision 14)."""
 
     _login(portal_client, monkeypatch)
     _patch(monkeypatch, energy=[_energy_row(ASSET_A, 0, 1.0, 0.1)])
     body = _series(portal_client, f"{ASSET_A}:ENERGY_IMPORT", phase="three_phase").json()
     assert body["phase"] == "three_phase"
     assert [(s["qualifier"], s["status"]) for s in body["series"]] == [("TOTAL", "OK")]
+    assert "phase_fallback" not in body["series"][0]
 
 
 def test_response_shape_is_stable(portal_client, monkeypatch) -> None:
@@ -304,13 +412,18 @@ def test_response_shape_is_stable(portal_client, monkeypatch) -> None:
     _patch(monkeypatch, energy=[_energy_row(ASSET_A, 0, 1.0, 0.1)])
     response = _series(portal_client, f"{ASSET_A}:ENERGY_IMPORT", resolution=None)
     body = response.json()
-    assert set(body) == {"site_id", "site_timezone", "from", "to", "requested_resolution",
+    assert set(body) == {"site_id", "site_timezone", "as_of", "from", "to", "requested_resolution",
                          "resolution", "phase", "series"}
     assert (body["requested_resolution"], body["resolution"], body["phase"]) == ("auto", "15m", "system")
     assert set(body["series"][0]) == {"asset_id", "asset_name", "data_point", "label", "qualifier", "unit",
-                                      "chart_kind", "aggregation", "status", "points", "summary"}
-    assert set(body["series"][0]["points"][0]) == {"bucket_start", "bucket_end", "value", "min", "max",
-                                                   "coverage_ratio", "evidence_status", "quality", "is_partial"}
+                                      "chart_kind", "aggregation", "status", "status_reasons",
+                                      "resolution_available_from", "first_data_at", "last_data_at", "stale",
+                                      "points", "summary"}
+    assert set(body["series"][0]["points"][0]) == {
+        "bucket_start", "bucket_end", "value", "min", "max", "bucket_state", "data_state",
+        "expected_intervals", "assigned_expected_intervals", "valid_intervals", "invalid_intervals",
+        "reconstructed_intervals", "evidence_flags", "evidence_status", "quality", "is_partial"}
+    assert set(body["series"][0]["summary"]) == {"total", "average", "min", "min_at", "max", "max_at"}
     assert "attribution_basis" not in response.text and "PARITY_BRIDGE" not in response.text
 
 
@@ -366,19 +479,44 @@ def test_limits_on_data_points_and_expanded_series(monkeypatch) -> None:
     assert excinfo.value.code == "too_many_series"
 
 
+def _request(resolution: str, requested: str = "auto", start=T0) -> SeriesRequest:
+    return SeriesRequest(dt_from=start, dt_to=start + timedelta(days=1), requested_resolution=requested,
+                         resolution=resolution, phase="system",
+                         selections=(Selection(asset_id=ASSET_A, data_point="ENERGY_IMPORT"),))
+
+
+@pytest.mark.parametrize(
+    ("resolution", "floors", "expected"),
+    [
+        ("15m", NO_FLOORS, "15m"),
+        ("15m", {**NO_FLOORS, "15m": T0 + timedelta(minutes=1)}, "1h"),
+        ("15m", {**NO_FLOORS, "15m": T0 + timedelta(minutes=1), "1h": T0 + timedelta(minutes=1)}, "1d"),
+        ("1h", {**NO_FLOORS, "1h": T0 + timedelta(minutes=1)}, "1d"),
+        # Even 1d cannot serve it: Auto stays on 1d (reported as RESOLUTION_UNAVAILABLE).
+        ("1h", {**NO_FLOORS, "1h": T0 + timedelta(minutes=1), "1d": T0 + timedelta(minutes=1)}, "1d"),
+    ],
+)
+def test_auto_is_floor_aware(resolution, floors, expected) -> None:
+    assert apply_floor_aware_auto(_request(resolution), floors).resolution == expected
+
+
+def test_an_explicit_resolution_is_never_changed_by_the_floors() -> None:
+    floors = {**NO_FLOORS, "1h": T0 + timedelta(minutes=1)}
+    assert apply_floor_aware_auto(_request("1h", requested="1h"), floors).resolution == "1h"
+
+
 # ---------------------------------------------------------------------------
-# Retention floors (migration 280)
+# Retention floors (migrations 280 / 282)
 # ---------------------------------------------------------------------------
 
 
 def test_request_before_the_resolution_retention_floor_is_resolution_unavailable(portal_client, monkeypatch) -> None:
-    """A request starting before its resolution's Energy tier retention floor
-    is RESOLUTION_UNAVAILABLE -- and the Energy tiers are not read."""
+    """An explicit resolution starting before its retention floor is
+    RESOLUTION_UNAVAILABLE with the floor -- and the Energy tiers are not read."""
 
     _login(portal_client, monkeypatch)
-    calls = _patch(monkeypatch, energy=[_energy_row(ASSET_A, 0, 1.0, 0.1)],
-                   floors={"1m": None, "15m": None, "30m": None, "1d": None,
-                           "1h": T0 + timedelta(minutes=1)})
+    floor = T0 + timedelta(minutes=1)
+    calls = _patch(monkeypatch, energy=[_energy_row(ASSET_A, 0, 1.0, 0.1)], floors={**NO_FLOORS, "1h": floor})
     response = _series(portal_client, f"{ASSET_A}:ENERGY_IMPORT", f"{ASSET_X}:ENERGY_IMPORT")
     assert response.status_code == 200
     series = response.json()["series"]
@@ -386,22 +524,33 @@ def test_request_before_the_resolution_retention_floor_is_resolution_unavailable
         (ASSET_A, "RESOLUTION_UNAVAILABLE"),
         (ASSET_X, "NOT_AVAILABLE"),
     ]
-    assert series[0]["points"] == [] and series[0]["label"] == "Active Energy Import"
-    assert "floors" in calls
-    assert not any(isinstance(c, tuple) for c in calls)
+    assert series[0]["status_reasons"] == ["BEFORE_RETENTION_FLOOR"]
+    assert series[0]["resolution_available_from"] == "2026-09-20T00:01:00Z"
+    assert series[0]["points"] == [] and series[0]["label"] == "Energy"
+    assert ("floors", AS_OF) in calls
+    assert _energy_calls(calls) == []
 
 
 def test_request_at_or_after_the_floor_is_served(portal_client, monkeypatch) -> None:
     _login(portal_client, monkeypatch)
-    calls = _patch(monkeypatch, energy=[_energy_row(ASSET_A, 0, 1.0, 0.1)],
-                   floors={"1m": None, "15m": None, "30m": None, "1d": None, "1h": T0})
+    calls = _patch(monkeypatch, energy=[_energy_row(ASSET_A, 0, 1.0, 0.1)], floors={**NO_FLOORS, "1h": T0})
     series = _series(portal_client, f"{ASSET_A}:ENERGY_IMPORT").json()["series"][0]
     assert series["status"] == "OK"
-    assert ("energy", (ASSET_A,), "1h") in calls
+    assert _energy_calls(calls) == [("energy", (ASSET_A,), "1h", AS_OF)]
+
+
+def test_auto_before_its_floor_is_served_at_a_coarser_resolution(portal_client, monkeypatch) -> None:
+    _login(portal_client, monkeypatch)
+    calls = _patch(monkeypatch, energy=[_energy_row(ASSET_A, 0, 1.0, 0.1)],
+                   floors={**NO_FLOORS, "15m": T0 + timedelta(minutes=1)})
+    body = _series(portal_client, f"{ASSET_A}:ENERGY_IMPORT", resolution=None).json()
+    assert (body["requested_resolution"], body["resolution"]) == ("auto", "1h")
+    assert body["series"][0]["status"] == "OK"
+    assert _energy_calls(calls) == [("energy", (ASSET_A,), "1h", AS_OF)]
 
 
 def test_floors_are_not_read_when_nothing_is_available(portal_client, monkeypatch) -> None:
     _login(portal_client, monkeypatch)
     calls = _patch(monkeypatch)
     assert _series(portal_client, f"{ASSET_X}:ENERGY_IMPORT").status_code == 200
-    assert "floors" not in calls
+    assert not any(isinstance(c, tuple) and c[0] == "floors" for c in calls)

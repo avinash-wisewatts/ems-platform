@@ -156,11 +156,12 @@ GET /api/v1/sites/{site_id}/analytics/series (Analytics v1, ADR-022) returns
 one series per explicit selection=<asset_id>:<DATA_POINT> pair -- never a
 cross-product -- on the Analytics bucket grid. Energy values come from the
 persisted Energy tiers through analytics.get_portal_asset_energy_series
-(migration 279; portal/organization scoped, never keyed on the Grafana
-organization mapping); 1h is the UTC hour grid and 1d the site-local calendar
-day. A request starting before its resolution's retention floor
-(analytics.get_analytics_energy_resolution_floors, migration 280) is
-RESOLUTION_UNAVAILABLE.
+(migration 282; values as migration 279/281; portal/organization scoped,
+never keyed on the Grafana organization mapping); 30m and 1h are on the
+site-local grid and 1d the site-local calendar day. Every read in a request
+is evaluated at one as_of. A request starting before its resolution's
+retention floor (the site-aware analytics.get_analytics_energy_resolution_floors,
+migration 282) is RESOLUTION_UNAVAILABLE; Auto never picks such a resolution.
 """
 
 from __future__ import annotations
@@ -176,10 +177,12 @@ from src.auth.models import AuthenticatedPortalUser
 from src.analytics_trends_service import (
     AnalyticsCatalogResponse,
     AnalyticsSeriesResponse,
+    apply_floor_aware_auto,
     build_analytics_catalog_response,
     build_analytics_series_response,
     energy_asset_ids,
     energy_resolution_retained,
+    fetch_analytics_as_of,
     fetch_analytics_catalog,
     fetch_analytics_energy_availability,
     fetch_analytics_energy_resolution_floors,
@@ -1110,7 +1113,8 @@ async def get_site_analytics_catalog(
 
     rows = await fetch_analytics_catalog(user.portal_user_id, site_id)
     availability = await fetch_analytics_energy_availability(user.portal_user_id, site_id)
-    return build_analytics_catalog_response(site=site, rows=rows, availability=availability)
+    floors = await fetch_analytics_energy_resolution_floors(site_id)
+    return build_analytics_catalog_response(site=site, rows=rows, availability=availability, floors=floors)
 
 
 @router.get(
@@ -1149,7 +1153,8 @@ async def get_site_analytics_series(
     selection the site's catalogue cannot serve is returned with status
     NOT_AVAILABLE, never dropped. Energy selections read the persisted
     Energy tiers through analytics.get_portal_asset_energy_series (migration
-    279); a request starting before the resolution's retention floor is
+    282). Every read uses the same as_of. Auto is floor-aware; a request
+    starting before the served resolution's retention floor is
     RESOLUTION_UNAVAILABLE without reading them."""
 
     user = _require_portal_user(request)
@@ -1172,12 +1177,15 @@ async def get_site_analytics_series(
     if site is None:
         raise _not_found("Site")
 
+    as_of = await fetch_analytics_as_of()
     catalog_rows = await fetch_analytics_catalog(user.portal_user_id, site_id)
     asset_ids = energy_asset_ids(series_request, catalog_rows)
     retained = True
+    floors: dict = {}
     energy_rows: list = []
     if asset_ids:
-        floors = await fetch_analytics_energy_resolution_floors()
+        floors = await fetch_analytics_energy_resolution_floors(site_id, as_of)
+        series_request = apply_floor_aware_auto(series_request, floors)
         retained = energy_resolution_retained(series_request, floors)
         if retained:
             energy_rows = await fetch_analytics_energy_series(
@@ -1187,12 +1195,15 @@ async def get_site_analytics_series(
                 series_request.dt_from,
                 series_request.dt_to,
                 series_request.resolution,
+                as_of,
             )
     return build_analytics_series_response(
         site=site,
         request=series_request,
         catalog_rows=catalog_rows,
         energy_rows=energy_rows,
+        as_of=as_of,
+        floors=floors,
         energy_resolution_available=retained,
     )
 

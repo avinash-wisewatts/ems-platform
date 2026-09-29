@@ -146,7 +146,7 @@ def test_canonical_read_era_series_is_dropped():
     with psycopg.connect(CONNINFO) as connection:
         assert connection.execute("SELECT to_regprocedure(%s)", (DROPPED_SIG,)).fetchone()[0] is None
         assert connection.execute(
-            "SELECT to_regprocedure('analytics.get_portal_asset_energy_series(bigint, uuid, uuid[], timestamptz, timestamptz, text)')"
+            "SELECT to_regprocedure('analytics.get_portal_asset_energy_series(bigint, uuid, uuid[], timestamptz, timestamptz, text, timestamptz)')"
         ).fetchone()[0] is not None
 
 

@@ -150,7 +150,15 @@ Import and Export resolved independently through
   Option B) — portal/organization scoped, never Grafana-keyed, **reads the
   persisted tiers**: 15m `energy_consumption_15min`; 30m from 15m; 1h
   `energy_consumption_hourly` (UTC hours); 1d `energy_consumption_daily`
-  (site-local days, DST-exact ends); 1m raw only within raw retention. Each
+  (site-local days, DST-exact ends); 1m raw only within raw retention.
+  **Since migration 282** (ADR-022 Amendment 4) the Analytics 30m and 1h
+  buckets are site-local: the UTC hourly rows are used only where local hours
+  are UTC hours, otherwise each local hour is summed from its 15-minute rows
+  (the Energy values are unchanged). 282 also adds a `p_as_of` argument,
+  per-bucket interval counts and data state, per-series data bounds and a
+  data-latency `stale`, and a site-aware
+  `get_analytics_energy_resolution_floors(site, as_of)`; the persisted tiers,
+  their jobs and retention are untouched. Each
   persisted tier is trusted only up to its own `telemetry.pipeline_state`
   checkpoint; newer hours/days are summed from 15-minute rows, and 15-minute
   rows newer than the 15m checkpoint (floored to the 15-minute grid, since the

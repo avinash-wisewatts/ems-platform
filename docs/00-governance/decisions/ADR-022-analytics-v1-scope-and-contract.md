@@ -69,6 +69,9 @@ staging database found:
 9. **1h basis.** Analytics 1h follows the UTC-grid contract (ADR-019 D3) for
    every data point, Energy included. Existing Energy screens (Main
    Dashboard, Asset View, Energy) are not changed by this work.
+   **Superseded 2026-09-29 by [Amendment 4](#amendment-4-2026-09-29-data-quality-read-contract-migration-282):**
+   Analytics 30m and 1h follow the site-local grid (Product Owner decision
+   D24); the existing Energy screens are still unchanged.
 10. **Asset-only v1.** Analytics v1 is Asset-only. Environmental / Space data
     (`metadata.space_points`) is out of scope for v1 and is not forced into
     the Asset contract.
@@ -131,6 +134,7 @@ commissioning and an assignment made for another purpose.
 - B1b: `postgres/migrations/277_analytics_api_energy_availability.sql` (availability bounds per Energy data point, in the catalogue).
 - B2: `postgres/migrations/278_analytics_api_energy_series.sql`, `GET /api/v1/sites/{site_id}/analytics/series` (explicit selections; Energy only; UTC-grid 1h; DST-correct site-local 1d).
 - Amendment 1: `postgres/migrations/279_asset_energy_tier_read.sql` (deployed to staging, PR #85), `postgres/migrations/280_analytics_energy_persisted_tier_switch.sql` (not deployed).
+- Amendment 4: `postgres/migrations/282_analytics_energy_series_data_quality.sql`, `app/src/analytics_trends_service.py`, `app/src/routers/analytics_api.py` (implemented, not deployed).
 - Remaining steps: [the Analytics feature document](../../07-features/analytics/README.md#implementation-plan).
 
 ## Validation references
@@ -147,6 +151,10 @@ are keyed on the portal user and the asset's organization, never on
 persisted Energy tiers: `energy_consumption_15min` (15m; 30m derived from it),
 `energy_consumption_hourly` (UTC hours), `energy_consumption_daily`
 (site-local days) and raw 1-minute data only within raw retention.
+**Superseded 2026-09-29 by [Amendment 4](#amendment-4-2026-09-29-data-quality-read-contract-migration-282)
+for 1h:** Analytics 1h is on the site-local grid; the UTC-hour
+`energy_consumption_hourly` rows serve it only where the site's local hours
+are UTC hours, otherwise each local hour is summed from its 15-minute rows.
 
 **Why.** A read-only investigation found that `analytics.get_canonical_energy_read`
 — the source of the first B2 implementation — is keyed on the Grafana
@@ -170,3 +178,61 @@ request-time aggregation cost.
 **Unchanged.** `analytics.get_canonical_energy_read`, every Grafana path and
 the Asset View Energy tile; moving the Asset View off the Grafana-keyed read is
 a separate, parity-gated decision.
+
+---
+
+## Amendment 4 (2026-09-29): Data Quality read contract (migration 282)
+
+Numbering note: Amendments 2 and 3 (Analytics UI decisions 1 and 2, first
+load and empty state) are recorded on the unmerged PR #89 branch.
+
+**Decision.** The Analytics series read returns the evidence the Data Quality
+section needs, computed server-side from existing data, with no storage or
+pipeline change. Product Owner decisions it implements: site-local time axis
+(D24), customer Energy labels (D73), and the Analytics Data Quality decisions
+1–22 (2026-09-28/29).
+
+**What changes (implemented in migration 282 and the Analytics service):**
+
+1. **One `as_of` per request.** The API reads the database clock once and
+   passes it to every read; bucket state, data state, data bounds and stale
+   are evaluated at it. `analytics.get_portal_asset_energy_series` gains a
+   seventh argument `p_as_of` (the 6-argument function is dropped).
+2. **Site-local 30m and 1h grid (D24).** Buckets start on the site's local
+   boundaries. **This supersedes decision 9 (UTC-grid 1h) and ADR-019 D3/D4
+   for the Analytics series.** The persisted UTC hourly tier serves 1h only
+   where local hours are UTC hours; otherwise each hour is the sum of its
+   15-minute rows (every IANA offset is a multiple of 15 minutes). Energy
+   values are unchanged: the same rows are summed.
+3. **Per bucket and direction:** `bucket_state` (`COMPLETE` / `IN_PROGRESS` /
+   `FUTURE`), `data_state` (`MEASURED` / `GAP` / `NOT_ASSIGNED` /
+   `BEFORE_DATA` / `AFTER_LATEST_DATA` / `FUTURE`), `expected_intervals`,
+   `assigned_expected_intervals`, `valid_intervals`, `invalid_intervals`,
+   `reconstructed_intervals` and `evidence_flags` (every condition present).
+   The device's first-ever reading (`INITIAL` by construction) is excluded
+   from both the expected and the invalid count. `evidence_status` and
+   `is_partial` remain for compatibility. **`coverage_ratio` is removed**
+   (bucket and summary).
+4. **Per series:** `status_reasons`, `resolution_available_from`,
+   `first_data_at`, `last_data_at` and `stale`.
+5. **Stale** is a data-latency condition, not device connectivity: true when
+   `as_of − last_data_at` exceeds capture interval + late-arrival tolerance
+   (the site policy in effect at `last_data_at`) + the live schedule interval
+   of each forward stage on the site's Analytics path + that path's CAGG end
+   offset, while `last_data_at` is inside the range and a binding extends
+   beyond it. The threshold is never returned. For capture intervals other
+   than ≤ 60 s and 300 s (900 s) the path is unverified and `stale` is null.
+6. **Resolution floors and Auto.** Retention floors are site-aware (for 1h,
+   the 15-minute floor where local hours are not UTC hours), returned as
+   `resolutions[].available_from` in the catalogue. Auto is floor-aware: when its window-based choice starts before that resolution's retention floor, the next coarser resolution that can serve it is used (1d as the last resort); an explicit resolution is never changed.
+7. **Labels (D73):** "Energy" (consumed/imported) and "Energy Export".
+8. **Reconstruction stays OFF.** Nothing reconstructed exists; the counters
+   are present and zero.
+
+**Unchanged.** Energy values and attribution, the canonical Energy read,
+every Grafana path, the Asset View, the persisted tiers, their jobs and
+retention.
+
+**Evidence.** `app/tests/test_analytics_energy_series_data_quality.py` and the
+updated Analytics tests; full backend suite 1835 passed locally (2026-09-29).
+Not deployed.

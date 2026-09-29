@@ -81,7 +81,7 @@ def _login_global_admin(portal_client, monkeypatch: pytest.MonkeyPatch) -> None:
     assert response.status_code == 303
 
 
-def _patch(monkeypatch, *, allowed=True, site=SITE, rows=None, calls=None, availability=None):
+def _patch(monkeypatch, *, allowed=True, site=SITE, rows=None, calls=None, availability=None, floors=None):
     async def access(portal_user_id, site_id):
         return allowed(site_id) if callable(allowed) else allowed
 
@@ -104,6 +104,13 @@ def _patch(monkeypatch, *, allowed=True, site=SITE, rows=None, calls=None, avail
     monkeypatch.setattr("src.routers.analytics_api.fetch_analytics_site", fetch_site)
     monkeypatch.setattr("src.routers.analytics_api.fetch_analytics_catalog", fetch_catalog)
     monkeypatch.setattr("src.routers.analytics_api.fetch_analytics_energy_availability", fetch_availability)
+
+    async def fetch_floors(site_id, as_of=None):
+        if calls is not None:
+            calls.append("floors")
+        return floors if floors is not None else {r: None for r in ("1m", "15m", "30m", "1h", "1d")}
+
+    monkeypatch.setattr("src.routers.analytics_api.fetch_analytics_energy_resolution_floors", fetch_floors)
 
 
 def _catalog(portal_client, site_id: str = SITE_ID):
@@ -157,7 +164,8 @@ def test_catalog_returns_energy_pilot_shape(portal_client, monkeypatch) -> None:
     assert [p["data_point"] for p in points] == ["ENERGY_IMPORT", "ENERGY_EXPORT"]
     assert points[0] == {
         "data_point": "ENERGY_IMPORT",
-        "label": "Active Energy Import",
+        # Customer label from the registry (D73), not the parameter name.
+        "label": "Energy",
         "category": "Energy",
         "unit": "kWh",
         "chart_kind": "bar",
@@ -191,7 +199,8 @@ def test_catalog_field_names_are_stable_contract(portal_client, monkeypatch) -> 
         "asset_id", "asset_name", "asset_type_id", "asset_type_name", "building_name",
         "floor_name", "space_id", "space_name", "location_path", "data_points",
     }
-    assert set(body["resolutions"][0]) == {"resolution", "max_window_seconds", "default_window_seconds"}
+    assert set(body["resolutions"][0]) == {"resolution", "max_window_seconds", "default_window_seconds",
+                                           "available_from"}
 
 
 def test_catalog_accessible_site_without_assignments_is_empty_not_error(portal_client, monkeypatch) -> None:
