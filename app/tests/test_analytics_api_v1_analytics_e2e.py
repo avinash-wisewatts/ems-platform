@@ -198,6 +198,10 @@ def test_catalog_end_to_end(live_client, monkeypatch, users) -> None:
     # 2026-03-02 00:00 IST is the local day containing T0 (05:30 IST).
     assert imp["available_from"] == "2026-03-01T18:30:00Z"
     assert imp["available_to"] == (T0 + timedelta(hours=HOURS)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    assert (imp["label"], points[1]["label"]) == ("Energy", "Energy Export")
+    floors = {r["resolution"]: r["available_from"] for r in body["resolutions"]}
+    # IST local hours are not UTC hours: local 1h is built from 15m, so it has the 15m floor.
+    assert floors["1h"] == floors["15m"] and floors["15m"] is not None
     assert "attribution_basis" not in response.text and "PARITY_BRIDGE" not in response.text
 
 
@@ -217,9 +221,16 @@ def test_series_end_to_end_every_resolution_agrees(live_client, monkeypatch, use
         imp, exp, draft = body["series"]
         assert (imp["status"], exp["status"], draft["status"]) == ("OK", "OK", "NOT_AVAILABLE")
         totals[resolution] = (imp["summary"]["total"], exp["summary"]["total"])
+        assert "coverage_ratio" not in response.text
+        assert imp["stale"] is False
+        measured = [p for p in imp["points"] if p["data_state"] == "MEASURED"]
+        assert measured and all(p["bucket_state"] == "COMPLETE" for p in measured)
+        assert {p["invalid_intervals"] for p in imp["points"]} == {0}
+        assert {tuple(p["evidence_flags"]) for p in imp["points"]} == {()}
+        # Nothing missing: every expected interval of a measured bucket is accounted for.
+        assert all(p["assigned_expected_intervals"] <= p["valid_intervals"] for p in measured)
         if resolution in ("15m", "30m", "1h"):
-            assert imp["summary"]["coverage_ratio"] == 1.0
-            assert {p["evidence_status"] for p in imp["points"]} == {"GOOD"}
+            assert {p["evidence_status"] for p in measured} == {"GOOD"}
 
     full = (IMPORT_PER_MIN * 60 * HOURS, EXPORT_PER_MIN * 60 * HOURS)
     for resolution in ("15m", "30m", "1h", "1d"):
@@ -236,6 +247,8 @@ def test_series_end_to_end_1m_beyond_raw_retention_is_resolution_unavailable(liv
     assert response.status_code == 200
     series = response.json()["series"][0]
     assert (series["status"], series["points"]) == ("RESOLUTION_UNAVAILABLE", [])
+    assert series["status_reasons"] == ["BEFORE_RETENTION_FLOOR"]
+    assert series["resolution_available_from"] is not None
 
 
 def test_fixture_organization_has_no_grafana_mapping(users) -> None:
@@ -246,12 +259,19 @@ def test_fixture_organization_has_no_grafana_mapping(users) -> None:
     assert count == 0
 
 
-def test_series_1h_is_utc_grid_and_1d_is_ist_local_days(live_client, monkeypatch, users) -> None:
+def test_series_1h_is_ist_local_hours_and_1d_is_ist_local_days(live_client, monkeypatch, users) -> None:
+    """D24 (migration 282): 1h follows the site's local hours. T0 is 05:30 IST,
+    so the first local hour is 05:00 IST (23:30 UTC) and the 26 hours of data
+    span 27 local hours, the first and last half-filled."""
+
     _login_as(live_client, monkeypatch, users[USER], ORG)
     end = T0 + timedelta(hours=HOURS)
     hourly = _series(live_client, "1h", T0, end, f"{ASSET}:ENERGY_IMPORT").json()["series"][0]["points"]
-    assert hourly[0]["bucket_start"] == "2026-03-02T00:00:00Z"
-    assert len(hourly) == HOURS
+    assert hourly[0]["bucket_start"] == "2026-03-01T23:30:00Z"
+    assert hourly[-1]["bucket_end"] == "2026-03-03T02:30:00Z"
+    assert len(hourly) == HOURS + 1
+    per_hour = IMPORT_PER_MIN * 60
+    assert [p["value"] for p in hourly] == pytest.approx([per_hour / 2] + [per_hour] * (HOURS - 1) + [per_hour / 2])
 
     daily = _series(live_client, "1d", T0, end, f"{ASSET}:ENERGY_IMPORT").json()["series"][0]["points"]
     assert [(p["bucket_start"], p["bucket_end"]) for p in daily] == [
@@ -260,7 +280,8 @@ def test_series_1h_is_utc_grid_and_1d_is_ist_local_days(live_client, monkeypatch
     ]
     # T0 is 05:30 IST: the first local day holds 18.5 h of data, the second 7.5 h.
     assert [p["value"] for p in daily] == pytest.approx([IMPORT_PER_MIN * 60 * 18.5, IMPORT_PER_MIN * 60 * 7.5])
-    assert [p["coverage_ratio"] for p in daily] == pytest.approx([18.5 / 24, 7.5 / 24])
+    assert [p["valid_intervals"] for p in daily] == [int(18.5 * 60), int(7.5 * 60)]
+    assert [p["data_state"] for p in daily] == ["MEASURED", "MEASURED"]
 
 
 def test_other_tenant_cannot_read_the_site(live_client, monkeypatch, users) -> None:

@@ -8,10 +8,13 @@ B2  GET /api/v1/sites/{site_id}/analytics/series (Energy data points)
 Every value comes from a portal-scoped SECURITY DEFINER read:
 analytics.get_portal_analytics_catalog (migration 276),
 analytics.get_portal_analytics_energy_availability (277, aligned with the
-persisted Energy tiers by 280), analytics.get_analytics_energy_resolution_floors
-(280) and analytics.get_portal_asset_energy_series (279: the persisted Energy
-tiers, portal/organization scoped, never keyed on the Grafana organization
-mapping -- ADR-022 Option B). This module adds the curated registry
+persisted Energy tiers by 280), the site-aware
+analytics.get_analytics_energy_resolution_floors (282) and
+analytics.get_portal_asset_energy_series (282, values as 279/281: the
+persisted Energy tiers, portal/organization scoped, never keyed on the Grafana
+organization mapping -- ADR-022 Option B -- with the Data Quality contract:
+site-local 30m/1h grid, interval counts, data state, data bounds and stale,
+all evaluated at one as_of). This module adds the curated registry
 (which semantic parameters Analytics v1 can chart, and how), request
 validation, and response shaping. It never derives availability from device
 capability or PRIMARY_METER (ADR-018 decision 1), and it never exposes the
@@ -54,16 +57,27 @@ class DataPointDefinition:
     aggregation: str         # "sum" | "mean"
     qualifiers: tuple[str, ...]
     energy_direction: str | None = None   # "import" | "export" for the Energy tiers
+    # Customer-facing label. None falls back to the parameter name.
+    label: str | None = None
 
 
+# Labels: platform-wide Energy terminology (Analytics UI decision D73):
+# "Energy" is consumed/imported energy, "Energy Export" is exported energy.
 ANALYTICS_DATA_POINTS: dict[str, DataPointDefinition] = {
     "ENERGY_IMPORT": DataPointDefinition(
-        chart_kind="bar", aggregation="sum", qualifiers=(SYSTEM_QUALIFIER,), energy_direction="import"
+        chart_kind="bar", aggregation="sum", qualifiers=(SYSTEM_QUALIFIER,), energy_direction="import",
+        label="Energy",
     ),
     "ENERGY_EXPORT": DataPointDefinition(
-        chart_kind="bar", aggregation="sum", qualifiers=(SYSTEM_QUALIFIER,), energy_direction="export"
+        chart_kind="bar", aggregation="sum", qualifiers=(SYSTEM_QUALIFIER,), energy_direction="export",
+        label="Energy Export",
     ),
 }
+
+
+def data_point_label(code: str, fallback: str | None) -> str | None:
+    definition = ANALYTICS_DATA_POINTS.get(code)
+    return definition.label if definition is not None and definition.label else fallback
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +118,11 @@ def resolve_auto_resolution(window: timedelta) -> str:
     if window < timedelta(days=30):
         return "1h"
     return "1d"
+
+
+# Coarser resolutions Auto may fall back to when its choice starts before
+# that resolution's retention floor (floor-aware Auto, Data Quality decision 3).
+AUTO_FALLBACKS: dict[str, tuple[str, ...]] = {"15m": ("1h", "1d"), "1h": ("1d",), "1d": ()}
 
 
 # ---------------------------------------------------------------------------
@@ -150,6 +169,10 @@ class AnalyticsResolution(BaseModel):
     resolution: str
     max_window_seconds: int
     default_window_seconds: int
+    # Earliest instant this resolution can serve for the site (retention
+    # floor; for 1h at a site whose local hours are not UTC hours, the
+    # 15-minute floor). None = no floor.
+    available_from: datetime | None = None
 
 
 class AnalyticsCatalogResponse(BaseModel):
@@ -171,14 +194,28 @@ class AnalyticsSeriesPoint(BaseModel):
     value: float | None = None
     min: float | None = None
     max: float | None = None
-    coverage_ratio: float | None = None
-    # Energy only: the Energy tiers' evidence status (GOOD,
+    # COMPLETE / IN_PROGRESS / FUTURE, relative to the response's as_of.
+    bucket_state: str
+    # MEASURED / GAP / NOT_ASSIGNED / BEFORE_DATA / AFTER_LATEST_DATA / FUTURE.
+    data_state: str | None = None
+    # Interval counts at the site's capture interval. assigned_expected
+    # covers only assigned, elapsed time between first and last data, less
+    # the device's first-ever (INITIAL) reading; invalid excludes it too.
+    expected_intervals: int | None = None
+    assigned_expected_intervals: int | None = None
+    valid_intervals: int = 0
+    invalid_intervals: int = 0
+    reconstructed_intervals: int = 0
+    # Every evidence condition present in the bucket.
+    evidence_flags: list[str] = Field(default_factory=list)
+    # Kept for compatibility: the most severe Energy evidence status (GOOD,
     # GAPS_DETECTED, RECONSTRUCTED_TIMING, RESET_DETECTED, ROLLOVER_DETECTED,
     # INVALID_INTERVALS); null for an empty bucket. Energy is not mapped onto
     # the five-value quality lattice (MVP-4 decision pack).
     evidence_status: str | None = None
     # Non-Energy only: the GOOD/GAP/ESTIMATED/INVALID/PARTIAL lattice.
     quality: str | None = None
+    # Kept for compatibility: bucket_state != COMPLETE.
     is_partial: bool
 
 
@@ -189,7 +226,6 @@ class AnalyticsSeriesSummary(BaseModel):
     min_at: datetime | None = None
     max: float | None = None
     max_at: datetime | None = None
-    coverage_ratio: float | None = None
 
 
 class AnalyticsSeries(BaseModel):
@@ -202,6 +238,11 @@ class AnalyticsSeries(BaseModel):
     chart_kind: str
     aggregation: str
     status: str
+    status_reasons: list[str] = Field(default_factory=list)
+    resolution_available_from: datetime | None = None
+    first_data_at: datetime | None = None
+    last_data_at: datetime | None = None
+    stale: bool | None = None
     points: list[AnalyticsSeriesPoint]
     summary: AnalyticsSeriesSummary
 
@@ -211,6 +252,7 @@ class AnalyticsSeriesResponse(BaseModel):
 
     site_id: UUID
     site_timezone: str | None = None
+    as_of: datetime
     range_from: datetime = Field(alias="from")
     range_to: datetime = Field(alias="to")
     requested_resolution: str
@@ -225,6 +267,19 @@ STATUS_NO_DATA = "NO_DATA"
 STATUS_NOT_AVAILABLE = "NOT_AVAILABLE"
 STATUS_RESOLUTION_UNAVAILABLE = "RESOLUTION_UNAVAILABLE"
 STATUS_DATA_UNAVAILABLE = "DATA_UNAVAILABLE"
+
+# Unavailability reasons that mean the resolution (not the data) cannot serve
+# the request; any other reason makes the series DATA_UNAVAILABLE.
+RESOLUTION_REASONS = frozenset({"BEFORE_RETENTION_FLOOR", "CAPTURE_INTERVAL_TOO_COARSE"})
+
+# Evidence flags, in the Energy evidence precedence (migration 269).
+EVIDENCE_FLAG_COUNTERS: tuple[tuple[str, str], ...] = (
+    ("INVALID_INTERVALS", "invalid"),
+    ("RESET_DETECTED", "reset"),
+    ("GAPS_DETECTED", "gap"),
+    ("RECONSTRUCTED_TIMING", "reconstructed"),
+    ("ROLLOVER_DETECTED", "rollover"),
+)
 
 
 # ---------------------------------------------------------------------------
@@ -378,6 +433,14 @@ async def fetch_analytics_energy_availability(
     )
 
 
+async def fetch_analytics_as_of() -> datetime:
+    """The request's single "now" (database clock). Every read in the
+    request is evaluated at this instant."""
+
+    rows = await _read_rows("SELECT now() AS as_of", ())
+    return rows[0]["as_of"]
+
+
 async def fetch_analytics_energy_series(
     portal_user_id: int,
     site_id: UUID,
@@ -385,28 +448,67 @@ async def fetch_analytics_energy_series(
     dt_from: datetime,
     dt_to: datetime,
     resolution: str,
+    as_of: datetime,
 ) -> list[dict[str, Any]]:
     return await _read_rows(
         """
         SELECT
             asset_id, bucket_start, bucket_end, import_kwh, export_kwh,
-            import_status, export_status, import_intervals, export_intervals,
-            expected_intervals, is_partial, unavailable_reason
-        FROM analytics.get_portal_asset_energy_series(%s, %s, %s::uuid[], %s, %s, %s)
+            import_status, export_status,
+            import_valid_intervals, import_invalid_intervals, import_reconstructed_intervals,
+            import_gap_intervals, import_reset_intervals, import_rollover_intervals,
+            export_valid_intervals, export_invalid_intervals, export_reconstructed_intervals,
+            export_gap_intervals, export_reset_intervals, export_rollover_intervals,
+            expected_intervals, import_assigned_expected_intervals, export_assigned_expected_intervals,
+            import_data_state, export_data_state, is_partial, unavailable_reasons,
+            import_first_data_at, import_last_data_at, export_first_data_at, export_last_data_at,
+            import_assigned_in_range, export_assigned_in_range, import_stale, export_stale
+        FROM analytics.get_portal_asset_energy_series(%s, %s, %s::uuid[], %s, %s, %s, %s)
         """,
-        (portal_user_id, str(site_id), [str(a) for a in asset_ids], dt_from, dt_to, resolution),
+        (portal_user_id, str(site_id), [str(a) for a in asset_ids], dt_from, dt_to, resolution, as_of),
     )
 
 
-async def fetch_analytics_energy_resolution_floors() -> dict[str, datetime | None]:
-    """Earliest instant each resolution's Energy tier still retains (None =
-    no retention policy), from analytics.get_analytics_energy_resolution_floors."""
+async def fetch_analytics_energy_resolution_floors(
+    site_id: UUID, as_of: datetime | None = None
+) -> dict[str, datetime | None]:
+    """Earliest instant each resolution's Energy source retains at as_of
+    (None = no retention policy); for 1h at a site whose local hours are not
+    UTC hours, the 15-minute floor. From the site-aware
+    analytics.get_analytics_energy_resolution_floors (migration 282)."""
 
     rows = await _read_rows(
-        "SELECT resolution, earliest_available FROM analytics.get_analytics_energy_resolution_floors()",
-        (),
+        "SELECT resolution, earliest_available FROM analytics.get_analytics_energy_resolution_floors(%s, %s)",
+        (str(site_id), as_of),
     )
     return {row["resolution"]: row["earliest_available"] for row in rows}
+
+
+def apply_floor_aware_auto(request: SeriesRequest, floors: dict[str, datetime | None]) -> SeriesRequest:
+    """Auto never lands on a resolution that cannot serve the range: when the
+    window-based choice starts before its retention floor, the next coarser
+    resolution whose floor allows it is used (1d as the last resort). An
+    explicitly requested resolution is never changed."""
+
+    if request.requested_resolution != AUTO_RESOLUTION:
+        return request
+
+    def serves(resolution: str) -> bool:
+        floor = floors.get(resolution)
+        return floor is None or request.dt_from >= floor
+
+    if serves(request.resolution):
+        return request
+    fallbacks = AUTO_FALLBACKS.get(request.resolution, ())
+    chosen = next((r for r in fallbacks if serves(r)), fallbacks[-1] if fallbacks else request.resolution)
+    return SeriesRequest(
+        dt_from=request.dt_from,
+        dt_to=request.dt_to,
+        requested_resolution=request.requested_resolution,
+        resolution=chosen,
+        phase=request.phase,
+        selections=request.selections,
+    )
 
 
 def energy_resolution_retained(request: SeriesRequest, floors: dict[str, datetime | None]) -> bool:
@@ -422,12 +524,13 @@ def energy_resolution_retained(request: SeriesRequest, floors: dict[str, datetim
 # Response building -- catalogue.
 # ---------------------------------------------------------------------------
 
-def _resolutions() -> list[AnalyticsResolution]:
+def _resolutions(floors: dict[str, datetime | None] | None = None) -> list[AnalyticsResolution]:
     return [
         AnalyticsResolution(
             resolution=code,
             max_window_seconds=int(max_window.total_seconds()),
             default_window_seconds=int(default_window.total_seconds()),
+            available_from=_utc((floors or {}).get(code)),
         )
         for code, (max_window, default_window) in ANALYTICS_RESOLUTION_WINDOWS.items()
     ]
@@ -451,6 +554,7 @@ def build_analytics_catalog_response(
     site: dict[str, Any],
     rows: list[dict[str, Any]],
     availability: list[dict[str, Any]] | None = None,
+    floors: dict[str, datetime | None] | None = None,
 ) -> AnalyticsCatalogResponse:
     """Group catalogue rows into assets -> registry data points.
 
@@ -492,7 +596,7 @@ def build_analytics_catalog_response(
             data_points.append(
                 AnalyticsDataPoint(
                     data_point=code,
-                    label=point_row["data_point_name"],
+                    label=data_point_label(code, point_row["data_point_name"]),
                     category=point_row.get("category"),
                     unit=point_row.get("unit"),
                     chart_kind=definition.chart_kind,
@@ -527,7 +631,7 @@ def build_analytics_catalog_response(
         limits=AnalyticsLimits(
             max_data_points=MAX_DATA_POINTS, max_assets=MAX_ASSETS, max_series=MAX_SERIES
         ),
-        resolutions=_resolutions(),
+        resolutions=_resolutions(floors),
         assets=catalog_assets,
     )
 
@@ -556,10 +660,42 @@ def _float(value: Any) -> float | None:
     return float(value) if isinstance(value, (Decimal, int, float)) else float(value)
 
 
-def _coverage(measured: Any, expected: Any) -> float | None:
-    if not expected:
-        return None
-    return min(1.0, float(measured or 0) / float(expected))
+def _int(value: Any) -> int:
+    return int(value) if value is not None else 0
+
+
+def _bucket_state(start: datetime, end: datetime, as_of: datetime) -> str:
+    if end <= as_of:
+        return "COMPLETE"
+    if start <= as_of:
+        return "IN_PROGRESS"
+    return "FUTURE"
+
+
+def _evidence_flags(counts: dict[str, int]) -> list[str]:
+    return [flag for flag, counter in EVIDENCE_FLAG_COUNTERS if counts.get(counter, 0) > 0]
+
+
+def _no_data_reason(
+    request: SeriesRequest,
+    as_of: datetime,
+    assigned_in_range: bool | None,
+    first_data_at: datetime | None,
+    last_data_at: datetime | None,
+) -> str:
+    """Why a valid, served selection has no value in range (first match)."""
+
+    if assigned_in_range is False:
+        return "NOT_ASSIGNED_IN_RANGE"
+    if last_data_at is None:
+        return "NO_DATA_EVER"
+    if request.dt_from >= as_of:
+        return "RANGE_IN_FUTURE"
+    if first_data_at is not None and request.dt_to <= first_data_at:
+        return "RANGE_BEFORE_DATA"
+    if request.dt_from >= last_data_at:
+        return "RANGE_AFTER_LATEST_DATA"
+    return "NO_DATA_IN_RANGE"
 
 
 def _energy_series(
@@ -567,55 +703,90 @@ def _energy_series(
     catalog_row: dict[str, Any],
     definition: DataPointDefinition,
     rows: list[dict[str, Any]],
+    *,
+    request: SeriesRequest,
+    as_of: datetime,
+    floors: dict[str, datetime | None],
 ) -> AnalyticsSeries:
     direction = definition.energy_direction
     base = dict(
         asset_id=selection.asset_id,
         asset_name=catalog_row["asset_name"],
         data_point=selection.data_point,
-        label=catalog_row["data_point_name"],
+        label=data_point_label(selection.data_point, catalog_row["data_point_name"]),
         qualifier=SYSTEM_QUALIFIER,
         unit=catalog_row.get("unit"),
         chart_kind=definition.chart_kind,
         aggregation=definition.aggregation,
     )
 
-    reasons = {r["unavailable_reason"] for r in rows if r.get("unavailable_reason")}
+    reasons: list[str] = []
+    for row in rows:
+        for reason in row.get("unavailable_reasons") or []:
+            if reason not in reasons:
+                reasons.append(reason)
     if reasons:
         status = (
-            STATUS_RESOLUTION_UNAVAILABLE
-            if reasons == {"RESOLUTION_UNAVAILABLE"}
-            else STATUS_DATA_UNAVAILABLE
+            STATUS_RESOLUTION_UNAVAILABLE if set(reasons) <= RESOLUTION_REASONS else STATUS_DATA_UNAVAILABLE
         )
-        return AnalyticsSeries(**base, status=status, points=[], summary=AnalyticsSeriesSummary())
+        return AnalyticsSeries(
+            **base,
+            status=status,
+            status_reasons=reasons,
+            resolution_available_from=(
+                _utc(floors.get(request.resolution)) if "BEFORE_RETENTION_FLOOR" in reasons else None
+            ),
+            points=[],
+            summary=AnalyticsSeriesSummary(),
+        )
+
+    head = rows[0] if rows else {}
+    first_data_at = _utc(head.get(f"{direction}_first_data_at"))
+    last_data_at = _utc(head.get(f"{direction}_last_data_at"))
+    assigned_in_range = head.get(f"{direction}_assigned_in_range")
+    stale = head.get(f"{direction}_stale")
 
     points: list[AnalyticsSeriesPoint] = []
-    measured_total = 0
-    expected_total = 0
     for row in rows:
-        value = _float(row[f"{direction}_kwh"])
-        measured = row[f"{direction}_intervals"] or 0
-        expected = row["expected_intervals"] or 0
-        measured_total += measured
-        expected_total += expected
+        start, end = _utc(row["bucket_start"]), _utc(row["bucket_end"])
+        counts = {
+            "valid": _int(row[f"{direction}_valid_intervals"]),
+            "invalid": _int(row[f"{direction}_invalid_intervals"]),
+            "reconstructed": _int(row[f"{direction}_reconstructed_intervals"]),
+            "gap": _int(row[f"{direction}_gap_intervals"]),
+            "reset": _int(row[f"{direction}_reset_intervals"]),
+            "rollover": _int(row[f"{direction}_rollover_intervals"]),
+        }
+        expected = row.get("expected_intervals")
+        assigned_expected = row.get(f"{direction}_assigned_expected_intervals")
         points.append(
             AnalyticsSeriesPoint(
-                bucket_start=_utc(row["bucket_start"]),
-                bucket_end=_utc(row["bucket_end"]),
-                value=value,
-                coverage_ratio=_coverage(measured, expected),
+                bucket_start=start,
+                bucket_end=end,
+                value=_float(row[f"{direction}_kwh"]),
+                bucket_state=_bucket_state(start, end, as_of),
+                data_state=row.get(f"{direction}_data_state"),
+                expected_intervals=None if expected is None else int(expected),
+                assigned_expected_intervals=None if assigned_expected is None else int(assigned_expected),
+                valid_intervals=counts["valid"],
+                invalid_intervals=counts["invalid"],
+                reconstructed_intervals=counts["reconstructed"],
+                evidence_flags=_evidence_flags(counts),
                 evidence_status=row[f"{direction}_status"],
-                is_partial=bool(row["is_partial"]),
+                is_partial=end > as_of,
             )
         )
 
+    series_fields = dict(first_data_at=first_data_at, last_data_at=last_data_at, stale=stale)
     valued = [p for p in points if p.value is not None]
     if not valued:
         return AnalyticsSeries(
             **base,
+            **series_fields,
             status=STATUS_NO_DATA,
+            status_reasons=[_no_data_reason(request, as_of, assigned_in_range, first_data_at, last_data_at)],
             points=points,
-            summary=AnalyticsSeriesSummary(coverage_ratio=_coverage(measured_total, expected_total)),
+            summary=AnalyticsSeriesSummary(),
         )
 
     total = sum(p.value for p in valued)
@@ -628,9 +799,8 @@ def _energy_series(
         min_at=lowest.bucket_start,
         max=highest.value,
         max_at=highest.bucket_start,
-        coverage_ratio=_coverage(measured_total, expected_total),
     )
-    return AnalyticsSeries(**base, status=STATUS_OK, points=points, summary=summary)
+    return AnalyticsSeries(**base, **series_fields, status=STATUS_OK, points=points, summary=summary)
 
 
 def build_analytics_series_response(
@@ -639,6 +809,8 @@ def build_analytics_series_response(
     request: SeriesRequest,
     catalog_rows: list[dict[str, Any]],
     energy_rows: list[dict[str, Any]],
+    as_of: datetime,
+    floors: dict[str, datetime | None] | None = None,
     energy_resolution_available: bool = True,
 ) -> AnalyticsSeriesResponse:
     """One series per selection, in request order. A selection the
@@ -646,6 +818,8 @@ def build_analytics_series_response(
     point not assigned to it) is returned as NOT_AVAILABLE -- never dropped,
     and never distinguishable from an asset that does not exist."""
 
+    as_of = _utc(as_of)
+    floors = floors or {}
     pairs = _available_pairs(catalog_rows)
     energy_by_asset: dict[str, list[dict[str, Any]]] = {}
     for row in energy_rows:
@@ -670,18 +844,20 @@ def build_analytics_series_response(
             )
             continue
         if not energy_resolution_available:
-            rows = [{"unavailable_reason": "RESOLUTION_UNAVAILABLE"}]
-            series.append(_energy_series(selection, catalog_row, definition, rows))
-            continue
-        rows = sorted(
-            energy_by_asset.get(str(selection.asset_id), []),
-            key=lambda r: (r["bucket_start"] is not None, r["bucket_start"] or datetime.min),
+            rows = [{"unavailable_reasons": ["BEFORE_RETENTION_FLOOR"]}]
+        else:
+            rows = sorted(
+                energy_by_asset.get(str(selection.asset_id), []),
+                key=lambda r: (r["bucket_start"] is not None, r["bucket_start"] or datetime.min),
+            )
+        series.append(
+            _energy_series(selection, catalog_row, definition, rows, request=request, as_of=as_of, floors=floors)
         )
-        series.append(_energy_series(selection, catalog_row, definition, rows))
 
     return AnalyticsSeriesResponse(
         site_id=site["site_id"],
         site_timezone=site.get("timezone"),
+        as_of=as_of,
         range_from=request.dt_from,
         range_to=request.dt_to,
         requested_resolution=request.requested_resolution,

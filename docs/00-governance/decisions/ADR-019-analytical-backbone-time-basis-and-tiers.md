@@ -90,9 +90,16 @@ the site's IANA timezone, DST-correct, never a fixed offset.
   dated timezone history is a separate, future product/data-model decision.
 - **D3** — 1h stays on the UTC grid. For half-hour-offset sites (IST) the
   customer sees e.g. 05:30–06:30 local; 1h is never re-bucketed to local hours.
+  **Superseded for the Analytics series on 2026-09-29** (Product Owner
+  decision D24; [ADR-022 Amendment 4](ADR-022-analytics-v1-scope-and-contract.md#amendment-4-2026-09-29-data-quality-read-contract-migration-282)):
+  Analytics 30m and 1h follow site-local boundaries. The persisted hourly
+  tier itself stays on the UTC hour grid.
 - **D4** — 1h range edges include overlapping UTC hours as-is; the requested
   range is not silently rounded; actual UTC bucket boundaries are displayed
   converted to site-local time.
+  **Superseded for the Analytics series on 2026-09-29** (same amendment):
+  edge buckets are still returned whole and never clipped, but they are
+  site-local buckets, not UTC hours.
 - **D5** — Late-data reconciliation is bounded to 35 days (failed-message
   recovery can re-normalize rows up to the 30-day `raw_message_failures`
   retention). Writes into compressed chunks are acceptable; the window is
@@ -255,3 +262,14 @@ job's schedule interval, config, runtime, retries, `fixed_schedule` and
   `web/src/time/ranges.ts` `resolveRange("TODAY")` uses UTC midnight; the
   offset-at-noon logic in `startOfDayInTimeZone` / `siteLocalDateToUtcInstant`
   is off by an hour for midnight on DST-transition days.
+
+## Amendment (2026-09-29): Analytics site-local 30m/1h
+
+D3 and D4 no longer govern the Analytics series
+([ADR-022 Amendment 4](ADR-022-analytics-v1-scope-and-contract.md#amendment-4-2026-09-29-data-quality-read-contract-migration-282),
+migration 282). Storage is unchanged: the persisted Energy and generic hourly
+tiers stay on the UTC hour grid, and UTC remains the canonical time basis.
+The Analytics read builds site-local 30m and 1h buckets from 15-minute rows
+(which nest in every IANA local hour), using the UTC hourly tier only where
+local hours are UTC hours. Consequence: at a half-hour-offset site, local 1h
+needs 15-minute data, so its retention floor is the 15-minute tier's.

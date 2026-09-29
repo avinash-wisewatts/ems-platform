@@ -385,7 +385,7 @@ def test_only_approved_routines_reference_migration_268_objects(conn):
             "analytics.energy_gap_weights(numeric[])",
             "config.energy_reconstruction_enabled(uuid,uuid)",
             "analytics.get_canonical_energy_read(bigint,uuid,timestamp with time zone,timestamp with time zone,text,text)",
-            "analytics.get_portal_asset_energy_series(bigint,uuid,uuid[],timestamp with time zone,timestamp with time zone,text)",
+            "analytics.get_portal_asset_energy_series(bigint,uuid,uuid[],timestamp with time zone,timestamp with time zone,text,timestamp with time zone)",
             "analytics.reconcile_energy_deficits(text,timestamp with time zone,timestamp with time zone,interval,integer)",
         ]
     )
