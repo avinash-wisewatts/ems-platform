@@ -172,7 +172,7 @@ Import and Export resolved independently through
   whole-bucket UTC range, so TimescaleDB can exclude chunks (a filter on the
   view's grouped `bucket_start` cannot). The rows are identical to the view's;
   the view, the persisted tiers, their jobs and retention are unchanged.
-  Migration 284 (implemented, not deployed) changes only how the series
+  Migration 284 (deployed to staging 2026-09-29, `17b1843`) changes only how the series
   function computes its Data Quality counts (set-based instead of per bucket);
   this tail read, the tiers and their jobs are unchanged. Hourly/daily rows are used whole only
   inside exactly one binding window; otherwise the bucket is summed from its
