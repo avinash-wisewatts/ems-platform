@@ -318,7 +318,8 @@ the Asset View only ([ADR-022 amendment](../../00-governance/decisions/ADR-022-a
 | 280 | Switch Analytics Energy to 279; drop 278's function; availability aligned; resolution retention floors | Implemented, not deployed |
 | 282 | Data Quality read contract ([ADR-022 Amendment 4](../../00-governance/decisions/ADR-022-analytics-v1-scope-and-contract.md#amendment-4-2026-09-29-data-quality-read-contract-migration-282)): `as_of`, site-local 30m/1h, interval counts, bucket/data state, evidence flags, status reasons, data bounds, stale, site-aware floors, floor-aware Auto, D73 labels, `coverage_ratio` removed | Implemented, not deployed; staging parity and latency gate pending |
 | 283 | Read latency, Option 1: the fresh 15-minute tail is read through `analytics.energy_semantic_rollup_15min_range` (the rollup view bounded to a whole-bucket UTC range before grouping, so chunk exclusion applies); results unchanged | Deployed to staging 2026-09-29 (`e6754de`, PR #91). Read-only validation: helper↔view parity on live data 0 differing rows; value and Data Quality snapshot 282→283 identical (140,132 rows, 36 columns); tail read pruned to the current chunk |
-| 284 | Read latency, Option 2: the per-bucket Data Quality subqueries of 282 (NOT_ASSIGNED, the device-first INITIAL count, assigned expected intervals) are replaced by set-based, request-level computation (computed once per request and joined to the bucket grid); 7-argument API, Energy values, Data Quality semantics, 283's tail pruning, views, tiers, jobs and storage unchanged | Implemented, not deployed. Local validation: 283→284 parity 0 differences across the randomised scenario matrix; full backend suite 1843 passed. Staging validation pending |
+| 284 | Read latency, Option 2: the per-bucket Data Quality subqueries of 282 (NOT_ASSIGNED, the device-first INITIAL count, assigned expected intervals) are replaced by set-based, request-level computation (computed once per request and joined to the bucket grid); 7-argument API, Energy values, Data Quality semantics, 283's tail pruning, views, tiers, jobs and storage unchanged | Deployed to staging 2026-09-29 (`17b1843`, PR #92, deploy run 36541126955). Read-only validation: value and Data Quality snapshot 283→284 identical (140,132 rows, 36 columns); helper↔view parity still 0 differing rows; latency improved only about 10–25%, all resolutions remain above the 500 ms target |
+| 285 | Read latency: `analytics.energy_direction_status` `RESET search_path`, so its IMMUTABLE `CASE` is inlined into the series read (was one function call per 15-minute row per direction); body, grants and the series function unchanged | Deployed to staging 2026-09-29 (`6b09475`, PR #93, deploy run 36551005201; checksum `926d7ae4…`). Read-only validation: 284→285 snapshot identical (140,132 rows, 36 columns); helper inlined (0 helper executions per 15m request, against 42,958); latency improved only about 0–10% (median) |
 | B3 | Generic series path (1m / 15m / 30m / 1h) | Planned — returns `NOT_AVAILABLE` until non-Energy assignments exist |
 | B4 | `analytics.point_telemetry_1d` persisted tier (job-built from 15m, upsert-only, 35-day reconcile, backfill, 8-year retention, compression after 90 days; ADR-019 D1/D5) and the 1d read path | Planned — must be live before the first `point_telemetry_15m` chunks age out of 120-day retention |
 | F1–F8 | Frontend: time-range defect fixes (ADR-019), route, API layer, date/time picker, filter panel, ChartFrame extension, table/CSV/states, verification against staging through the tunnel | Planned |
@@ -374,7 +375,9 @@ grouping, and customer-meaningful data point names.
 
 - 283: `app/tests/test_energy_rollup_range.py` (5: helper security and inlinability, helper = view definition plus the bounded `WHERE`, series function = 282 with only the tail line changed, `bucket_start` pruning in the plan, helper rows equal the view's rows on all 43 columns for on-grid, off-grid, empty, infinite and no-data ranges, 1-minute and 5-minute native rows, and another organization's device). Existing Analytics suites pass unchanged in values. Full backend suite 1840 passed locally (2026-09-29). Staging (2026-09-29, after deployment of `e6754de`, read-only): helper↔view parity on live data for every bound device in both organizations — last 6 hours including the fresh tail, last 3 days, an off-grid range and an empty range — 0 differing rows in either direction; 282→283 snapshot (5 resolutions, 53 assets, fixed `as_of`) identical on all 140,132 rows and 36 columns; the tail read scans only the current `energy_consumption_1min` chunk via `(device_id, bucket_start)` (0.24 ms, against up to 1,565 ms per asset before).
 
-- 284: new `app/tests/test_energy_series_set_based_quality.py` (3: set-based structure and unchanged security; property test installing migration 283's exact function as a session-temporary reference and comparing it with 284 on every row and column — 12 seeded scenarios × 5 resolutions × 3 `as_of` values, across UTC / IST / Kathmandu / London sites, 60 / 300 / 900 s capture, tier checkpoints, binding windows starting and ending mid-bucket, device replacement with the new device's first reading inside the range, separate import/export windows, a sub-bucket window, a never-reporting device, missing / gap / rejected minutes and a later INITIAL — 0 differences, every data state exercised; a check that the device-first reading is still subtracted once per containing binding window). A mutation check confirmed the property test detects deliberate changes to the assigned-interval, INITIAL and NOT_ASSIGNED logic. `test_energy_rollup_range.py`: its byte-for-byte pin of the series function to 282 plus one line is retired (superseded by the 283→284 parity test); it still checks the tail is read through the 283 helper. Full backend suite 1843 passed locally (2026-09-29). Not deployed; staging validation pending.
+- 284: new `app/tests/test_energy_series_set_based_quality.py` (3: set-based structure and unchanged security; property test installing migration 283's exact function as a session-temporary reference and comparing it with 284 on every row and column — 12 seeded scenarios × 5 resolutions × 3 `as_of` values, across UTC / IST / Kathmandu / London sites, 60 / 300 / 900 s capture, tier checkpoints, binding windows starting and ending mid-bucket, device replacement with the new device's first reading inside the range, separate import/export windows, a sub-bucket window, a never-reporting device, missing / gap / rejected minutes and a later INITIAL — 0 differences, every data state exercised; a check that the device-first reading is still subtracted once per containing binding window). A mutation check confirmed the property test detects deliberate changes to the assigned-interval, INITIAL and NOT_ASSIGNED logic. `test_energy_rollup_range.py`: its byte-for-byte pin of the series function to 282 plus one line is retired (superseded by the 283→284 parity test); it still checks the tail is read through the 283 helper. Full backend suite 1843 passed locally (2026-09-29). Staging (2026-09-29, after deployment of `17b1843`, read-only): function md5 `3f43cdae…`, security unchanged (SECURITY DEFINER, STABLE, owner `ems_admin`, pinned `search_path`, `ems_app`-only EXECUTE); 283 helper, view and `get_canonical_energy_read` fingerprints unchanged; reconstruction OFF; 283→284 snapshot (5 resolutions, 53 assets, fixed `as_of`) identical on all 140,132 rows and 36 columns; helper↔view parity on live data 0 differing rows in either direction.
+
+- 285: new `app/tests/test_energy_direction_status_inlining.py` (5: helper attributes and grants, body byte-identical to 279; inlining shown by `EXPLAIN`; all 4,096 counter combinations including NULL; series parity against a non-inlinable reference over the 284 randomised scenarios and a GOOD / INVALID / RESET / GAPS / ROLLOVER scenario, mutation-checked). Full backend suite 1848 passed locally (2026-09-29).
 
 ## Release status
 
@@ -403,30 +406,40 @@ Not released. Nothing deployed.
   each resolution's maximum window): 1m / 3 days 2.66 s; 15m / 30 days
   0.88 s; 30m / 60 days 0.67 s; 1h / 180 days 0.48 s; 1d / 3 years 0.36 s.
   1m, 15m and 30m exceed a 500 ms per-request target; not yet optimized.
-- Staging measurements after migration 282 (2026-09-29, same method):
-  15m / 30 days 1.55–2.39 s; 30m / 60 days 1.66–2.20 s; 1h / 180 days (IST,
-  local hours) 1.68–2.93 s; 1d / 3 years 1.05–1.20 s. A read-only
-  investigation attributed about 0.3–0.55 s per request to 282's per-bucket
-  and per-series Data Quality work, and the largest, most variable cost to the
-  unchanged fresh-tail read of `v_energy_semantic_rollup_15min`, whose filter
-  on the grouped `bucket_start` scanned every chunk of a device's native rows
-  (up to about 1.6 s per asset on a cold cache). Migration 283 (deployed to
-  staging 2026-09-29) bounds that tail read. Staging benchmark (10 IST assets,
-  maximum windows, 5 runs; first run cold, median of the rest warm), 282 → 283:
-  15m / 30 days first 6.99 → 1.98 s, warm 1.78 → 1.73 s; 30m / 60 days warm
-  1.94 → 1.74 s; 1h / 180 days warm 1.70 → 1.78–1.82 s (repeat runs); 1d /
-  3 years warm 1.02 → 1.07 s. The cold-cache spike is removed; warm latency is
-  essentially unchanged and **remains above the 500 ms target**, being mostly
-  282's per-bucket and per-series Data Quality work. Option 2 — replacing
-  282's per-bucket subqueries with set-based, request-level computation — is
-  migration 284 (implemented 2026-09-29, **not deployed**; staging validation
-  pending). A local benchmark (disposable test database, 10 IST assets, 30 days
-  of 1-minute data, warm median of 5 runs), 283 → 284: 15m 5.36 → 0.77 s;
-  30m 1.77 → 0.64 s; 1h 0.86 → 0.58 s; 1d 0.25 → 0.26 s. These figures are
-  **directional and local only**: the test database is not tuned like staging
-  (283's 15m read took 1.73 s on staging against 5.36 s locally), so they are
-  not a staging or production result and do not establish that the 500 ms
-  target is met. No production-readiness claim is made.
+- Staging after migration 282 (2026-09-29, same method): 15m / 30 days
+  1.55–2.39 s; 30m / 60 days 1.66–2.20 s; 1h / 180 days (IST, local hours)
+  1.68–2.93 s; 1d / 3 years 1.05–1.20 s.
+- Read-latency work 283–285 (all deployed to staging 2026-09-29; values
+  unchanged at each step). Benchmarks: Coimbatore IST, 10 assets, maximum
+  windows, warm medians, each baseline taken just before its merge.
+  - **283** (bounded fresh-tail read): the cold-cache spike is removed (15m
+    first run 6.99 → 1.98 s); warm latency essentially unchanged (15m 1.78 →
+    1.73 s; 1d 1.02 → 1.07 s).
+  - **284** (set-based Data Quality work): about 10–25% (15m 1.56 →
+    1.34–1.36 s; 30m 1.85 → 1.30–1.50 s; 1h 1.78 → 1.47–1.74 s; 1d 0.91 →
+    0.73–0.76 s). A local benchmark had overstated the gain (15m 5.36 →
+    0.77 s on an untuned test database).
+  - **285** (status helper inlined): pooled medians 284 → 285 over 8–13 and
+    22–27 runs: 15m 1.38 → 1.27 s (−8%); 30m 1.43 → 1.42 s; 1h 1.41 →
+    1.27 s (−10%); 1d 0.75 → 0.85 s (noise). Fastest runs: 15m 1.30 → 1.12 s;
+    30m 1.31 → 1.04 s; 1h 1.35 → 1.10 s; 1d 0.71 → 0.67 s.
+- **Measured state after 285:** 15m, 30m and 1h about 1.1–1.4 s; 1d about
+  0.7–0.85 s. **The 500 ms target is not met.** Staging is a 2-vCPU host
+  shared with the application and live-telemetry containers; single runs
+  vary by ±0.3–0.5 s, so medians of fewer than about 10 runs are unreliable.
+- **Remaining cost (measured, read-only decomposition on 284):** structural.
+  The read runs once per asset: a main query (planned per asset, about
+  11–24 ms of planning each) plus about 10 small per-asset statements
+  (binding windows, data bounds, stale). Inside the main query, bucket joins,
+  sorts and the 34-column result scale with the window, not the data.
+  Persisted tier and rollup reads are only about 2–4% of the time.
+- **Decision (Product Owner, 2026-09-29): the 500 ms target is accepted as
+  non-blocking.** The current implementation (283–285) is kept; the
+  all-assets, set-based rewrite of the roughly 900-line series function (one
+  query for every asset instead of the per-asset loop) and any further
+  performance optimization are not pursued. That rewrite was only a proposal:
+  never started, unmeasured, and never claimed to reach 500 ms. Performance
+  work closes here; no production-readiness claim is made.
 - The Asset View Energy tile still reads the canonical, Grafana-keyed Energy
   read; moving it is a separate, parity-gated change.
 

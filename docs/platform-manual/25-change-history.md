@@ -747,3 +747,36 @@ Second ADR-020 slice ([ADR-020](../00-governance/decisions/ADR-020-late-recovere
 - **Validation (local)**: new `app/tests/test_energy_series_set_based_quality.py` (3) — 283→284 parity against migration 283's exact function over a randomised scenario matrix (12 seeds × 5 resolutions × 3 `as_of` values): 0 differences on every row and column; a mutation check confirmed the test detects deliberate logic changes. `test_energy_rollup_range.py`'s 282 byte pin retired (superseded by the parity test). Full backend suite 1843 passed.
 - **Latency (local, directional only)**: disposable test database, 10 IST assets, 30 days, warm median, 283 → 284: 15m 5.36 → 0.77 s; 30m 1.77 → 0.64 s; 1h 0.86 → 0.58 s; 1d 0.25 → 0.26 s. Not a staging measurement.
 - **Status**: implemented, not deployed; staging parity and latency validation pending. Not production-ready.
+
+### 2026-09-29 — Migration 284 deployed to staging and validated
+
+- **Deployment**: PR #92 squash-merged as `17b1843`; staging deploy run 36541126955 succeeded (CI gates, immutable artifacts, deploy, post-deployment verification). Ledger: `284_analytics_energy_series_set_based_quality`, checksum `da0347d1…`. Series function md5 `3f43cdae…` (as tested), SECURITY DEFINER, STABLE, owner `ems_admin`, pinned `search_path`, `ems_app`-only EXECUTE; 283 helper `69935711…`, view `7a79ad57…` and `get_canonical_energy_read` `bb58dfbc…` unchanged; reconstruction OFF. Production untouched.
+- **Validation** (read-only, `statement_timeout`): value and Data Quality snapshot taken from 283 just before the merge and from 284 after it (5 resolutions, 53 assets, fixed `as_of`): identical on all 140,132 rows and 36 columns. Helper↔view parity on live data (both organizations; last 6 hours, last 3 days, off-grid, empty ranges): 0 differing rows in either direction.
+- **Latency** (Coimbatore IST, 10 assets, maximum windows, warm medians; 283 baseline → two 284 passes): 15m / 30 d 1.56 → 1.36 / 1.34 s; 30m / 60 d 1.85 → 1.30 / 1.50 s; 1h / 180 d 1.78 → 1.47 / 1.74 s, focused repeat median about 1.57 s; 1d / 3 y 0.91 → 0.76 / 0.73 s (no regression). The improvement is only about 10–25%; every resolution remains above the 500 ms target. The earlier local benchmark overstated the gain. No production-readiness claim; no further optimization started.
+
+### 2026-09-29 — Migration 285 deployed to staging; read-latency work 283–285 closed out
+
+- **Change**: `285_analytics_energy_direction_status_inlinable` (checksum
+  `926d7ae4…`): `analytics.energy_direction_status` `RESET search_path`, so
+  its IMMUTABLE `CASE` is inlined into the series read. Body, grants,
+  comment and the series function (`3f43cdae…`) unchanged; its only caller is
+  the series function (staging catalog checked read-only). PR #93 merged as
+  `6b09475`; staging deploy run 36551005201 succeeded. Production untouched.
+- **Validation** (read-only): helper `5e819bc3…`, IMMUTABLE, SECURITY
+  INVOKER, no `SET`, owner-only EXECUTE; `EXPLAIN` shows the `CASE` inlined,
+  and a 15m request executes the helper 0 times (284: 42,958). 284→285
+  snapshot (5 resolutions, 53 assets, fixed `as_of`) identical on all 140,132
+  rows and 36 columns.
+- **Latency** (10 IST assets, maximum windows, pooled warm medians 284 →
+  285): 15m 1.38 → 1.27 s; 30m 1.43 → 1.42 s; 1h 1.41 → 1.27 s; 1d 0.75 →
+  0.85 s (noise). Staging host CPU contention makes single runs vary by
+  ±0.3–0.5 s.
+- **Close-out**: after 283–285, 15m / 30m / 1h take about 1.1–1.4 s and 1d
+  about 0.7–0.85 s; the 500 ms target is not met. The remaining cost is
+  structural (per-asset planning and repeated small queries; per-bucket
+  assembly scaling with the window); persisted tier reads are about 2–4%.
+  An all-assets set-based rewrite of the roughly 900-line series function
+  has not been started and is not claimed to reach the target.
+- **Decision** (Product Owner, 2026-09-29): the 500 ms target is accepted as
+  non-blocking. The current implementation is kept; the all-assets rewrite
+  and further performance optimization are not pursued.
