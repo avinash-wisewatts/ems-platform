@@ -168,7 +168,8 @@ chain).
 
 ## Open decisions (before the named PR)
 
-- PR4: customer wording for reconstructed timing; whether the Grafana
+- PR4: customer wording for reconstructed timing (settled for Analytics
+  only by ADR-022 Amendment 6, 2026-09-29; other screens still open); whether the Grafana
   asset-overview panel (plots only `GOOD`, so it hides `GAP` and
   `RECONSTRUCTED_TIMING` energy) shows reconstructed energy. The internal
   status code and priority above were chosen in PR2 and can be revisited.
