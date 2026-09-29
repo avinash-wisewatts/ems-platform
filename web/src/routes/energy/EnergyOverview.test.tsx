@@ -81,6 +81,28 @@ function energyResponse(importKwh: number, noData = false) {
   };
 }
 
+/** F1 (elapsed portion only, PO 2026-09-29): Typical is compared with the
+ *  complete elapsed local days, read by an extra 1d request whose window ends
+ *  before now. That request gets the same consumption scaled to those days
+ *  against the nearest fixed reference length, so each test keeps its
+ *  intended deviation from typical. */
+function isCompleteDaysBasisUrl(url: string): boolean {
+  const parsed = new URL(url, "http://localhost");
+  const to = parsed.searchParams.get("to");
+  return parsed.searchParams.get("resolution") === "1d" && to !== null && Date.parse(to) <= Date.now();
+}
+function completeDaysFactor(url: string): number {
+  const parsed = new URL(url, "http://localhost");
+  const days = Math.round(
+    (Date.parse(parsed.searchParams.get("to") ?? "") - Date.parse(parsed.searchParams.get("from") ?? "")) / 86_400_000,
+  );
+  const referenceDays = [1, 7, 30, 90, 365].reduce((best, d) => (Math.abs(d - days) < Math.abs(best - days) ? d : best));
+  return days / referenceDays;
+}
+function energyFor(url: string, importKwh: number, noData = false) {
+  return energyResponse(isCompleteDaysBasisUrl(url) ? importKwh * completeDaysFactor(url) : importKwh, noData);
+}
+
 /** Multi-point consumption fixture for Q75 chart-data export tests --
  *  distinct per-point values so row order/values are unambiguously
  *  checkable, unlike energyResponse's single-point fixture used by the
@@ -234,6 +256,8 @@ describe("EnergyOverview (Slice A/C -- Energy Performance)", () => {
     expect(screen.getByTestId("energy-comparison")).toHaveTextContent("100.0 kWh");
     expect(screen.getByTestId("energy-delta")).toHaveTextContent("+20.0 kWh");
     expect(screen.getByTestId("energy-delta")).toHaveTextContent("+20.0%");
+    // F1: the comparison covers the matched elapsed portion -- qualified in site-local time.
+    expect(screen.getByTestId("compared-through")).toHaveTextContent(/^Compared through \d{2}:\d{2}, \d{2} [A-Z][a-z]{2}$/);
     expect(screen.getByTestId("status-badge")).toHaveTextContent("Higher than comparison");
     expect(screen.getByTestId("chart-frame")).toBeTruthy();
 
@@ -303,7 +327,7 @@ describe("EnergyOverview (Slice A/C -- Energy Performance)", () => {
         };
       }
       if (isEvidenceUrl(url)) return { jsonBody: evidenceResponse() };
-      if (isConsumptionUrl(url)) return { jsonBody: typicalMode ? energyResponse(118) : energyResponse(999) };
+      if (isConsumptionUrl(url)) return { jsonBody: typicalMode ? energyFor(url, 118) : energyResponse(999) };
       return { status: 404, jsonBody: { error: "not_found", detail: "unexpected" } };
     });
 
@@ -316,11 +340,16 @@ describe("EnergyOverview (Slice A/C -- Energy Performance)", () => {
     await waitFor(() => expect(referenceCalls).toBe(1)); // one bounded call, never N+1
     await waitFor(() => expect(screen.getByTestId("energy-current-value")).toHaveTextContent("118.0 kWh"));
 
-    expect(screen.getByTestId("energy-comparison")).toHaveTextContent("100.5 kWh");
+    // F1: Typical is compared over the 6 complete elapsed days of 7 Days --
+    // typical 100.5 x 6/7 = 86.1 kWh against actual 118 x 6/7 = 101.1 kWh
+    // (the stub scales the complete-days request); "This period" stays 118.0.
+    expect(screen.getByTestId("energy-comparison")).toHaveTextContent("86.1 kWh");
     expect(screen.getByTestId("energy-typical-reference-evidence")).toHaveTextContent(
       "based on 8 of 8 comparable historical periods",
     );
-    expect(screen.getByTestId("energy-delta")).toHaveTextContent("+17.5 kWh");
+    expect(screen.getByTestId("energy-delta")).toHaveTextContent("+15.0 kWh");
+    // Typical compares complete days: the qualifier is today's local midnight.
+    expect(screen.getByTestId("compared-through")).toHaveTextContent(/^Compared through 00:00, \d{2} [A-Z][a-z]{2}$/);
     expect(screen.getByTestId("status-badge")).toHaveTextContent("Higher than comparison");
 
     // Reset/rollover on an included period never excludes it, and the UI
@@ -356,7 +385,7 @@ describe("EnergyOverview (Slice A/C -- Energy Performance)", () => {
         };
       }
       if (isEvidenceUrl(url)) return { jsonBody: evidenceResponse() };
-      if (isConsumptionUrl(url)) return { jsonBody: typicalMode ? energyResponse(118) : energyResponse(999) };
+      if (isConsumptionUrl(url)) return { jsonBody: typicalMode ? energyFor(url, 118) : energyResponse(999) };
       return { status: 404, jsonBody: { error: "not_found", detail: "unexpected" } };
     });
 

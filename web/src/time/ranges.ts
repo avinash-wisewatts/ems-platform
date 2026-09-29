@@ -13,8 +13,9 @@
  */
 
 import type { EnergyResolution, MeasurementResolution, PowerQualityResolution } from "../api/types";
+import { CALENDAR_PRESETS, calendarDayCount, calendarRange, localDateKey, localMidnightUtc } from "./calendarRanges";
 
-export const TIME_RANGE_PRESETS = ["TODAY", "7D", "30D", "3M", "1Y"] as const;
+export const TIME_RANGE_PRESETS = CALENDAR_PRESETS;
 export type TimeRangePreset = (typeof TIME_RANGE_PRESETS)[number];
 
 export const PRESET_LABELS: Record<TimeRangePreset, string> = {
@@ -39,32 +40,27 @@ export type AbsoluteRange = { from: string; to: string };
 
 const DAY_MS = 86_400_000;
 
-/** Resolve a preset to a half-open absolute range ending "now" (UTC). */
-export function resolveRange(preset: TimeRangePreset, now: Date = new Date()): AbsoluteRange {
-  const to = now;
-  let from: Date;
-  switch (preset) {
-    case "TODAY": {
-      from = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-      break;
-    }
-    case "7D":
-      from = new Date(to.getTime() - 7 * DAY_MS);
-      break;
-    case "30D":
-      from = new Date(to.getTime() - 30 * DAY_MS);
-      break;
-    case "3M":
-      from = new Date(to.getTime() - 90 * DAY_MS);
-      break;
-    case "1Y":
-      from = new Date(to.getTime() - 365 * DAY_MS);
-      break;
-  }
-  return { from: from.toISOString(), to: to.toISOString() };
+/**
+ * Resolve a preset to its half-open calendar range in the site's timezone:
+ * local midnight of the first day to the EXCLUSIVE next local midnight after
+ * today (application-wide calendar semantics, ADR-022 Amendment 5, D61/D62;
+ * see ./calendarRanges). `timeZone` is the site's IANA timezone; null or
+ * undefined falls back to UTC.
+ */
+export function resolveRange(
+  preset: TimeRangePreset,
+  timeZone: string | null | undefined,
+  now: Date = new Date(),
+): AbsoluteRange {
+  return calendarRange(preset, timeZone, now);
 }
 
 // Phase 7 caps (seconds). Kept in sync with analytics_api_service.py.
+// Backend follow-up (Product Owner, 2026-09-29): the calendar 1 Year preset
+// spans 367 days when it contains 29 February, over the 366-day "1d" caps
+// below. The API limit is to be extended to 367 days before 29 Feb 2028; until
+// then such a range is reported as not served, never shortened (see
+// docs/07-features/energy/README.md, Known limitations).
 // Exported (MVP-6, Site Performance Report) so the report's own
 // arbitrary-range planning (sitePerformanceReportRanges.ts) can reuse the
 // exact same, already-enforced caps instead of duplicating the numbers --
@@ -132,9 +128,10 @@ export function windowSeconds(range: AbsoluteRange): number {
 /** How to request space measurements for a preset, or why it can't be. */
 export function planMeasurementRequest(
   preset: TimeRangePreset,
+  timeZone: string | null | undefined,
   now: Date = new Date(),
 ): MeasurementPlan | UnsupportedPlan {
-  const range = resolveRange(preset, now);
+  const range = resolveRange(preset, timeZone, now);
   const span = windowSeconds(range);
   const resolution: MeasurementResolution = span <= MEASUREMENT_MAX_WINDOW_S.raw ? "raw" : "1h";
   if (span > MEASUREMENT_MAX_WINDOW_S[resolution]) {
@@ -149,9 +146,10 @@ export function planMeasurementRequest(
 /** How to request site energy consumption for a preset, or why it can't be. */
 export function planEnergyRequest(
   preset: TimeRangePreset,
+  timeZone: string | null | undefined,
   now: Date = new Date(),
 ): EnergyPlan | UnsupportedPlan {
-  const range = resolveRange(preset, now);
+  const range = resolveRange(preset, timeZone, now);
   const span = windowSeconds(range);
   const resolution: EnergyResolution = span <= ENERGY_MAX_WINDOW_S["1h"] ? "1h" : "1d";
   if (span > ENERGY_MAX_WINDOW_S[resolution]) {
@@ -167,9 +165,10 @@ export function planEnergyRequest(
  *  resolution to choose -- see DemandPlan. */
 export function planDemandRequest(
   preset: TimeRangePreset,
+  timeZone: string | null | undefined,
   now: Date = new Date(),
 ): DemandPlan | UnsupportedPlan {
-  const range = resolveRange(preset, now);
+  const range = resolveRange(preset, timeZone, now);
   const span = windowSeconds(range);
   if (span > DEMAND_MAX_WINDOW_S) {
     return {
@@ -183,9 +182,10 @@ export function planDemandRequest(
 /** How to request site power quality for a preset, or why it can't be. */
 export function planPowerQualityRequest(
   preset: TimeRangePreset,
+  timeZone: string | null | undefined,
   now: Date = new Date(),
 ): PowerQualityPlan | UnsupportedPlan {
-  const range = resolveRange(preset, now);
+  const range = resolveRange(preset, timeZone, now);
   const span = windowSeconds(range);
   const resolution: PowerQualityResolution =
     span <= POWER_QUALITY_MAX_WINDOW_S["15min"]
@@ -202,22 +202,30 @@ export function planPowerQualityRequest(
   return { supported: true, resolution, range };
 }
 
-function planForKind(kind: DataKind, preset: TimeRangePreset, now: Date) {
+function planForKind(kind: DataKind, preset: TimeRangePreset, timeZone: string | null | undefined, now: Date) {
   switch (kind) {
     case "measurement":
-      return planMeasurementRequest(preset, now);
+      return planMeasurementRequest(preset, timeZone, now);
     case "demand":
-      return planDemandRequest(preset, now);
+      return planDemandRequest(preset, timeZone, now);
     case "power-quality":
-      return planPowerQualityRequest(preset, now);
+      return planPowerQualityRequest(preset, timeZone, now);
     case "energy":
     default:
-      return planEnergyRequest(preset, now);
+      return planEnergyRequest(preset, timeZone, now);
   }
 }
 
-export function isPresetSupported(preset: TimeRangePreset, kind: DataKind, now: Date = new Date()): boolean {
-  return planForKind(kind, preset, now).supported;
+/** Whether `kind` can serve `preset`. Support depends only on the range's
+ *  length, which the site timezone changes by at most a DST hour; omitting it
+ *  evaluates in UTC. */
+export function isPresetSupported(
+  preset: TimeRangePreset,
+  kind: DataKind,
+  now: Date = new Date(),
+  timeZone: string | null | undefined = null,
+): boolean {
+  return planForKind(kind, preset, timeZone, now).supported;
 }
 
 // ---------------------------------------------------------------------------
@@ -285,33 +293,88 @@ export function shiftRangeForComparison(range: AbsoluteRange, basis: HistoricalS
   return { from: shiftOneYear(range.from), to: shiftOneYear(range.to) };
 }
 
+/**
+ * Comparisons use only the ELAPSED portion of the selected calendar range
+ * (Product Owner decision, 2026-09-29): the displayed range (with its future
+ * empty buckets, D16) is unchanged, but unelapsed time never enters a
+ * comparison or an Energy Attention threshold. The elapsed portion ends at the
+ * last boundary the data can represent exactly on both sides: the last
+ * completed UTC hour for the hourly historian (1h), today's local midnight for
+ * the site-local daily historian (1d). Never before the range's start.
+ */
+export function comparisonCutoff(
+  range: AbsoluteRange,
+  resolution: EnergyResolution,
+  timeZone: string | null | undefined,
+  now: Date = new Date(),
+): string {
+  const from = Date.parse(range.from);
+  const to = Date.parse(range.to);
+  const boundary =
+    resolution === "1h"
+      ? Math.floor(now.getTime() / 3_600_000) * 3_600_000
+      : localMidnightUtc(localDateKey(now, timeZone), timeZone).getTime();
+  return new Date(Math.max(from, Math.min(boundary, to))).toISOString();
+}
+
+/** The historical window covering the same elapsed portion as [range.from,
+ *  cutoff): the preceding period of the range's full length, cut to the same
+ *  elapsed duration (PREVIOUS_PERIOD), or the same calendar window one year
+ *  earlier (SAME_PERIOD_PREVIOUSLY). */
+export function elapsedComparisonWindow(
+  range: AbsoluteRange,
+  cutoff: string,
+  basis: HistoricalShiftBasis,
+): AbsoluteRange {
+  if (basis === "PREVIOUS_PERIOD") {
+    const spanMs = Date.parse(range.to) - Date.parse(range.from);
+    return {
+      from: new Date(Date.parse(range.from) - spanMs).toISOString(),
+      to: new Date(Date.parse(cutoff) - spanMs).toISOString(),
+    };
+  }
+  return shiftRangeForComparison({ from: range.from, to: cutoff }, basis);
+}
+
 export type EnergyComparisonPlan = {
   supported: true;
   resolution: EnergyResolution;
+  /** The displayed calendar range -- the chart and the "This period" total. */
   current: AbsoluteRange;
-  comparison: AbsoluteRange;
+  /** End of the elapsed portion used for the comparison ([current.from, comparedUntil)). */
+  comparedUntil: string;
+  /** The historical window covering the same elapsed portion; null while
+   *  nothing has elapsed yet (e.g. the first minutes of Today). */
+  comparison: AbsoluteRange | null;
 };
 
 /**
  * How to request the current AND comparison energy windows for a preset --
  * two independent calls to the existing, unmodified
  * GET /sites/{id}/energy/consumption, both at the same resolution so the
- * two series are directly comparable. Unsupported exactly when the current
- * window itself is unsupported (the comparison window has the same span, so
- * it independently satisfies the same resolution cap).
+ * two series are directly comparable. The comparison window covers only the
+ * elapsed portion of the current range (comparisonCutoff). Unsupported exactly
+ * when the current window itself is unsupported (the comparison window is
+ * never longer, so it satisfies the same resolution cap).
  */
 export function planEnergyComparisonRequest(
   preset: TimeRangePreset,
   basis: HistoricalShiftBasis,
+  timeZone: string | null | undefined,
   now: Date = new Date(),
 ): EnergyComparisonPlan | UnsupportedPlan {
-  const currentPlan = planEnergyRequest(preset, now);
+  const currentPlan = planEnergyRequest(preset, timeZone, now);
   if (!currentPlan.supported) return currentPlan;
+  const comparedUntil = comparisonCutoff(currentPlan.range, currentPlan.resolution, timeZone, now);
   return {
     supported: true,
     resolution: currentPlan.resolution,
     current: currentPlan.range,
-    comparison: shiftRangeForComparison(currentPlan.range, basis),
+    comparedUntil,
+    comparison:
+      Date.parse(comparedUntil) > Date.parse(currentPlan.range.from)
+        ? elapsedComparisonWindow(currentPlan.range, comparedUntil, basis)
+        : null,
   };
 }
 
@@ -321,51 +384,75 @@ export function planEnergyComparisonRequest(
 // A THIRD comparison basis, not a replacement for PREVIOUS_PERIOD/
 // SAME_PERIOD_PREVIOUSLY above. Unlike those two, the 8 comparable periods
 // are selected and aggregated entirely SERVER-SIDE (migration 236) -- this
-// function's only job is to compute the CURRENT window to send as [from,
-// to) to GET .../energy/consumption/typical-reference, which the server
-// then uses to derive up to 8 comparable historical windows itself.
+// function's only job is to compute the window to send as [from, to) to
+// GET .../energy/consumption/typical-reference.
 //
-// The typical-reference endpoint requires (to - from) to be an EXACT whole
-// number of days (1/7/30/90/365). planEnergyRequest's range already
-// satisfies this for 7D/30D/3M/1Y (a pure "now minus N days" duration
-// subtraction is always exactly N*86400000ms, regardless of what
-// time-of-day "now" is). TODAY is the one exception: resolveRange's TODAY
-// window is UTC-midnight-to-now (a PARTIAL day, since "now" is rarely
-// exactly midnight) -- so here, and ONLY here, `to` is widened to exactly
-// one full day after `from`, reusing resolveRange's own (UTC-midnight-
-// aligned) `from` UNCHANGED.
+// That endpoint requires (to - from) to be an EXACT whole number of 24-hour
+// days, one of 1/7/30/90/365. The customer's calendar range (resolveRange)
+// is not always such a span: 3 Months is 90-93 days, 1 Year is 366 days (367
+// across 29 February), and a DST change makes a local week 1 hour shorter or
+// longer. Product Owner decision (2026-09-29): the customer's calendar range
+// stays authoritative for actual consumption; typical reference uses the
+// nearest supported fixed window -- 1/7/30/90/365 days for Today/7 Days/
+// 30 Days/3 Months/1 Year -- ENDING at the calendar range's end, and is never
+// shown as unavailable because of the mismatch. When the day counts differ,
+// average consumption per calendar day is compared, not raw totals.
 //
-// This intentionally inherits the same pre-existing UTC-vs-site-local
-// TODAY imprecision already documented in the approved Slice C Historical
-// Comparison specification (resolveRange's TODAY is not site-timezone-
-// aware) -- NOT fixed and NOT expanded here, per that specification's
-// explicit instruction to leave resolveRange/TODAY's existing behaviour
-// alone and treat it as a separate, already-reported issue. The CURRENT
-// VALUE the customer sees is entirely unaffected: it still comes from the
-// separate, unmodified GET /energy/consumption call using its own
-// unmodified midnight-to-now window; this plan's `current` is used ONLY
-// as the typical-reference request's own [from, to) parameter.
+// Elapsed portion (Product Owner decisions, 2026-09-29): comparisons use only
+// the elapsed part of the range, and for Typical only COMPLETE elapsed local
+// days -- the typical value comes from the site-local daily historian, which
+// cannot represent part of a day. The actual consumption compared is read for
+// those complete days (`basisRange`, at 1d); the typical per day is scaled to
+// the same number of days. Today has no complete day, so it has no Typical
+// comparison until the day is complete.
 // ---------------------------------------------------------------------------
+
+/** The fixed typical-reference window length, in days, for each preset. */
+export const TYPICAL_REFERENCE_WINDOW_DAYS: Record<TimeRangePreset, number> = {
+  TODAY: 1,
+  "7D": 7,
+  "30D": 30,
+  "3M": 90,
+  "1Y": 365,
+};
 
 export type EnergyTypicalReferencePlan = {
   supported: true;
   /** [from, to) sent to GET .../energy/consumption/typical-reference.
-   *  Always an exact whole-day span (1/7/30/90/365 days). */
+   *  Always an exact whole-day span (1/7/30/90/365 days) ending at the
+   *  calendar range's end. */
   current: AbsoluteRange;
+  /** The complete elapsed local days of the customer's range, [range start,
+   *  today's local midnight) -- the actual consumption compared, read at 1d.
+   *  Null when no complete day has elapsed (Today). */
+  basisRange: AbsoluteRange | null;
+  /** Number of complete elapsed local days in basisRange (0 for Today). */
+  basisDays: number;
+  /** Days in the reference window. */
+  referenceDays: number;
 };
 
 export function planEnergyTypicalReferenceRequest(
   preset: TimeRangePreset,
+  timeZone: string | null | undefined,
   now: Date = new Date(),
 ): EnergyTypicalReferencePlan | UnsupportedPlan {
-  const currentPlan = planEnergyRequest(preset, now);
+  const currentPlan = planEnergyRequest(preset, timeZone, now);
   if (!currentPlan.supported) return currentPlan;
 
-  if (preset === "TODAY") {
-    const from = currentPlan.range.from;
-    const to = new Date(Date.parse(from) + DAY_MS).toISOString();
-    return { supported: true, current: { from, to } };
-  }
-
-  return { supported: true, current: currentPlan.range };
+  const referenceDays = TYPICAL_REFERENCE_WINDOW_DAYS[preset];
+  const to = currentPlan.range.to;
+  const from = new Date(Date.parse(to) - referenceDays * DAY_MS).toISOString();
+  const completeUntil = comparisonCutoff(currentPlan.range, "1d", timeZone, now);
+  const basisRange =
+    Date.parse(completeUntil) > Date.parse(currentPlan.range.from)
+      ? { from: currentPlan.range.from, to: completeUntil }
+      : null;
+  return {
+    supported: true,
+    current: { from, to },
+    basisRange,
+    basisDays: basisRange ? calendarDayCount(basisRange) : 0,
+    referenceDays,
+  };
 }

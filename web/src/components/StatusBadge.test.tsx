@@ -7,6 +7,8 @@ function result(deltaPercent: number | null): ComparisonResult {
   return {
     basis: "PREVIOUS_PERIOD",
     currentTotalKwh: 100,
+    basisCurrentKwh: 100,
+    comparedUntil: null,
     comparisonTotalKwh: 90,
     deltaKwh: 10,
     deltaPercent,

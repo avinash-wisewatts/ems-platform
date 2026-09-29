@@ -15,16 +15,19 @@ export function TimeRangePicker({
    *  shown disabled rather than silently misbehaving. */
   dataKind,
   now,
+  timeZone,
 }: {
   value: TimeRangePreset;
   onChange: (preset: TimeRangePreset) => void;
   dataKind?: DataKind;
   now?: Date;
+  /** The site's IANA timezone: presets are calendar ranges in it. */
+  timeZone?: string | null;
 }) {
   return (
     <div className="time-range-picker" role="group" aria-label="Time range">
       {TIME_RANGE_PRESETS.map((preset) => {
-        const disabled = dataKind ? !isPresetSupported(preset, dataKind, now) : false;
+        const disabled = dataKind ? !isPresetSupported(preset, dataKind, now, timeZone) : false;
         return (
           <button
             key={preset}

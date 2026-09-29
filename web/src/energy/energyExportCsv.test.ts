@@ -38,6 +38,8 @@ function comparisonResult(overrides: Partial<ComparisonResult> = {}): Comparison
   return {
     basis: "PREVIOUS_PERIOD",
     currentTotalKwh: 1234.567,
+    basisCurrentKwh: 1234.567,
+    comparedUntil: null,
     comparisonTotalKwh: 1000.0,
     deltaKwh: 234.567,
     deltaPercent: 23.4567,
@@ -52,6 +54,7 @@ function typicalReferenceResult(overrides: Partial<TypicalReferenceResult> = {})
     ...comparisonResult({ basis: "TYPICAL_HISTORICAL_REFERENCE" }),
     requestedPeriodCount: 8,
     windowsWithDataCount: 6,
+    normalizedPerCalendarDay: false,
     eligiblePeriodCount: 6,
     sufficient: true,
     windows: [],
