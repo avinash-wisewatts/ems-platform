@@ -208,8 +208,11 @@ def test_read_is_portal_scoped_and_never_grafana_keyed():
     for forbidden in ("grafana", "get_canonical_energy_read", "v_energy_reporting", "primary_meter",
                       "insert into", "update ", "delete from"):
         assert forbidden not in body, forbidden
+    # Since migration 283 the fresh 15-minute tail is read through
+    # analytics.energy_semantic_rollup_15min_range (the rollup view, bounded
+    # before grouping; covered by test_energy_rollup_range.py).
     for required in ("energy_consumption_15min", "energy_consumption_hourly", "energy_consumption_daily",
-                     "v_energy_semantic_rollup_15min", "resolve_asset_energy_source_windows",
+                     "energy_semantic_rollup_15min_range", "resolve_asset_energy_source_windows",
                      "portal_user_can_access_site"):
         assert required in body, required
     assert helper_public is False

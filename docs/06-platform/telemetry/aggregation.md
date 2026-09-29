@@ -164,7 +164,13 @@ Import and Export resolved independently through
   rows newer than the 15m checkpoint (floored to the 15-minute grid, since the
   15-minute job's checkpoint can fall inside a bucket — migration 281) come from
   `v_energy_semantic_rollup_15min` (the persisted 15m tier's own source), so
-  the read is as fresh as raw data. Hourly/daily rows are used whole only
+  the read is as fresh as raw data. Since migration 283 (implemented, not
+  deployed) that fresh tail is read through
+  `analytics.energy_semantic_rollup_15min_range`: the view's definition,
+  restricted before grouping to the organization, the devices and a
+  whole-bucket UTC range, so TimescaleDB can exclude chunks (a filter on the
+  view's grouped `bucket_start` cannot). The rows are identical to the view's;
+  the view, the persisted tiers, their jobs and retention are unchanged. Hourly/daily rows are used whole only
   inside exactly one binding window; otherwise the bucket is summed from its
   attributed 15-minute rows (incoming source owns a straddling 15-minute
   bucket, as in the canonical read). Status uses the canonical precedence

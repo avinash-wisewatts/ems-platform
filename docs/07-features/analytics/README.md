@@ -285,7 +285,7 @@ Query: `from`, `to` (ISO-8601 UTC, half-open), `resolution`
 | Resolution | Energy (Import / Export) | Other data points |
 |---|---|---|
 | 1m | raw `v_energy_consumption_native` (60 s capture on every current site), only within raw retention | `telemetry.normalized_points` (`GOOD`), 90-day retention |
-| 15m | persisted `analytics.energy_consumption_15min`; newer than its checkpoint, `v_energy_semantic_rollup_15min` | `analytics.point_telemetry_15m` |
+| 15m | persisted `analytics.energy_consumption_15min`; newer than its checkpoint, `v_energy_semantic_rollup_15min` (read through the bounded helper `analytics.energy_semantic_rollup_15min_range` since migration 283) | `analytics.point_telemetry_15m` |
 | 30m | the 15-minute rows, summed per site-local 30-minute bucket | derived from `point_telemetry_15m` |
 | 1h | site-local hours (migration 282): persisted `analytics.energy_consumption_hourly` (UTC hours) only where local hours are UTC hours; otherwise, and for newer hours and hours a binding changes inside, summed from 15m. Never the site-local `v_energy_reporting_hourly` | `analytics.point_telemetry_1h` |
 | 1d | persisted `analytics.energy_consumption_daily` (site-local days, DST-exact); unprocessed days and days a binding changes inside are summed from 15m | new `analytics.point_telemetry_1d` (site-local days, from 15m), plus the open day from 15m |
@@ -317,6 +317,7 @@ the Asset View only ([ADR-022 amendment](../../00-governance/decisions/ADR-022-a
 | Option B | Persisted-tier Energy read, portal/organization scoped, not Grafana-keyed | Migration 279 **deployed to staging** 2026-09-27 (PR #85); staging parity gate PT-1–PT-11 passed with zero mismatches |
 | 280 | Switch Analytics Energy to 279; drop 278's function; availability aligned; resolution retention floors | Implemented, not deployed |
 | 282 | Data Quality read contract ([ADR-022 Amendment 4](../../00-governance/decisions/ADR-022-analytics-v1-scope-and-contract.md#amendment-4-2026-09-29-data-quality-read-contract-migration-282)): `as_of`, site-local 30m/1h, interval counts, bucket/data state, evidence flags, status reasons, data bounds, stale, site-aware floors, floor-aware Auto, D73 labels, `coverage_ratio` removed | Implemented, not deployed; staging parity and latency gate pending |
+| 283 | Read latency, Option 1: the fresh 15-minute tail is read through `analytics.energy_semantic_rollup_15min_range` (the rollup view bounded to a whole-bucket UTC range before grouping, so chunk exclusion applies); results unchanged | Implemented, not deployed; staging parity and benchmark pending |
 | B3 | Generic series path (1m / 15m / 30m / 1h) | Planned — returns `NOT_AVAILABLE` until non-Energy assignments exist |
 | B4 | `analytics.point_telemetry_1d` persisted tier (job-built from 15m, upsert-only, 35-day reconcile, backfill, 8-year retention, compression after 90 days; ADR-019 D1/D5) and the 1d read path | Planned — must be live before the first `point_telemetry_15m` chunks age out of 120-day retention |
 | F1–F8 | Frontend: time-range defect fixes (ADR-019), route, API layer, date/time picker, filter panel, ChartFrame extension, table/CSV/states, verification against staging through the tunnel | Planned |
@@ -370,6 +371,8 @@ grouping, and customer-meaningful data point names.
 - Full backend suite passed locally (1798 tests, 2026-09-27). Migration 280 not deployed.
 - 282: `app/tests/test_analytics_energy_series_data_quality.py` (18: IST local 1h equals its 15m rows with the UTC hourly tier unused, Kathmandu +05:45 30m/1h, DST days of 23/25 local hours, in-progress/future buckets, assignment boundaries, device-first vs later `INITIAL`, missing/rejected/gap and all-rejected buckets, stale at 7 and 21 minutes, policy at `last_data_at`, unscheduled stage, 900 s capture → null, site-aware floors, reconstruction off, tenancy, function security); `test_asset_energy_tier_read.py` values unchanged (tenant default UTC for hourly-tier composition; reasons now named); series route tests (reasons, NO_DATA reasons, one `as_of`, floor-aware Auto, evidence flags, bucket state, no `coverage_ratio`, 3-phase fallback); e2e (IST local hours, 1d, floors). Full backend suite 1835 passed locally (2026-09-29). Not deployed.
 
+- 283: `app/tests/test_energy_rollup_range.py` (5: helper security and inlinability, helper = view definition plus the bounded `WHERE`, series function = 282 with only the tail line changed, `bucket_start` pruning in the plan, helper rows equal the view's rows on all 43 columns for on-grid, off-grid, empty, infinite and no-data ranges, 1-minute and 5-minute native rows, and another organization's device). Existing Analytics suites pass unchanged in values. Full backend suite 1840 passed locally (2026-09-29). Staging validation not yet done; not deployed.
+
 ## Release status
 
 Not released. Nothing deployed.
@@ -397,6 +400,17 @@ Not released. Nothing deployed.
   each resolution's maximum window): 1m / 3 days 2.66 s; 15m / 30 days
   0.88 s; 30m / 60 days 0.67 s; 1h / 180 days 0.48 s; 1d / 3 years 0.36 s.
   1m, 15m and 30m exceed a 500 ms per-request target; not yet optimized.
+- Staging measurements after migration 282 (2026-09-29, same method):
+  15m / 30 days 1.55–2.39 s; 30m / 60 days 1.66–2.20 s; 1h / 180 days (IST,
+  local hours) 1.68–2.93 s; 1d / 3 years 1.05–1.20 s. A read-only
+  investigation attributed about 0.3–0.55 s per request to 282's per-bucket
+  and per-series Data Quality work, and the largest, most variable cost to the
+  unchanged fresh-tail read of `v_energy_semantic_rollup_15min`, whose filter
+  on the grouped `bucket_start` scanned every chunk of a device's native rows
+  (up to about 1.6 s per asset on a cold cache). Migration 283 (implemented,
+  not deployed) bounds that tail read; its effect on staging has not been
+  measured yet. Replacing 282's per-bucket subqueries with set-based joins
+  (Option 2) is planned separately.
 - The Asset View Energy tile still reads the canonical, Grafana-keyed Energy
   read; moving it is a separate, parity-gated change.
 
