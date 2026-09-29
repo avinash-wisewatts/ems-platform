@@ -34,6 +34,31 @@ predictive baselines in MVP. Any energy number shown must eventually carry
 a Grafana parity commitment before Grafana's equivalent workflow retires
 (see [ADR-008](../../00-governance/decisions/ADR-008-grafana-ops-role.md)).
 
+**Time ranges** (2026-09-29, ADR-022 Amendment 5, D61/D62): the presets
+Today, 7 Days, 30 Days, 3 Months and 1 Year are calendar ranges in the site's
+timezone, from local midnight of the first day to the exclusive next local
+midnight (7 / 30 Days = today plus the preceding 6 / 29 days; 3 Months / 1 Year
+= the same day-of-month back, or that month's last valid day). The same
+presets apply on Site Overview, Demand, Power Quality and the Main Dashboard.
+
+**Typical historical consumption** ([ADR-009 Amendment 1](../../00-governance/decisions/ADR-009-slice-c-historical-reference-methodology.md#amendment-1-2026-09-29-typical-reference-with-calendar-ranges)):
+the selected calendar range stays authoritative for actual consumption; the
+reference uses the nearest supported fixed window (1/7/30/90/365 days) ending
+at the range's end; when the two durations differ, average consumption per
+calendar day is compared instead of raw totals; Typical is never shown as
+unavailable merely because the durations differ.
+
+**Comparisons use only the elapsed portion** (2026-09-29): the displayed range
+is unchanged, but unelapsed time is excluded from the previous-period,
+same-period-last-year and Typical comparisons and from Energy Attention.
+Previous-period and same-period-last-year compare the same elapsed duration on
+both sides; Typical compares complete elapsed local days only, so Today has no
+Typical comparison until the day is complete. "This period" still shows the
+total recorded so far. Wherever a comparison covers only the matched elapsed
+portion, it carries the site-local qualifier "Compared through {date/time}"
+(e.g. "Compared through 00:00, 15 Jun") -- on the Energy comparison, the Site
+Overview "vs. typical" figure and the Energy Attention trigger.
+
 ## Data / API dependencies
 
 - `GET /api/v1/sites/{site_id}/energy/consumption` (`1h`/`1d`) — **LIVE**.
@@ -89,6 +114,27 @@ and
 No tariff/cost schema exists anywhere — financial views on energy (cost-
 to-date, EMS-REQ-025) are blocked on a genuine data dependency, not a
 scope question (Workshop Q73/Q74).
+
+**1 Year across 29 February — backend follow-up.** The 1 Year preset is
+the same date one year back through today (D61/D62), so it spans 366
+calendar days, or **367** when the interval contains 29 February. The API's
+1-day serving limit is 366 days (`ENERGY_RESOLUTION_MAX_WINDOW["1d"]` and
+`POWER_QUALITY_RESOLUTION_MAX_WINDOW["1d"]` in `app/src/analytics_api_service.py`,
+mirrored in `web/src/time/ranges.ts`). Product Owner decision (2026-09-29):
+keep the calendar semantics — no shortened range and no special 365/366-day
+rule — and **extend the backend/API limit to the maximum calendar span the 1
+Year preset produces (367 days)**. That backend change is a follow-up,
+required before 29 February 2028. Until then, for every "today" from
+29 Feb 2028 to 28 Feb 2029 the 1 Year preset reports the range as not
+served, rather than being shortened.
+
+**Energy CSV and the elapsed-portion comparison -- follow-up.** Since
+2026-09-29 the Energy comparison value, difference and percentage cover only
+the matched elapsed portion, qualified in the UI as "Compared through
+{date/time}". The CSV export's `comparison_value_kwh`, `delta_kwh` and
+`delta_percent` carry the same matched values, but the CSV schema is
+unchanged and has no column stating the cut-off. Whether the export should
+carry that context (an ADR-014 export-format change) is a separate follow-up.
 
 ## Future scope
 

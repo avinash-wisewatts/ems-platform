@@ -79,7 +79,7 @@ import {
   planPowerQualityRequest,
   type TimeRangePreset,
 } from "../time/ranges";
-import { buildTypicalReferenceResult } from "../energy/comparison";
+import { buildTypicalReferenceResult, type TypicalReferenceBasis } from "../energy/comparison";
 import { summarizeEnergyEvidence } from "../energy/evidence";
 import { evaluateEnergyAttention } from "../attention/energyAttention";
 import { deriveSiteHealth, siteHealthSummary } from "../attention/siteHealth";
@@ -89,6 +89,7 @@ import { findPeak } from "./demand/DemandOverview";
 import { latestPowerQualityPoint } from "./power-quality/PowerQualityOverview";
 import { HierarchyCrumb } from "../components/HierarchyCrumb";
 import { TimeRangePicker } from "../components/TimeRangePicker";
+import { ComparedThrough } from "../components/ComparedThrough";
 import { SiteHealthBanner } from "../components/SiteHealthBanner";
 import { AttentionList } from "../components/AttentionList";
 import { FreshnessIndicator } from "../components/FreshnessIndicator";
@@ -107,6 +108,8 @@ type EnergySection = {
   reference: EnergyTypicalReferenceResponse | null;
   evidence: EnergyConsumptionEvidenceResponse | null;
   window: { from: string; to: string } | null;
+  /** The complete elapsed days compared against Typical, and their actual consumption. */
+  typicalBasis: TypicalReferenceBasis | null;
 };
 
 type DemandSection = {
@@ -140,6 +143,7 @@ const ENERGY_INITIAL: EnergySection = {
   reference: null,
   evidence: null,
   window: null,
+  typicalBasis: null,
 };
 const DEMAND_INITIAL: DemandSection = {
   status: "loading",
@@ -168,8 +172,8 @@ export function SiteOverview() {
     let active = true;
     setEnergy((s) => ({ ...s, status: "loading", error: null, unsupportedReason: null }));
 
-    const consumptionPlan = planEnergyRequest(preset);
-    const referencePlan = planEnergyTypicalReferenceRequest(preset);
+    const consumptionPlan = planEnergyRequest(preset, selectedSite.timezone);
+    const referencePlan = planEnergyTypicalReferenceRequest(preset, selectedSite.timezone);
     if (!consumptionPlan.supported) {
       setEnergy({ ...ENERGY_INITIAL, status: "ready", unsupportedReason: consumptionPlan.reason });
       return;
@@ -189,8 +193,11 @@ export function SiteOverview() {
         resolution: consumptionPlan.resolution,
         ...consumptionPlan.range,
       }),
+      referencePlan.basisRange
+        ? getSiteEnergyConsumption(selectedSite.site_id, { resolution: "1d", ...referencePlan.basisRange })
+        : null,
     ])
-      .then(([current, reference, evidence]) => {
+      .then(([current, reference, evidence, basisResponse]) => {
         if (!active) return;
         setEnergy({
           status: "ready",
@@ -200,6 +207,12 @@ export function SiteOverview() {
           reference,
           evidence,
           window: consumptionPlan.range,
+          typicalBasis: {
+            basisResponse,
+            basisUntil: referencePlan.basisRange?.to ?? null,
+            basisDays: referencePlan.basisDays,
+            referenceDays: referencePlan.referenceDays,
+          },
         });
       })
       .catch((err: unknown) => {
@@ -217,7 +230,7 @@ export function SiteOverview() {
     let active = true;
     setDemand((s) => ({ ...s, status: "loading", error: null, unsupportedReason: null }));
 
-    const plan = planDemandRequest(preset);
+    const plan = planDemandRequest(preset, selectedSite.timezone);
     if (!plan.supported) {
       setDemand({ ...DEMAND_INITIAL, status: "ready", unsupportedReason: plan.reason });
       return;
@@ -243,7 +256,7 @@ export function SiteOverview() {
     let active = true;
     setPq((s) => ({ ...s, status: "loading", error: null, unsupportedReason: null }));
 
-    const plan = planPowerQualityRequest(preset);
+    const plan = planPowerQualityRequest(preset, selectedSite.timezone);
     if (!plan.supported) {
       setPq({ ...PQ_INITIAL, status: "ready", unsupportedReason: plan.reason });
       return;
@@ -300,7 +313,9 @@ export function SiteOverview() {
   // section's own already-fetched data. No second baseline mechanism; Slice
   // C's typical-reference is the only comparison this reads.
   const comparisonResult =
-    energy.current && energy.reference ? buildTypicalReferenceResult(energy.current, energy.reference) : null;
+    energy.current && energy.reference
+      ? buildTypicalReferenceResult(energy.current, energy.reference, energy.typicalBasis ?? undefined)
+      : null;
   const evidenceSummary = energy.evidence ? summarizeEnergyEvidence(energy.evidence) : null;
 
   const attentionItems: AttentionItem[] = [];
@@ -312,6 +327,7 @@ export function SiteOverview() {
       siteName: selectedSite.site_name,
       window: energy.window,
       investigatePath: "/features/energy",
+      timeZone: selectedSite.timezone,
     });
     if (item) attentionItems.push(item);
   }
@@ -328,7 +344,7 @@ export function SiteOverview() {
       <HierarchyCrumb siteName={selectedSite.site_name} multiSite={sites.length > 1} />
       <h1>Site Overview</h1>
 
-      <TimeRangePicker value={preset} onChange={setPreset} dataKind="energy" />
+      <TimeRangePicker value={preset} onChange={setPreset} dataKind="energy" timeZone={selectedSite.timezone} />
 
       {/* 1. Overall Site Health / Status */}
       {siteHealthKnown ? (
@@ -382,6 +398,8 @@ export function SiteOverview() {
                     {" "}
                     ({comparisonResult.deltaPercent >= 0 ? "+" : ""}
                     {comparisonResult.deltaPercent.toFixed(1)}% vs. typical)
+                    {comparisonResult.comparedUntil !== null ? " · " : null}
+                    <ComparedThrough comparedUntil={comparisonResult.comparedUntil} timeZone={selectedSite.timezone} />
                   </span>
                 ) : null}
               </p>

@@ -62,6 +62,7 @@ import {
 import {
   buildComparisonResult,
   buildTypicalReferenceResult,
+  type TypicalReferenceBasis,
   type ComparisonResult,
   type TypicalReferenceResult,
 } from "../../energy/comparison";
@@ -70,6 +71,7 @@ import { buildEnergyConsumptionExportCsv, energyConsumptionExportFilename } from
 import { downloadCsv } from "../../export/downloadCsv";
 import { HierarchyCrumb } from "../../components/HierarchyCrumb";
 import { TimeRangePicker } from "../../components/TimeRangePicker";
+import { ComparedThrough } from "../../components/ComparedThrough";
 import { StatusBadge } from "../../components/StatusBadge";
 import { EnergyEvidencePanel } from "../../components/EnergyEvidencePanel";
 import { FreshnessIndicator } from "../../components/FreshnessIndicator";
@@ -118,6 +120,12 @@ export function EnergyOverview() {
   // TYPICAL_HISTORICAL_REFERENCE (Slice C): the complete server-computed
   // reference -- one bounded call, no frontend N+1.
   const [typicalReference, setTypicalReference] = useState<EnergyTypicalReferenceResponse | null>(null);
+  // The complete elapsed local days compared against Typical, and their
+  // actual consumption (planEnergyTypicalReferenceRequest's basisRange).
+  const [typicalBasis, setTypicalBasis] = useState<TypicalReferenceBasis | null>(null);
+  // End of the elapsed portion compared for PREVIOUS_PERIOD /
+  // SAME_PERIOD_PREVIOUSLY (planEnergyComparisonRequest's comparedUntil).
+  const [comparedUntil, setComparedUntil] = useState<string | null>(null);
   // Evidence (Slice C, C4): the current period's coverage/gap/reset/rollover
   // counters, from the additive GET .../energy/consumption/evidence endpoint.
   const [evidence, setEvidence] = useState<EnergyConsumptionEvidenceResponse | null>(null);
@@ -151,8 +159,8 @@ export function EnergyOverview() {
     }
 
     if (basis === "TYPICAL_HISTORICAL_REFERENCE") {
-      const consumptionPlan = planEnergyRequest(preset);
-      const referencePlan = planEnergyTypicalReferenceRequest(preset);
+      const consumptionPlan = planEnergyRequest(preset, selectedSite.timezone);
+      const referencePlan = planEnergyTypicalReferenceRequest(preset, selectedSite.timezone);
       if (!consumptionPlan.supported) {
         resetToUnsupported(consumptionPlan.reason);
         return;
@@ -162,6 +170,7 @@ export function EnergyOverview() {
         return;
       }
 
+      const basisRange = referencePlan.basisRange;
       Promise.all([
         getSiteEnergyConsumption(selectedSite.site_id, {
           resolution: consumptionPlan.resolution,
@@ -172,11 +181,19 @@ export function EnergyOverview() {
           resolution: consumptionPlan.resolution,
           ...consumptionPlan.range,
         }),
+        basisRange ? getSiteEnergyConsumption(selectedSite.site_id, { resolution: "1d", ...basisRange }) : null,
       ])
-        .then(([currentRes, referenceRes, evidenceRes]) => {
+        .then(([currentRes, referenceRes, evidenceRes, basisRes]) => {
           if (!active) return;
           setCurrent(currentRes);
           setTypicalReference(referenceRes);
+          setTypicalBasis({
+            basisResponse: basisRes,
+            basisUntil: basisRange?.to ?? null,
+            basisDays: referencePlan.basisDays,
+            referenceDays: referencePlan.referenceDays,
+          });
+          setComparedUntil(null);
           setComparison(null);
           setEvidence(evidenceRes);
           setStatus("ready");
@@ -188,7 +205,7 @@ export function EnergyOverview() {
       };
     }
 
-    const plan = planEnergyComparisonRequest(preset, basis);
+    const plan = planEnergyComparisonRequest(preset, basis, selectedSite.timezone);
     if (!plan.supported) {
       resetToUnsupported(plan.reason);
       return;
@@ -196,13 +213,17 @@ export function EnergyOverview() {
 
     Promise.all([
       getSiteEnergyConsumption(selectedSite.site_id, { resolution: plan.resolution, ...plan.current }),
-      getSiteEnergyConsumption(selectedSite.site_id, { resolution: plan.resolution, ...plan.comparison }),
+      // Only the elapsed portion is compared; nothing to request before any has elapsed.
+      plan.comparison
+        ? getSiteEnergyConsumption(selectedSite.site_id, { resolution: plan.resolution, ...plan.comparison })
+        : null,
       getSiteEnergyConsumptionEvidence(selectedSite.site_id, { resolution: plan.resolution, ...plan.current }),
     ])
       .then(([currentRes, comparisonRes, evidenceRes]) => {
         if (!active) return;
         setCurrent(currentRes);
         setComparison(comparisonRes);
+        setComparedUntil(plan.comparedUntil);
         setTypicalReference(null);
         setEvidence(evidenceRes);
         setStatus("ready");
@@ -242,10 +263,10 @@ export function EnergyOverview() {
       ? null
       : basis === "TYPICAL_HISTORICAL_REFERENCE"
         ? typicalReference !== null
-          ? buildTypicalReferenceResult(current, typicalReference)
+          ? buildTypicalReferenceResult(current, typicalReference, typicalBasis ?? undefined)
           : null
-        : comparison !== null
-          ? buildComparisonResult(basis, current, comparison)
+        : comparedUntil !== null
+          ? buildComparisonResult(basis, current, comparison, comparedUntil)
           : null;
 
   const referenceResult: TypicalReferenceResult | null =
@@ -280,7 +301,7 @@ export function EnergyOverview() {
       <h1>Energy consumption</h1>
 
       <div className="energy-controls">
-        <TimeRangePicker value={preset} onChange={setPreset} dataKind="energy" />
+        <TimeRangePicker value={preset} onChange={setPreset} dataKind="energy" timeZone={selectedSite.timezone} />
         <div role="group" aria-label="Compare to" className="comparison-basis-picker">
           {COMPARISON_BASES.map((b) => (
             <button
@@ -354,6 +375,11 @@ export function EnergyOverview() {
                       : ""}
                   </span>
                 ) : null}
+                {/* The comparison value, difference and percentage cover only
+                    the matched elapsed portion; "This period" shows everything
+                    recorded so far. */}
+                {result.comparedUntil !== null ? " · " : null}
+                <ComparedThrough comparedUntil={result.comparedUntil} timeZone={selectedSite.timezone} />
               </p>
             ) : (
               <NoDataYet message="No comparison data for that period yet." />

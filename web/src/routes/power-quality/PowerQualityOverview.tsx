@@ -67,7 +67,7 @@ export function PowerQualityOverview() {
     setError(null);
     setUnsupportedReason(null);
 
-    const plan = planPowerQualityRequest(preset);
+    const plan = planPowerQualityRequest(preset, selectedSite.timezone);
     if (!plan.supported) {
       setUnsupportedReason(plan.reason);
       setStatus("ready");
@@ -130,7 +130,7 @@ export function PowerQualityOverview() {
         measures waveform distortion on each supply phase.
       </p>
 
-      <TimeRangePicker value={preset} onChange={setPreset} dataKind="power-quality" />
+      <TimeRangePicker value={preset} onChange={setPreset} dataKind="power-quality" timeZone={selectedSite.timezone} />
 
       {status === "loading" ? <Loading label="Loading power quality…" /> : null}
       {status === "error" ? <ErrorState error={error} onRetry={() => setNonce((n) => n + 1)} /> : null}

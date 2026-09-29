@@ -60,6 +60,18 @@ The exact financial/operational significance framing for PF (Workshop
 financial implication") requires formulas and tariff/DISCOM scope that
 remain **OPEN** — not to be assumed universal across Indian DISCOMs.
 
+**1 Year across 29 February — backend follow-up.** The 1 Year preset is
+the same date one year back through today (D61/D62), so it spans 366
+calendar days, or **367** when the interval contains 29 February. The API's
+1-day serving limit is 366 days (`POWER_QUALITY_RESOLUTION_MAX_WINDOW["1d"]` in `app/src/analytics_api_service.py`,
+mirrored in `web/src/time/ranges.ts`). Product Owner decision (2026-09-29):
+keep the calendar semantics — no shortened range and no special 365/366-day
+rule — and **extend the backend/API limit to the maximum calendar span the 1
+Year preset produces (367 days)**. That backend change is a follow-up,
+required before 29 February 2028. Until then, for every "today" from
+29 Feb 2028 to 28 Feb 2029 the 1 Year preset reports the range as not
+served, rather than being shortened.
+
 ## Future scope
 
 Harmonic spectrum view, alerting on PF/imbalance (MVP-7), tie to equipment

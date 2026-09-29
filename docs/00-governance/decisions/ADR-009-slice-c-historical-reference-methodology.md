@@ -120,3 +120,54 @@ classification pipeline, or Grafana. See
 [../../08-verification/staging-validation.md](../../08-verification/staging-validation.md)
 for the subsequent MVP-3 composite-screen staging validation that
 consumes this endpoint.
+
+---
+
+## Amendment 1 (2026-09-29): typical reference with calendar ranges
+
+**Context.** The time-range presets became calendar ranges in the site's
+timezone, application-wide (ADR-022 Amendment 5, D61/D62): local midnight of
+the first day to the exclusive next local midnight. The typical-reference
+endpoint accepts only exact spans of 1, 7, 30, 90 or 365 × 24 hours, while a
+calendar 3 Months is 90–93 days, a 1 Year 366 days (367 when it contains
+29 February), and a range across a DST change is an hour shorter or longer.
+
+**Decision (Product Owner, 2026-09-29).**
+
+1. The customer's selected calendar range remains authoritative for actual
+   consumption; it is never changed to fit the reference.
+2. The typical reference uses the nearest supported fixed window — 1, 7, 30,
+   90 or 365 days for Today, 7 Days, 30 Days, 3 Months and 1 Year — **ending
+   at the selected range's end**.
+3. When the range's calendar-day count and the reference window's day count
+   differ, the comparison uses **normalized average consumption per calendar
+   day**, not raw totals.
+4. Typical is never shown as unavailable merely because the durations
+   differ.
+5. **Elapsed portion only** (Product Owner, 2026-09-29). The displayed
+   calendar range is unchanged (including its future empty buckets, D16), but
+   unelapsed time is excluded from every comparison and from the Energy
+   Attention thresholds: actual consumption so far is compared with historical
+   or reference periods covering the same elapsed duration. This applies to
+   the previous-period, same-period-last-year and Typical comparisons.
+6. **Typical compares complete elapsed local days only** (Product Owner,
+   2026-09-29). The typical value comes from the site-local daily historian,
+   which cannot represent part of a day, so Typical compares the actual
+   consumption of the complete elapsed local days (range start to today's
+   local midnight) with the typical per day × that number of days. Today has
+   no complete day, so it has no Typical comparison until the day is complete.
+
+**Implementation (F1, frontend only).** `planEnergyTypicalReferenceRequest`
+(`web/src/time/ranges.ts`) builds the fixed window and the complete-day basis
+(`basisRange`, read at 1d); `buildTypicalReferenceResult`
+(`web/src/energy/comparison.ts`) compares those days with typical per day ×
+their count. Previous-period and same-period-last-year windows are cut at the
+same elapsed point on both sides (`planEnergyComparisonRequest`): the last
+completed UTC hour for hourly data, today's local midnight for daily data. The
+"This period" total still shows everything recorded in the displayed range;
+the comparison figure, difference and percentage (and so Energy Attention)
+use only the matched elapsed portion, and carry the site-local qualifier
+"Compared through {date/time}" (Product Owner, 2026-09-29) on the Energy
+comparison, the Site Overview "vs. typical" figure and the Energy Attention
+trigger (`web/src/components/ComparedThrough.tsx`). The server-side methodology
+above is unchanged.

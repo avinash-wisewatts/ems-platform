@@ -37,6 +37,7 @@ import type { EnergyEvidenceSummary } from "../energy/evidence";
 import type { TypicalReferenceResult } from "../energy/comparison";
 import type { EnergyMaterialityPolicy } from "./materiality-policy";
 import type { AttentionItem } from "./types";
+import { comparedThroughText } from "../components/ComparedThrough";
 
 export type EnergyAttentionInput = {
   result: TypicalReferenceResult;
@@ -51,6 +52,9 @@ export type EnergyAttentionInput = {
   window: { from: string; to: string };
   /** In-app path to the full Energy screen, for "Investigate". */
   investigatePath: string;
+  /** Site timezone for the "Compared through" qualifier, added when the
+   *  comparison covers only the matched elapsed portion (result.comparedUntil). */
+  timeZone?: string | null;
 };
 
 /** Absorbs IEEE-754 division noise (observed ~1e-13) at the threshold
@@ -71,6 +75,7 @@ export function evaluateEnergyAttention({
   siteName,
   window,
   investigatePath,
+  timeZone = null,
 }: EnergyAttentionInput): AttentionItem | null {
   if (!result.sufficient || !result.currentHasData || result.deltaPercent === null) {
     return null;
@@ -94,7 +99,12 @@ export function evaluateEnergyAttention({
     what: direction === "HIGH" ? "Unusually high consumption" : "Unusually low consumption",
     where: siteName,
     when: window,
-    trigger: `${formatDeltaPercent(deltaPercent)} vs. typical historical consumption (threshold: ${threshold}%)`,
+    trigger: [
+      `${formatDeltaPercent(deltaPercent)} vs. typical historical consumption (threshold: ${threshold}%)`,
+      comparedThroughText(result.comparedUntil, timeZone),
+    ]
+      .filter((part): part is string => part !== null)
+      .join(" · "),
     evidence: {
       eligiblePeriodCount: result.eligiblePeriodCount,
       requestedPeriodCount: result.requestedPeriodCount,

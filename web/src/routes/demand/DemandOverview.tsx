@@ -177,7 +177,7 @@ export function DemandOverview() {
     setError(null);
     setUnsupportedReason(null);
 
-    const plan = planDemandRequest(preset);
+    const plan = planDemandRequest(preset, selectedSite.timezone);
     if (!plan.supported) {
       setUnsupportedReason(plan.reason);
       setStatus("ready");
@@ -238,7 +238,7 @@ export function DemandOverview() {
       <HierarchyCrumb siteName={selectedSite.site_name} multiSite={sites.length > 1} leaf={{ label: "Demand" }} />
       <h1>Maximum demand</h1>
 
-      <TimeRangePicker value={preset} onChange={setPreset} dataKind="demand" />
+      <TimeRangePicker value={preset} onChange={setPreset} dataKind="demand" timeZone={selectedSite.timezone} />
 
       {status === "loading" ? <Loading label="Loading demand…" /> : null}
       {status === "error" ? <ErrorState error={error} onRetry={() => setNonce((n) => n + 1)} /> : null}

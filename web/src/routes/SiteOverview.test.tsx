@@ -45,6 +45,28 @@ function energyResponse(importKwh: number, noData = false) {
   };
 }
 
+/** F1 (elapsed portion only, PO 2026-09-29): Typical is compared with the
+ *  complete elapsed local days, read by an extra 1d request whose window ends
+ *  before now. That request gets the same consumption scaled to those days
+ *  against the nearest fixed reference length, so each test keeps its
+ *  intended deviation from typical. */
+function isCompleteDaysBasisUrl(url: string): boolean {
+  const parsed = new URL(url, "http://localhost");
+  const to = parsed.searchParams.get("to");
+  return parsed.searchParams.get("resolution") === "1d" && to !== null && Date.parse(to) <= Date.now();
+}
+function completeDaysFactor(url: string): number {
+  const parsed = new URL(url, "http://localhost");
+  const days = Math.round(
+    (Date.parse(parsed.searchParams.get("to") ?? "") - Date.parse(parsed.searchParams.get("from") ?? "")) / 86_400_000,
+  );
+  const referenceDays = [1, 7, 30, 90, 365].reduce((best, d) => (Math.abs(d - days) < Math.abs(best - days) ? d : best));
+  return days / referenceDays;
+}
+function energyFor(url: string, importKwh: number, noData = false) {
+  return energyResponse(isCompleteDaysBasisUrl(url) ? importKwh * completeDaysFactor(url) : importKwh, noData);
+}
+
 function evidenceResponse(noData = false) {
   return {
     site_id: SITE_ID,
@@ -197,7 +219,7 @@ function stubAllHealthy() {
   return stubFetch((url) => {
     if (isEvidenceUrl(url)) return { jsonBody: evidenceResponse() };
     if (isTypicalReferenceUrl(url)) return { jsonBody: typicalReferenceResponse({ typical_kwh: 100 }) };
-    if (isConsumptionUrl(url)) return { jsonBody: energyResponse(105) }; // +5%, within band
+    if (isConsumptionUrl(url)) return { jsonBody: energyFor(url, 105) }; // +5%, within band
     if (isDemandCurrentUrl(url)) return { jsonBody: currentDemandResponse(true) };
     if (isDemandSeriesUrl(url)) return { jsonBody: demandSeriesResponse() };
     if (isPowerQualityUrl(url)) return { jsonBody: pqResponse() };
@@ -216,6 +238,7 @@ describe("SiteOverview (MVP-3 -- Site Health & Attention)", () => {
 
     expect(screen.getByTestId("site-overview-energy-value")).toHaveTextContent("105.0 kWh");
     expect(screen.getByTestId("site-overview-energy-delta")).toHaveTextContent("+5.0%");
+    expect(screen.getByTestId("site-overview-energy-delta")).toHaveTextContent(/Compared through 00:00, \d{2} [A-Z][a-z]{2}/);
 
     await waitFor(() => expect(screen.getByTestId("site-overview-demand-value")).toHaveTextContent("60.5 kW"));
     expect(screen.getByTestId("site-overview-demand-peak")).toHaveTextContent("70.0 kW");
@@ -229,7 +252,7 @@ describe("SiteOverview (MVP-3 -- Site Health & Attention)", () => {
     stubFetch((url) => {
       if (isEvidenceUrl(url)) return { jsonBody: evidenceResponse() };
       if (isTypicalReferenceUrl(url)) return { jsonBody: typicalReferenceResponse({ typical_kwh: 100 }) };
-      if (isConsumptionUrl(url)) return { jsonBody: energyResponse(118) };
+      if (isConsumptionUrl(url)) return { jsonBody: energyFor(url, 118) };
       if (isDemandCurrentUrl(url)) return { jsonBody: currentDemandResponse(true) };
       if (isDemandSeriesUrl(url)) return { jsonBody: demandSeriesResponse() };
       if (isPowerQualityUrl(url)) return { jsonBody: pqResponse() };
@@ -255,7 +278,7 @@ describe("SiteOverview (MVP-3 -- Site Health & Attention)", () => {
     stubFetch((url) => {
       if (isEvidenceUrl(url)) return { jsonBody: evidenceResponse() };
       if (isTypicalReferenceUrl(url)) return { jsonBody: typicalReferenceResponse({ typical_kwh: 100 }) };
-      if (isConsumptionUrl(url)) return { jsonBody: energyResponse(80) };
+      if (isConsumptionUrl(url)) return { jsonBody: energyFor(url, 80) };
       if (isDemandCurrentUrl(url)) return { jsonBody: currentDemandResponse(true) };
       if (isDemandSeriesUrl(url)) return { jsonBody: demandSeriesResponse() };
       if (isPowerQualityUrl(url)) return { jsonBody: pqResponse() };
@@ -276,7 +299,7 @@ describe("SiteOverview (MVP-3 -- Site Health & Attention)", () => {
       if (isEvidenceUrl(url)) return { jsonBody: evidenceResponse() };
       if (isTypicalReferenceUrl(url))
         return { jsonBody: typicalReferenceResponse({ sufficient: false, typical_kwh: null, eligible_period_count: 3 }) };
-      if (isConsumptionUrl(url)) return { jsonBody: energyResponse(999) };
+      if (isConsumptionUrl(url)) return { jsonBody: energyFor(url, 999) };
       if (isDemandCurrentUrl(url)) return { jsonBody: currentDemandResponse(true) };
       if (isDemandSeriesUrl(url)) return { jsonBody: demandSeriesResponse() };
       if (isPowerQualityUrl(url)) return { jsonBody: pqResponse() };
@@ -298,7 +321,7 @@ describe("SiteOverview (MVP-3 -- Site Health & Attention)", () => {
     stubFetch((url) => {
       if (isEvidenceUrl(url)) return { jsonBody: evidenceResponse(true) };
       if (isTypicalReferenceUrl(url)) return { jsonBody: typicalReferenceResponse({ typical_kwh: 100 }) };
-      if (isConsumptionUrl(url)) return { jsonBody: energyResponse(0, true) };
+      if (isConsumptionUrl(url)) return { jsonBody: energyFor(url, 0, true) };
       if (isDemandCurrentUrl(url)) return { jsonBody: currentDemandResponse(true) };
       if (isDemandSeriesUrl(url)) return { jsonBody: demandSeriesResponse() };
       if (isPowerQualityUrl(url)) return { jsonBody: pqResponse() };
@@ -317,7 +340,7 @@ describe("SiteOverview (MVP-3 -- Site Health & Attention)", () => {
       if (isDemandCurrentUrl(url) || isDemandSeriesUrl(url)) return { status: 500, jsonBody: { error: "server_error" } };
       if (isEvidenceUrl(url)) return { jsonBody: evidenceResponse() };
       if (isTypicalReferenceUrl(url)) return { jsonBody: typicalReferenceResponse({ typical_kwh: 100 }) };
-      if (isConsumptionUrl(url)) return { jsonBody: energyResponse(105) };
+      if (isConsumptionUrl(url)) return { jsonBody: energyFor(url, 105) };
       if (isPowerQualityUrl(url)) return { jsonBody: pqResponse() };
       return { status: 404, jsonBody: { error: "not_found", detail: "unexpected" } };
     });
@@ -348,7 +371,7 @@ describe("SiteOverview (MVP-3 -- Site Health & Attention)", () => {
     stubFetch((url) => {
       if (isEvidenceUrl(url)) return { jsonBody: evidenceResponse() };
       if (isTypicalReferenceUrl(url)) return { jsonBody: typicalReferenceResponse({ typical_kwh: 100 }) };
-      if (isConsumptionUrl(url)) return { jsonBody: energyResponse(105) };
+      if (isConsumptionUrl(url)) return { jsonBody: energyFor(url, 105) };
       if (isDemandCurrentUrl(url)) return { jsonBody: currentDemandResponse(true) };
       if (isDemandSeriesUrl(url)) return { jsonBody: demandSeriesResponse() };
       if (isPowerQualityUrl(url)) return { jsonBody: pqResponse() };
@@ -388,13 +411,15 @@ describe("SiteOverview (MVP-3 -- Site Health & Attention)", () => {
     });
 
     renderWithProviders(<SiteOverview />, { sites: () => Promise.resolve(SITES_ONE) });
-    await waitFor(() => expect(consumptionCalls).toBe(1));
+    // Two consumption reads per range: the range itself, and its complete
+    // elapsed days compared with Typical (F1, elapsed portion only).
+    await waitFor(() => expect(consumptionCalls).toBe(2));
     await waitFor(() => expect(demandSeriesCalls).toBe(1));
     await waitFor(() => expect(pqCalls).toBe(1));
 
     screen.getByRole("button", { name: "30 Days" }).click();
 
-    await waitFor(() => expect(consumptionCalls).toBe(2));
+    await waitFor(() => expect(consumptionCalls).toBe(4));
     await waitFor(() => expect(demandSeriesCalls).toBe(2));
     await waitFor(() => expect(pqCalls).toBe(2));
   });
@@ -404,7 +429,7 @@ describe("SiteOverview (MVP-3 -- Site Health & Attention)", () => {
       if (isFreshnessUrl(url)) return { jsonBody: freshnessResponse({ energy: "FRESH", demand: "STALE", power_quality: "NO_DATA" }) };
       if (isEvidenceUrl(url)) return { jsonBody: evidenceResponse() };
       if (isTypicalReferenceUrl(url)) return { jsonBody: typicalReferenceResponse({ typical_kwh: 100 }) };
-      if (isConsumptionUrl(url)) return { jsonBody: energyResponse(105) };
+      if (isConsumptionUrl(url)) return { jsonBody: energyFor(url, 105) };
       if (isDemandCurrentUrl(url)) return { jsonBody: currentDemandResponse(true) };
       if (isDemandSeriesUrl(url)) return { jsonBody: demandSeriesResponse() };
       if (isPowerQualityUrl(url)) return { jsonBody: pqResponse() };
@@ -426,7 +451,7 @@ describe("SiteOverview (MVP-3 -- Site Health & Attention)", () => {
       if (isFreshnessUrl(url)) return { jsonBody: freshnessResponse({ energy: "UNKNOWN", demand: "STALE", power_quality: "NO_DATA" }) };
       if (isEvidenceUrl(url)) return { jsonBody: evidenceResponse() };
       if (isTypicalReferenceUrl(url)) return { jsonBody: typicalReferenceResponse({ typical_kwh: 100 }) };
-      if (isConsumptionUrl(url)) return { jsonBody: energyResponse(0, true) }; // Energy: no_data
+      if (isConsumptionUrl(url)) return { jsonBody: energyFor(url, 0, true) }; // Energy: no_data
       if (isDemandCurrentUrl(url)) return { jsonBody: currentDemandResponse(false) }; // Demand: has_data false
       if (isDemandSeriesUrl(url)) return { jsonBody: demandSeriesResponse(true) };
       if (isPowerQualityUrl(url)) return { jsonBody: pqResponse(true) }; // PQ: no_data
@@ -465,7 +490,7 @@ describe("SiteOverview (MVP-3 -- Site Health & Attention)", () => {
       if (isFreshnessUrl(url)) return { status: 500, jsonBody: { error: "server_error" } };
       if (isEvidenceUrl(url)) return { jsonBody: evidenceResponse() };
       if (isTypicalReferenceUrl(url)) return { jsonBody: typicalReferenceResponse({ typical_kwh: 100 }) };
-      if (isConsumptionUrl(url)) return { jsonBody: energyResponse(105) };
+      if (isConsumptionUrl(url)) return { jsonBody: energyFor(url, 105) };
       if (isDemandCurrentUrl(url)) return { jsonBody: currentDemandResponse(true) };
       if (isDemandSeriesUrl(url)) return { jsonBody: demandSeriesResponse() };
       if (isPowerQualityUrl(url)) return { jsonBody: pqResponse() };

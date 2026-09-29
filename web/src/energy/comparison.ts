@@ -21,21 +21,31 @@ import type { EnergyConsumptionResponse, EnergyTypicalReferenceResponse } from "
 
 export type ComparisonResult = {
   basis: ComparisonBasis;
+  /** "This period": everything recorded so far in the displayed range. */
   currentTotalKwh: number | null;
+  /** The actual consumption the comparison is made on: the elapsed portion
+   *  matched on both sides (Product Owner decision, 2026-09-29). Equal to
+   *  currentTotalKwh when no cut applies. */
+  basisCurrentKwh: number | null;
+  /** End of that portion (ISO), or null when the whole response is compared. */
+  comparedUntil: string | null;
   comparisonTotalKwh: number | null;
+  /** basisCurrentKwh - comparisonTotalKwh. */
   deltaKwh: number | null;
   deltaPercent: number | null;
   currentHasData: boolean;
   comparisonHasData: boolean;
 };
 
-/** Sum of import_kwh across the series; null if no point carries a value. */
-function sumImportKwh(response: EnergyConsumptionResponse): number | null {
+/** Sum of import_kwh across the series (optionally only buckets starting
+ *  before `until`); null if no point carries a value. */
+function sumImportKwh(response: EnergyConsumptionResponse, until?: string | null): number | null {
   if (response.no_data) return null;
+  const limit = until ? Date.parse(until) : Number.POSITIVE_INFINITY;
   let total = 0;
   let any = false;
   for (const point of response.series) {
-    if (point.import_kwh !== null) {
+    if (point.import_kwh !== null && Date.parse(point.bucket_start) < limit) {
       total += point.import_kwh;
       any = true;
     }
@@ -43,32 +53,40 @@ function sumImportKwh(response: EnergyConsumptionResponse): number | null {
   return any ? total : null;
 }
 
-export function buildComparisonResult(
-  basis: ComparisonBasis,
-  current: EnergyConsumptionResponse,
-  comparison: EnergyConsumptionResponse,
-): ComparisonResult {
-  const currentTotalKwh = sumImportKwh(current);
-  const comparisonTotalKwh = sumImportKwh(comparison);
-
+function delta(basisCurrentKwh: number | null, comparisonTotalKwh: number | null) {
   const deltaKwh =
-    currentTotalKwh !== null && comparisonTotalKwh !== null
-      ? currentTotalKwh - comparisonTotalKwh
-      : null;
-
+    basisCurrentKwh !== null && comparisonTotalKwh !== null ? basisCurrentKwh - comparisonTotalKwh : null;
   const deltaPercent =
     deltaKwh !== null && comparisonTotalKwh !== null && comparisonTotalKwh !== 0
       ? (deltaKwh / comparisonTotalKwh) * 100
       : null;
+  return { deltaKwh, deltaPercent };
+}
 
+/**
+ * PREVIOUS_PERIOD / SAME_PERIOD_PREVIOUSLY. `comparison` is the historical
+ * window covering the same elapsed portion as [current range start,
+ * `comparedUntil`) (planEnergyComparisonRequest), or null when nothing has
+ * elapsed yet. Unelapsed time never enters the delta.
+ */
+export function buildComparisonResult(
+  basis: ComparisonBasis,
+  current: EnergyConsumptionResponse,
+  comparison: EnergyConsumptionResponse | null,
+  comparedUntil: string | null = null,
+): ComparisonResult {
+  const currentTotalKwh = sumImportKwh(current);
+  const basisCurrentKwh = sumImportKwh(current, comparedUntil);
+  const comparisonTotalKwh = comparison ? sumImportKwh(comparison) : null;
   return {
     basis,
     currentTotalKwh,
+    basisCurrentKwh,
+    comparedUntil,
     comparisonTotalKwh,
-    deltaKwh,
-    deltaPercent,
+    ...delta(basisCurrentKwh, comparisonTotalKwh),
     currentHasData: !current.no_data,
-    comparisonHasData: !comparison.no_data,
+    comparisonHasData: comparison !== null && !comparison.no_data,
   };
 }
 
@@ -97,6 +115,20 @@ export type TypicalReferenceResult = ComparisonResult & {
   eligiblePeriodCount: number;
   sufficient: boolean;
   windows: EnergyTypicalReferenceResponse["windows"];
+  /** Set when the compared days and the fixed reference window have
+   *  different day counts, so the comparison was made per calendar day. */
+  normalizedPerCalendarDay: boolean;
+};
+
+/** The complete elapsed local days compared against Typical
+ *  (planEnergyTypicalReferenceRequest's basisRange / basisDays /
+ *  referenceDays): their actual consumption, read at 1d, or null when no
+ *  complete day has elapsed. */
+export type TypicalReferenceBasis = {
+  basisResponse: EnergyConsumptionResponse | null;
+  basisUntil: string | null;
+  basisDays: number;
+  referenceDays: number;
 };
 
 /**
@@ -114,32 +146,46 @@ export type TypicalReferenceResult = ComparisonResult & {
 export function buildTypicalReferenceResult(
   current: EnergyConsumptionResponse,
   reference: EnergyTypicalReferenceResponse,
+  basis?: TypicalReferenceBasis,
 ): TypicalReferenceResult {
   const currentTotalKwh = sumImportKwh(current);
-  const comparisonTotalKwh = reference.sufficient ? reference.typical_kwh : null;
+  const typicalKwh = reference.sufficient ? reference.typical_kwh : null;
 
-  const deltaKwh =
-    currentTotalKwh !== null && comparisonTotalKwh !== null
-      ? currentTotalKwh - comparisonTotalKwh
-      : null;
-
-  const deltaPercent =
-    deltaKwh !== null && comparisonTotalKwh !== null && comparisonTotalKwh !== 0
-      ? (deltaKwh / comparisonTotalKwh) * 100
-      : null;
+  let basisCurrentKwh = currentTotalKwh;
+  let comparisonTotalKwh = typicalKwh;
+  let normalizedPerCalendarDay = false;
+  if (basis !== undefined) {
+    // Product Owner decisions (2026-09-29): only COMPLETE elapsed local days
+    // are compared with Typical (the daily historian cannot represent part of
+    // a day), and when their count differs from the reference window's,
+    // average consumption per calendar day is compared -- the typical per day
+    // is expressed for the compared days, so the delta and percentage equal
+    // the per-day comparison. No complete day yet (Today): no comparison.
+    const hasBasis = basis.basisResponse !== null && basis.basisDays > 0 && basis.referenceDays > 0;
+    basisCurrentKwh = hasBasis && basis.basisResponse ? sumImportKwh(basis.basisResponse) : null;
+    normalizedPerCalendarDay = hasBasis && basis.basisDays !== basis.referenceDays;
+    comparisonTotalKwh =
+      !hasBasis || typicalKwh === null
+        ? null
+        : normalizedPerCalendarDay
+          ? (typicalKwh / basis.referenceDays) * basis.basisDays
+          : typicalKwh;
+  }
 
   return {
     basis: "TYPICAL_HISTORICAL_REFERENCE",
     currentTotalKwh,
+    basisCurrentKwh,
+    comparedUntil: basis?.basisUntil ?? null,
     comparisonTotalKwh,
-    deltaKwh,
-    deltaPercent,
+    ...delta(basisCurrentKwh, comparisonTotalKwh),
     currentHasData: !current.no_data,
-    comparisonHasData: reference.sufficient,
+    comparisonHasData: reference.sufficient && comparisonTotalKwh !== null,
     requestedPeriodCount: reference.requested_period_count,
     windowsWithDataCount: reference.windows_with_data_count,
     eligiblePeriodCount: reference.eligible_period_count,
     sufficient: reference.sufficient,
     windows: reference.windows,
+    normalizedPerCalendarDay,
   };
 }

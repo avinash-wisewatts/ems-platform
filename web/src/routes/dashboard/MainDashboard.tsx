@@ -132,6 +132,7 @@ import {
   type TimeRangePreset,
 } from "../../time/ranges";
 import { buildComparisonResult, buildTypicalReferenceResult, type ComparisonResult } from "../../energy/comparison";
+import { ComparedThrough } from "../../components/ComparedThrough";
 import { summarizeEnergyEvidence } from "../../energy/evidence";
 import { evaluateEnergyAttention } from "../../attention/energyAttention";
 import { deriveSiteHealth, siteHealthSummary, SITE_HEALTH_LABELS } from "../../attention/siteHealth";
@@ -284,7 +285,17 @@ function toChartPoints(series: DemandSeriesResponse["series"]): ChartPoint[] {
   return series.map((point) => ({ t: Date.parse(point.interval_start), value: point.demand_kw }));
 }
 
-function EnergyDelta({ result, comparisonLabel }: { result: ComparisonResult; comparisonLabel: string }) {
+function EnergyDelta({
+  result,
+  comparisonLabel,
+  timeZone = null,
+}: {
+  result: ComparisonResult;
+  comparisonLabel: string;
+  /** Site timezone for the "Compared through" qualifier, shown only when the
+   *  comparison covers a matched elapsed portion (result.comparedUntil). */
+  timeZone?: string | null;
+}) {
   if (result.deltaPercent === null || result.comparisonTotalKwh === null) {
     return (
       <p className="kpi-card__delta kpi-card__delta--unknown" data-testid="kpi-delta-unknown">
@@ -303,6 +314,7 @@ function EnergyDelta({ result, comparisonLabel }: { result: ComparisonResult; co
       <span className="kpi-card__delta-basis">
         vs. {formatKwh(result.comparisonTotalKwh)} kWh ({comparisonLabel})
       </span>
+      <ComparedThrough comparedUntil={result.comparedUntil} timeZone={timeZone} />
     </p>
   );
 }
@@ -538,7 +550,7 @@ export function MainDashboard() {
 
     Promise.all([
       getSiteCurrentDemand(selectedSite.site_id),
-      getSiteDemandSeries(selectedSite.site_id, resolveRange("TODAY")),
+      getSiteDemandSeries(selectedSite.site_id, resolveRange("TODAY", selectedSite.timezone)),
       getSiteDemandSeries(selectedSite.site_id, mtdRange()),
     ])
       .then(([currentRes, todayRes, monthRes]) => {
@@ -566,7 +578,7 @@ export function MainDashboard() {
     let active = true;
     setTrend((s) => ({ ...s, status: "loading", error: null, unsupportedReason: null }));
 
-    const plan = planDemandRequest(trendPreset);
+    const plan = planDemandRequest(trendPreset, selectedSite.timezone);
     if (!plan.supported) {
       setTrend({ status: "ready", error: null, unsupportedReason: plan.reason, series: null });
       return;
@@ -636,8 +648,8 @@ export function MainDashboard() {
     let active = true;
     setHealth((s) => ({ ...s, status: "loading", error: null, unsupportedReason: null }));
 
-    const consumptionPlan = planEnergyRequest("7D");
-    const referencePlan = planEnergyTypicalReferenceRequest("7D");
+    const consumptionPlan = planEnergyRequest("7D", selectedSite.timezone);
+    const referencePlan = planEnergyTypicalReferenceRequest("7D", selectedSite.timezone);
     if (!consumptionPlan.supported) {
       setHealth({ ...HEALTH_INITIAL, status: "ready", unsupportedReason: consumptionPlan.reason });
       return;
@@ -657,10 +669,20 @@ export function MainDashboard() {
         resolution: consumptionPlan.resolution,
         ...consumptionPlan.range,
       }),
+      referencePlan.basisRange
+        ? getSiteEnergyConsumption(selectedSite.site_id, { resolution: "1d", ...referencePlan.basisRange })
+        : null,
     ])
-      .then(([current, reference, evidence]) => {
+      .then(([current, reference, evidence, basisResponse]) => {
         if (!active) return;
-        const comparisonResult = buildTypicalReferenceResult(current, reference);
+        // Only complete elapsed local days are compared with Typical (and so
+        // reach the Energy Attention threshold).
+        const comparisonResult = buildTypicalReferenceResult(current, reference, {
+          basisResponse,
+          basisUntil: referencePlan.basisRange?.to ?? null,
+          basisDays: referencePlan.basisDays,
+          referenceDays: referencePlan.referenceDays,
+        });
         const evidenceSummary = summarizeEnergyEvidence(evidence);
         const attentionItems: AttentionItem[] = [];
         const item = evaluateEnergyAttention({
@@ -670,6 +692,7 @@ export function MainDashboard() {
           siteName: selectedSite.site_name,
           window: consumptionPlan.range,
           investigatePath: "/features/energy",
+          timeZone: selectedSite.timezone,
         });
         if (item) attentionItems.push(item);
         const energyAssessable = comparisonResult.sufficient && comparisonResult.currentHasData;

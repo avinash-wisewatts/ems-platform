@@ -44,6 +44,9 @@ function referenceResult(
   return {
     basis: "TYPICAL_HISTORICAL_REFERENCE",
     currentTotalKwh,
+    basisCurrentKwh: currentTotalKwh,
+    comparedUntil: null,
+    normalizedPerCalendarDay: false,
     comparisonTotalKwh,
     deltaKwh,
     deltaPercent,
@@ -247,5 +250,27 @@ describe("evaluateEnergyAttention -- floating-point boundary regression (PR #50 
     const item = evaluate(referenceResult({ currentTotalKwh: 89.3 * 0.84, comparisonTotalKwh: 89.3 }));
     expect(item).not.toBeNull();
     expect(item!.direction).toBe("LOW");
+  });
+});
+
+describe("evaluateEnergyAttention -- 'Compared through' qualifier (F1, elapsed portion only)", () => {
+  it("adds the site-local qualifier when the comparison covers only the matched elapsed portion", () => {
+    const item = evaluateEnergyAttention({
+      result: { ...referenceResult({ currentTotalKwh: 80, comparisonTotalKwh: 100 }), comparedUntil: "2026-06-14T18:30:00.000Z" },
+      evidence: EVIDENCE,
+      policy: MVP3_MATERIALITY_POLICY.ENERGY_CONSUMPTION,
+      siteName: SITE_NAME,
+      window: WINDOW,
+      investigatePath: INVESTIGATE_PATH,
+      timeZone: "Asia/Kolkata",
+    });
+    expect(item!.trigger).toBe(
+      "-20.0% vs. typical historical consumption (threshold: 15%) · Compared through 00:00, 15 Jun",
+    );
+  });
+
+  it("leaves the trigger unchanged when the whole period is compared", () => {
+    const item = evaluate(referenceResult({ currentTotalKwh: 80, comparisonTotalKwh: 100 }));
+    expect(item!.trigger).toBe("-20.0% vs. typical historical consumption (threshold: 15%)");
   });
 });
