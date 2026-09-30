@@ -565,3 +565,22 @@ button.status-pill { font-family: inherit; cursor: pointer; }
 .live-param-card__phases div { display: flex; align-items: baseline; gap: 24px; padding: 1px 0; }
 .live-param-card__phases dt { font-weight: 500; }
 .live-param-card__phases dd { margin: 0; color: var(--text); font-weight: 600; }
+
+/* ---- Analytics v1 (F3 page frame) -----------------------------------------
+   Main area (chart, then Statistics and Data quality) with the filter panel
+   on the right (docs/07-features/analytics/README.md, D19/D36). Narrow
+   screens stack for now; the filter drawer/overlay (D82) comes with the
+   filter panel (F4). */
+.analytics-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; align-items: start; }
+.analytics-main { min-width: 0; }
+.analytics-empty { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 32px; text-align: center; }
+.analytics-empty__title { font-weight: 600; margin: 0 0 6px; }
+.analytics-empty__detail { color: var(--muted); margin: 0; }
+.analytics-filters { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+.analytics-update { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.analytics-update__pending { color: var(--muted); font-size: 0.875rem; }
+.analytics-update__message { flex-basis: 100%; margin: 0; color: var(--invalid); font-size: 0.875rem; }
+.analytics-update__notice { flex-basis: 100%; margin: 0; color: var(--muted); font-size: 0.875rem; }
+@media (max-width: 900px) {
+  .analytics-layout { grid-template-columns: minmax(0, 1fr); }
+}
