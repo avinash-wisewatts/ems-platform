@@ -19,15 +19,22 @@ import {
 
 const API_BASE = "/api/v1";
 
-type QueryValue = string | number | boolean | undefined | null;
+type QueryScalar = string | number | boolean | undefined | null;
+/** A scalar, or an array sent as one repeated parameter per element, in order
+ *  (e.g. Analytics `selection=...&selection=...`). Null/undefined elements
+ *  are skipped; an empty array sends nothing. */
+export type QueryValue = QueryScalar | readonly QueryScalar[];
 
-function buildUrl(path: string, query?: Record<string, QueryValue>): string {
+export function buildUrl(path: string, query?: Record<string, QueryValue>): string {
   const url = `${API_BASE}${path}`;
   if (!query) return url;
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {
-    if (value === undefined || value === null) continue;
-    params.append(key, String(value));
+    const values = Array.isArray(value) ? value : [value];
+    for (const item of values) {
+      if (item === undefined || item === null) continue;
+      params.append(key, String(item));
+    }
   }
   const qs = params.toString();
   return qs ? `${url}?${qs}` : url;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { apiGet } from "./client";
+import { apiGet, buildUrl } from "./client";
 import { ContractError, NetworkError, NotAccessibleError, UnauthenticatedError } from "./errors";
 import { stubFetch } from "../test-utils";
 
@@ -27,6 +27,31 @@ describe("apiGet", () => {
     expect(mock.mock.calls[0]![0]).toBe(
       "/api/v1/spaces/s1/measurements?parameter=TEMPERATURE&resolution=raw&from=2026-01-01T00%3A00%3A00Z&to=2026-01-02T00%3A00%3A00Z",
     );
+  });
+
+  it("sends an array as one repeated parameter per element, in order", async () => {
+    const mock = stubFetch(() => ({ jsonBody: {} }));
+    await apiGet("/sites/s1/analytics/series", {
+      from: "2026-06-01T00:00:00Z",
+      selection: ["a1:ENERGY_IMPORT", "a2:ENERGY_EXPORT", "a1:ENERGY_EXPORT"],
+      to: "2026-06-02T00:00:00Z",
+    });
+    expect(mock.mock.calls[0]![0]).toBe(
+      "/api/v1/sites/s1/analytics/series?from=2026-06-01T00%3A00%3A00Z" +
+        "&selection=a1%3AENERGY_IMPORT&selection=a2%3AENERGY_EXPORT&selection=a1%3AENERGY_EXPORT" +
+        "&to=2026-06-02T00%3A00%3A00Z",
+    );
+  });
+
+  it("skips null/undefined array elements and sends nothing for an empty array", async () => {
+    const mock = stubFetch(() => ({ jsonBody: {} }));
+    await apiGet("/x", { selection: [], other: [null, "b", undefined, 3, false] });
+    expect(mock.mock.calls[0]![0]).toBe("/api/v1/x?other=b&other=3&other=false");
+  });
+
+  it("buildUrl leaves the path alone when there is nothing to send", () => {
+    expect(buildUrl("/x")).toBe("/api/v1/x");
+    expect(buildUrl("/x", { a: undefined, b: [] })).toBe("/api/v1/x");
   });
 
   it("maps 401 -> UnauthenticatedError with the flat envelope detail", async () => {
