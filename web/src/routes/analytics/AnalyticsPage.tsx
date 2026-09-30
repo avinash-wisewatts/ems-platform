@@ -59,7 +59,9 @@ export function AnalyticsPage() {
   }
 
   return (
-    <div className="page page--analytics" data-testid="page-analytics" aria-label="Analytics">
+    // A labelled section is a named region landmark, so the "Analytics" label
+    // is exposed to assistive technology (on a plain div it was ignored).
+    <section className="page page--analytics" data-testid="page-analytics" aria-label="Analytics">
       {catalogState.status === "loading" ? <Loading /> : null}
       {catalogState.status === "error" ? (
         <ErrorState error={catalogState.error} onRetry={() => setCatalogNonce((n) => n + 1)} />
@@ -70,7 +72,7 @@ export function AnalyticsPage() {
           <AnalyticsFilterPanel analytics={analytics} />
         </div>
       ) : null}
-    </div>
+    </section>
   );
 }
 
@@ -80,7 +82,8 @@ export function AnalyticsPage() {
 function AnalyticsResultArea({ analytics }: { analytics: UseAnalyticsState }) {
   const { applied, loading } = analytics.state;
   return (
-    <main className="analytics-main" data-testid="analytics-main" aria-busy={loading}>
+    // A section, not <main>: the app shell already provides the page's main landmark.
+    <section className="analytics-main" data-testid="analytics-main" aria-busy={loading}>
       {loading ? <Loading /> : null}
       {applied === null ? (
         <div className="analytics-empty" data-testid="analytics-empty-state">
@@ -91,7 +94,7 @@ function AnalyticsResultArea({ analytics }: { analytics: UseAnalyticsState }) {
         // F5 renders the chart and F6 Statistics / Data quality from `applied`.
         <section className="analytics-result" data-testid="analytics-result" />
       )}
-    </main>
+    </section>
   );
 }
 
