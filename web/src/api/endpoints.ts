@@ -21,6 +21,8 @@
  *   GET /api/v1/sites/{site_id}/telemetry-freshness (MVP-4)
  *   GET /api/v1/sites/{site_id}/alerts                (MVP-7)
  *   GET /api/v1/alerts/{alert_id}                      (MVP-7)
+ *   GET /api/v1/sites/{site_id}/analytics/catalog       (Analytics v1, ADR-022)
+ *   GET /api/v1/sites/{site_id}/analytics/series        (Analytics v1, ADR-022)
  *
  * No other paths, no arbitrary parameters, no generic query mechanism.
  *
@@ -59,6 +61,11 @@
 import { apiGet } from "./client";
 import type {
   Alert,
+  AnalyticsCatalogResponse,
+  AnalyticsDataPointCode,
+  AnalyticsPhase,
+  AnalyticsRequestedResolution,
+  AnalyticsSeriesResponse,
   AlertListResponse,
   AlertState,
   AssetCurrentDemandResponse,
@@ -355,4 +362,57 @@ export function getSiteAlerts(
  *  identical to every other portal-scoped resource this client reads. */
 export function getAlertDetail(alertId: string, init?: RequestInit): Promise<Alert> {
   return apiGet<Alert>(`/alerts/${encodeURIComponent(alertId)}`, undefined, init);
+}
+
+// ---- Analytics v1 (ADR-022) -------------------------------------------------
+
+/** One selected (asset, data point) pair. The server never forms a
+ *  cross-product: each pair is sent explicitly (ADR-022 decision 14). */
+export type AnalyticsSelection = {
+  assetId: string;
+  dataPoint: AnalyticsDataPointCode;
+};
+
+export type AnalyticsSeriesQuery = {
+  from: string; // ISO-8601 UTC, inclusive
+  to: string; // ISO-8601 UTC, exclusive
+  /** Omitted = the server's default, "auto". */
+  resolution?: AnalyticsRequestedResolution;
+  /** Omitted = the server's default, "system". */
+  phase?: AnalyticsPhase;
+  /** In display order; the response returns one series per selection in the same order. */
+  selections: readonly AnalyticsSelection[];
+};
+
+/** The wire form of one selection: `<asset_id>:<DATA_POINT>`. */
+export function formatAnalyticsSelection(selection: AnalyticsSelection): string {
+  return `${selection.assetId}:${selection.dataPoint}`;
+}
+
+/** The site's Analytics catalogue: ACTIVE assets with their confirmed
+ *  semantic data points, request limits and per-resolution windows/floors. */
+export function getAnalyticsCatalog(siteId: string, init?: RequestInit): Promise<AnalyticsCatalogResponse> {
+  return apiGet<AnalyticsCatalogResponse>(`/sites/${encodeURIComponent(siteId)}/analytics/catalog`, undefined, init);
+}
+
+/** Series for explicit selections, sent as repeated `selection=` parameters.
+ *  The whole request is validated server-side before any read: a limit or
+ *  window violation is a ContractError carrying the 422 code (e.g.
+ *  `too_many_series`, `time_range_too_large`). */
+export function getAnalyticsSeries(
+  siteId: string,
+  query: AnalyticsSeriesQuery,
+  init?: RequestInit,
+): Promise<AnalyticsSeriesResponse> {
+  return apiGet<AnalyticsSeriesResponse>(
+    `/sites/${encodeURIComponent(siteId)}/analytics/series`,
+    {
+      from: query.from,
+      to: query.to,
+      resolution: query.resolution,
+      phase: query.phase,
+      selection: query.selections.map(formatAnalyticsSelection),
+    },
+    init,
+  );
 }

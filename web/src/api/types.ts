@@ -469,3 +469,183 @@ export type AlertListResponse = {
   site_id: string;
   alerts: Alert[];
 };
+
+// ---- Analytics v1 (ADR-022) -------------------------------------------------
+// GET /api/v1/sites/{site_id}/analytics/catalog and .../analytics/series --
+// docs/07-features/analytics/README.md "API contract", matching the backend
+// models in app/src/analytics_trends_service.py field for field. All
+// timestamps are UTC ISO-8601 strings; site-local presentation is the
+// frontend's job (ADR-019).
+
+/** Registry data-point codes. v1 serves only ENERGY_IMPORT ("Energy") and
+ *  ENERGY_EXPORT ("Energy Export"); the registry can grow, so any code the
+ *  catalogue returns is accepted. */
+export type AnalyticsDataPointCode = "ENERGY_IMPORT" | "ENERGY_EXPORT" | (string & {});
+
+export type AnalyticsResolutionCode = "1m" | "15m" | "30m" | "1h" | "1d";
+/** `auto` lets the server choose (ADR-019 rule, floor-aware). */
+export type AnalyticsRequestedResolution = "auto" | AnalyticsResolutionCode;
+export type AnalyticsPhase = "system" | "three_phase";
+
+export type AnalyticsLimits = {
+  max_data_points: number;
+  max_assets: number;
+  max_series: number;
+};
+
+export type AnalyticsResolution = {
+  resolution: AnalyticsResolutionCode;
+  max_window_seconds: number;
+  default_window_seconds: number;
+  /** This resolution's retention floor for the site; null = no floor. */
+  available_from: string | null;
+};
+
+export type AnalyticsDataPoint = {
+  data_point: AnalyticsDataPointCode;
+  label: string;
+  category: string | null;
+  unit: string | null;
+  chart_kind: "bar" | "line";
+  aggregation: "sum" | "mean";
+  phases: { system: boolean; three_phase: boolean };
+  /** Data bounds for this asset and data point; null = no data yet. */
+  available_from: string | null;
+  available_to: string | null;
+};
+
+export type AnalyticsCatalogAsset = {
+  asset_id: string;
+  asset_name: string;
+  asset_type_id: string | null;
+  asset_type_name: string | null;
+  building_name: string | null;
+  floor_name: string | null;
+  space_id: string | null;
+  space_name: string | null;
+  location_path: string | null;
+  data_points: AnalyticsDataPoint[];
+};
+
+export type AnalyticsCatalogResponse = {
+  site_id: string;
+  site_name: string;
+  site_timezone: string | null;
+  limits: AnalyticsLimits;
+  resolutions: AnalyticsResolution[];
+  /** ACTIVE assets with at least one registry data point only. */
+  assets: AnalyticsCatalogAsset[];
+};
+
+/** Series status (migration 282). Only OK series are charted. */
+export type AnalyticsSeriesStatus =
+  | "OK"
+  | "NO_DATA"
+  | "NOT_AVAILABLE"
+  | "RESOLUTION_UNAVAILABLE"
+  | "DATA_UNAVAILABLE";
+
+/** status_reasons values. NO_DATA carries exactly one (first match);
+ *  RESOLUTION_UNAVAILABLE one; DATA_UNAVAILABLE all that apply;
+ *  NOT_AVAILABLE and OK none. */
+export type AnalyticsStatusReason =
+  | "NOT_ASSIGNED_IN_RANGE"
+  | "NO_DATA_EVER"
+  | "RANGE_IN_FUTURE"
+  | "RANGE_BEFORE_DATA"
+  | "RANGE_AFTER_LATEST_DATA"
+  | "NO_DATA_IN_RANGE"
+  | "BEFORE_RETENTION_FLOOR"
+  | "CAPTURE_INTERVAL_TOO_COARSE"
+  | "CAPTURE_POLICY_CHANGE"
+  | "CAPTURE_POLICY_GAP"
+  | "TIMEZONE_MISMATCH";
+
+export type AnalyticsBucketState = "COMPLETE" | "IN_PROGRESS" | "FUTURE";
+export type AnalyticsDataState =
+  | "MEASURED"
+  | "GAP"
+  | "NOT_ASSIGNED"
+  | "BEFORE_DATA"
+  | "AFTER_LATEST_DATA"
+  | "FUTURE";
+/** Every evidence condition present in a bucket (Energy). */
+export type AnalyticsEvidenceFlag =
+  | "INVALID_INTERVALS"
+  | "RESET_DETECTED"
+  | "GAPS_DETECTED"
+  | "RECONSTRUCTED_TIMING"
+  | "ROLLOVER_DETECTED";
+
+export type AnalyticsSeriesPoint = {
+  bucket_start: string;
+  bucket_end: string;
+  /** null = no value in this bucket (every grid bucket is returned). */
+  value: number | null;
+  /** Non-Energy only; null for Energy (a bucket is a sum). */
+  min: number | null;
+  max: number | null;
+  bucket_state: AnalyticsBucketState;
+  data_state: AnalyticsDataState | null;
+  expected_intervals: number | null;
+  assigned_expected_intervals: number | null;
+  valid_intervals: number;
+  invalid_intervals: number;
+  reconstructed_intervals: number;
+  evidence_flags: AnalyticsEvidenceFlag[];
+  /** Compatibility: the most severe Energy evidence status; null for an empty bucket. */
+  evidence_status: string | null;
+  /** Non-Energy only: the GOOD/GAP/ESTIMATED/INVALID/PARTIAL lattice. */
+  quality: "GOOD" | "GAP" | "ESTIMATED" | "INVALID" | "PARTIAL" | null;
+  /** Compatibility: bucket_state !== "COMPLETE". */
+  is_partial: boolean;
+};
+
+export type AnalyticsSeriesSummary = {
+  /** Energy only. */
+  total: number | null;
+  average: number | null;
+  min: number | null;
+  min_at: string | null;
+  max: number | null;
+  max_at: string | null;
+};
+
+export type AnalyticsSeries = {
+  asset_id: string;
+  /** null for NOT_AVAILABLE series (the catalogue could not serve them). */
+  asset_name: string | null;
+  data_point: AnalyticsDataPointCode;
+  label: string | null;
+  /** "TOTAL" = System; "L1"/"L2"/"L3" per phase. Never shown to customers (D83). */
+  qualifier: string;
+  unit: string | null;
+  chart_kind: "bar" | "line";
+  aggregation: "sum" | "mean";
+  status: AnalyticsSeriesStatus;
+  status_reasons: AnalyticsStatusReason[];
+  /** Set for RESOLUTION_UNAVAILABLE / BEFORE_RETENTION_FLOOR. */
+  resolution_available_from: string | null;
+  first_data_at: string | null;
+  last_data_at: string | null;
+  /** Data latency (business rule 12); null where the capture path is unverified. */
+  stale: boolean | null;
+  /** Empty for NOT_AVAILABLE / RESOLUTION_UNAVAILABLE / DATA_UNAVAILABLE. */
+  points: AnalyticsSeriesPoint[];
+  summary: AnalyticsSeriesSummary;
+};
+
+export type AnalyticsSeriesResponse = {
+  site_id: string;
+  site_timezone: string | null;
+  /** The one database clock read every value in the response is evaluated at. */
+  as_of: string;
+  from: string;
+  to: string;
+  requested_resolution: AnalyticsRequestedResolution;
+  /** The resolution actually served (Auto resolved, floor-aware). */
+  resolution: AnalyticsResolutionCode;
+  phase: AnalyticsPhase;
+  /** One series per selection, in request order. */
+  series: AnalyticsSeries[];
+};
