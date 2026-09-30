@@ -98,10 +98,13 @@ export function visibleNav(items: readonly NavItem[], permissions: readonly stri
  * the real Asset View was built -- AssetsList itself is untouched and still
  * exists, just no longer linked from primary nav). "Alerts" still reuses
  * the already-implemented AlertsArea screen under its existing /features/*
- * route -- no duplicate screen is built. "Analytics", "Single Line Diagram"
- * and "Settings" have no implementation yet, so they route into the
- * existing, honest /features/* catch-all (PlaceholderArea) exactly like
- * every other not-yet-built feature area -- never a fabricated screen.
+ * route -- no duplicate screen is built. "Analytics" opens the real Analytics
+ * v1 page at /features/analytics (routes/analytics/AnalyticsPage.tsx; the
+ * entry opens Trends directly, ADR-022 Amendment 5, D81), matched before the
+ * /features/* catch-all. "Single Line Diagram" and "Settings" have no
+ * implementation yet, so they route into the existing, honest /features/*
+ * catch-all (PlaceholderArea) exactly like every other not-yet-built feature
+ * area -- never a fabricated screen.
  */
 export const SHELL_PRIMARY_NAV: readonly NavItem[] = [
   {

@@ -22,6 +22,7 @@ import { DemandOverview } from "./routes/demand/DemandOverview";
 import { PowerQualityOverview } from "./routes/power-quality/PowerQualityOverview";
 import { SitePerformanceReport } from "./routes/reports/SitePerformanceReport";
 import { AlertsArea } from "./routes/alerts/AlertsArea";
+import { AnalyticsPage } from "./routes/analytics/AnalyticsPage";
 
 /**
  * Foundation routes:
@@ -47,6 +48,8 @@ import { AlertsArea } from "./routes/alerts/AlertsArea";
  *   /features/power-quality        Power Quality Overview (Slice B)
  *   /features/reports              Site Performance Report (MVP-6, Q76, ADR-015)
  *   /features/alerts                Basic Alerts (MVP-7, Q77, ADR-016/ADR-017)
+ *   /features/analytics             Analytics v1 Trends explorer (ADR-022; opened
+ *                                   directly by the Analytics nav entry, D81)
  * Specific routes are matched before the /features/* catch-all regardless
  * of declaration order (React Router v6 ranking); everything else under
  * /features/* still falls through to PlaceholderArea, honestly.
@@ -167,6 +170,14 @@ export function AppRoutes() {
         element={
           <ShellGate>
             <AlertsArea />
+          </ShellGate>
+        }
+      />
+      <Route
+        path="/features/analytics"
+        element={
+          <ShellGate>
+            <AnalyticsPage />
           </ShellGate>
         }
       />
