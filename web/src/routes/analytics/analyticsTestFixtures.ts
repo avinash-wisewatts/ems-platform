@@ -13,6 +13,7 @@ export function catalogFixture(overrides: Partial<AnalyticsCatalogResponse> = {}
     phases: { system: true, three_phase: threePhase },
     available_from: "2026-01-01T00:00:00Z",
     available_to: null,
+    assignment_periods: [{ assigned_from: null as string | null, assigned_to: null as string | null }],
   });
   const asset = (id: string, points: ReturnType<typeof point>[]) => ({
     asset_id: id,

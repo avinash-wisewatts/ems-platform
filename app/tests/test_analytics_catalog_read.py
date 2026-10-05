@@ -25,9 +25,9 @@ CONNINFO = (
 CATALOG_SIG = "analytics.get_portal_analytics_catalog(bigint, uuid)"
 CATALOG_SQL = """
     SELECT asset_id::text, asset_name, data_point, data_point_name, category, unit,
-           qualifier, attribution_basis
+           qualifier, attribution_basis, assigned_from, assigned_to
     FROM analytics.get_portal_analytics_catalog(%s, %s)
-    ORDER BY asset_name, data_point, qualifier
+    ORDER BY asset_name, data_point, qualifier, assigned_from NULLS FIRST
 """
 NEG_INF = "-infinity"
 
@@ -160,7 +160,11 @@ def test_catalog_never_reads_device_capability_or_primary_meter():
 # ---------------------------------------------------------------------------
 
 
-def test_catalog_lists_only_active_assets_with_current_bindings(tx):
+def test_catalog_lists_every_assignment_period_of_active_assets(tx):
+    """Migration 288: current, closed and future bindings of ACTIVE assets are
+    all listed, each with its assignment period (closed and future
+    assignments were excluded before 288). DRAFT / COMMISSIONING assets
+    and unbound assets stay out."""
     with tx.cursor() as cur:
         f = Fixture(cur)
         org, site, gw = f.org_site("A")
@@ -188,13 +192,41 @@ def test_catalog_lists_only_active_assets_with_current_bindings(tx):
         cur.execute(CATALOG_SQL, (admin, site))
         rows = cur.fetchall()
 
-    assert [(r[1], r[2], r[6]) for r in rows] == [
-        ("A1 Confirmed", "ENERGY_EXPORT", "TOTAL"),
-        ("A1 Confirmed", "ENERGY_IMPORT", "TOTAL"),
+    default_start = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    assert [(r[1], r[2], r[6], r[8], r[9]) for r in rows] == [
+        ("A1 Confirmed", "ENERGY_EXPORT", "TOTAL", default_start, None),
+        ("A1 Confirmed", "ENERGY_IMPORT", "TOTAL", default_start, None),
+        ("A4 Ended", "ENERGY_IMPORT", "TOTAL", now - timedelta(days=10), now - timedelta(days=1)),
+        ("A5 Future", "ENERGY_IMPORT", "TOTAL", now + timedelta(days=1), None),
     ]
     assert {r[3] for r in rows} == {"Active Energy Import", "Active Energy Export"}
     assert {(r[4], r[5]) for r in rows} == {("Energy", "kWh")}
     assert {r[7] for r in rows} == {"CONFIRMED"}
+
+
+def test_separate_assignments_are_separate_periods_and_a_same_instant_replacement_is_one(tx):
+    with tx.cursor() as cur:
+        f = Fixture(cur)
+        org, site, gw = f.org_site("P")
+        t = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        # Assigned, unassigned for a week, assigned again (still open).
+        gap_asset, dev = f.asset(org, site, gw, "P1 Reassigned", "ACTIVE")
+        f.bind(org, gap_asset, dev, "ENERGY_IMPORT_TOTAL", start=t, end=t + timedelta(days=5))
+        f.bind(org, gap_asset, dev, "ENERGY_IMPORT_TOTAL", start=t + timedelta(days=12))
+        # Meter replaced at one instant: device A until T, device B from T.
+        swap_asset, dev_a = f.asset(org, site, gw, "P2 Replaced", "ACTIVE")
+        _spare, dev_b = f.asset(org, site, gw, "P9 Spare meter holder", "DRAFT")
+        f.bind(org, swap_asset, dev_a, "ENERGY_EXPORT_TOTAL", start=t, end=t + timedelta(days=3))
+        f.bind(org, swap_asset, dev_b, "ENERGY_EXPORT_TOTAL", start=t + timedelta(days=3), end=t + timedelta(days=20))
+        admin = f.portal_user(None, "GLOBAL", role="ADMIN")
+        cur.execute(CATALOG_SQL, (admin, site))
+        rows = cur.fetchall()
+
+    assert [(r[1], r[2], r[8], r[9]) for r in rows] == [
+        ("P1 Reassigned", "ENERGY_IMPORT", t, t + timedelta(days=5)),
+        ("P1 Reassigned", "ENERGY_IMPORT", t + timedelta(days=12), None),
+        ("P2 Replaced", "ENERGY_EXPORT", t, t + timedelta(days=20)),
+    ]
 
 
 def test_parity_bridge_rows_are_classified_internally_and_left_unchanged(tx):
@@ -219,6 +251,8 @@ def test_parity_bridge_rows_are_classified_internally_and_left_unchanged(tx):
         after = cur.fetchall()
 
     assert [(r[2], r[7]) for r in rows] == [("ENERGY_IMPORT", "PARITY_BRIDGE")]
+    # The '-infinity' start is returned as NULL (unbounded), never infinity.
+    assert (rows[0][8], rows[0][9]) == (None, None)
     assert before == after
     assert before[0][1] == "-infinity"
 
@@ -276,3 +310,22 @@ def test_other_tenant_and_other_site_see_nothing(tx):
     assert [r[1] for r in own] == ["D1 Tenant A"]
     assert foreign == []
     assert other_site == []
+
+
+def test_closed_assignments_stay_tenant_scoped(tx):
+    with tx.cursor() as cur:
+        f = Fixture(cur)
+        now = datetime.now(timezone.utc)
+        org_a, site_a, gw_a = f.org_site("TA")
+        asset, dev = f.asset(org_a, site_a, gw_a, "T1 Closed", "ACTIVE")
+        f.bind(org_a, asset, dev, "ENERGY_IMPORT_TOTAL", start=now - timedelta(days=30), end=now - timedelta(days=2))
+        org_b, _site_b, _gw_b = f.org_site("TB")
+        user_a = f.portal_user(org_a, "ORGANIZATION")
+        user_b = f.portal_user(org_b, "ORGANIZATION")
+        cur.execute(CATALOG_SQL, (user_a, site_a))
+        own = cur.fetchall()
+        cur.execute(CATALOG_SQL, (user_b, site_a))
+        foreign = cur.fetchall()
+
+    assert [(r[1], r[8], r[9]) for r in own] == [("T1 Closed", now - timedelta(days=30), now - timedelta(days=2))]
+    assert foreign == []

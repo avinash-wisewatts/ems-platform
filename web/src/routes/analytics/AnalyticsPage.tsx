@@ -297,6 +297,7 @@ function AnalyticsFilterPanel({
       />
       <DataPointSelector
         catalog={catalog}
+        range={range}
         selected={state.draft.dataPoints}
         maxDataPoints={limits.maxDataPoints}
         onToggle={analytics.toggleDataPoint}

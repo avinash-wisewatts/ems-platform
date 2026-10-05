@@ -173,6 +173,9 @@ def test_catalog_returns_energy_pilot_shape(portal_client, monkeypatch) -> None:
         "phases": {"system": True, "three_phase": False},
         "available_from": None,
         "available_to": None,
+        # Migration 288: assignment periods (these mocked rows carry no
+        # bounds, so one unbounded period).
+        "assignment_periods": [{"assigned_from": None, "assigned_to": None}],
     }
 
 

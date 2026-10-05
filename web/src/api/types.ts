@@ -512,6 +512,16 @@ export type AnalyticsDataPoint = {
   /** Data bounds for this asset and data point; null = no data yet. */
   available_from: string | null;
   available_to: string | null;
+  /** When the data point is assigned to the asset -- current, closed and
+   *  future assignments, in time order (migration 288). Data outside every
+   *  period is NOT_ASSIGNED. */
+  assignment_periods: AnalyticsAssignmentPeriod[];
+};
+
+/** [assigned_from, assigned_to); null = unbounded at that end. */
+export type AnalyticsAssignmentPeriod = {
+  assigned_from: string | null;
+  assigned_to: string | null;
 };
 
 export type AnalyticsCatalogAsset = {

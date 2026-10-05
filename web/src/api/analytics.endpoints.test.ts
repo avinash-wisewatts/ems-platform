@@ -35,6 +35,7 @@ const CATALOG: AnalyticsCatalogResponse = {
           phases: { system: true, three_phase: false },
           available_from: "2026-01-01T00:00:00Z",
           available_to: null,
+          assignment_periods: [{ assigned_from: null, assigned_to: null }],
         },
       ],
     },

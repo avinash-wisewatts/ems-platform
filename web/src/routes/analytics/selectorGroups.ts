@@ -12,7 +12,13 @@
  * for it. Frequently Used repeats points shown in their own group -- selecting
  * one selects the same underlying data point.
  */
-import type { AnalyticsCatalogAsset, AnalyticsCatalogResponse, AnalyticsDataPoint } from "../../api/types";
+import type {
+  AnalyticsAssignmentPeriod,
+  AnalyticsCatalogAsset,
+  AnalyticsCatalogResponse,
+  AnalyticsDataPoint,
+} from "../../api/types";
+import type { CalendarRange } from "../../time/calendarRanges";
 
 export type AssetGrouping = "space" | "assetType";
 
@@ -130,13 +136,44 @@ export const DATA_POINT_GROUPS: Readonly<Record<string, readonly DataPointGroupN
 export type DataPointOption = { code: string; label: string };
 export type DataPointGroup = { name: DataPointGroupName; points: DataPointOption[] };
 
-/** Every data point in the site catalogue (independent of the selected assets, D42). */
-export function siteDataPoints(catalog: AnalyticsCatalogResponse | null): DataPointOption[] {
+/** Whether any assignment period overlaps [range.from, range.to). Periods
+ *  are [assigned_from, assigned_to) with null = unbounded. A point without
+ *  period information is treated as always assigned. */
+export function assignedDuring(periods: readonly AnalyticsAssignmentPeriod[] | undefined, range: CalendarRange): boolean {
+  if (!periods || periods.length === 0) return true;
+  const from = Date.parse(range.from);
+  const to = Date.parse(range.to);
+  return periods.some(
+    (p) =>
+      (p.assigned_from === null || Date.parse(p.assigned_from) < to) &&
+      (p.assigned_to === null || Date.parse(p.assigned_to) > from),
+  );
+}
+
+/**
+ * The site catalogue's data points for the selected date range (D42 as
+ * revised for historical assignments, migration 288): independent of the
+ * selected assets, but a data point is offered only when some asset's
+ * assignment of it overlaps the range -- a closed assignment stays
+ * selectable for the periods it covered. Already-selected points stay listed
+ * so they can still be cleared. Without a range, every catalogue point.
+ */
+export function siteDataPoints(
+  catalog: AnalyticsCatalogResponse | null,
+  range?: CalendarRange,
+  selected: readonly string[] = [],
+): DataPointOption[] {
   const byCode = new Map<string, AnalyticsDataPoint>();
+  const offered = new Set<string>();
   for (const asset of catalog?.assets ?? []) {
-    for (const point of asset.data_points) if (!byCode.has(point.data_point)) byCode.set(point.data_point, point);
+    for (const point of asset.data_points) {
+      if (!byCode.has(point.data_point)) byCode.set(point.data_point, point);
+      if (!range || assignedDuring(point.assignment_periods, range)) offered.add(point.data_point);
+    }
   }
-  return [...byCode.values()].map((p) => ({ code: p.data_point, label: p.label }));
+  return [...byCode.values()]
+    .filter((p) => offered.has(p.data_point) || selected.includes(p.data_point))
+    .map((p) => ({ code: p.data_point, label: p.label }));
 }
 
 export function groupDataPoints(points: readonly DataPointOption[], search = ""): DataPointGroup[] {
