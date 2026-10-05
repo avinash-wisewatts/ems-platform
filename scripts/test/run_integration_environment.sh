@@ -237,6 +237,42 @@ echo
 echo "[asset-power-trend-portal-read] Running portal-scoped Asset Power Trend (migration 246) read assertions..."
 bash "${SCRIPT_DIR}/assert_asset_power_trend_portal_read.sh"
 
+echo
+echo "[asset-point-assignment-candidates] Running Asset Data Point Assignment candidate read (migration 253) assertions..."
+bash "${SCRIPT_DIR}/assert_asset_point_assignment_candidates.sh"
+
+echo
+echo "[canonical-measurement-groups] Running canonical measurement groups (migration 254) assertions..."
+bash "${SCRIPT_DIR}/assert_canonical_measurement_groups.sh"
+
+echo
+echo "[asset-point-assignment-save] Running Asset Data Point Assignment save (migrations 255, 259) assertions..."
+bash "${SCRIPT_DIR}/assert_asset_point_assignment_save.sh"
+
+echo
+echo "[asset-commissioning-backfill-trigger] Running commissioning backfill trigger (migration 256) assertions..."
+bash "${SCRIPT_DIR}/assert_asset_commissioning_backfill_trigger.sh"
+
+echo
+echo "[asset-commissioning-backfill-job] Running commissioning backfill worker (migration 257) assertions..."
+bash "${SCRIPT_DIR}/assert_asset_commissioning_backfill_job.sh"
+
+echo
+echo "[asset-commissioning-backfill-attribution] Running commissioning backfill attribution (migration 257) assertions..."
+bash "${SCRIPT_DIR}/assert_asset_commissioning_backfill_attribution.sh"
+
+echo
+echo "[asset-commissioning-backfill-activation] Running commissioning backfill activation (migrations 258, 260) assertions..."
+bash "${SCRIPT_DIR}/assert_asset_commissioning_backfill_activation.sh"
+
+echo
+echo "[device-workspace-optional-profile] Running device workspace optional profile join (migration 261) assertions..."
+bash "${SCRIPT_DIR}/assert_device_workspace_optional_profile.sh"
+
+echo
+echo "[active-power-power-factor-display-category] Running Active Power / Power Factor display category (migration 262) assertions..."
+bash "${SCRIPT_DIR}/assert_active_power_power_factor_display_category.sh"
+
 echo "[14/14] Verifying migration ledger..."
 ledger="$(
     docker compose \

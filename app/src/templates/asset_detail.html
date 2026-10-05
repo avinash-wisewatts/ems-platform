@@ -21,5 +21,39 @@
 {% endfor %}</tbody></table></div>{% else %}<p class="empty-state">No devices are assigned to this asset.</p>{% endif %}
 {% if can_manage_relationships %}<details class="assignment-create"><summary>Assign device</summary><form method="post" action="/administration/assets/{{ asset.asset_id }}/assign-device"><div class="form-grid two-column"><label>Device<select name="device_id" required><option value="">Select device from {{ asset.site_name }}</option>{% for d in candidate_devices %}<option value="{{ d.device_id }}" data-category-id="{{ d.device_category_id }}">{{ d.device_name }} — {{ d.device_category_name }}{% if d.location_path %} · {{ d.location_path }}{% endif %}</option>{% endfor %}</select></label><label>Role<select name="relationship_type" required><option value="">Select role</option>{% for t in relationship_types %}<option value="{{ t.code }}">{{ t.name }}</option>{% endfor %}</select></label></div><button class="button button-primary" type="submit">Assign device</button></form></details>{% endif %}
 </section>
+<section id="asset-points" class="surface-panel administration-detail-section assignment-section">
+<h3>Data points</h3>
+<p class="section-intro">Confirmed measurements this asset's Analytics history is built from.</p>
+{% if point_error %}<div class="form-error" role="alert">{{ point_error }}</div>{% endif %}
+{% if point_notice %}<div class="form-success" role="status">{{ point_notice }}</div>{% endif %}
+{% if backfill_status %}<p class="field-help">Historical backfill: <span class="status-pill{% if backfill_status.status == 'COMPLETED' %} is-positive{% elif backfill_status.status == 'FAILED' %} is-warning{% endif %}">{{ backfill_status.status|title }}</span>{% if backfill_status.status == 'FAILED' and backfill_status.last_error %} — {{ backfill_status.last_error }}{% endif %}</p>{% endif %}
+{% if assigned_points %}
+<div class="table-scroll"><table class="data-table assignment-table"><thead><tr><th>Data point</th><th>Friendly name</th><th>Device</th><th>Status</th><th>Edit</th></tr></thead><tbody>
+{% for p in assigned_points %}<tr><td>{{ p.logical_point_name }}</td><td>{{ p.friendly_name or '—' }}</td><td><a class="entity-link" href="/administration/devices/{{ p.device_id }}">{{ p.device_name }}</a></td><td><span class="status-pill is-positive">Assigned</span></td><td>{% if can_edit %}<a class="button button-secondary button-compact" href="#points-device-{{ p.device_id }}">Edit</a>{% endif %}</td></tr>
+{% endfor %}</tbody></table></div>
+{% elif not relationships %}
+<div class="empty-state"><h4>No Devices Associated</h4><p>This asset has no associated devices yet. Assign a device in "Assigned devices" above, then return here to confirm its data points.</p></div>
+{% elif not point_devices %}
+<div class="empty-state"><h4>No Data Points Available</h4><p>This asset's associated device(s) have no enabled data points available for assignment. Enable telemetry points for the device, then return here to confirm which ones belong to this asset.</p></div>
+{% else %}
+<div class="empty-state"><h4>Assign Data Points</h4><p>No data points are assigned to this asset yet. Use one of the "Edit data points" panels below to confirm which measurements from its assigned devices belong to this asset.</p></div>
+{% endif %}
+{% if can_edit %}
+{% for device in point_devices %}
+<details id="points-device-{{ device.device_id }}" class="assignment-create">
+<summary>Edit data points — {{ device.device_name }}</summary>
+<form method="post" action="/administration/assets/{{ asset.asset_id }}/points/{{ device.device_id }}/save">
+{% for category in device.categories %}
+<h4>{{ category.name }}</h4>
+<div class="form-grid two-column">
+{% for point in category.points %}<label><input type="checkbox" name="logical_point_id" value="{{ point.logical_point_id }}"{% if point.is_confirmed %} checked{% endif %}> {{ point.logical_point_name }}{% if point.unit_symbol %} ({{ point.unit_symbol }}){% endif %}</label><input type="text" name="friendly_name__{{ point.logical_point_id }}" maxlength="500" placeholder="Friendly name" value="{{ point.friendly_name or '' }}">
+{% endfor %}</div>
+{% endfor %}
+<button class="button button-primary" type="submit">Save data points</button>
+</form>
+</details>
+{% endfor %}
+{% endif %}
+</section>
 <section class="surface-panel administration-detail-section"><h3>Record information</h3><div class="table-scroll"><table class="data-table administration-detail-table"><tbody><tr><th scope="row">Created</th><td>{{ asset.created_at|date_time if asset.created_at else '—' }}</td></tr><tr><th scope="row">Last updated</th><td>{{ asset.updated_at|date_time if asset.updated_at else '—' }}</td></tr></tbody></table></div></section>
 </div></section>{% endblock %}

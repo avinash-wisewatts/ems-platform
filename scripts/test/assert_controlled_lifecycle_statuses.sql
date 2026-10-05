@@ -14,6 +14,7 @@ DECLARE
     v_device_category_id UUID;
     v_status TEXT;
     v_count INTEGER;
+    v_valid_asset_status TEXT;
 BEGIN
     SELECT count(*) INTO v_count
     FROM config.status_definitions
@@ -134,6 +135,28 @@ BEGIN
     IF v_status <> 'ACTIVE' THEN
         RAISE EXCEPTION 'Asset compatibility default expected ACTIVE, found %', v_status;
     END IF;
+
+    -- assets_lifecycle_status_chk (migration 001) permits exactly the 5
+    -- ASSET_LIFECYCLE codes above, including COMMISSIONING -- already true
+    -- since the platform baseline and never altered since, but until now
+    -- only the default (ACTIVE) and rejection of an invalid value were
+    -- covered; no assertion proved each valid value, individually and
+    -- specifically COMMISSIONING, is actually accepted. The constraint
+    -- only enforces set membership, never transition order -- that is a
+    -- separate, higher-level concern owned by admin.update_asset()/
+    -- admin.validate_lifecycle_transition(), not exercised here.
+    FOREACH v_valid_asset_status IN ARRAY ARRAY['DRAFT','COMMISSIONING','ACTIVE','INACTIVE','DECOMMISSIONED']
+    LOOP
+        UPDATE metadata.assets
+        SET lifecycle_status = v_valid_asset_status
+        WHERE id = v_asset_id;
+
+        SELECT lifecycle_status INTO v_status
+        FROM metadata.assets WHERE id = v_asset_id;
+        IF v_status <> v_valid_asset_status THEN
+            RAISE EXCEPTION 'Asset lifecycle_status % was not accepted (read back %)', v_valid_asset_status, v_status;
+        END IF;
+    END LOOP;
 
     INSERT INTO metadata.device_models
         (vendor, model, device_type, device_category_id)
