@@ -81,6 +81,13 @@ from src.relationship_management_service import (
     assign_device_to_asset, list_accessible_relationships, list_relationship_types,
     remove_relationship, replace_primary_meter, update_relationship_metadata,
 )
+from src.asset_point_assignment import (
+    AssetPointAssignmentValidationError, validate_asset_point_assignment_submission,
+)
+from src.asset_point_assignment_service import (
+    AssetPointAssignmentConflictError, get_asset_commissioning_backfill_status,
+    list_asset_point_assignment_candidates, save_asset_point_assignments,
+)
 from src.metering_coverage_service import (
     list_accessible_metering_coverage, summarize_metering_coverage,
 )
@@ -2258,6 +2265,12 @@ async def asset_detail_page(request: Request, asset_id: UUID) -> Response:
             portal_user_id=user.portal_user_id
         ) if str(row["site_id"]) == str(asset["site_id"])
     ]
+    point_candidates = await list_asset_point_assignment_candidates(
+        portal_user_id=user.portal_user_id, asset_id=str(asset_id)
+    )
+    backfill_status = await get_asset_commissioning_backfill_status(
+        portal_user_id=user.portal_user_id, asset_id=str(asset_id)
+    )
     return templates.TemplateResponse(
         request=request, name="asset_detail.html",
         context={
@@ -2268,6 +2281,11 @@ async def asset_detail_page(request: Request, asset_id: UUID) -> Response:
             "phase_designations": PHASE_DESIGNATIONS,
             "relationship_error": request.query_params.get("relationship_error"),
             "relationship_notice": request.query_params.get("relationship_notice"),
+            "assigned_points": [row for row in point_candidates if row["is_confirmed"]],
+            "point_devices": _group_point_candidates_by_device(point_candidates),
+            "backfill_status": backfill_status,
+            "point_error": request.query_params.get("point_error"),
+            "point_notice": request.query_params.get("point_notice"),
             "can_edit": has_permission(user, PortalPermission.ASSET_MANAGE),
             "can_manage_relationships": has_permission(
                 user, PortalPermission.RELATIONSHIP_MANAGE
@@ -2275,6 +2293,42 @@ async def asset_detail_page(request: Request, asset_id: UUID) -> Response:
             "active_navigation_key": "assets",
         },
     )
+
+
+def _group_point_candidates_by_device(
+    point_candidates: list[dict],
+) -> list[dict]:
+    """Group flat asset-point candidates by device, each further grouped by
+    measurement/category, for the per-device Assign Data Points edit panel
+    (ADR-018 Amendment 5). Devices with zero enabled candidate points never
+    appear (admin.list_asset_point_assignment_candidates already excludes
+    them at the source)."""
+    devices: dict[str, dict] = {}
+    for row in point_candidates:
+        device_id = str(row["device_id"])
+        device = devices.setdefault(
+            device_id,
+            {
+                "device_id": device_id,
+                "device_name": row["device_name"],
+                "categories": {},
+            },
+        )
+        category_name = row["point_category_name"] or "Other"
+        device["categories"].setdefault(category_name, []).append(row)
+    grouped = []
+    for device in devices.values():
+        grouped.append(
+            {
+                "device_id": device["device_id"],
+                "device_name": device["device_name"],
+                "categories": [
+                    {"name": name, "points": points}
+                    for name, points in sorted(device["categories"].items())
+                ],
+            }
+        )
+    return sorted(grouped, key=lambda d: d["device_name"])
 
 
 @app.get(
@@ -2457,6 +2511,53 @@ async def remove_asset_relationship(request: Request, asset_id: UUID, relationsh
     except DatabaseError as exc:
         return _relationship_redirect(path, error=user_facing_database_error(exc, fallback="The database rejected the relationship removal."))
     return _relationship_redirect(path, notice="Device assignment removed.")
+
+
+def _point_redirect(path: str, *, notice: str | None = None, error: str | None = None) -> RedirectResponse:
+    from urllib.parse import quote
+    key, value = ("point_error", error) if error else ("point_notice", notice or "Data point assignments saved.")
+    return RedirectResponse(f"{path}?{key}={quote(value)}", status_code=303)
+
+
+@app.post(
+    "/administration/assets/{asset_id}/points/{device_id}/save",
+    include_in_schema=False,
+)
+async def save_asset_point_assignments_submit(
+    request: Request, asset_id: UUID, device_id: UUID
+) -> Response:
+    user = require_authenticated_portal_user(request)
+    path = f"/administration/assets/{asset_id}"
+    if not has_permission(user, PortalPermission.ASSET_MANAGE):
+        return RedirectResponse("/forbidden", status_code=303)
+    form = await request.form()
+    checked_logical_point_ids = [str(value) for value in form.getlist("logical_point_id")]
+    friendly_names = {
+        key.removeprefix("friendly_name__"): str(value)
+        for key, value in form.multi_items()
+        if key.startswith("friendly_name__")
+    }
+    try:
+        validated = validate_asset_point_assignment_submission(
+            asset_id=str(asset_id),
+            device_id=str(device_id),
+            checked_logical_point_ids=checked_logical_point_ids,
+            friendly_names=friendly_names,
+        )
+        await save_asset_point_assignments(portal_user_id=user.portal_user_id, **validated)
+    except AssetPointAssignmentValidationError as exc:
+        return _point_redirect(path, error=str(exc))
+    except AssetPointAssignmentConflictError as exc:
+        return _point_redirect(path, error=str(exc))
+    except DatabaseError as exc:
+        return _point_redirect(
+            path,
+            error=user_facing_database_error(
+                exc, fallback="The database rejected the data point assignment."
+            ),
+        )
+    return _point_redirect(path)
+
 
 @app.get(
     "/administration/metering-coverage",
