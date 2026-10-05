@@ -21,6 +21,7 @@ import { ErrorState } from "../../components/states/ErrorState";
 import { Loading } from "../../components/states/Loading";
 import { MESSAGES, limitsFrom, resolveDraftRange } from "./analyticsQuery";
 import { useAnalyticsState, type UseAnalyticsState } from "./useAnalyticsState";
+import { AnalyticsChart } from "./AnalyticsChart";
 import { AnalyticsDateRange } from "./AnalyticsDateRange";
 import {
   AssetSelector,
@@ -156,7 +157,7 @@ function AnalyticsWorkspace({
           {filtersOpen ? "Hide Filters" : "Show Filters"}
         </button>
       </div>
-      <AnalyticsResultArea analytics={analytics} />
+      <AnalyticsResultArea analytics={analytics} catalog={catalog} timeZone={timeZone} />
       {filtersOpen && narrow ? <div className="analytics-drawer-backdrop" aria-hidden="true" onClick={hideFilters} /> : null}
       {filtersOpen ? (
         <AnalyticsFilterPanel analytics={analytics} catalog={catalog} timeZone={timeZone} drawer={narrow} onHide={hideFilters} />
@@ -176,7 +177,15 @@ function FilterIcon() {
 /** Main area: the empty state before the first successful Update (D2),
  *  otherwise the applied result, kept visible while a new one loads (D7)
  *  and after a failed Update (D50). */
-function AnalyticsResultArea({ analytics }: { analytics: UseAnalyticsState }) {
+function AnalyticsResultArea({
+  analytics,
+  catalog,
+  timeZone,
+}: {
+  analytics: UseAnalyticsState;
+  catalog: AnalyticsCatalogResponse;
+  timeZone: string | null | undefined;
+}) {
   const { applied, loading } = analytics.state;
   return (
     // A section, not <main>: the app shell already provides the page's main landmark.
@@ -188,8 +197,17 @@ function AnalyticsResultArea({ analytics }: { analytics: UseAnalyticsState }) {
           <p className="analytics-empty__detail">{MESSAGES.emptyStateDetail}</p>
         </div>
       ) : (
-        // F5 renders the chart and F6 Statistics / Data quality from `applied`.
-        <section className="analytics-result" data-testid="analytics-result" />
+        // F6 adds Statistics and Data quality below the chart, from `applied`.
+        <section className="analytics-result" data-testid="analytics-result">
+          {/* Keyed per successful Update (each response has its own as_of):
+              a new result starts unzoomed. */}
+          <AnalyticsChart
+            key={`${applied.response?.as_of ?? ""}|${applied.range.from}|${applied.range.to}`}
+            applied={applied}
+            catalog={catalog}
+            timeZone={timeZone}
+          />
+        </section>
       )}
     </section>
   );
