@@ -134,6 +134,12 @@ class AnalyticsPhases(BaseModel):
     three_phase: bool
 
 
+class AnalyticsAssignmentPeriod(BaseModel):
+    # [assigned_from, assigned_to); None = unbounded at that end.
+    assigned_from: datetime | None = None
+    assigned_to: datetime | None = None
+
+
 class AnalyticsDataPoint(BaseModel):
     data_point: str
     label: str
@@ -144,6 +150,10 @@ class AnalyticsDataPoint(BaseModel):
     phases: AnalyticsPhases
     available_from: datetime | None = None
     available_to: datetime | None = None
+    # When the data point is assigned to the asset (migration 288): current,
+    # closed and future assignments, in time order. Data outside every
+    # period is NOT_ASSIGNED.
+    assignment_periods: list[AnalyticsAssignmentPeriod] = Field(default_factory=list)
 
 
 class AnalyticsCatalogAsset(BaseModel):
@@ -414,7 +424,8 @@ async def fetch_analytics_catalog(portal_user_id: int, site_id: UUID) -> list[di
         SELECT
             asset_id, asset_name, asset_type_id, asset_type_name,
             building_name, floor_name, space_id, space_name, location_path,
-            data_point, data_point_name, category, unit, qualifier
+            data_point, data_point_name, category, unit, qualifier,
+            assigned_from, assigned_to
         FROM analytics.get_portal_analytics_catalog(%s, %s)
         """,
         (portal_user_id, str(site_id)),
@@ -549,6 +560,32 @@ def _available_pairs(rows: list[dict[str, Any]]) -> dict[tuple[str, str], dict[s
     return pairs
 
 
+def _merge_periods(
+    periods: set[tuple[datetime | None, datetime | None]],
+) -> list[AnalyticsAssignmentPeriod]:
+    """Union of [from, to) periods (None = unbounded), in time order;
+    overlapping or touching periods become one."""
+
+    lowest = datetime.min.replace(tzinfo=timezone.utc)
+    highest = datetime.max.replace(tzinfo=timezone.utc)
+    ordered = sorted(
+        ((_utc(start) or lowest, _utc(end) or highest) for start, end in periods),
+    )
+    merged: list[list[datetime]] = []
+    for start, end in ordered:
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    return [
+        AnalyticsAssignmentPeriod(
+            assigned_from=None if start == lowest else start,
+            assigned_to=None if end == highest else end,
+        )
+        for start, end in merged
+    ]
+
+
 def build_analytics_catalog_response(
     *,
     site: dict[str, Any],
@@ -563,7 +600,8 @@ def build_analytics_catalog_response(
     omitted: the catalogue lists only assets the customer can chart.
     Ordering is deterministic: assets by name then id, data points by the
     registry's own order. Availability bounds are attached per data point;
-    null bounds mean no data yet.
+    null bounds mean no data yet. Each data point carries its assignment
+    periods (one catalogue row per period since migration 288).
     """
 
     bounds = {
@@ -572,6 +610,7 @@ def build_analytics_catalog_response(
     }
     assets: dict[str, dict[str, Any]] = {}
     qualifiers: dict[tuple[str, str], set[str]] = {}
+    periods: dict[tuple[str, str], set[tuple[datetime | None, datetime | None]]] = {}
     for row in rows:
         definition = ANALYTICS_DATA_POINTS.get(row["data_point"])
         if definition is None or row["qualifier"] not in definition.qualifiers:
@@ -580,6 +619,9 @@ def build_analytics_catalog_response(
         asset = assets.setdefault(asset_key, {"row": row, "points": {}})
         asset["points"].setdefault(row["data_point"], row)
         qualifiers.setdefault((asset_key, row["data_point"]), set()).add(row["qualifier"])
+        periods.setdefault((asset_key, row["data_point"]), set()).add(
+            (row.get("assigned_from"), row.get("assigned_to"))
+        )
 
     registry_order = list(ANALYTICS_DATA_POINTS)
     catalog_assets: list[AnalyticsCatalogAsset] = []
@@ -607,6 +649,7 @@ def build_analytics_catalog_response(
                     ),
                     available_from=_utc(available_from),
                     available_to=_utc(available_to),
+                    assignment_periods=_merge_periods(periods[(asset_key, code)]),
                 )
             )
         catalog_assets.append(

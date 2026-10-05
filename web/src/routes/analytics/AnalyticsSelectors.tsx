@@ -311,12 +311,15 @@ export function AssetSelector({
 
 export function DataPointSelector({
   catalog,
+  range,
   selected,
   maxDataPoints,
   onToggle,
   onSetDataPoints,
 }: {
   catalog: AnalyticsCatalogResponse | null;
+  /** The draft date range: only points assigned during it are offered. */
+  range: CalendarRange;
   selected: readonly string[];
   maxDataPoints: number;
   onToggle: (code: string) => void;
@@ -324,7 +327,7 @@ export function DataPointSelector({
 }) {
   const [search, setSearch] = useState("");
   const { expanded, toggle } = useExpanded();
-  const points = useMemo(() => siteDataPoints(catalog), [catalog]);
+  const points = useMemo(() => siteDataPoints(catalog, range, selected), [catalog, range, selected]);
   const groups = useMemo(() => groupDataPoints(points, search), [points, search]);
   const atLimit = selected.length >= maxDataPoints;
   const searching = search.trim() !== "";
