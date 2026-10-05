@@ -3,8 +3,11 @@ import {
   DEFAULT_LIMITS,
   INITIAL_DRAFT,
   MESSAGES,
+  RESOLUTION_OPTIONS,
   draftsEqual,
   isResolutionAvailable,
+  isValidCustomRange,
+  rangesEqual,
   limitsFrom,
   planSelections,
   renderedSeriesCount,
@@ -30,7 +33,74 @@ describe("approved wording (canonical docs)", () => {
         "Resolution changed to Auto because the selected resolution is not available for this range.",
       emptyStateTitle: "Select data to explore",
       emptyStateDetail: "Choose an asset and data point to get started.",
+      assetLimitReached: "You can select up to 10 assets.",
+      dataPointLimitReached: "You can select up to 5 data points.",
+      comparisonComingSoon: "Coming soon",
     });
+  });
+
+  it("offers the resolutions in display order (EMS-REQ-134)", () => {
+    expect(RESOLUTION_OPTIONS.map((o) => o.label)).toEqual(["Auto", "1 minute", "15 minutes", "30 minutes", "1 hour", "1 day"]);
+  });
+});
+
+describe("custom date ranges (D8, D15, D60)", () => {
+  const custom = (fromDate: string, toDate: string, fromTime: string | null = null, toTime: string | null = null) => ({
+    kind: "custom" as const,
+    fromDate,
+    toDate,
+    fromTime,
+    toTime,
+  });
+
+  it("whole local days, the end date inclusive", () => {
+    expect(resolveDraftRange(custom("2026-09-01", "2026-09-03"), "Asia/Kolkata")).toEqual({
+      from: "2026-08-31T18:30:00.000Z",
+      to: "2026-09-03T18:30:00.000Z",
+    });
+  });
+
+  it("a single day", () => {
+    expect(resolveDraftRange(custom("2026-09-01", "2026-09-01"), "Asia/Kolkata")).toEqual({
+      from: "2026-08-31T18:30:00.000Z",
+      to: "2026-09-01T18:30:00.000Z",
+    });
+  });
+
+  it("time-of-day refinement to any minute; an omitted time keeps the day boundary", () => {
+    expect(resolveDraftRange(custom("2026-09-01", "2026-09-01", "08:17", "17:45"), "Asia/Kolkata")).toEqual({
+      from: "2026-09-01T02:47:00.000Z",
+      to: "2026-09-01T12:15:00.000Z",
+    });
+    expect(resolveDraftRange(custom("2026-09-01", "2026-09-02", "08:00"), "Asia/Kolkata")).toEqual({
+      from: "2026-09-01T02:30:00.000Z",
+      to: "2026-09-02T18:30:00.000Z",
+    });
+  });
+
+  it("DST: a London day across the autumn change is 25 hours", () => {
+    const { from, to } = resolveDraftRange(custom("2026-10-25", "2026-10-25"), "Europe/London");
+    expect((Date.parse(to) - Date.parse(from)) / 3_600_000).toBe(25);
+  });
+
+  it("valid only with a positive length", () => {
+    expect(isValidCustomRange(custom("2026-09-01", "2026-09-01"), "Asia/Kolkata")).toBe(true);
+    expect(isValidCustomRange(custom("2026-09-02", "2026-09-01"), "Asia/Kolkata")).toBe(false);
+    expect(isValidCustomRange(custom("2026-09-01", "2026-09-01", "10:00", "10:00"), "Asia/Kolkata")).toBe(false);
+    expect(isValidCustomRange(custom("2026-09-01", "2026-09-01", "10:00", "09:59"), "Asia/Kolkata")).toBe(false);
+    expect(isValidCustomRange(custom("2026-09-01", "2026-09-01", "10:00", "10:01"), "Asia/Kolkata")).toBe(true);
+  });
+
+  it("rangesEqual compares kind, dates and times", () => {
+    expect(rangesEqual({ kind: "preset", preset: "TODAY" }, { kind: "preset", preset: "TODAY" })).toBe(true);
+    expect(rangesEqual({ kind: "preset", preset: "TODAY" }, { kind: "preset", preset: "7D" })).toBe(false);
+    expect(rangesEqual({ kind: "preset", preset: "TODAY" }, custom("2026-09-01", "2026-09-01"))).toBe(false);
+    expect(rangesEqual(custom("2026-09-01", "2026-09-02"), custom("2026-09-01", "2026-09-02"))).toBe(true);
+    expect(rangesEqual(custom("2026-09-01", "2026-09-02"), custom("2026-09-01", "2026-09-02", "08:00"))).toBe(false);
+  });
+
+  it("a custom range is a draft change", () => {
+    expect(draftsEqual(INITIAL_DRAFT, draft({ range: custom("2026-09-01", "2026-09-01") }))).toBe(false);
   });
 });
 

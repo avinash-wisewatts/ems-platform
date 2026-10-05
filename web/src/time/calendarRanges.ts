@@ -142,3 +142,20 @@ export function calendarRange(
 export function calendarDayCount(range: CalendarRange): number {
   return Math.round((Date.parse(range.to) - Date.parse(range.from)) / DAY_MS);
 }
+
+/**
+ * The UTC instant of local wall time `time` ("HH:MM") on calendar date `key`
+ * in `timeZone` -- the custom range's time-of-day refinement (D60). DST-correct:
+ * the offset is taken at that wall time; a wall time inside a spring-forward gap
+ * resolves to the instant after the gap.
+ */
+export function localDateTimeUtc(key: string, time: string, timeZone: string | null | undefined): Date {
+  const tz = timeZone ?? "UTC";
+  const { year, month, day } = parseKey(key);
+  const hours = Number(time.slice(0, 2));
+  const minutes = Number(time.slice(3, 5));
+  const naive = Date.UTC(year, month - 1, day, hours, minutes);
+  const first = naive - offsetMs(naive, tz);
+  const second = naive - offsetMs(first, tz);
+  return new Date(Math.max(first, second));
+}

@@ -7,6 +7,7 @@ import {
   calendarDayCount,
   calendarRange,
   localDateKey,
+  localDateTimeUtc,
   localMidnightUtc,
   presetStartKey,
 } from "./calendarRanges";
@@ -146,5 +147,19 @@ describe("calendarRange", () => {
   it("1 Year in a leap span is 366 days; otherwise 365", () => {
     expect(calendarDayCount(calendarRange("1Y", "Asia/Kolkata", new Date("2028-03-10T06:00:00.000Z")))).toBe(367);
     expect(calendarDayCount(calendarRange("1Y", "Asia/Kolkata", new Date("2027-03-10T06:00:00.000Z")))).toBe(366);
+  });
+});
+
+describe("localDateTimeUtc (time-of-day refinement, D60)", () => {
+  it("IST and Kathmandu wall times", () => {
+    expect(localDateTimeUtc("2026-09-29", "08:30", "Asia/Kolkata").toISOString()).toBe("2026-09-29T03:00:00.000Z");
+    expect(localDateTimeUtc("2026-09-29", "00:00", "Asia/Kathmandu").toISOString()).toBe("2026-09-28T18:15:00.000Z");
+    expect(localDateTimeUtc("2026-09-29", "23:59", "Asia/Kolkata").toISOString()).toBe("2026-09-29T18:29:00.000Z");
+  });
+
+  it("London: BST and GMT days, and a wall time in the spring-forward gap resolves after the gap", () => {
+    expect(localDateTimeUtc("2026-07-01", "12:00", "Europe/London").toISOString()).toBe("2026-07-01T11:00:00.000Z");
+    expect(localDateTimeUtc("2026-12-01", "12:00", "Europe/London").toISOString()).toBe("2026-12-01T12:00:00.000Z");
+    expect(localDateTimeUtc("2026-03-29", "01:30", "Europe/London").toISOString()).toBe("2026-03-29T01:30:00.000Z");
   });
 });
