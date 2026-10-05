@@ -14,7 +14,14 @@ import type {
   AnalyticsResolutionCode,
 } from "../../api/types";
 import type { AnalyticsSelection } from "../../api/endpoints";
-import { calendarRange, type CalendarPreset, type CalendarRange } from "../../time/calendarRanges";
+import {
+  addDays,
+  calendarRange,
+  localDateTimeUtc,
+  localMidnightUtc,
+  type CalendarPreset,
+  type CalendarRange,
+} from "../../time/calendarRanges";
 
 // ---- Approved wording (D48, D78, D80, D68) -----------------------------------
 
@@ -28,7 +35,22 @@ export const MESSAGES = {
   resolutionChangedToAuto: "Resolution changed to Auto because the selected resolution is not available for this range.",
   emptyStateTitle: "Select data to explore",
   emptyStateDetail: "Choose an asset and data point to get started.",
+  // Limit-reached indication (D65) and the disabled Comparison control (D52):
+  // Product Owner wording, 2026-09-30.
+  assetLimitReached: "You can select up to 10 assets.",
+  dataPointLimitReached: "You can select up to 5 data points.",
+  comparisonComingSoon: "Coming soon",
 } as const;
+
+/** Resolution options and their labels (EMS-REQ-134), in display order. */
+export const RESOLUTION_OPTIONS: readonly { value: AnalyticsRequestedResolution; label: string }[] = [
+  { value: "auto", label: "Auto" },
+  { value: "1m", label: "1 minute" },
+  { value: "15m", label: "15 minutes" },
+  { value: "30m", label: "30 minutes" },
+  { value: "1h", label: "1 hour" },
+  { value: "1d", label: "1 day" },
+];
 
 // ---- Limits (ADR-022 decision 7; D5, D70) ------------------------------------
 
@@ -48,8 +70,16 @@ export function limitsFrom(catalog: AnalyticsCatalogResponse | null): AnalyticsL
 
 // ---- Draft query -------------------------------------------------------------
 
-/** F3 holds a quick-range preset; the custom date/time range is F4's date picker. */
-export type AnalyticsRangeSelection = { kind: "preset"; preset: CalendarPreset };
+/**
+ * A quick range (D10, D61), or dates picked on the calendar (date-first, D60)
+ * with an optional time-of-day refinement (any minute, PO 2026-09-30).
+ * Custom dates are inclusive site-local dates ("YYYY-MM-DD"); without a time
+ * the range runs from the first date's local midnight to the local midnight
+ * after the last date (D15).
+ */
+export type AnalyticsRangeSelection =
+  | { kind: "preset"; preset: CalendarPreset }
+  | { kind: "custom"; fromDate: string; toDate: string; fromTime: string | null; toTime: string | null };
 
 export type AnalyticsDraft = {
   range: AnalyticsRangeSelection;
@@ -70,10 +100,16 @@ export const INITIAL_DRAFT: AnalyticsDraft = {
   dataPoints: [],
 };
 
+export function rangesEqual(a: AnalyticsRangeSelection, b: AnalyticsRangeSelection): boolean {
+  if (a.kind === "preset" || b.kind === "preset") {
+    return a.kind === "preset" && b.kind === "preset" && a.preset === b.preset;
+  }
+  return a.fromDate === b.fromDate && a.toDate === b.toDate && a.fromTime === b.fromTime && a.toTime === b.toTime;
+}
+
 export function draftsEqual(a: AnalyticsDraft, b: AnalyticsDraft): boolean {
   return (
-    a.range.kind === b.range.kind &&
-    a.range.preset === b.range.preset &&
+    rangesEqual(a.range, b.range) &&
     a.resolution === b.resolution &&
     a.phase === b.phase &&
     a.assetIds.length === b.assetIds.length &&
@@ -89,7 +125,24 @@ export function resolveDraftRange(
   timeZone: string | null | undefined,
   now: Date = new Date(),
 ): CalendarRange {
-  return calendarRange(range.preset, timeZone, now);
+  if (range.kind === "preset") return calendarRange(range.preset, timeZone, now);
+  const from = range.fromTime
+    ? localDateTimeUtc(range.fromDate, range.fromTime, timeZone)
+    : localMidnightUtc(range.fromDate, timeZone);
+  const to = range.toTime
+    ? localDateTimeUtc(range.toDate, range.toTime, timeZone)
+    : localMidnightUtc(addDays(range.toDate, 1), timeZone);
+  return { from: from.toISOString(), to: to.toISOString() };
+}
+
+/** A custom range can be applied only when it has a positive length. */
+export function isValidCustomRange(
+  range: Extract<AnalyticsRangeSelection, { kind: "custom" }>,
+  timeZone: string | null | undefined,
+): boolean {
+  if (!range.fromDate || !range.toDate || range.fromDate > range.toDate) return false;
+  const { from, to } = resolveDraftRange(range, timeZone);
+  return Date.parse(from) < Date.parse(to);
 }
 
 // ---- Selections --------------------------------------------------------------

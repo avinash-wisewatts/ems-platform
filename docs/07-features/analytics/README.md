@@ -82,7 +82,8 @@ message is shown only when it has useful content; otherwise it is absent.
   On narrow screens it is a drawer/overlay opened with **Show Filters** (D82).
 - Filter order: 1 Update · 2 Assets · 3 Data points · 4 Resolution · 5 Phase
   type · 6 Comparison (D36). Comparison is visible, disabled and marked as
-  unavailable in v1 (D52).
+  unavailable in v1 with the text "Coming soon" (D52; wording approved
+  2026-09-30).
 
 ### First load, return visits and site change
 
@@ -109,13 +110,14 @@ message is shown only when it has useful content; otherwise it is absent.
 - Two views: **Group by Space** (default) and **Group by Asset Type**.
   Switching views never changes the selection. Assets without a Space are in
   an **Unassigned** group at the bottom; assets without an Asset Type are in
-  an **Other** group. Groups are collapsed by default (D38, D65, D71, D72).
+  an **Other** group, also at the bottom (position approved 2026-09-30).
+  Groups are collapsed by default (D38, D65, D71, D72).
 - Group-level checkboxes and **Select All / Clear All**. At most **10**
   assets, enforced while selecting. When a group selection or Select All
   would exceed 10, assets are selected top to bottom in the current visual
   order up to the limit, the rest stay unselected, the group checkbox shows a
   partial state and the UI indicates that the limit was reached (D5, D44,
-  D65).
+  D65): "You can select up to 10 assets." (approved 2026-09-30).
 
 ### Data points
 
@@ -123,7 +125,8 @@ message is shown only when it has useful content; otherwise it is absent.
   data points can be selected in either order, and any combination may be
   chosen (combinations without data are handled after Update) (D4, D42, D43).
 - At most **5** semantic data points, enforced while selecting; phase
-  expansion does not count (D5, D66, D70).
+  expansion does not count (D5, D66, D70). At the limit the UI shows "You can
+  select up to 5 data points." (approved 2026-09-30).
 - Groups are organizational only: collapsed by default, **no** group-level
   checkbox; **Select All / Clear All** and search (D39, D59, D66).
 - Groups and members (D67, as revised by D75). A group appears only where
@@ -180,7 +183,8 @@ message is shown only when it has useful content; otherwise it is absent.
   - The end is the exclusive next local midnight. The week starts on Sunday
     (D13).
 - Date-first selection with an optional time-of-day refinement; by default
-  local day start to next local day start. Choosing a quick range resets any
+  local day start to next local day start. The refinement can be set to any
+  minute (HH:MM; approved 2026-09-30). Choosing a quick range resets any
   time-of-day refinement (D60, revising D14). Two-month calendar with Apply /
   Cancel (D1, EMS-REQ-133).
 - Display: inclusive dates, e.g. `01 Sep 2026 – 30 Sep 2026`; with a
@@ -593,21 +597,23 @@ D65), quality on the chart (D23 and Data quality); production release gate
 (not blocked; an empty production catalogue is acceptable, D84); the
 "Series not shown" wording and the resolution auto-switch notice (approved
 2026-09-29); the range slider (kept, visual-only, 2026-09-29).
+Answered and removed (2026-09-30): the limit-reached wording ("You can select
+up to 10 assets." / "You can select up to 5 data points."); the Comparison
+placeholder text ("Coming soon"); the "Other" asset group's position (at the
+bottom, D72); the time-of-day refinement's granularity (any minute, D60).
 
 1. **Curated non-Energy registry.** Which parameters join the registry once
    assignments exist? Cumulative registers other than Active Energy
    Import/Export (apparent and reactive energy) cannot be shown as averages;
    they need a delta calculation first. Labels for non-Energy points are part
    of this question.
-2. **Limit-reached indication** (D65): wording not decided.
-3. **CSV quality context.** Whether the wide CSV carries any coverage or
+2. **CSV quality context.** Whether the wide CSV carries any coverage or
    quality information (EMS-REQ-137, ADR-014).
-4. **Smaller open items:** the position of the "Other" asset group (D72);
-   "Export Energy" in the Power list (D67) versus "Energy Export" (D73);
-   whether D73's platform-wide "Energy" replaces the customer term
-   "Consumption" outside Analytics; the time-of-day refinement's granularity
-   (D60); phase labels for other quantities (D63); a hint near Phase type
-   before Update when per-phase values are unavailable (DQ14).
+3. **Smaller open items:** "Export Energy" in the Power list (D67) versus
+   "Energy Export" (D73); whether D73's platform-wide "Energy" replaces the
+   customer term "Consumption" outside Analytics; phase labels for other
+   quantities (D63); a hint near Phase type before Update when per-phase
+   values are unavailable (DQ14).
 
 ## Validation
 
