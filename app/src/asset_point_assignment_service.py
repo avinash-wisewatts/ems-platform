@@ -52,13 +52,25 @@ async def _read_all(query: str, params: tuple = ()) -> list[dict[str, Any]]:
     return rows
 
 
+# effective_from / effective_to can be infinite: the staging parity-bridge
+# assignments start at '-infinity', which Python's datetime cannot represent
+# (psycopg raises DataError while loading the row). An infinite bound means
+# "unbounded", so it is returned as NULL; no caller relies on the value.
+LIST_CANDIDATES_SQL = """
+    SELECT device_id, device_name, relationship_type, relationship_type_name,
+           logical_point_id, logical_point_name, point_category_id,
+           point_category_name, unit_symbol, is_confirmed, asset_point_id,
+           friendly_name,
+           CASE WHEN isfinite(effective_from) THEN effective_from END AS effective_from,
+           CASE WHEN isfinite(effective_to) THEN effective_to END AS effective_to
+    FROM admin.list_asset_point_assignment_candidates(%s, %s::uuid)
+"""
+
+
 async def list_asset_point_assignment_candidates(
     *, portal_user_id: int, asset_id: str
 ) -> list[dict[str, Any]]:
-    return await _read_all(
-        "SELECT * FROM admin.list_asset_point_assignment_candidates(%s, %s::uuid)",
-        (portal_user_id, asset_id),
-    )
+    return await _read_all(LIST_CANDIDATES_SQL, (portal_user_id, asset_id))
 
 
 async def get_asset_commissioning_backfill_status(
