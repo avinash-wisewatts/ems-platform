@@ -17,11 +17,13 @@ set -Eeuo pipefail
 #   3. COMPLETED initial backfill -> ACTIVE.
 #   4. FAILED -> remains COMMISSIONING.
 #   5. FAILED -> retry -> COMPLETED -> ACTIVE.
-#   6. Administrator moves the Asset to INACTIVE before completion ->
-#      successful backfill must not silently reactivate it.
-#   7. DECOMMISSIONED before completion -> must remain DECOMMISSIONED.
-#   8. Repeated completion/retry is idempotent (no duplicate activation
-#      audit row, no error, stays ACTIVE).
+#   6. Administrator moves the Asset to INACTIVE before completion -> the
+#      backfill is refused (migration 287: COMMISSIONING-only) and the
+#      asset is not reactivated.
+#   7. DECOMMISSIONED before completion -> refused; stays DECOMMISSIONED.
+#   8. Rerun of a completed job on the now-ACTIVE asset is refused safely
+#      (migration 287): FAILED with reason, no second activation audit row,
+#      stays ACTIVE, no start date moved.
 #   9. Existing lifecycle/audit behavior (admin.commission_asset(), fully
 #      untouched by this migration) remains intact.
 # ============================================================================
@@ -284,29 +286,40 @@ echo "PASS: FAILED -> retry -> COMPLETED -> ACTIVE"
 # 6 & 7 (continued): the completed-but-diverted jobs must not have
 # reactivated the asset.
 # ----------------------------------------------------------------------------
-assert_eq "asset 6's backfill status" "COMPLETED" "$(scalar "SELECT status FROM metadata.asset_commissioning_backfill WHERE id='${BACKFILL6}';")"
+# Migration 287: the worker backfills only COMMISSIONING assets, so a record
+# whose asset an administrator moved to INACTIVE is refused (FAILED, with the
+# refusal reason) instead of completing; it is still never reactivated.
+assert_eq "asset 6's backfill status (refused: not COMMISSIONING)" "FAILED" "$(scalar "SELECT status FROM metadata.asset_commissioning_backfill WHERE id='${BACKFILL6}';")"
+assert_eq "asset 6's refusal reason" "1" "$(scalar "SELECT count(*) FROM metadata.asset_commissioning_backfill WHERE id='${BACKFILL6}' AND last_error LIKE '%refused%not COMMISSIONING%';")"
 assert_eq "asset 6's lifecycle_status (must stay INACTIVE)" "INACTIVE" "$(scalar "SELECT lifecycle_status FROM metadata.assets WHERE id='${ASSET6}';")"
-echo "PASS: a successful backfill does not silently reactivate an asset an administrator moved to INACTIVE"
+echo "PASS: a backfill for an asset moved to INACTIVE is refused and never reactivates it"
 
-assert_eq "asset 7's backfill status" "COMPLETED" "$(scalar "SELECT status FROM metadata.asset_commissioning_backfill WHERE id='${BACKFILL7}';")"
+assert_eq "asset 7's backfill status (refused: not COMMISSIONING)" "FAILED" "$(scalar "SELECT status FROM metadata.asset_commissioning_backfill WHERE id='${BACKFILL7}';")"
+assert_eq "asset 7's refusal reason" "1" "$(scalar "SELECT count(*) FROM metadata.asset_commissioning_backfill WHERE id='${BACKFILL7}' AND last_error LIKE '%refused%not COMMISSIONING%';")"
 assert_eq "asset 7's lifecycle_status (must stay DECOMMISSIONED)" "DECOMMISSIONED" "$(scalar "SELECT lifecycle_status FROM metadata.assets WHERE id='${ASSET7}';")"
-echo "PASS: a successful backfill does not reactivate a DECOMMISSIONED asset"
+echo "PASS: a backfill for a DECOMMISSIONED asset is refused and it stays DECOMMISSIONED"
 
 # ----------------------------------------------------------------------------
-# 8. Repeated completion/retry is idempotent -- rerun asset 3's
-# already-COMPLETED/ACTIVE job; must stay ACTIVE, no duplicate activation
-# audit row, no error.
+# 8. Rerun of asset 3's already-COMPLETED job after it became ACTIVE --
+# refused safely (migration 287: COMMISSIONING-only). Before 287 this rerun
+# COMPLETED again as an idempotent no-op; the lifecycle rule was corrected on
+# purpose (product owner, 2026-10-05). Must stay ACTIVE, no second activation
+# audit row, no start date moved.
 # ----------------------------------------------------------------------------
 AUDIT_COUNT_BEFORE=$(scalar "SELECT count(*) FROM admin.onboarding_audit WHERE (request_payload->>'asset_id')='${ASSET3}' AND request_payload->>'operation'='ACTIVATE_ASSET_AFTER_COMMISSIONING_BACKFILL';")
+FROM_3_BEFORE=$(scalar "SELECT string_agg(id || '=' || effective_from, ',' ORDER BY id) FROM metadata.asset_points WHERE asset_id='${ASSET3}';")
 run_sql "UPDATE metadata.asset_commissioning_backfill SET status='PENDING', started_at=NULL, completed_at=NULL WHERE id='${BACKFILL3}';"
 psql_exec -c "CALL telemetry.process_asset_commissioning_backfill(10);"
+FROM_3_AFTER=$(scalar "SELECT string_agg(id || '=' || effective_from, ',' ORDER BY id) FROM metadata.asset_points WHERE asset_id='${ASSET3}';")
 AUDIT_COUNT_AFTER=$(scalar "SELECT count(*) FROM admin.onboarding_audit WHERE (request_payload->>'asset_id')='${ASSET3}' AND request_payload->>'operation'='ACTIVATE_ASSET_AFTER_COMMISSIONING_BACKFILL';")
 
-assert_eq "asset 3's backfill status after idempotent rerun" "COMPLETED" "$(scalar "SELECT status FROM metadata.asset_commissioning_backfill WHERE id='${BACKFILL3}';")"
-assert_eq "asset 3's lifecycle_status after idempotent rerun" "ACTIVE" "$(scalar "SELECT lifecycle_status FROM metadata.assets WHERE id='${ASSET3}';")"
+assert_eq "asset 3's backfill status after the refused rerun" "FAILED" "$(scalar "SELECT status FROM metadata.asset_commissioning_backfill WHERE id='${BACKFILL3}';")"
+assert_eq "asset 3's refusal reason" "1" "$(scalar "SELECT count(*) FROM metadata.asset_commissioning_backfill WHERE id='${BACKFILL3}' AND last_error LIKE '%refused%not COMMISSIONING%';")"
+assert_eq "asset 3's lifecycle_status after the refused rerun" "ACTIVE" "$(scalar "SELECT lifecycle_status FROM metadata.assets WHERE id='${ASSET3}';")"
 assert_eq "activation audit row count before rerun" "1" "${AUDIT_COUNT_BEFORE}"
-assert_eq "activation audit row count after idempotent rerun (must not duplicate)" "1" "${AUDIT_COUNT_AFTER}"
-echo "PASS: reprocessing an already-COMPLETED/ACTIVE job is idempotent -- no duplicate activation, no error"
+assert_eq "activation audit row count after the refused rerun (no second activation)" "1" "${AUDIT_COUNT_AFTER}"
+assert_eq "asset 3's assignment start dates unchanged by the refused rerun" "${FROM_3_BEFORE}" "${FROM_3_AFTER}"
+echo "PASS: a rerun of a completed job on an ACTIVE asset is refused safely -- FAILED with reason, no second activation, start dates unchanged"
 
 # ----------------------------------------------------------------------------
 # 9. Existing lifecycle/audit behavior (admin.commission_asset(), fully

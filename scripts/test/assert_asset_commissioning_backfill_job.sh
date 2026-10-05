@@ -23,8 +23,10 @@ set -Eeuo pipefail
 #      deterministic failure).
 #   9. Retry after failure: requeue Z, fix the underlying cause, rerun ->
 #      succeeds.
-#  10. Idempotent rerun: reprocessing an already-COMPLETED job (Y) is a
-#      safe no-op -- same effective_from, job still reports COMPLETED.
+#  10. Rerun of an already-COMPLETED job (Y, whose asset is now ACTIVE) is
+#      refused safely (migration 287: only COMMISSIONING assets are
+#      backfilled) -- FAILED with the refusal reason, same effective_from,
+#      asset stays ACTIVE.
 #  11. Concurrent workers cannot process the same Asset simultaneously:
 #      a background session holds a row lock on asset X's backfill
 #      record; a concurrent CALL to the claiming procedure must skip it
@@ -279,29 +281,38 @@ fi
 echo "PASS: retry after failure (requeue FAILED -> PENDING, fix the cause, rerun) succeeds"
 
 # ----------------------------------------------------------------------------
-# 10. Idempotent rerun -- reprocessing an already-COMPLETED job (Y) is a
-#     safe no-op: same effective_from, still COMPLETED.
+# 10. Rerun of an already-COMPLETED job (Y) after its asset became ACTIVE --
+#     refused safely (migration 287: the worker backfills only assets in
+#     COMMISSIONING; a completed commissioning is never re-run). Before 287
+#     this rerun COMPLETED again as an idempotent no-op; the lifecycle rule
+#     was corrected on purpose (product owner, 2026-10-05).
 # ----------------------------------------------------------------------------
+LIFECYCLE_Y_BEFORE=$(scalar "SELECT lifecycle_status FROM metadata.assets WHERE name='Backfill Job Test Asset Y';")
 run_sql "UPDATE metadata.asset_commissioning_backfill SET status='PENDING', started_at=NULL, completed_at=NULL WHERE id = '${BACKFILL_Y}';"
 psql_exec -c "CALL telemetry.process_asset_commissioning_backfill(10);"
 
 STATUS_Y_RERUN=$(scalar "SELECT status FROM metadata.asset_commissioning_backfill WHERE id='${BACKFILL_Y}';")
+LAST_ERROR_Y=$(scalar "SELECT last_error FROM metadata.asset_commissioning_backfill WHERE id='${BACKFILL_Y}';")
 EFFECTIVE_FROM_Y_2=$(scalar "SELECT effective_from::text FROM metadata.asset_points WHERE asset_id=(SELECT id FROM metadata.assets WHERE name='Backfill Job Test Asset Y');")
-ATTEMPT_COUNT_Y=$(scalar "SELECT attempt_count FROM metadata.asset_commissioning_backfill WHERE id='${BACKFILL_Y}';")
+LIFECYCLE_Y_AFTER=$(scalar "SELECT lifecycle_status FROM metadata.assets WHERE name='Backfill Job Test Asset Y';")
 
-if [[ "${STATUS_Y_RERUN}" != "COMPLETED" ]]; then
-    echo "FAIL: expected asset Y's backfill job to COMPLETE again on rerun, found ${STATUS_Y_RERUN}" >&2
+if [[ "${LIFECYCLE_Y_BEFORE}" != "ACTIVE" ]]; then
+    echo "FAIL: fixture -- expected asset Y to be ACTIVE after its completed commissioning, found ${LIFECYCLE_Y_BEFORE}" >&2
+    exit 1
+fi
+if [[ "${STATUS_Y_RERUN}" != "FAILED" || "${LAST_ERROR_Y}" != *"refused"*"not COMMISSIONING"* ]]; then
+    echo "FAIL: expected the rerun on an ACTIVE asset to be refused (FAILED, refusal reason), found ${STATUS_Y_RERUN} / ${LAST_ERROR_Y}" >&2
     exit 1
 fi
 if [[ "${EFFECTIVE_FROM_Y_1}" != "${EFFECTIVE_FROM_Y_2}" ]]; then
-    echo "FAIL: expected effective_from to converge (unchanged) on an idempotent rerun, was ${EFFECTIVE_FROM_Y_1} now ${EFFECTIVE_FROM_Y_2}" >&2
+    echo "FAIL: expected effective_from unchanged by a refused rerun, was ${EFFECTIVE_FROM_Y_1} now ${EFFECTIVE_FROM_Y_2}" >&2
     exit 1
 fi
-if [[ "${ATTEMPT_COUNT_Y}" -lt 2 ]]; then
-    echo "FAIL: expected attempt_count >= 2 after a genuine rerun, found ${ATTEMPT_COUNT_Y}" >&2
+if [[ "${LIFECYCLE_Y_AFTER}" != "ACTIVE" ]]; then
+    echo "FAIL: expected asset Y to stay ACTIVE after a refused rerun, found ${LIFECYCLE_Y_AFTER}" >&2
     exit 1
 fi
-echo "PASS: reprocessing an already-COMPLETED job is idempotent -- effective_from converges, no spurious change"
+echo "PASS: a rerun of a completed job on an ACTIVE asset is refused safely -- FAILED with reason, effective_from unchanged, still ACTIVE"
 
 # ----------------------------------------------------------------------------
 # Once the lock is released, X's job can be claimed and completes too.

@@ -273,6 +273,10 @@ echo
 echo "[active-power-power-factor-display-category] Running Active Power / Power Factor display category (migration 262) assertions..."
 bash "${SCRIPT_DIR}/assert_active_power_power_factor_display_category.sh"
 
+echo
+echo "[asset-commissioning-backfill-draft-only] Running DRAFT-only commissioning / COMMISSIONING-only backfill guard / cleanup (migration 287) assertions..."
+bash "${SCRIPT_DIR}/assert_asset_commissioning_backfill_draft_only.sh"
+
 echo "[14/14] Verifying migration ledger..."
 ledger="$(
     docker compose \
