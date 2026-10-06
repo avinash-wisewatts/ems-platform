@@ -204,6 +204,30 @@ def test_catalog_lists_every_assignment_period_of_active_assets(tx):
     assert {r[7] for r in rows} == {"CONFIRMED"}
 
 
+def test_catalog_reports_power_in_kw_kva_kvar_and_energy_in_kwh(tx):
+    """Migration 289: the power parameters report their logical-point units
+    (kW / kVA / kvar), Energy stays kWh, Power Factor stays unitless."""
+    with tx.cursor() as cur:
+        f = Fixture(cur)
+        org, site, gw = f.org_site("U")
+        asset, dev = f.asset(org, site, gw, "U1 Units", "ACTIVE")
+        for point in ("ACTIVE_POWER_TOTAL", "APPARENT_POWER_TOTAL", "REACTIVE_POWER_TOTAL",
+                      "POWER_FACTOR_TOTAL", "ENERGY_IMPORT_TOTAL", "ENERGY_EXPORT_TOTAL"):
+            f.bind(org, asset, dev, point)
+        admin = f.portal_user(None, "GLOBAL", role="ADMIN")
+        cur.execute(CATALOG_SQL, (admin, site))
+        rows = cur.fetchall()
+
+    assert {r[2]: r[5] for r in rows} == {
+        "ACTIVE_POWER": "kW",
+        "APPARENT_POWER": "kVA",
+        "REACTIVE_POWER": "kvar",
+        "POWER_FACTOR": None,
+        "ENERGY_IMPORT": "kWh",
+        "ENERGY_EXPORT": "kWh",
+    }
+
+
 def test_separate_assignments_are_separate_periods_and_a_same_instant_replacement_is_one(tx):
     with tx.cursor() as cur:
         f = Fixture(cur)
