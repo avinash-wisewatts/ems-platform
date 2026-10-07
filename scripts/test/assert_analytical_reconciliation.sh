@@ -199,6 +199,9 @@ $t$;
 --    (Migration 265 / ADR-019 M2 added analytics.run_point_telemetry_1h_job,
 --    the sole checkpoint writer of the point_telemetry_1h tier; its refresh,
 --    detector, reconcile and backfill routines write none.)
+--    (Migration 290 / F1 added analytics.run_energy_register_delta_15min_job,
+--    the sole checkpoint writer of the energy_register_delta_15min tier; its
+--    refresh and reconcile routines write none.)
 -- ======================================================================
 DO $t$
 DECLARE v_writers text[]; v_expected text[];
@@ -213,7 +216,7 @@ BEGIN
         'analytics.run_demand_calculation_job','analytics.run_energy_consumption_15min_job',
         'analytics.run_energy_consumption_1min_job','analytics.run_energy_consumption_5min_job',
         'analytics.run_energy_consumption_daily_job','analytics.run_energy_consumption_hourly_job',
-        'analytics.run_point_telemetry_1h_job',
+        'analytics.run_energy_register_delta_15min_job','analytics.run_point_telemetry_1h_job',
         'telemetry.capture_raw_message_failures_incremental','telemetry.load_device_raw_receipt_state_incremental',
         'telemetry.load_energy_measurements_incremental','telemetry.load_environment_measurements_incremental',
         'telemetry.load_normalized_points_incremental','telemetry.run_derived_space_dew_point_1min_job',
