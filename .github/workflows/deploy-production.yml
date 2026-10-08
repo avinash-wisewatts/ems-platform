@@ -1,4 +1,9 @@
 name: Deploy to Production
+# Records the release actually deployed in the run's display title, so later
+# promotions can read it back (a workflow_dispatch run's headSha is the branch
+# tip it ran from, not release_git_sha). Parsed by the staging-milestone
+# forward-only check below; keep the "Deploy <40-hex sha> (" prefix stable.
+run-name: Deploy ${{ inputs.release_git_sha }} (${{ inputs.promotion_mode }})
 
 # Production deployment ARCHITECTURE.
 #
@@ -31,9 +36,15 @@ name: Deploy to Production
 #                             (GitHub compare: <sha>...staging is "ahead" or
 #                             "identical"), re-verified immediately before
 #                             deployment; and (b) moves production FORWARD:
-#                             the head SHA of the most recent successful run
-#                             of this workflow must be a strict ancestor of
-#                             release_git_sha (fails closed if none). Used for
+#                             the release deployed by the most recent run of
+#                             this workflow whose deploy job succeeded must be
+#                             a strict ancestor of release_git_sha. That
+#                             release is read from the run title ("Deploy
+#                             <sha> (...)", see run-name) and/or the deploy
+#                             job's "[1/6] Checking out release commit <sha>"
+#                             log line -- never from the run's headSha, which
+#                             is the branch tip it ran from. Fails closed if
+#                             it cannot be established unambiguously. Used for
 #                             staged release promotion through milestones
 #                             that each passed staging; it can never act as a
 #                             rollback (that remains rollback.yml's job).
@@ -204,17 +215,58 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_SHA: ${{ inputs.release_git_sha }}
         run: |
-          # The most recent successful run of this workflow is the last
-          # promoted production release. A milestone must be strictly newer
-          # (that release must be a strict ancestor of it), so this mode can
-          # never redeploy the same commit or move production backwards.
-          # Fails closed if the last promoted release cannot be determined.
-          last_promoted="$(gh run list --repo "${{ github.repository }}" --workflow=deploy-production.yml \
-            --status success --limit 1 --json headSha --jq '.[0].headSha // empty')"
-          if [[ -z "${last_promoted}" ]]; then
-            echo "::error::Could not determine the last successfully promoted production release -- refusing a staging-milestone promotion."
+          # The last promoted release is the release_git_sha DEPLOYED by the
+          # most recent run of this workflow whose deploy job succeeded (a run
+          # whose post-deployment verification failed still changed
+          # production). It is NOT that run's headSha: a workflow_dispatch
+          # run's headSha is the branch tip it ran from (staging HEAD at
+          # dispatch), which differs from release_git_sha in staging-milestone
+          # mode. A milestone must be strictly newer than the last promoted
+          # release (a strict ancestor of it), so this mode can never redeploy
+          # the same commit or move production backwards.
+          #
+          # The deployed SHA is read from the run title written by run-name
+          # ("Deploy <sha> (<mode>)") and from the deploy job's
+          # "[1/6] Checking out release commit <sha>" log line (the only source
+          # for runs older than run-name). If both exist they must agree.
+          # Fails closed if it cannot be established unambiguously.
+          repo="${{ github.repository }}"
+          deploy_job_name="Deploy exact staging-proven artifact to production"
+          last_promoted=""
+          last_promoted_run=""
+          last_promoted_source=""
+          while IFS=$'\t' read -r run_id run_title; do
+            [[ -z "${run_id}" || "${run_id}" == "${{ github.run_id }}" ]] && continue
+            job_id="$(gh api "repos/${repo}/actions/runs/${run_id}/jobs" \
+              --jq ".jobs[] | select(.name == \"${deploy_job_name}\" and .conclusion == \"success\") | .id" | head -1)"
+            [[ -z "${job_id}" ]] && continue
+            title_sha=""
+            if [[ "${run_title}" =~ ^Deploy\ ([0-9a-f]{40})\ \( ]]; then
+              title_sha="${BASH_REMATCH[1]}"
+            fi
+            log_shas="$(gh run view "${run_id}" --repo "${repo}" --log --job "${job_id}" 2>/dev/null \
+              | grep -oE 'Checking out release commit [0-9a-f]{40}' | awk '{print $NF}' | sort -u || true)"
+            if [[ "$(printf '%s\n' "${log_shas}" | grep -c .)" -gt 1 ]]; then
+              echo "::error::Run ${run_id}'s deploy job logged more than one release commit -- refusing a staging-milestone promotion."
+              exit 1
+            fi
+            if [[ -n "${title_sha}" && -n "${log_shas}" && "${title_sha}" != "${log_shas}" ]]; then
+              echo "::error::Run ${run_id}'s title (${title_sha}) and deploy log (${log_shas}) disagree on the deployed release -- refusing a staging-milestone promotion."
+              exit 1
+            fi
+            last_promoted="${title_sha:-${log_shas}}"
+            last_promoted_run="${run_id}"
+            if [[ -n "${title_sha}" && -n "${log_shas}" ]]; then last_promoted_source="run title + deploy log"
+            elif [[ -n "${title_sha}" ]]; then last_promoted_source="run title"
+            else last_promoted_source="deploy log"; fi
+            break
+          done < <(gh run list --repo "${repo}" --workflow=deploy-production.yml --limit 50 \
+                    --json databaseId,displayTitle --jq '.[] | "\(.databaseId)\t\(.displayTitle)"')
+          if [[ ! "${last_promoted}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Could not establish the release deployed by the last production promotion (run ${last_promoted_run:-none}) -- refusing a staging-milestone promotion."
             exit 1
           fi
+          echo "Last promoted release: ${last_promoted} (run ${last_promoted_run}, from ${last_promoted_source})"
           status="$(gh api "repos/${{ github.repository }}/compare/${last_promoted}...${RELEASE_SHA}" --jq '.status')" || {
             echo "::error::Could not compare the last promoted release (${last_promoted}) with release_git_sha (${RELEASE_SHA})."
             exit 1
@@ -224,6 +276,7 @@ jobs:
             exit 1
           fi
           echo "last_promoted=${last_promoted}" >> "$GITHUB_OUTPUT"
+          echo "last_promoted_run=${last_promoted_run}" >> "$GITHUB_OUTPUT"
           echo "release_git_sha moves production forward from the last promoted release ${last_promoted}"
 
       - name: Require a successful deploy-staging.yml run for this exact SHA
@@ -296,6 +349,7 @@ jobs:
           STAGING_HEAD: ${{ steps.staging-head.outputs.staging_head }}
           PROMOTION_MODE: ${{ inputs.promotion_mode }}
           LAST_PROMOTED: ${{ steps.forward-only.outputs.last_promoted }}
+          LAST_PROMOTED_RUN: ${{ steps.forward-only.outputs.last_promoted_run }}
           STAGING_RUN_URL: ${{ steps.staging-run.outputs.run_url }}
           STAGING_RUN_ID: ${{ steps.staging-run.outputs.run_id }}
           IMAGE_WITH_DIGEST: ${{ steps.resolve-image.outputs.image_with_digest }}
@@ -310,7 +364,7 @@ jobs:
             echo "| confirmation match | yes |"
             echo "| promotion mode | \`${PROMOTION_MODE}\` |"
             echo "| current staging HEAD | \`${STAGING_HEAD}\` |"
-            echo "| last promoted release (staging-milestone only) | \`${LAST_PROMOTED:-n/a}\` |"
+            echo "| last promoted release (staging-milestone only) | \`${LAST_PROMOTED:-n/a}\` (run ${LAST_PROMOTED_RUN:-n/a}) |"
             echo "| staging deployment run | [${STAGING_RUN_ID}](${STAGING_RUN_URL}) |"
             echo "| derived image (digest-pinned) | \`${IMAGE_WITH_DIGEST}\` |"
             echo "| authorized actor | \`${ACTOR}\` |"

@@ -45,7 +45,7 @@ digest-pinned again just before SSH, and post-deployment verification.
 | Mode | `release_git_sha` may be | Pre-deploy recheck |
 |---|---|---|
 | `staging-head` (default; original behaviour) | only staging's **current HEAD** | staging HEAD must not have moved |
-| `staging-milestone` (added 2026-10-08) | an **earlier commit in staging's history** (GitHub compare `<sha>...staging` is `ahead` or `identical`) that **moves production forward**: the head SHA of the most recent successful `deploy-production.yml` run must be a strict ancestor of it (fails closed if none) | the commit must still be in staging's history |
+| `staging-milestone` (added 2026-10-08) | an **earlier commit in staging's history** (GitHub compare `<sha>...staging` is `ahead` or `identical`) that **moves production forward**: the release **deployed** by the most recent `deploy-production.yml` run whose deploy job succeeded must be a strict ancestor of it (fails closed if it cannot be established) | the commit must still be in staging's history |
 
 `staging-milestone` exists for staged release promotion: deploying a
 milestone commit that already passed staging, so that operator steps can run
@@ -56,10 +56,23 @@ milestone also deploys that milestone's application image and the
 configuration checked out at that commit. It can never redeploy the current
 release or move production backwards; that remains `rollback.yml`'s job.
 
-Known limit: "the last promoted release" is the last successful
-`deploy-production.yml` run. If `rollback.yml` has since moved production to
-an older commit, the forward-only check compares against the last promotion,
-which is stricter than necessary, never looser.
+**How "the last promoted release" is established (fixed 2026-10-08).** It is
+the `release_git_sha` deployed by the most recent `deploy-production.yml` run
+whose deploy job succeeded (a run whose post-deployment verification failed
+still changed production). It is read from the run title, which `run-name`
+sets to `Deploy <release_git_sha> (<promotion_mode>)`, and/or from the deploy
+job's `[1/6] Checking out release commit <sha>` log line (the only source for
+runs before `run-name` existed); when both exist they must agree. It is
+**never** the run's `headSha`: for a `workflow_dispatch` run that is the
+branch tip the workflow ran from (staging's HEAD at dispatch), not the commit
+it deployed. The first version of this check used `headSha` and refused
+release Stage 3 (`9ca461e`, run `37740385524`) because Stage 2's run deployed
+`f1df32f` but recorded `headSha` `aaccb0b`; it failed closed, so nothing was
+deployed. Anything missing or ambiguous still fails closed.
+
+Known limit: if `rollback.yml` has since moved production to an older commit,
+the forward-only check compares against the last promotion, which is stricter
+than necessary, never looser.
 
 Tests: `scripts/test/assert_deploy_production_promotion_gate.sh` (live
 against the real repository, Actions history and compare API; Tests 4c/4d
