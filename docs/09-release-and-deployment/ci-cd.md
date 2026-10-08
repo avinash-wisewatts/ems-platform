@@ -66,6 +66,14 @@ against the real repository, Actions history and compare API; Tests 4c/4d
 and 19–23 cover the milestone mode). Not run by `ci.yml`; run it locally
 when changing the workflow, together with `actionlint`.
 
+**Post-deployment verification timeout.** The `verify-production` SSH step
+sets `command_timeout: 45m` (the `appleboy/ssh-action` default is 10m). On
+2026-10-08 (run `37732791343`, release Stage 1) the advisory suites in
+`post_deploy_verify.sh` scanned production-scale tables past the 10-minute
+default, so the step was killed with `Run Command Timeout` after all three
+REQUIRED gates had already passed and the run reported failure. Test 24 in the
+gate script asserts the explicit timeout.
+
 ## Production authorization model
 
 The `production` GitHub Environment exists as a secrets/variables namespace
