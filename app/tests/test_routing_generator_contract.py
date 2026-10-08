@@ -35,6 +35,7 @@ MIG_226 = REPO / "postgres" / "migrations" / "226_environment_space_binding.sql"
 MIG_227 = REPO / "postgres" / "migrations" / "227_parameter_routing_foundation.sql"
 MIG_228 = REPO / "postgres" / "migrations" / "228_device_specific_asset_space_point_binding.sql"
 MIG_267 = REPO / "postgres" / "migrations" / "267_routing_bounded_window_end.sql"
+MIG_291 = REPO / "postgres" / "migrations" / "291_environment_loader_bounded_update.sql"
 MANIFEST = REPO / "postgres" / "restructure_manifest.csv"
 
 # The Phase 2 amendment (migration 228) adds exactly one predicate to the
@@ -66,6 +67,60 @@ _MIG_267_NEW_BLOCK = (
     "      WHERE platform_received_at IS NOT NULL;\n"
     "    END IF;"
 )
+
+
+# Migration 291 bounds the UPDATE of already-routed rows to the earliest
+# still-correctable candidate bucket_start (and skips it when there is none).
+# It changes exactly these four fragments; reverting them must give back the
+# migration-267 body exactly. (new, old) pairs, applied in order.
+_MIG_291_FRAGMENTS = [
+    (
+        "    v_now TIMESTAMPTZ := clock_timestamp();\n"
+        "    v_update_floor TIMESTAMPTZ;\n",
+        "    v_now TIMESTAMPTZ := clock_timestamp();\n",
+    ),
+    (
+        "    CREATE UNIQUE INDEX ON tmp_environment_candidates(bucket_start,device_id);\n\n"
+        "    -- Migration 291: only candidates still inside their correction window\n"
+        "    -- (v_now <= correction_deadline) can be updated, so bound the UPDATE to\n"
+        "    -- the earliest such bucket_start. That keeps it out of compressed chunks,\n"
+        "    -- which it otherwise decompressed in full on every run.\n"
+        "    SELECT min(bucket_start) INTO v_update_floor\n"
+        "    FROM tmp_environment_candidates\n"
+        "    WHERE v_now <= correction_deadline;\n\n"
+        "    IF v_update_floor IS NOT NULL THEN\n"
+        "    UPDATE telemetry.environment_measurements t\n",
+        "    CREATE UNIQUE INDEX ON tmp_environment_candidates(bucket_start,device_id);\n\n"
+        "    UPDATE telemetry.environment_measurements t\n",
+    ),
+    (
+        "    WHERE t.bucket_start >= v_update_floor\n"
+        "      AND t.bucket_start=s.bucket_start\n",
+        "    WHERE t.bucket_start=s.bucket_start\n",
+    ),
+    (
+        "    GET DIAGNOSTICS v_updated = ROW_COUNT;\n"
+        "    END IF;\n",
+        "    GET DIAGNOSTICS v_updated = ROW_COUNT;\n",
+    ),
+]
+
+
+def _revert_291_text(sql: str) -> str:
+    for new, old in _MIG_291_FRAGMENTS:
+        assert sql.count(new) == 1, f"migration-291 fragment must appear exactly once: {new[:50]!r}"
+        sql = sql.replace(new, old)
+    return sql
+
+
+def _revert_291_tokens(tokens: list[str]) -> list[str]:
+    for new, old in _MIG_291_FRAGMENTS:
+        n = _tokens(_strip_line_comments(new))
+        o = _tokens(_strip_line_comments(old))
+        i = _find_sublist(tokens, n)
+        assert i != -1, f"migration-291 fragment missing from the generated body: {new[:50]!r}"
+        tokens = tokens[:i] + o + tokens[i + len(n):]
+    return tokens
 
 
 def _find_sublist(hay: list[str], needle: list[str]) -> int:
@@ -155,13 +210,13 @@ def test_render_ignores_dict_key_order():
 # single migration-228 (Phase 2 amendment) device predicate and nothing else
 # --------------------------------------------------------------------------- #
 
-def test_generated_body_is_migration_226_plus_only_the_228_predicate_and_267_window_end():
+def test_generated_body_is_migration_226_plus_only_the_228_predicate_267_window_end_and_291_bound():
     body226 = "\n".join(MIG_226.read_text(encoding="utf-8").splitlines()[110:413])
     gen_full = ARTIFACT.read_text(encoding="utf-8")
     b226, _ = _split_body_comment(body226)
     bgen, _ = _split_body_comment(gen_full)
     tb226 = _tokens(_strip_line_comments(b226))
-    tbgen = _revert_267_tokens(_tokens(_strip_line_comments(bgen)))
+    tbgen = _revert_267_tokens(_revert_291_tokens(_tokens(_strip_line_comments(bgen))))
 
     i = _find_sublist(tbgen, _MIG_228_EXTRA_TOKENS)
     assert i != -1, (
@@ -334,24 +389,60 @@ def test_manifest_registers_migration_227():
     assert r["target_path"] == "postgres/migrations/227_parameter_routing_foundation.sql"
 
 
-def test_migration_267_embedded_body_equals_generated_artifact():
-    # Migration 267 now owns the deployed body: it CREATE OR REPLACEs the
-    # loader with the current generated artifact, verbatim.
-    mig = MIG_267.read_text(encoding="utf-8")
-    art = ARTIFACT.read_text(encoding="utf-8").rstrip("\n")
+def _embedded_body(path: Path) -> str:
+    mig = path.read_text(encoding="utf-8")
     start = mig.index("CREATE OR REPLACE PROCEDURE telemetry.load_environment_measurements_incremental")
     end = mig.index("read at runtime.';") + len("read at runtime.';")
-    assert mig[start:end] == art
+    return mig[start:end]
+
+
+def test_migration_291_embedded_body_equals_generated_artifact():
+    # Migration 291 now owns the deployed body: it CREATE OR REPLACEs the
+    # loader with the current generated artifact, verbatim.
+    art = ARTIFACT.read_text(encoding="utf-8").rstrip("\n")
+    assert _embedded_body(MIG_291) == art
+
+
+def test_migration_267_embedded_body_is_the_artifact_before_the_291_bound():
+    # Migration 267's embedded body is the pre-291 artifact: identical to the
+    # current generated artifact except for the four migration-291 fragments.
+    art = ARTIFACT.read_text(encoding="utf-8").rstrip("\n")
+    assert _embedded_body(MIG_267) == _revert_291_text(art)
 
 
 def test_migration_228_embedded_body_is_the_artifact_before_the_267_window_end():
     # Migration 228's embedded body is the pre-267 artifact: identical to the
-    # current generated artifact except for the migration-267 window-end block.
-    mig = MIG_228.read_text(encoding="utf-8")
+    # current generated artifact except for the migration-291 fragments and the
+    # migration-267 window-end block.
     art = ARTIFACT.read_text(encoding="utf-8").rstrip("\n")
-    start = mig.index("CREATE OR REPLACE PROCEDURE telemetry.load_environment_measurements_incremental")
-    end = mig.index("read at runtime.';") + len("read at runtime.';")
-    assert mig[start:end] == _revert_267_text(art)
+    assert _embedded_body(MIG_228) == _revert_267_text(_revert_291_text(art))
+
+
+def test_migration_291_bound_is_derived_only_from_correctable_candidates():
+    # The floor is the earliest bucket_start among candidates still inside
+    # their correction window -- the same condition the UPDATE already
+    # requires -- so the bound can never exclude a row the UPDATE could change.
+    body, _ = _split_body_comment(ARTIFACT.read_text(encoding="utf-8"))
+    floor = (
+        "    SELECT min(bucket_start) INTO v_update_floor\n"
+        "    FROM tmp_environment_candidates\n"
+        "    WHERE v_now <= correction_deadline;\n"
+    )
+    assert body.count(floor) == 1
+    assert body.count("      AND v_now <= s.correction_deadline;\n") == 1
+    assert body.index(floor) < body.index("    IF v_update_floor IS NOT NULL THEN\n") < body.index(
+        "    WHERE t.bucket_start >= v_update_floor\n"
+    ) < body.index("    END IF;\n\n    INSERT INTO telemetry.environment_measurements")
+    assert "plan_cache_mode" not in body
+
+
+def test_manifest_registers_migration_291_last():
+    import csv
+
+    rows = list(csv.DictReader(MANIFEST.read_text(encoding="utf-8").splitlines()))
+    migrations = [r for r in rows if r["target_category"] == "migration"]
+    assert migrations[-1]["source_file"] == "291_environment_loader_bounded_update.sql"
+    assert migrations[-1]["target_path"] == "postgres/migrations/291_environment_loader_bounded_update.sql"
 
 
 def test_migration_227_embedded_body_is_the_228_body_minus_the_device_predicate():
@@ -364,7 +455,7 @@ def test_migration_227_embedded_body_is_the_228_body_minus_the_device_predicate(
     body227, _ = _split_body_comment(mig[start:end])
     bgen, _ = _split_body_comment(ARTIFACT.read_text(encoding="utf-8"))
     t227 = _tokens(_strip_line_comments(body227))
-    tgen = _revert_267_tokens(_tokens(_strip_line_comments(bgen)))
+    tgen = _revert_267_tokens(_revert_291_tokens(_tokens(_strip_line_comments(bgen))))
     i = _find_sublist(tgen, _MIG_228_EXTRA_TOKENS)
     assert i != -1
     assert tgen[:i] + tgen[i + len(_MIG_228_EXTRA_TOKENS):] == t227

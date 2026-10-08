@@ -10,6 +10,7 @@ DECLARE
     v_inserted BIGINT := 0;
     v_lock_acquired BOOLEAN;
     v_now TIMESTAMPTZ := clock_timestamp();
+    v_update_floor TIMESTAMPTZ;
 BEGIN
     IF p_overlap IS NULL OR p_overlap < INTERVAL '0 seconds' THEN
         RAISE EXCEPTION 'p_overlap must be zero or positive';
@@ -206,6 +207,15 @@ GROUP BY np.event_time, np.organization_id, np.site_id, np.gateway_id, np.device
 
     CREATE UNIQUE INDEX ON tmp_environment_candidates(bucket_start,device_id);
 
+    -- Migration 291: only candidates still inside their correction window
+    -- (v_now <= correction_deadline) can be updated, so bound the UPDATE to
+    -- the earliest such bucket_start. That keeps it out of compressed chunks,
+    -- which it otherwise decompressed in full on every run.
+    SELECT min(bucket_start) INTO v_update_floor
+    FROM tmp_environment_candidates
+    WHERE v_now <= correction_deadline;
+
+    IF v_update_floor IS NOT NULL THEN
     UPDATE telemetry.environment_measurements t
     SET received_at=s.received_at,
         source_timestamp=s.source_timestamp,
@@ -219,12 +229,14 @@ GROUP BY np.event_time, np.organization_id, np.site_id, np.gateway_id, np.device
         is_estimated=COALESCE(s.is_estimated,t.is_estimated),
 {{UPDATE_SET_PAYLOAD}}
     FROM tmp_environment_candidates s
-    WHERE t.bucket_start=s.bucket_start
+    WHERE t.bucket_start >= v_update_floor
+      AND t.bucket_start=s.bucket_start
       AND t.device_id=s.device_id
       AND COALESCE(s.source_timestamp,s.received_at) >
           COALESCE(t.source_timestamp,t.received_at,'-infinity'::TIMESTAMPTZ)
       AND v_now <= s.correction_deadline;
     GET DIAGNOSTICS v_updated = ROW_COUNT;
+    END IF;
 
     INSERT INTO telemetry.environment_measurements
     (

@@ -1,6 +1,6 @@
 # Telemetry Pipeline: Physical Device → Grafana
 
-Status: CURRENT · Last reviewed: 2026-08-30
+Status: CURRENT · Last reviewed: 2026-10-08
 Verification basis: Staging (live, end-to-end trace across 22 real Meenaxy Pharma devices) + Repository + Production (2026-08-30: migrations 216–222 promoted, Job 1000 bounded-window catch-up observed live)
 
 This is the verified, currently-operating data path — not a design
@@ -81,7 +81,8 @@ bounded +6h at ~2,840 rows/s; steady-state 1-minute cycles now complete in
 
 ### Routing window end: bounded to recent `event_time` (migration 267)
 
-**Status: implemented, not yet deployed.**
+**Status: deployed to staging (2026-09-24, PR #78); production receives it in
+release Stage 4 of the 223–290 promotion.**
 
 The two routing loaders take `window_end` as
 `max(platform_received_at)` over `telemetry.normalized_points`. Until
@@ -128,6 +129,48 @@ outside the replaced block.
   policy allows 900 s of late tolerance.
 
 Both need separate decisions.
+
+### Environment routing UPDATE: bounded to correctable buckets (migration 291)
+
+**Status: implemented, not yet deployed** (staging deploy pending approval;
+production follows the 223–290 promotion).
+
+The environment loader refreshes already-routed rows with
+`UPDATE telemetry.environment_measurements … FROM tmp_environment_candidates`.
+Before migration 291 nothing bounded that UPDATE by `bucket_start`, so
+TimescaleDB decompressed **every compressed batch of the hypertable** on every
+run. Once the compressed rows exceeded
+`timescaledb.max_tuples_decompressed_per_dml_transaction` (100,000) every run
+failed: on staging, 2026-10-08 10:04 IST, the daily compression took them
+from 73,414 to 109,092 and TimescaleDB paused the environment routing job.
+Production carries the same body (since release Stage 1) with about 43,600
+compressed rows, growing about 10,000 a week.
+
+Migration 291 computes `v_update_floor`, the earliest `bucket_start` among
+candidates still inside their correction window (`v_now <=
+correction_deadline`), skips the UPDATE when there is none, and otherwise adds
+`t.bucket_start >= v_update_floor`.
+
+- **Exactly equivalent.** The UPDATE already required `v_now <=
+  s.correction_deadline` and `t.bucket_start = s.bucket_start`, so the floor
+  removes nothing it could have changed. `correction_deadline` is
+  `bucket_start` + capture interval + late-arrival tolerance (at most about 20
+  minutes here), so the floor is always inside the uncompressed chunk.
+- **No reliance on plan-time chunk exclusion.** TimescaleDB filters compressed
+  batches at execution using the `bucket_start` min/max metadata
+  (`bucket_start` is the compression order-by column; the migration asserts
+  it). `EXPLAIN ANALYZE` under a forced generic plan: unbounded 4,000 tuples
+  decompressed, bounded none.
+- **Source of truth** is the generator template
+  `scripts/codegen/templates/load_environment_measurements_incremental.sql.tmpl`
+  (regenerated artifact embedded verbatim in the migration). No dynamic SQL,
+  no planner setting.
+- **Tests:** `app/tests/test_environment_loader_bounded_update.py` (real
+  loader over compressed history with the cap lowered to 100; statement-level
+  equivalence; `EXPLAIN ANALYZE` decompression counters) and
+  `app/tests/test_routing_generator_contract.py`.
+- **After deploying to staging**, the paused environment routing job must be
+  re-enabled (`alter_job(<id>, scheduled => true)`) as a separate step.
 
 ### Failure quarantine and recovery (jobs 1076/1068/1077)
 

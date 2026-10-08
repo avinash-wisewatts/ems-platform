@@ -1,3 +1,94 @@
+-- ============================================================================
+-- Migration 291
+-- Environment routing loader: bound its UPDATE to the correctable bucket range
+-- so it stops decompressing every compressed telemetry.environment_measurements
+-- chunk on every run.
+--
+-- WHY
+--   telemetry.load_environment_measurements_incremental (job: run_environment_
+--   routing_job) refreshes already-routed rows with
+--       UPDATE telemetry.environment_measurements t ... FROM tmp_environment_candidates s
+--       WHERE t.bucket_start = s.bucket_start AND t.device_id = s.device_id ...
+--         AND v_now <= s.correction_deadline;
+--   Nothing bounds t.bucket_start by a value the executor can apply to the
+--   compressed batches, so TimescaleDB decompresses every compressed batch of
+--   the hypertable on every run, however small the window. Once the compressed
+--   rows exceed timescaledb.max_tuples_decompressed_per_dml_transaction
+--   (100000), every run fails. Staging, 2026-10-08 10:04 IST: the daily
+--   compression took the compressed rows from 73,414 to 109,092 (4 chunks:
+--   3,210 + 40,074 + 30,130 + 35,678), every run failed with "tuples
+--   decompressed: 109092", and TimescaleDB paused job 1012. Production carries
+--   the same body (since release Stage 1) with about 43,600 compressed rows,
+--   growing about 10,000 a week.
+--
+-- WHAT (only this; everything else in the body is byte-for-byte unchanged,
+-- proven by the postconditions)
+--     SELECT min(bucket_start) INTO v_update_floor
+--     FROM tmp_environment_candidates
+--     WHERE v_now <= correction_deadline;
+--     IF v_update_floor IS NOT NULL THEN
+--       UPDATE ... WHERE t.bucket_start >= v_update_floor AND <unchanged predicates>;
+--       GET DIAGNOSTICS v_updated = ROW_COUNT;
+--     END IF;
+--   plus the declaration of v_update_floor.
+--
+-- SEMANTICS
+--   * Exactly equivalent. The UPDATE already requires v_now <= s.correction_
+--     deadline and t.bucket_start = s.bucket_start, so every row it can change
+--     has bucket_start >= the earliest such candidate's bucket_start. The new
+--     predicate removes nothing the UPDATE could have changed; when no
+--     candidate is still correctable the UPDATE could change nothing, so it is
+--     skipped and v_updated stays 0. The INSERT ... ON CONFLICT DO NOTHING is
+--     unchanged (its conflict check is per key, already bounded).
+--   * correction_deadline = bucket_start + capture_interval_seconds +
+--     late_arrival_tolerance_seconds, i.e. minutes after the bucket, so the
+--     floor is always recent and well inside the uncompressed chunk
+--     (environment_measurements compresses after 7 days).
+--   * The protection does not depend on plan-time chunk exclusion: TimescaleDB
+--     filters compressed batches at execution with the bucket_start min/max
+--     metadata (bucket_start is the compression order-by column, asserted
+--     below). Verified with EXPLAIN ANALYZE under plan_cache_mode =
+--     force_generic_plan: unbounded 4,000 tuples decompressed, bounded none.
+--   * No runtime-dynamic SQL (generator contract), no planner setting changed.
+--
+-- SOURCES
+--   Body: the offline generator's committed artifact
+--   scripts/codegen/generated/load_environment_measurements_incremental.generated.sql,
+--   regenerated from the updated template
+--   scripts/codegen/templates/load_environment_measurements_incremental.sql.tmpl
+--   (previous live CR-normalized md5 a3820ee221be9d535e5a357f2d946c52, the migration-267 body;
+--   new CR-normalized md5 d0708b46eb9ab81a6b2cc37ee0d85ef5).
+--   Tests: app/tests/test_environment_loader_bounded_update.py and
+--   app/tests/test_routing_generator_contract.py.
+-- ============================================================================
+
+
+-- ----------------------------------------------------------------------------
+-- 1. Preconditions: exact source body, and bucket_start is the compression
+--    order-by column (the execution-time batch filter relies on it).
+-- ----------------------------------------------------------------------------
+DO $pre$
+BEGIN
+    IF (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_proc
+        WHERE oid = 'telemetry.load_environment_measurements_incremental(interval,interval)'::regprocedure)
+       IS DISTINCT FROM 'a3820ee221be9d535e5a357f2d946c52' THEN
+        RAISE EXCEPTION 'Migration 291 precondition failed: load_environment_measurements_incremental differs from the expected (migration 267) body.';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM timescaledb_information.compression_settings
+        WHERE hypertable_schema = 'telemetry' AND hypertable_name = 'environment_measurements'
+          AND attname = 'bucket_start' AND orderby_column_index IS NOT NULL
+    ) THEN
+        RAISE EXCEPTION 'Migration 291 precondition failed: telemetry.environment_measurements is not compressed with bucket_start as an order-by column.';
+    END IF;
+END
+$pre$;
+
+
+-- ----------------------------------------------------------------------------
+-- 2. Environment loader: the regenerated offline-generator artifact, verbatim.
+-- ----------------------------------------------------------------------------
 CREATE OR REPLACE PROCEDURE telemetry.load_environment_measurements_incremental(IN p_overlap interval DEFAULT '00:15:00'::interval, IN p_max_window interval DEFAULT NULL)
  LANGUAGE plpgsql
 AS $procedure$
@@ -393,3 +484,113 @@ COMMENT ON PROCEDURE telemetry.load_environment_measurements_incremental(interva
 'Migration 207: p_max_window (default NULL) optionally caps the forward processing boundary to previous_checkpoint + p_max_window instead of always advancing to max(telemetry.normalized_points.platform_received_at). NULL preserves the exact prior behaviour. The scheduled wrapper telemetry.run_environment_routing_job passes a bounded value (default 2 hours, config.max_window-overridable) so an unattended multi-hour backlog self-drains. No intermediate COMMIT is introduced. Mirrors migration 205 / telemetry.load_energy_measurements_incremental(). '
 'Migration 226: additionally resolves telemetry.environment_measurements.space_id at routing time from metadata.space_points (point-in-time via effective_range, restricted to the row''s organization), writing NULL when there is no effective binding or when applicable bindings are ambiguous. All bounded-catch-up / watermark / overlap / correction-deadline / idempotency / advisory-lock behaviour is unchanged; quality_code is still written NULL. '
 'Phase 4 (migration 227): this body is emitted by the offline generator scripts/codegen/generate_routing_procedure.py from config.parameter_routing (declarative spec scripts/codegen/routing/environment_measurements.routing.json), not hand-typed. It is behaviourally identical to the migration-226 body -- the same 12 routed logical points map to the same 12 destination columns with the same casts, the same legacy BATTERY_VOLTAGE compatibility alias feeds battery_voltage_v, and Space resolution, the watermark, bounded catch-up and the EXCEPTION contract are unchanged; only list/line formatting differs. No config.parameter_routing row is read at runtime.';
+
+
+
+-- ----------------------------------------------------------------------------
+-- 3. Postconditions: the new body is exactly the generated artifact, each
+--    migration-291 fragment appears exactly once, and reverting the four
+--    fragments gives back the migration-267 body byte for byte.
+-- ----------------------------------------------------------------------------
+DO $post$
+DECLARE
+    v_body TEXT;
+BEGIN
+    SELECT replace(prosrc, E'\r', '') INTO v_body FROM pg_proc
+    WHERE oid = 'telemetry.load_environment_measurements_incremental(interval,interval)'::regprocedure;
+
+    IF md5(v_body) IS DISTINCT FROM 'd0708b46eb9ab81a6b2cc37ee0d85ef5' THEN
+        RAISE EXCEPTION 'Migration 291 postcondition failed: the loader body is not the expected migration-291 body (md5 %).', md5(v_body);
+    END IF;
+
+    IF (length(v_body) - length(replace(v_body, replace($n1$    v_now TIMESTAMPTZ := clock_timestamp();
+    v_update_floor TIMESTAMPTZ;
+$n1$, E'\r', ''), ''))) / length(replace($n1$    v_now TIMESTAMPTZ := clock_timestamp();
+    v_update_floor TIMESTAMPTZ;
+$n1$, E'\r', '')) <> 1 THEN
+        RAISE EXCEPTION 'Migration 291 postcondition failed: fragment 1 of the bounded-UPDATE change is not present exactly once.';
+    END IF;
+    IF (length(v_body) - length(replace(v_body, replace($n2$    CREATE UNIQUE INDEX ON tmp_environment_candidates(bucket_start,device_id);
+
+    -- Migration 291: only candidates still inside their correction window
+    -- (v_now <= correction_deadline) can be updated, so bound the UPDATE to
+    -- the earliest such bucket_start. That keeps it out of compressed chunks,
+    -- which it otherwise decompressed in full on every run.
+    SELECT min(bucket_start) INTO v_update_floor
+    FROM tmp_environment_candidates
+    WHERE v_now <= correction_deadline;
+
+    IF v_update_floor IS NOT NULL THEN
+    UPDATE telemetry.environment_measurements t
+$n2$, E'\r', ''), ''))) / length(replace($n2$    CREATE UNIQUE INDEX ON tmp_environment_candidates(bucket_start,device_id);
+
+    -- Migration 291: only candidates still inside their correction window
+    -- (v_now <= correction_deadline) can be updated, so bound the UPDATE to
+    -- the earliest such bucket_start. That keeps it out of compressed chunks,
+    -- which it otherwise decompressed in full on every run.
+    SELECT min(bucket_start) INTO v_update_floor
+    FROM tmp_environment_candidates
+    WHERE v_now <= correction_deadline;
+
+    IF v_update_floor IS NOT NULL THEN
+    UPDATE telemetry.environment_measurements t
+$n2$, E'\r', '')) <> 1 THEN
+        RAISE EXCEPTION 'Migration 291 postcondition failed: fragment 2 of the bounded-UPDATE change is not present exactly once.';
+    END IF;
+    IF (length(v_body) - length(replace(v_body, replace($n3$    WHERE t.bucket_start >= v_update_floor
+      AND t.bucket_start=s.bucket_start
+$n3$, E'\r', ''), ''))) / length(replace($n3$    WHERE t.bucket_start >= v_update_floor
+      AND t.bucket_start=s.bucket_start
+$n3$, E'\r', '')) <> 1 THEN
+        RAISE EXCEPTION 'Migration 291 postcondition failed: fragment 3 of the bounded-UPDATE change is not present exactly once.';
+    END IF;
+    IF (length(v_body) - length(replace(v_body, replace($n4$    GET DIAGNOSTICS v_updated = ROW_COUNT;
+    END IF;
+$n4$, E'\r', ''), ''))) / length(replace($n4$    GET DIAGNOSTICS v_updated = ROW_COUNT;
+    END IF;
+$n4$, E'\r', '')) <> 1 THEN
+        RAISE EXCEPTION 'Migration 291 postcondition failed: fragment 4 of the bounded-UPDATE change is not present exactly once.';
+    END IF;
+
+    IF md5(replace(replace(replace(replace(v_body,
+            replace($n1$    v_now TIMESTAMPTZ := clock_timestamp();
+    v_update_floor TIMESTAMPTZ;
+$n1$, E'\r', ''),
+            replace($o1$    v_now TIMESTAMPTZ := clock_timestamp();
+$o1$, E'\r', '')),
+            replace($n2$    CREATE UNIQUE INDEX ON tmp_environment_candidates(bucket_start,device_id);
+
+    -- Migration 291: only candidates still inside their correction window
+    -- (v_now <= correction_deadline) can be updated, so bound the UPDATE to
+    -- the earliest such bucket_start. That keeps it out of compressed chunks,
+    -- which it otherwise decompressed in full on every run.
+    SELECT min(bucket_start) INTO v_update_floor
+    FROM tmp_environment_candidates
+    WHERE v_now <= correction_deadline;
+
+    IF v_update_floor IS NOT NULL THEN
+    UPDATE telemetry.environment_measurements t
+$n2$, E'\r', ''),
+            replace($o2$    CREATE UNIQUE INDEX ON tmp_environment_candidates(bucket_start,device_id);
+
+    UPDATE telemetry.environment_measurements t
+$o2$, E'\r', '')),
+            replace($n3$    WHERE t.bucket_start >= v_update_floor
+      AND t.bucket_start=s.bucket_start
+$n3$, E'\r', ''),
+            replace($o3$    WHERE t.bucket_start=s.bucket_start
+$o3$, E'\r', '')),
+            replace($n4$    GET DIAGNOSTICS v_updated = ROW_COUNT;
+    END IF;
+$n4$, E'\r', ''),
+            replace($o4$    GET DIAGNOSTICS v_updated = ROW_COUNT;
+$o4$, E'\r', ''))) IS DISTINCT FROM 'a3820ee221be9d535e5a357f2d946c52' THEN
+        RAISE EXCEPTION 'Migration 291 postcondition failed: the loader changed outside the bounded-UPDATE fragments.';
+    END IF;
+
+    IF (SELECT pg_get_userbyid(proowner) FROM pg_proc
+        WHERE oid = 'telemetry.load_environment_measurements_incremental(interval,interval)'::regprocedure) <> 'ems_admin' THEN
+        RAISE EXCEPTION 'Migration 291 postcondition failed: the loader is no longer owned by ems_admin.';
+    END IF;
+END
+$post$;
