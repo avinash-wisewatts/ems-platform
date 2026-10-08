@@ -21,10 +21,23 @@ name: Deploy to Production
 #      PRODUCTION_APPROVED_OPERATORS environment variable (a repo-native
 #      allowlist -- see docs/operations/CICD_PIPELINE.md). Repository write
 #      access alone is NOT sufficient.
-#   3. release_git_sha must be staging's CURRENT HEAD, re-verified again
-#      immediately before deployment to close the push-after-validation
-#      race window. This workflow only ever promotes "staging, right now" --
-#      never an arbitrary older or newer SHA (that is rollback.yml's job).
+#   3. promotion_mode selects what release_git_sha may be (default
+#      staging-head, unchanged behaviour):
+#        staging-head      -- release_git_sha must be staging's CURRENT HEAD,
+#                             re-verified again immediately before deployment
+#                             to close the push-after-validation race window.
+#        staging-milestone -- release_git_sha may be an earlier commit, but
+#                             only one that (a) is in staging's history
+#                             (GitHub compare: <sha>...staging is "ahead" or
+#                             "identical"), re-verified immediately before
+#                             deployment; and (b) moves production FORWARD:
+#                             the head SHA of the most recent successful run
+#                             of this workflow must be a strict ancestor of
+#                             release_git_sha (fails closed if none). Used for
+#                             staged release promotion through milestones
+#                             that each passed staging; it can never act as a
+#                             rollback (that remains rollback.yml's job).
+#      Every other gate below applies identically in both modes.
 #   4. release_git_sha must correspond to a deploy-staging.yml run whose
 #      headSha matches and whose conclusion is "success" -- proof staging
 #      was actually deployed AND passed its own post-deployment
@@ -71,6 +84,14 @@ on:
       confirm_release_git_sha:
         description: "Retype the same commit SHA to confirm -- must match release_git_sha exactly"
         required: true
+      promotion_mode:
+        description: "staging-head (default): release_git_sha must be staging's current HEAD. staging-milestone: an earlier commit in staging's history that moves production forward."
+        required: true
+        type: choice
+        default: staging-head
+        options:
+          - staging-head
+          - staging-milestone
 
 permissions:
   contents: read
@@ -125,11 +146,12 @@ jobs:
           fi
           echo "Confirmation matches: ${RELEASE_SHA}"
 
-      - name: Require release_git_sha to be staging's current HEAD
+      - name: Require release_git_sha to be staging's current HEAD (or, in staging-milestone mode, in staging's history)
         id: staging-head
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_SHA: ${{ inputs.release_git_sha }}
+          PROMOTION_MODE: ${{ inputs.promotion_mode }}
         run: |
           # This repository is private, and this job never runs
           # actions/checkout, so there is no git credential helper
@@ -144,12 +166,65 @@ jobs:
             echo "::error::Could not resolve origin/staging HEAD via the GitHub API"
             exit 1
           fi
-          if [[ "${RELEASE_SHA}" != "${head}" ]]; then
-            echo "::error::release_git_sha (${RELEASE_SHA}) is not staging's current HEAD (${head}). This workflow only promotes the current staging tip -- use rollback.yml for an older, previously-deployed commit."
+          case "${PROMOTION_MODE}" in
+            staging-head)
+              if [[ "${RELEASE_SHA}" != "${head}" ]]; then
+                echo "::error::release_git_sha (${RELEASE_SHA}) is not staging's current HEAD (${head}). This workflow only promotes the current staging tip -- use rollback.yml for an older, previously-deployed commit."
+                exit 1
+              fi
+              echo "release_git_sha matches staging HEAD: ${head}"
+              ;;
+            staging-milestone)
+              # Compare base=release_git_sha with head=staging: "ahead" means
+              # staging contains release_git_sha plus later commits,
+              # "identical" means they are the same commit. "behind" or
+              # "diverged" means release_git_sha is NOT in staging's history.
+              # An unknown SHA makes the API call fail, which fails closed.
+              status="$(gh api "repos/${{ github.repository }}/compare/${RELEASE_SHA}...${head}" --jq '.status')" || {
+                echo "::error::Could not compare release_git_sha (${RELEASE_SHA}) with staging HEAD (${head}) -- the commit may not exist in this repository."
+                exit 1
+              }
+              if [[ "${status}" != "ahead" && "${status}" != "identical" ]]; then
+                echo "::error::release_git_sha (${RELEASE_SHA}) is not in staging's history (compare status '${status}' against staging HEAD ${head})."
+                exit 1
+              fi
+              echo "release_git_sha is in staging's history (compare status '${status}' against staging HEAD ${head})"
+              ;;
+            *)
+              echo "::error::Unknown promotion_mode '${PROMOTION_MODE}' (expected staging-head or staging-milestone)."
+              exit 1
+              ;;
+          esac
+          echo "staging_head=${head}" >> "$GITHUB_OUTPUT"
+
+      - name: Require a milestone to move production forward (staging-milestone mode only)
+        id: forward-only
+        if: ${{ inputs.promotion_mode == 'staging-milestone' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ inputs.release_git_sha }}
+        run: |
+          # The most recent successful run of this workflow is the last
+          # promoted production release. A milestone must be strictly newer
+          # (that release must be a strict ancestor of it), so this mode can
+          # never redeploy the same commit or move production backwards.
+          # Fails closed if the last promoted release cannot be determined.
+          last_promoted="$(gh run list --repo "${{ github.repository }}" --workflow=deploy-production.yml \
+            --status success --limit 1 --json headSha --jq '.[0].headSha // empty')"
+          if [[ -z "${last_promoted}" ]]; then
+            echo "::error::Could not determine the last successfully promoted production release -- refusing a staging-milestone promotion."
             exit 1
           fi
-          echo "staging_head=${head}" >> "$GITHUB_OUTPUT"
-          echo "release_git_sha matches staging HEAD: ${head}"
+          status="$(gh api "repos/${{ github.repository }}/compare/${last_promoted}...${RELEASE_SHA}" --jq '.status')" || {
+            echo "::error::Could not compare the last promoted release (${last_promoted}) with release_git_sha (${RELEASE_SHA})."
+            exit 1
+          }
+          if [[ "${status}" != "ahead" ]]; then
+            echo "::error::release_git_sha (${RELEASE_SHA}) does not move production forward from the last promoted release ${last_promoted} (compare status '${status}'). staging-milestone never redeploys or rolls back -- use rollback.yml for that."
+            exit 1
+          fi
+          echo "last_promoted=${last_promoted}" >> "$GITHUB_OUTPUT"
+          echo "release_git_sha moves production forward from the last promoted release ${last_promoted}"
 
       - name: Require a successful deploy-staging.yml run for this exact SHA
         id: staging-run
@@ -157,7 +232,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_SHA: ${{ inputs.release_git_sha }}
         run: |
+          # --commit filters server-side to runs for exactly this SHA, so an
+          # older milestone cannot fall outside a fixed recent-runs window.
+          # The headSha/conclusion filter below is unchanged.
           run_json="$(gh run list --repo "${{ github.repository }}" --workflow=deploy-staging.yml \
+            --commit "${RELEASE_SHA}" \
             --json headSha,conclusion,url,databaseId --limit 100 \
             --jq "[.[] | select(.headSha==\"${RELEASE_SHA}\" and .conclusion==\"success\")] | first")"
           if [[ -z "${run_json}" || "${run_json}" == "null" ]]; then
@@ -215,6 +294,8 @@ jobs:
         env:
           RELEASE_SHA: ${{ inputs.release_git_sha }}
           STAGING_HEAD: ${{ steps.staging-head.outputs.staging_head }}
+          PROMOTION_MODE: ${{ inputs.promotion_mode }}
+          LAST_PROMOTED: ${{ steps.forward-only.outputs.last_promoted }}
           STAGING_RUN_URL: ${{ steps.staging-run.outputs.run_url }}
           STAGING_RUN_ID: ${{ steps.staging-run.outputs.run_id }}
           IMAGE_WITH_DIGEST: ${{ steps.resolve-image.outputs.image_with_digest }}
@@ -227,7 +308,9 @@ jobs:
             echo "|---|---|"
             echo "| release_git_sha | \`${RELEASE_SHA}\` |"
             echo "| confirmation match | yes |"
+            echo "| promotion mode | \`${PROMOTION_MODE}\` |"
             echo "| current staging HEAD | \`${STAGING_HEAD}\` |"
+            echo "| last promoted release (staging-milestone only) | \`${LAST_PROMOTED:-n/a}\` |"
             echo "| staging deployment run | [${STAGING_RUN_ID}](${STAGING_RUN_URL}) |"
             echo "| derived image (digest-pinned) | \`${IMAGE_WITH_DIGEST}\` |"
             echo "| authorized actor | \`${ACTOR}\` |"
@@ -239,10 +322,11 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - name: Re-verify staging HEAD has not moved since validation
+      - name: Re-verify staging HEAD has not moved since validation (staging-milestone - still in staging's history)
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_SHA: ${{ inputs.release_git_sha }}
+          PROMOTION_MODE: ${{ inputs.promotion_mode }}
         run: |
           # See the equivalent step in validate-promotion for why this uses
           # the authenticated GitHub API rather than an unauthenticated
@@ -256,11 +340,33 @@ jobs:
             echo "::error::Could not resolve origin/staging HEAD via the GitHub API"
             exit 1
           fi
-          if [[ "${RELEASE_SHA}" != "${head}" ]]; then
-            echo "::error::staging HEAD moved to ${head} after this promotion was validated for ${RELEASE_SHA}. Aborting -- re-run this workflow against the new staging HEAD."
-            exit 1
-          fi
-          echo "staging HEAD still matches validated release_git_sha: ${head}"
+          case "${PROMOTION_MODE}" in
+            staging-head)
+              if [[ "${RELEASE_SHA}" != "${head}" ]]; then
+                echo "::error::staging HEAD moved to ${head} after this promotion was validated for ${RELEASE_SHA}. Aborting -- re-run this workflow against the new staging HEAD."
+                exit 1
+              fi
+              echo "staging HEAD still matches validated release_git_sha: ${head}"
+              ;;
+            staging-milestone)
+              # staging may legitimately advance; what must still hold is
+              # that release_git_sha is in its history (e.g. no force-push
+              # rewrote it away since validation).
+              status="$(gh api "repos/${{ github.repository }}/compare/${RELEASE_SHA}...${head}" --jq '.status')" || {
+                echo "::error::Could not re-compare release_git_sha (${RELEASE_SHA}) with staging HEAD (${head})."
+                exit 1
+              }
+              if [[ "${status}" != "ahead" && "${status}" != "identical" ]]; then
+                echo "::error::release_git_sha (${RELEASE_SHA}) is no longer in staging's history (compare status '${status}' against ${head}). Aborting."
+                exit 1
+              fi
+              echo "release_git_sha is still in staging's history (compare status '${status}' against ${head})"
+              ;;
+            *)
+              echo "::error::Unknown promotion_mode '${PROMOTION_MODE}'."
+              exit 1
+              ;;
+          esac
 
       - name: Resolve and pin the deployment image
         # Authoritative for this deployment. Deliberately re-resolved here,

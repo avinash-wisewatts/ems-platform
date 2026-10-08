@@ -362,6 +362,21 @@ changed (the disposable CI test database has no comparable connection pressure).
   promotion model: the bind-address values are host-local configuration,
   never embedded in the application image or in the Git-promoted artifact.
 
+## Staged forward promotion (`promotion_mode: staging-milestone`, added 2026-10-08)
+
+`deploy-production.yml` normally promotes only staging's current HEAD
+(`promotion_mode: staging-head`, the default). With
+`promotion_mode: staging-milestone` it may instead promote an earlier commit
+that is in staging's history, had its own successful `deploy-staging.yml`
+run, and moves production forward from the last successful
+`deploy-production.yml` release (strict ancestor; fails closed). All other
+gates -- operator allowlist, double-entry SHA, SHA-derived digest-pinned
+image, pre-deploy recheck (ancestry instead of HEAD equality), and
+post-deployment verification -- are unchanged. This is for staged release
+promotion, never for rollback; `rollback.yml` (below) is unchanged. Summary
+table and tests: `docs/09-release-and-deployment/ci-cd.md` ("Promotion
+modes").
+
 ## Rollback strategy
 
 **Application rollback** (implemented): `rollback.yml` redeploys a

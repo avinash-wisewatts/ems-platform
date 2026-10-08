@@ -1,6 +1,6 @@
 # CI/CD Pipeline
 
-Status: CURRENT · Last reviewed: 2026-08-30
+Status: CURRENT · Last reviewed: 2026-10-08
 Verification basis: Repository, Staging, Audit evidence, Production (2026-08-30: `deploy-production.yml` run `33304784449`)
 
 This summarizes and cross-checks `docs/operations/CICD_PIPELINE.md` (kept
@@ -27,12 +27,44 @@ tag*. Production never rebuilds from source.
 |---|---|---|
 | `.github/workflows/ci.yml` | `pull_request`, `push` (any branch), `workflow_call` | Config validation, Docker build validation, pytest suite, database/migration integration suite. Never deploys. |
 | `.github/workflows/deploy-staging.yml` | `push` to `staging` | Calls `ci.yml`, builds+pushes the immutable image, deploys via SSH, runs post-deploy verification. |
-| `.github/workflows/deploy-production.yml` | `workflow_dispatch` only, inputs `image_tag` + `release_git_sha` | Deploys a pre-built image tag already proven in staging. Never auto-triggered. First run: 2026-08-29 (`33239331538`); most recent documented run: 2026-08-30 (`33304784449`, migrations 216–222). |
+| `.github/workflows/deploy-production.yml` | `workflow_dispatch` only, inputs `release_git_sha` + `confirm_release_git_sha` (double entry) + `promotion_mode` (`staging-head` default, or `staging-milestone`) | Deploys the image built for `release_git_sha` (derived from the SHA, digest-pinned; there is no independent image input) after it was proven on staging. Never auto-triggered. First run: 2026-08-29 (`33239331538`); most recent documented run: 2026-08-30 (`33304784449`, migrations 216–222). See [Promotion modes](#promotion-modes). |
 | `.github/workflows/rollback.yml` | `workflow_dispatch` only | Redeploys a previously-built image tag to `staging` or `production` via the identical deploy path. |
 
 ## CI gates
 
 See [../08-verification/test-strategy.md](../08-verification/test-strategy.md).
+
+## Promotion modes
+
+`deploy-production.yml` always enforces, in every mode: the
+`PRODUCTION_APPROVED_OPERATORS` allowlist, double-entry SHA confirmation, a
+successful `deploy-staging.yml` run for that exact commit (looked up by
+commit, not by a recent-runs window), the SHA-derived GHCR image resolved and
+digest-pinned again just before SSH, and post-deployment verification.
+
+| Mode | `release_git_sha` may be | Pre-deploy recheck |
+|---|---|---|
+| `staging-head` (default; original behaviour) | only staging's **current HEAD** | staging HEAD must not have moved |
+| `staging-milestone` (added 2026-10-08) | an **earlier commit in staging's history** (GitHub compare `<sha>...staging` is `ahead` or `identical`) that **moves production forward**: the head SHA of the most recent successful `deploy-production.yml` run must be a strict ancestor of it (fails closed if none) | the commit must still be in staging's history |
+
+`staging-milestone` exists for staged release promotion: deploying a
+milestone commit that already passed staging, so that operator steps can run
+between groups of migrations (first use: the 223–290 release, where the
+production `asset_points` parity bridge must run after migration 228 and
+before 250, and the 15m/1h backfills between 265 and 266). Deploying a
+milestone also deploys that milestone's application image and the
+configuration checked out at that commit. It can never redeploy the current
+release or move production backwards; that remains `rollback.yml`'s job.
+
+Known limit: "the last promoted release" is the last successful
+`deploy-production.yml` run. If `rollback.yml` has since moved production to
+an older commit, the forward-only check compares against the last promotion,
+which is stricter than necessary, never looser.
+
+Tests: `scripts/test/assert_deploy_production_promotion_gate.sh` (live
+against the real repository, Actions history and compare API; Tests 4c/4d
+and 19–23 cover the milestone mode). Not run by `ci.yml`; run it locally
+when changing the workflow, together with `actionlint`.
 
 ## Production authorization model
 
