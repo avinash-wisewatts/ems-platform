@@ -122,15 +122,44 @@ else
     fail "4a: decoy SHA unexpectedly matched a successful run"
 fi
 
+# Mirrors the workflow's server-side --commit filter plus the unchanged
+# headSha/conclusion filter.
+successful_staging_runs() {
+    gh run list --repo "${REPO}" --workflow=deploy-staging.yml \
+        --commit "$1" --json headSha,conclusion --limit 100 \
+        --jq "[.[] | select(.headSha==\"$1\" and .conclusion==\"success\")] | length"
+}
+
 if [[ -n "${staging_head:-}" ]]; then
-    real_run="$(gh run list --repo "${REPO}" --workflow=deploy-staging.yml \
-        --json headSha,conclusion --limit 100 \
-        --jq "[.[] | select(.headSha==\"${staging_head}\" and .conclusion==\"success\")] | length")"
+    real_run="$(successful_staging_runs "${staging_head}")"
     if [[ "${real_run}" != "0" ]]; then
         pass "4b: current staging HEAD (${staging_head}) has a successful deploy-staging.yml run"
     else
         fail "4b: current staging HEAD has NO successful deploy-staging.yml run -- staging is not a valid promotion candidate right now"
     fi
+fi
+
+# 4c: an older milestone is found by its exact commit regardless of how many
+# later staging runs exist (the reason for --commit).
+# 28038ac = release Stage 1 milestone (migrations 223-248), a real staging deploy.
+milestone_sha="$(git -C "${PROJECT_ROOT}" rev-parse --verify --quiet 28038ac^{commit} || true)"
+if [[ -z "${milestone_sha}" ]]; then
+    fail "4c: milestone commit 28038ac not resolvable in this checkout"
+elif [[ "$(successful_staging_runs "${milestone_sha}")" != "0" ]]; then
+    pass "4c: older milestone ${milestone_sha} is found by exact-commit lookup with a successful deploy-staging.yml run"
+else
+    fail "4c: older milestone ${milestone_sha} has no successful deploy-staging.yml run found by exact-commit lookup"
+fi
+# 4d: a commit whose only staging run failed is still rejected.
+failed_only_sha="$(git -C "${PROJECT_ROOT}" rev-parse 59ba395 2>/dev/null || true)"
+if [[ -n "${failed_only_sha}" ]]; then
+    if [[ "$(successful_staging_runs "${failed_only_sha}")" == "0" ]]; then
+        pass "4d: commit ${failed_only_sha} (staging deploy concluded 'failure') correctly has zero successful runs"
+    else
+        fail "4d: commit ${failed_only_sha} unexpectedly has a successful staging run"
+    fi
+else
+    skip "4d: commit 59ba395 not resolvable in this checkout"
 fi
 
 # ----------------------------------------------------------------------------
@@ -377,6 +406,108 @@ if git diff --quiet origin/staging -- scripts/release/deploy_release.sh 2>/dev/n
 else
     fail "18: scripts/release/deploy_release.sh differs from origin/staging -- this fix must not modify the deployment script"
 fi
+
+# ----------------------------------------------------------------------------
+# Tests 19-23: staging-milestone promotion mode (2026-10-08). Mirrors the
+# compare-API logic in validate-promotion ("Require release_git_sha to be
+# staging's current HEAD (or ... in staging's history)" and "Require a
+# milestone to move production forward") and the deploy-production recheck,
+# against the real repository via the same authenticated `gh api` calls.
+# ----------------------------------------------------------------------------
+
+# Mirrors: staging-milestone ancestry check. 0 = accepted.
+milestone_in_staging_history() {
+    local sha="$1" head="$2" status
+    status="$(gh api "repos/${REPO}/compare/${sha}...${head}" --jq '.status' 2>/dev/null)" || return 1
+    [[ "${status}" == "ahead" || "${status}" == "identical" ]]
+}
+# Mirrors: forward-only check. 0 = accepted (last promoted is a strict ancestor).
+moves_production_forward() {
+    local last="$1" sha="$2" status
+    status="$(gh api "repos/${REPO}/compare/${last}...${sha}" --jq '.status' 2>/dev/null)" || return 1
+    [[ "${status}" == "ahead" ]]
+}
+
+echo
+echo "=== Test 19: staging-milestone ancestry check (live) ==="
+if [[ -n "${staging_head:-}" ]]; then
+    if milestone_in_staging_history "${staging_head}" "${staging_head}"; then pass "19a: staging HEAD itself accepted (identical)"; else fail "19a: staging HEAD rejected"; fi
+    if milestone_in_staging_history "${milestone_sha}" "${staging_head}"; then pass "19b: older milestone ${milestone_sha} accepted (in staging history)"; else fail "19b: older milestone ${milestone_sha} rejected"; fi
+    if milestone_in_staging_history "0000000000000000000000000000000000000000" "${staging_head}"; then fail "19c: unknown SHA incorrectly accepted"; else pass "19c: unknown SHA rejected (compare fails closed)"; fi
+    off_branch="$(git -C "${PROJECT_ROOT}" rev-parse 1c4d635 2>/dev/null || true)"
+    if [[ -n "${off_branch}" ]]; then
+        if milestone_in_staging_history "${off_branch}" "${staging_head}"; then fail "19d: commit not in staging history (${off_branch}) incorrectly accepted"; else pass "19d: commit not in staging history (${off_branch}, unmerged feature branch) rejected"; fi
+    else
+        skip "19d: off-staging commit 1c4d635 not resolvable in this checkout"
+    fi
+else
+    fail "19: no live staging HEAD"
+fi
+
+echo
+echo "=== Test 20: staging-milestone forward-only check (live) ==="
+last_promoted="$(gh run list --repo "${REPO}" --workflow=deploy-production.yml --status success --limit 1 --json headSha --jq '.[0].headSha // empty')"
+if [[ -z "${last_promoted}" ]]; then
+    fail "20: could not determine the last promoted production release (workflow would fail closed)"
+else
+    if moves_production_forward "${last_promoted}" "${milestone_sha}"; then pass "20a: milestone ${milestone_sha} moves production forward from last promoted ${last_promoted}"; else fail "20a: milestone ${milestone_sha} rejected as not moving forward from ${last_promoted}"; fi
+    if moves_production_forward "${last_promoted}" "${last_promoted}"; then fail "20b: redeploying the last promoted release incorrectly accepted"; else pass "20b: redeploying the last promoted release rejected (identical)"; fi
+    older="$(gh api "repos/${REPO}/commits/${last_promoted}" --jq '.parents[0].sha' 2>/dev/null || true)"
+    if [[ -n "${older}" ]]; then
+        if moves_production_forward "${last_promoted}" "${older}"; then fail "20c: older commit ${older} incorrectly accepted (would be a rollback)"; else pass "20c: older commit ${older} rejected (behind the last promoted release)"; fi
+    else
+        skip "20c: could not resolve a parent of the last promoted release"
+    fi
+fi
+
+echo
+echo "=== Test 21: promotion_mode input is explicit, opt-in, and defaults to the original behaviour ==="
+# The block ends at the next line indented 6 spaces or less (next input or section).
+mode_block="$(awk '/^      promotion_mode:/{f=1; print; next} f && /^ {0,6}[^ ]/ {exit} f' "${WORKFLOW_FILE}")"
+if echo "${mode_block}" | grep -qE '^[[:space:]]*type:[[:space:]]*choice[[:space:]]*$' \
+   && echo "${mode_block}" | grep -qE '^[[:space:]]*default:[[:space:]]*staging-head[[:space:]]*$' \
+   && [[ "$(echo "${mode_block}" | grep -cE '^[[:space:]]*- staging-(head|milestone)[[:space:]]*$')" -eq 2 ]] \
+   && [[ "$(echo "${mode_block}" | grep -cE '^[[:space:]]*- ')" -eq 2 ]]; then
+    pass "21: promotion_mode is a choice input with exactly {staging-head, staging-milestone}, default staging-head"
+else
+    fail "21: promotion_mode is not a two-option choice input defaulting to staging-head"
+fi
+
+echo
+echo "=== Test 22: staging-head behaviour and every existing safeguard are unchanged ==="
+[[ "$(grep -cF "is not staging's current HEAD (\${head}). This workflow only promotes the current staging tip" "${WORKFLOW_FILE}")" -eq 1 ]] \
+    && pass "22a: staging-head exact-equality rejection still present in validate-promotion" || fail "22a: staging-head exact-equality rejection missing"
+[[ "$(grep -cF 'staging HEAD moved to ${head} after this promotion was validated' "${WORKFLOW_FILE}")" -eq 1 ]] \
+    && pass "22b: staging-head pre-deploy race recheck still present in deploy-production" || fail "22b: staging-head race recheck missing"
+grep -qF 'name: Require an approved production operator' "${WORKFLOW_FILE}" && grep -qF 'PRODUCTION_APPROVED_OPERATORS' "${WORKFLOW_FILE}" \
+    && pass "22c: approved-operator allowlist step unchanged and unconditional" || fail "22c: allowlist step missing"
+grep -qF 'name: Require exact double-entry commit-SHA confirmation' "${WORKFLOW_FILE}" \
+    && pass "22d: double-entry SHA confirmation step present" || fail "22d: double-entry step missing"
+if echo "${validate_block}" | grep -B2 -A2 -E 'name: Require (an approved production operator|exact double-entry|a successful deploy-staging|.*SHA-derived image)' | grep -qE '^[[:space:]]*if:'; then
+    fail "22e: an existing safeguard step has become conditional"
+else
+    pass "22e: allowlist, double-entry, staging-run and image steps remain unconditional (apply in both modes)"
+fi
+grep -qF -- '--commit "${RELEASE_SHA}"' "${WORKFLOW_FILE}" && grep -qF 'select(.headSha==\"${RELEASE_SHA}\" and .conclusion==\"success\")' "${WORKFLOW_FILE}" \
+    && pass "22f: staging-run check is exact-commit (--commit) and still requires headSha match + conclusion success" || fail "22f: staging-run check changed unexpectedly"
+
+echo
+echo "=== Test 23: staging-milestone checks are present in both jobs and fail closed ==="
+[[ "$(grep -cF 'compare/${RELEASE_SHA}...${head}' "${WORKFLOW_FILE}")" -eq 2 ]] \
+    && pass "23a: ancestry compare present in validate-promotion and in the deploy-production recheck" || fail "23a: expected the ancestry compare in exactly 2 places"
+forward_step="$(echo "${validate_block}" | awk '/name: Require a milestone to move production forward/{f=1} f&&/- name:/&&!/move production forward/{exit} f')"
+echo "${forward_step}" | grep -qF "if: \${{ inputs.promotion_mode == 'staging-milestone' }}" \
+    && echo "${forward_step}" | grep -qF 'compare/${last_promoted}...${RELEASE_SHA}' \
+    && echo "${forward_step}" | grep -qF '!= "ahead"' \
+    && echo "${forward_step}" | grep -qF 'refusing a staging-milestone promotion' \
+    && pass "23b: forward-only step runs only in staging-milestone mode, requires strict 'ahead', and fails closed without a last promoted release" \
+    || fail "23b: forward-only step is missing or not fail-closed"
+[[ "$(grep -cF "Unknown promotion_mode" "${WORKFLOW_FILE}")" -eq 2 ]] \
+    && pass "23c: unknown promotion_mode is rejected in both validate-promotion and deploy-production" || fail "23c: unknown-mode rejection missing in one job"
+forward_line="$(echo "${validate_block}" | grep -n 'name: Require a milestone to move production forward' | cut -d: -f1)"
+image_line="$(echo "${validate_block}" | grep -n 'name: Verify the SHA-derived image exists in GHCR' | cut -d: -f1)"
+[[ -n "${forward_line}" && -n "${image_line}" && "${forward_line}" -lt "${image_line}" ]] \
+    && pass "23d: forward-only check runs before any registry credential use" || fail "23d: forward-only check ordering unexpected"
 
 echo
 echo "============================================================"
