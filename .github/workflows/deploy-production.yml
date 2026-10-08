@@ -438,6 +438,14 @@ jobs:
           host: ${{ secrets.PRODUCTION_HOST }}
           username: ${{ secrets.PRODUCTION_USER }}
           key: ${{ secrets.PRODUCTION_SSH_KEY }}
+          # The action's default command_timeout is 10m. On production data
+          # volumes the ADVISORY suites in post_deploy_verify.sh (pipeline and
+          # job verification, full scans of e.g. ~190M normalized_points rows)
+          # exceeded it on 2026-10-08 (run 37732791343): all three REQUIRED
+          # gates had already passed, but the SSH step was killed with
+          # "Run Command Timeout" and the job reported failure. 45m leaves
+          # ample headroom without leaving a hung session open indefinitely.
+          command_timeout: 45m
           script: |
             set -euo pipefail
             cd "${{ secrets.PRODUCTION_PROJECT_PATH }}"

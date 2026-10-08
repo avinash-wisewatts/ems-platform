@@ -510,6 +510,22 @@ image_line="$(echo "${validate_block}" | grep -n 'name: Verify the SHA-derived i
     && pass "23d: forward-only check runs before any registry credential use" || fail "23d: forward-only check ordering unexpected"
 
 echo
+echo "=== Test 24: post-deployment verification SSH step has an explicit, sufficient command_timeout ==="
+verify_block="$(extract_job "verify-production")"
+verify_timeout="$(echo "${verify_block}" | grep -E '^[[:space:]]*command_timeout:' | head -1 | sed -E 's/.*command_timeout:[[:space:]]*//; s/[[:space:]]*$//')"
+if [[ "${verify_timeout}" =~ ^([0-9]+)m$ ]] && (( BASH_REMATCH[1] >= 30 )); then
+    pass "24a: verify-production sets command_timeout=${verify_timeout} (>= 30m; the 10m default timed out on 2026-10-08, run 37732791343)"
+else
+    fail "24a: verify-production must set an explicit command_timeout of at least 30m (found '${verify_timeout:-none}')"
+fi
+deploy_timeout="$(echo "${deploy_block}" | grep -cE '^[[:space:]]*command_timeout:' || true)"
+if [[ "${deploy_timeout}" -eq 0 ]]; then
+    pass "24b: the deploy-production SSH step is unchanged by this fix (no command_timeout added there)"
+else
+    fail "24b: deploy-production gained a command_timeout -- this fix is scoped to post-deployment verification only"
+fi
+
+echo
 echo "============================================================"
 echo "RESULT: ${PASS} passed, ${FAIL} failed, ${SKIP} skipped (credential-limited, see notes above)"
 echo "============================================================"
