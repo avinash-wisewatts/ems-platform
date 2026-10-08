@@ -368,8 +368,10 @@ changed (the disposable CI test database has no comparable connection pressure).
 (`promotion_mode: staging-head`, the default). With
 `promotion_mode: staging-milestone` it may instead promote an earlier commit
 that is in staging's history, had its own successful `deploy-staging.yml`
-run, and moves production forward from the last successful
-`deploy-production.yml` release (strict ancestor; fails closed). All other
+run, and moves production forward from the release deployed by the last
+`deploy-production.yml` run whose deploy job succeeded (read from the run
+title and/or the deploy log, never the run's headSha; strict ancestor; fails
+closed). All other
 gates -- operator allowlist, double-entry SHA, SHA-derived digest-pinned
 image, pre-deploy recheck (ancestry instead of HEAD equality), and
 post-deployment verification -- are unchanged. This is for staged release

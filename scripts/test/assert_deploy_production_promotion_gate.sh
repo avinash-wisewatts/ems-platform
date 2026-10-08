@@ -445,19 +445,109 @@ else
 fi
 
 echo
-echo "=== Test 20: staging-milestone forward-only check (live) ==="
-last_promoted="$(gh run list --repo "${REPO}" --workflow=deploy-production.yml --status success --limit 1 --json headSha --jq '.[0].headSha // empty')"
-if [[ -z "${last_promoted}" ]]; then
-    fail "20: could not determine the last promoted production release (workflow would fail closed)"
+echo "=== Test 20: staging-milestone forward-only check: last promoted = the DEPLOYED release (live) ==="
+# Mirrors the forward-only step: the deployed release of a run comes from its
+# run title ("Deploy <sha> (...)", written by run-name) and/or its deploy job's
+# "[1/6] Checking out release commit <sha>" log line -- never from headSha,
+# which for workflow_dispatch is the branch tip the run started from.
+DEPLOY_JOB_NAME="Deploy exact staging-proven artifact to production"
+
+# Prints the SHA deployed by run $1 (title $2), or nothing if it did not
+# deploy or the SHA cannot be established unambiguously (fail closed).
+deployed_sha_of_run() {
+    local run_id="$1" run_title="$2" job_id title_sha="" log_shas
+    job_id="$(gh api "repos/${REPO}/actions/runs/${run_id}/jobs" \
+        --jq ".jobs[] | select(.name == \"${DEPLOY_JOB_NAME}\" and .conclusion == \"success\") | .id" | head -1)"
+    [[ -z "${job_id}" ]] && return 0
+    if [[ "${run_title}" =~ ^Deploy\ ([0-9a-f]{40})\ \( ]]; then title_sha="${BASH_REMATCH[1]}"; fi
+    log_shas="$(gh run view "${run_id}" --repo "${REPO}" --log --job "${job_id}" 2>/dev/null \
+        | grep -oE 'Checking out release commit [0-9a-f]{40}' | awk '{print $NF}' | sort -u || true)"
+    [[ "$(printf '%s\n' "${log_shas}" | grep -c .)" -gt 1 ]] && return 0
+    [[ -n "${title_sha}" && -n "${log_shas}" && "${title_sha}" != "${log_shas}" ]] && return 0
+    printf '%s' "${title_sha:-${log_shas}}"
+}
+
+# Mirrors the step's loop: newest run whose deploy job succeeded.
+resolve_last_promoted() {
+    local run_id run_title sha
+    while IFS=$'\t' read -r run_id run_title; do
+        [[ -z "${run_id}" ]] && continue
+        job_ok="$(gh api "repos/${REPO}/actions/runs/${run_id}/jobs" \
+            --jq "[.jobs[] | select(.name == \"${DEPLOY_JOB_NAME}\" and .conclusion == \"success\")] | length")"
+        [[ "${job_ok}" == "0" ]] && continue
+        sha="$(deployed_sha_of_run "${run_id}" "${run_title}")"
+        printf '%s\t%s' "${run_id}" "${sha}"
+        return 0
+    done < <(gh run list --repo "${REPO}" --workflow=deploy-production.yml --limit 50 \
+                --json databaseId,displayTitle --jq '.[] | "\(.databaseId)\t\(.displayTitle)"')
+}
+
+# 20a/20b: the Stage 2 milestone run (2026-10-08) deployed f1df32f while its
+# headSha is aaccb0b (staging HEAD at dispatch) -- the exact case the
+# headSha-based check got wrong.
+STAGE2_RUN=37738393291
+STAGE2_DEPLOYED="f1df32f0160a4402da83b88fcf6d4a426f9cabb3"
+STAGE2_HEADSHA="aaccb0b90d5c5a824b2d34b499c9f1e607327315"
+stage2_title="$(gh api "repos/${REPO}/actions/runs/${STAGE2_RUN}" --jq '.display_title')"
+stage2_headsha="$(gh api "repos/${REPO}/actions/runs/${STAGE2_RUN}" --jq '.head_sha')"
+stage2_sha="$(deployed_sha_of_run "${STAGE2_RUN}" "${stage2_title}")"
+[[ "${stage2_sha}" == "${STAGE2_DEPLOYED}" ]] \
+    && pass "20a: Stage 2 milestone run ${STAGE2_RUN} resolves to the deployed release ${STAGE2_DEPLOYED} (from its deploy log)" \
+    || fail "20a: Stage 2 milestone run ${STAGE2_RUN} resolved to '${stage2_sha}', expected ${STAGE2_DEPLOYED}"
+[[ "${stage2_headsha}" == "${STAGE2_HEADSHA}" && "${stage2_sha}" != "${stage2_headsha}" ]] \
+    && pass "20b: that run's headSha is ${STAGE2_HEADSHA} (staging HEAD at dispatch) and is NOT used as the deployed release" \
+    || fail "20b: expected headSha ${STAGE2_HEADSHA} distinct from the deployed release (got headSha '${stage2_headsha}', resolved '${stage2_sha}')"
+
+# 20c: a staging-head-era run (2026-08-30) resolves from its log to the same
+# commit as its headSha (in staging-head mode they coincide).
+HEAD_RUN=33321638240
+head_run_headsha="$(gh api "repos/${REPO}/actions/runs/${HEAD_RUN}" --jq '.head_sha')"
+head_run_sha="$(deployed_sha_of_run "${HEAD_RUN}" "Deploy to Production")"
+[[ -n "${head_run_sha}" && "${head_run_sha}" == "${head_run_headsha}" ]] \
+    && pass "20c: staging-head run ${HEAD_RUN} resolves from its deploy log to ${head_run_sha} (= its headSha, as expected in staging-head mode)" \
+    || fail "20c: staging-head run ${HEAD_RUN} resolved to '${head_run_sha}', expected its headSha ${head_run_headsha}"
+
+# 20d: a run whose deploy job was skipped (the refused Stage 3 attempt) yields
+# nothing -- it never changed production.
+SKIPPED_RUN=37740385524
+skipped_sha="$(deployed_sha_of_run "${SKIPPED_RUN}" "Deploy to Production")"
+[[ -z "${skipped_sha}" ]] \
+    && pass "20d: run ${SKIPPED_RUN} (deploy job skipped) resolves to no release and is never treated as a promotion" \
+    || fail "20d: run ${SKIPPED_RUN} with a skipped deploy job resolved to '${skipped_sha}'"
+
+# 20e: run-name parsing, as the step does it (title-only runs, mismatches).
+title_ok="Deploy ${STAGE2_DEPLOYED} (staging-milestone)"
+[[ "${title_ok}" =~ ^Deploy\ ([0-9a-f]{40})\ \( && "${BASH_REMATCH[1]}" == "${STAGE2_DEPLOYED}" ]] \
+    && pass "20e: run-name title 'Deploy <sha> (<mode>)' parses to the release SHA" \
+    || fail "20e: run-name title did not parse"
+for bad in "Deploy to Production" "Deploy ${STAGE2_DEPLOYED:0:39} (staging-head)" "Deploy ${STAGE2_DEPLOYED}"; do
+    if [[ "${bad}" =~ ^Deploy\ ([0-9a-f]{40})\ \( ]]; then fail "20e: malformed title '${bad}' incorrectly parsed"; fi
+done
+pass "20e: malformed or legacy titles are not parsed (the deploy log is used instead)"
+
+# 20f-20i: forward-only decisions against the live last promoted release.
+last_run=""; last_promoted=""
+# resolve_last_promoted prints without a trailing newline; read then returns
+# non-zero at EOF even though it filled the variables -- do not let set -e abort.
+read -r last_run last_promoted < <(resolve_last_promoted | tr '\t' ' ') || true
+if [[ ! "${last_promoted:-}" =~ ^[0-9a-f]{40}$ ]]; then
+    fail "20f: could not establish the last promoted release (the workflow would fail closed)"
 else
-    if moves_production_forward "${last_promoted}" "${milestone_sha}"; then pass "20a: milestone ${milestone_sha} moves production forward from last promoted ${last_promoted}"; else fail "20a: milestone ${milestone_sha} rejected as not moving forward from ${last_promoted}"; fi
-    if moves_production_forward "${last_promoted}" "${last_promoted}"; then fail "20b: redeploying the last promoted release incorrectly accepted"; else pass "20b: redeploying the last promoted release rejected (identical)"; fi
-    older="$(gh api "repos/${REPO}/commits/${last_promoted}" --jq '.parents[0].sha' 2>/dev/null || true)"
-    if [[ -n "${older}" ]]; then
-        if moves_production_forward "${last_promoted}" "${older}"; then fail "20c: older commit ${older} incorrectly accepted (would be a rollback)"; else pass "20c: older commit ${older} rejected (behind the last promoted release)"; fi
+    pass "20f: last promoted release = ${last_promoted} (run ${last_run}), established from what that run deployed"
+    stage3_sha="$(git -C "${PROJECT_ROOT}" rev-parse --verify --quiet 9ca461e^{commit} || true)"
+    if [[ -n "${stage3_sha}" ]] && [[ "${last_promoted}" == "${STAGE2_DEPLOYED}" ]]; then
+        moves_production_forward "${last_promoted}" "${stage3_sha}" \
+            && pass "20g: Stage 3 milestone ${stage3_sha} moves production forward from Stage 2's ${last_promoted}" \
+            || fail "20g: Stage 3 milestone ${stage3_sha} rejected as not moving forward from ${last_promoted}"
+        moves_production_forward "${last_promoted}" "${milestone_sha}" \
+            && fail "20h: Stage 1 milestone ${milestone_sha} incorrectly accepted after Stage 2 (would be a rollback)" \
+            || pass "20h: Stage 1 milestone ${milestone_sha} rejected (behind the last promoted release)"
     else
-        skip "20c: could not resolve a parent of the last promoted release"
+        skip "20g/20h: last promoted release is no longer Stage 2's ${STAGE2_DEPLOYED} (production has moved on); covered by 20i"
     fi
+    moves_production_forward "${last_promoted}" "${last_promoted}" \
+        && fail "20i: redeploying the last promoted release incorrectly accepted" \
+        || pass "20i: redeploying the last promoted release rejected (identical)"
 fi
 
 echo
@@ -524,6 +614,26 @@ if [[ "${deploy_timeout}" -eq 0 ]]; then
 else
     fail "24b: deploy-production gained a command_timeout -- this fix is scoped to post-deployment verification only"
 fi
+
+echo
+echo "=== Test 25: forward-only check reads the deployed release, never headSha (structural) ==="
+grep -qE '^run-name: Deploy \$\{\{ inputs\.release_git_sha \}\} \(\$\{\{ inputs\.promotion_mode \}\}\)$' "${WORKFLOW_FILE}" \
+    && pass "25a: run-name records the deployed release as 'Deploy <release_git_sha> (<promotion_mode>)'" \
+    || fail "25a: run-name does not record release_git_sha in the expected 'Deploy <sha> (<mode>)' form"
+fwd_step="$(echo "${validate_block}" | awk '/name: Require a milestone to move production forward/{f=1} f&&/- name:/&&!/move production forward/{exit} f')"
+echo "${fwd_step}" | grep -vE '^[[:space:]]*#' | grep -qiE 'headSha|head_sha' \
+    && fail "25b: the forward-only step still reads a run's headSha" \
+    || pass "25b: the forward-only step never reads a run's headSha (only commented explanation mentions it)"
+echo "${fwd_step}" | grep -qF "Checking out release commit [0-9a-f]{40}" \
+    && echo "${fwd_step}" | grep -qF 'Deploy exact staging-proven artifact to production' \
+    && echo "${fwd_step}" | grep -qF '^Deploy\ ([0-9a-f]{40})\ \(' \
+    && pass "25c: deployed release comes from the run title and/or the deploy job's release-commit log line" \
+    || fail "25c: forward-only step does not resolve the deployed release from run title + deploy log"
+echo "${fwd_step}" | grep -qF 'disagree on the deployed release' \
+    && echo "${fwd_step}" | grep -qF 'logged more than one release commit' \
+    && echo "${fwd_step}" | grep -qF 'Could not establish the release deployed by the last production promotion' \
+    && pass "25d: fails closed on title/log mismatch, multiple logged releases, or no established release" \
+    || fail "25d: forward-only step is missing a fail-closed branch"
 
 echo
 echo "============================================================"
