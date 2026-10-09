@@ -1,6 +1,6 @@
 # Incident History
 
-Status: HISTORICAL narrative, kept current for recent entries · Last reviewed: 2026-08-30
+Status: HISTORICAL narrative, kept current for recent entries · Last reviewed: 2026-10-10
 Verification basis: Audit evidence, Repository, Staging, Production (read-only)
 
 This is a record of real incidents: root cause, fix, and verification
@@ -8,6 +8,36 @@ evidence. For the current open/closed status of any item mentioned here,
 check [../06-platform/](../06-platform/) and
 [troubleshooting.md](troubleshooting.md) — this page is the story, not the
 live status.
+
+## Staging PostgreSQL crash-restart from an ad-hoc read-only query (2026-10-09)
+
+**What happened.** At about 23:36 IST an engineer's ad-hoc, read-only
+analysis query on staging (a join of `analytics.energy_consumption_15min`
+to all 108 `-infinity` stand-in assignment rows on `bucket_start < first
+reading`, i.e. a non-equi join over a hypertable) lost its connection and
+PostgreSQL went through crash recovery: every backend -- checkpointer,
+background writer, the TimescaleDB schedulers and all client connections --
+restarted between 23:37:04 and 23:37:37 IST; the postmaster itself stayed
+up (start time 2026-09-22). The host has 1.9 GB RAM (about 116 MB free);
+the most likely cause is the query's backend being killed for memory (the
+container log is empty and the kernel log was not readable, so this is not
+confirmed). An earlier unscoped 15-minute dry-run query in the same session
+only hung its client (no restart).
+
+**Impact.** Raw ingestion dipped for one minute (23:36: 12 messages against
+about 126) and caught up (23:30-23:40: 1,260 messages, exactly ten normal
+minutes; no `raw_message_failures`). TimescaleDB marked 12 jobs as crashed;
+normalization (1000), energy routing (1001) and environment routing (1012)
+waited out the crash back-off and resumed by themselves at 23:42:12 (stalled
+since 23:33:59); the `ca_environment_hourly` refresh (1048) at 23:51:43. App
+`/health` stayed 200. No data loss found; no manual action taken.
+
+**Lesson.** Read-only does not mean harmless on this host. Ad-hoc staging
+queries must be scoped to one gateway, device or asset, use indexed lookups
+(with `OFFSET 0` fences for LATERAL probes), keep short statement timeouts,
+avoid non-equi joins over hypertables, and stop at the first dropped
+connection (check `pg_stat_activity.backend_start` for crash recovery). The
+follow-up dry runs were run this way (8-20 s per gateway, 6-7 s per meter).
 
 ## Job 1077 / Job 1000 recovery-pipeline failure chain (2026-08-26/27)
 
