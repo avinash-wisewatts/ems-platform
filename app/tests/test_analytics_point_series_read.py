@@ -456,12 +456,35 @@ def test_availability_bounds_null_without_data_and_tenant_scoped(tx):
     assert avail(other.user) == {}
 
 
-def test_manifest_registers_migration_292_last():
+def _manifest_migrations() -> list[dict]:
     import csv
     from pathlib import Path
 
     manifest = Path(__file__).resolve().parents[2] / "postgres" / "restructure_manifest.csv"
     rows = list(csv.DictReader(manifest.read_text(encoding="utf-8").splitlines()))
-    migrations = [r for r in rows if r["target_category"] == "migration"]
-    assert migrations[-1]["source_file"] == "292_analytics_point_series.sql"
-    assert migrations[-1]["target_path"] == "postgres/migrations/292_analytics_point_series.sql"
+    return [r for r in rows if r["target_category"] == "migration"]
+
+
+def test_manifest_registers_migration_292():
+    migrations = _manifest_migrations()
+    files = [r["source_file"] for r in migrations]
+    row = migrations[files.index("292_analytics_point_series.sql")]
+    assert row["target_path"] == "postgres/migrations/292_analytics_point_series.sql"
+    assert files.index("292_analytics_point_series.sql") > files.index("291_environment_loader_bounded_update.sql")
+
+
+def test_manifest_registers_migration_293_last():
+    migrations = _manifest_migrations()
+    assert migrations[-1]["source_file"] == "293_analytics_point_series_planner_fences.sql"
+    assert migrations[-1]["target_path"] == "postgres/migrations/293_analytics_point_series_planner_fences.sql"
+
+
+def test_series_read_carries_the_migration_293_planner_fences(tx):
+    """Each of the four source probes ends in OFFSET 0 (migration 293), so
+    the planner cannot flatten it into a hash / merge join over every chunk
+    (staging, 2026-10-09: 30-55 s per series)."""
+
+    cur = tx.cursor()
+    cur.execute("SELECT pg_get_functiondef(%s::regprocedure)", (SERIES_SIG,))
+    definition = cur.fetchone()[0]
+    assert definition.count("OFFSET 0   -- planner fence (migration 293)") == 4

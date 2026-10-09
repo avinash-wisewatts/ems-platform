@@ -904,9 +904,25 @@ containers healthy, `/health` 200) has the Analytics backend, PR #113 (series
 `summary` over completed periods, `1632c64`) and the page through F6 (PR #112,
 `6ab676b`). Still open on the frontend: F7 (CSV export) and the rest of F8
 (scenarios pending, deferred or unverifiable above). Backend dependencies
-still open: B3 (non-Energy series; until then the catalogue is Energy-only and
-3 Phase has no per-phase data) and B4 (the daily persisted tier, required
-before the first `point_telemetry_15m` chunks age out of retention).
+still open: B4 (the daily persisted tier, required before the first
+`point_telemetry_15m` chunks age out of retention).
+
+B3 (PR #116, squash `7d44089`) was deployed to staging on 2026-10-09 (run
+37945038900: migration 292 applied once, containers healthy, required
+post-deploy gates passed). Read-only verification then found the series read
+unusable on staging volumes: every measurement series exceeded 30 s (55 s
+measured for one 75-minute 15m series) and per-phase Energy took ~5 s. Cause
+(auto_explain): the planner flattened the per-window LATERAL probes into a
+hash join over every `point_telemetry_15m` chunk (~10 M rows) and a merge
+join over every `normalized_points` chunk of the point (~2.6 M rows, sorted
+on disk). The local test database is too small to show it. Fix: migration
+293 adds an `OFFSET 0` planner fence to each of the four probes (identical
+results; the fenced 15-minute probe took 0.4 ms, 30 days 124 ms, on
+staging). Until 293 is deployed, B3 measurement and per-phase Energy views
+on staging time out; System Energy is unaffected. Raw 1-minute reads remain
+cache-sensitive (3 days: 0.5 s warm, 48 s once on a cold cache) because
+`telemetry.normalized_points` has no (device, logical point, time) index;
+that is recorded as a risk, not changed.
 
 ## Known limitations
 
