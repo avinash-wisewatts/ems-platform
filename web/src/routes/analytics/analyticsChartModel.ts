@@ -8,14 +8,18 @@
  * - Every grid bucket is kept: a null value (future, gap, no data) is a gap,
  *   never 0 (D16); the in-progress bucket is drawn as returned (D17).
  * - The X axis covers exactly the applied range (D24).
+ * - The tooltip lists each period's Data quality lines in group order (D22,
+ *   DQ9; analyticsDataQualityModel.ts).
  * - Card title "<N assets | asset name>, <range> – <resolution>, <phase>".
  */
-import type { AnalyticsCatalogResponse, AnalyticsSeries, AnalyticsSeriesResponse } from "../../api/types";
+import type { AnalyticsCatalogResponse, AnalyticsSeriesResponse } from "../../api/types";
 import type { ChartBucket, ChartSeries } from "../../components/ChartFrame";
 import { addDays, localDateKey, localMidnightUtc, type CalendarRange } from "../../time/calendarRanges";
 import { formatSiteLocalDateTime } from "../../time/siteLocalTicks";
 import { formatDateKey } from "./AnalyticsDateRange";
+import { bucketQualityNotes } from "./analyticsDataQualityModel";
 import { RESOLUTION_OPTIONS, type AnalyticsDraft } from "./analyticsQuery";
+import { seriesName } from "./analyticsSeriesName";
 import type { AppliedQuery } from "./useAnalyticsState";
 
 export type AnalyticsChartModel = {
@@ -24,32 +28,16 @@ export type AnalyticsChartModel = {
   range: { from: number; to: number };
 };
 
-/** Phase series labels (D55, D63, D74): P1-P3, I1-I3, V1-V3, PF1-PF3,
- *  E1-E3, Ex1-Ex3. Qualifiers themselves are never shown (D83). */
-const PHASE_PREFIX: Readonly<Record<string, string>> = {
-  ACTIVE_POWER: "P",
-  CURRENT: "I",
-  VOLTAGE_LINE_NEUTRAL: "V",
-  POWER_FACTOR: "PF",
-  ENERGY_IMPORT: "E",
-  ENERGY_EXPORT: "Ex",
-};
-const PHASE_NUMBER: Readonly<Record<string, string>> = { L1: "1", L2: "2", L3: "3" };
+export { seriesName } from "./analyticsSeriesName";
 
-/** Legend / tooltip name: "Asset · Data point" for System, "Asset - P1" for
- *  a phase series. */
-export function seriesName(s: AnalyticsSeries): string {
-  const asset = s.asset_name ?? "";
-  const phase = PHASE_NUMBER[s.qualifier];
-  if (phase) {
-    const prefix = PHASE_PREFIX[s.data_point];
-    return prefix ? `${asset} - ${prefix}${phase}` : `${asset} · ${s.label ?? s.data_point} ${phase}`;
-  }
-  return `${asset} · ${s.label ?? s.data_point}`;
-}
-
-/** The applied response as chart buckets and series (OK series only). */
-export function buildChartModel(response: AnalyticsSeriesResponse | null, range: CalendarRange): AnalyticsChartModel {
+/** The applied response as chart buckets and series (OK series only), each
+ *  bucket carrying its Data quality lines for the tooltip (D22, DQ9). */
+export function buildChartModel(
+  response: AnalyticsSeriesResponse | null,
+  range: CalendarRange,
+  catalog?: AnalyticsCatalogResponse | null,
+  timeZone?: string | null,
+): AnalyticsChartModel {
   const drawn = (response?.series ?? []).filter((s) => s.status === "OK");
   const ends = new Map<number, number>();
   for (const s of drawn) {
@@ -57,13 +45,17 @@ export function buildChartModel(response: AnalyticsSeriesResponse | null, range:
   }
   const buckets = [...ends.entries()].sort((a, b) => a[0] - b[0]).map(([start, end]) => ({ start, end }));
   const series = drawn.map<ChartSeries>((s) => {
-    const byStart = new Map(s.points.map((p) => [Date.parse(p.bucket_start), p.value]));
+    const byStart = new Map(s.points.map((p) => [Date.parse(p.bucket_start), p]));
     return {
       key: `${s.asset_id}:${s.data_point}:${s.qualifier}`,
-      name: seriesName(s),
+      name: seriesName(s, catalog),
       unit: s.unit,
       kind: s.chart_kind,
-      values: buckets.map((b) => byStart.get(b.start) ?? null),
+      values: buckets.map((b) => byStart.get(b.start)?.value ?? null),
+      notes: buckets.map((b) => {
+        const p = byStart.get(b.start);
+        return p ? bucketQualityNotes(s, p, timeZone) : [];
+      }),
     };
   });
   return { buckets, series, range: { from: Date.parse(range.from), to: Date.parse(range.to) } };

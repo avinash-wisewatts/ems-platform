@@ -628,6 +628,31 @@ button.status-pill { font-family: inherit; cursor: pointer; }
 .analytics-chart__body { margin-top: 10px; }
 .analytics-chart__body[hidden] { display: none; }
 
+/* Statistics and Data quality (F6). */
+.analytics-result { display: grid; gap: 12px; min-width: 0; }
+.analytics-card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px 16px; min-width: 0; }
+.analytics-card__title { margin: 0 0 10px; font-size: 15px; font-weight: 600; color: var(--ww-navy); }
+.analytics-stats__scroll { overflow-x: auto; }
+.analytics-stats__table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.analytics-stats__table th, .analytics-stats__table td { text-align: left; vertical-align: top; padding: 6px 10px; border-top: 1px solid var(--line); }
+.analytics-stats__table thead th { border-top: 0; font-weight: 600; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.analytics-stats__table td { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.analytics-stats__series { font-weight: 500; color: var(--text); }
+.analytics-stats__series .chart-frame__swatch { margin-right: 6px; vertical-align: baseline; }
+.analytics-stats__value, .analytics-stats__time { display: block; }
+.analytics-stats__time { color: var(--muted); font-size: 12px; }
+.analytics-dq__group { border-top: 1px solid var(--line); padding: 8px 0; }
+.analytics-dq__group:first-of-type { border-top: 0; padding-top: 0; }
+.analytics-dq__heading { margin: 0; font-size: 13.5px; font-weight: 600; color: var(--ww-navy); }
+summary.analytics-dq__heading { cursor: pointer; }
+.analytics-dq__body { margin-top: 6px; }
+.analytics-dq__explanation { margin: 0 0 6px; color: var(--muted); font-size: 13px; }
+.analytics-dq__entries { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 13px; }
+.analytics-dq__series { display: block; font-weight: 500; color: var(--text); }
+.analytics-dq__line { display: block; color: var(--muted); }
+.chart-frame__tooltip-list li { flex-wrap: wrap; }
+.chart-frame__tooltip-notes { flex-basis: 100%; list-style: none; margin: 0 0 2px 16px; padding: 0; color: var(--muted); font-size: 12px; }
+
 /* Buttons and links used across the panel and the picker. */
 .analytics-button { border-radius: 8px; padding: 7px 14px; font-weight: 500; }
 .analytics-button--primary { background: var(--accent); border-color: var(--accent); color: #fff; }

@@ -262,6 +262,10 @@ export type ChartSeries = {
   kind: "bar" | "line";
   /** One value per bucket, aligned with `buckets`; null is a gap, never 0. */
   values: readonly (number | null)[];
+  /** Optional tooltip lines per bucket, aligned with `buckets` (e.g. a
+   *  period's data quality). A bucket with lines is listed in the tooltip
+   *  even without a value. */
+  notes?: readonly (readonly string[])[];
 };
 
 /** Visible window as inclusive bucket indices; null = the whole range. */
@@ -535,7 +539,15 @@ function BarPathsLayer({
   );
 }
 
-type TooltipEntry = { name: string; unit: string | null; color: string; kind: "bar" | "line"; dataKey: string };
+type TooltipEntry = {
+  name: string;
+  unit: string | null;
+  color: string;
+  kind: "bar" | "line";
+  dataKey: string;
+  /** bucket start -> tooltip lines */
+  notes: ReadonlyMap<number, readonly string[]>;
+};
 
 function SeriesTooltip({
   entries,
@@ -553,7 +565,7 @@ function SeriesTooltip({
 }) {
   const row = active && label != null ? rowsByStart.get(Number(label)) : undefined;
   if (!row) return null;
-  const values = entries.filter((e) => row[e.dataKey] != null);
+  const values = entries.filter((e) => row[e.dataKey] != null || (e.notes.get(row.t)?.length ?? 0) > 0);
   return (
     <div className="chart-frame__tooltip" data-testid="chart-tooltip">
       <p className="chart-frame__tooltip-time">{formatSiteLocalDateTime(row.t, timeZone)}</p>
@@ -563,10 +575,19 @@ function SeriesTooltip({
             <li key={e.dataKey}>
               <span className={`chart-frame__swatch chart-frame__swatch--${e.kind}`} style={{ background: e.color }} />
               <span className="chart-frame__tooltip-name">{e.name}</span>
-              <span className="chart-frame__tooltip-value">
-                {formatValue(row[e.dataKey])}
-                {e.unit ? ` ${e.unit}` : ""}
-              </span>
+              {row[e.dataKey] != null ? (
+                <span className="chart-frame__tooltip-value">
+                  {formatValue(row[e.dataKey])}
+                  {e.unit ? ` ${e.unit}` : ""}
+                </span>
+              ) : null}
+              {(e.notes.get(row.t)?.length ?? 0) > 0 ? (
+                <ul className="chart-frame__tooltip-notes" data-testid="chart-tooltip-notes">
+                  {e.notes.get(row.t)!.map((note, i) => (
+                    <li key={i}>{note}</li>
+                  ))}
+                </ul>
+              ) : null}
             </li>
           ))}
         </ul>
@@ -616,8 +637,15 @@ export function MultiSeriesChartFrame({
     [series],
   );
   const entries = useMemo<TooltipEntry[]>(
-    () => series.map((s, i) => ({ name: s.name, unit: s.unit, color: seriesColor(i), kind: s.kind, dataKey: dataKeyOf(i) })),
-    [series],
+    () =>
+      series.map((s, i) => {
+        const notes = new Map<number, readonly string[]>();
+        s.notes?.forEach((lines, b) => {
+          if (lines.length > 0 && buckets[b]) notes.set(buckets[b]!.start, lines);
+        });
+        return { name: s.name, unit: s.unit, color: seriesColor(i), kind: s.kind, dataKey: dataKeyOf(i), notes };
+      }),
+    [series, buckets],
   );
   const first = view?.start ?? 0;
   const last = view?.end ?? rows.length - 1;

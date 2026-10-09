@@ -572,7 +572,60 @@ the Asset View only ([ADR-022 amendment](../../00-governance/decisions/ADR-022-a
 | 285 | Read latency: `analytics.energy_direction_status` `RESET search_path`, so its IMMUTABLE `CASE` is inlined into the series read (was one function call per 15-minute row per direction); body, grants and the series function unchanged | Deployed to staging 2026-09-29 (`6b09475`, PR #93, deploy run 36551005201; checksum `926d7ae4…`). Read-only validation: 284→285 snapshot identical (140,132 rows, 36 columns); helper inlined (0 helper executions per 15m request, against 42,958); latency improved only about 0–10% (median) |
 | B3 | Generic series path (1m / 15m / 30m / 1h) | Planned — returns `NOT_AVAILABLE` until non-Energy assignments exist |
 | B4 | `analytics.point_telemetry_1d` persisted tier (job-built from 15m, upsert-only, 35-day reconcile, backfill, 8-year retention, compression after 90 days; ADR-019 D1/D5) and the 1d read path | Planned — must be live before the first `point_telemetry_15m` chunks age out of 120-day retention |
-| F1–F8 | Frontend: time-range defect fixes (ADR-019), route, API layer, date/time picker, filter panel, ChartFrame extension, table/CSV/states, verification against staging through the tunnel | Planned |
+| F1 | Calendar quick ranges in the site timezone, application-wide (ADR-022 Amendment 5, D61/D62) | Merged to staging (PR #96, `a420a88`) |
+| F2 | Analytics v1 API client (`getAnalyticsCatalog`, `getAnalyticsSeries`) | Merged to staging (PR #97, `11e8123`) |
+| F3 | Page at `/features/analytics`, draft/applied state, Update, validation, loading and error behaviour | Merged to staging (PR #98, `feb7aec`) |
+| F4 | Filter panel (Assets, Data points, Resolution, Phase type, Comparison placeholder) and the date/time range | Merged to staging (PR #100, `ffe3dcc`); assignment periods in the selector added by PR #105 (migration 288) |
+| F5 | Chart card: multi-series chart, drag-to-zoom, range slider, Collapse / Expand | Merged to staging (PR #101, `6b9a805`) |
+| F6 | Statistics table, Data quality section (seven groups), per-period Data quality lines in the chart tooltip | Implemented (branch `feat/analytics-f6-statistics-quality`); see "Frontend implementation notes (F6)" |
+| F7 | CSV export (wide format, local + UTC timestamps, full applied range) and the toolbar's **Export CSV** | Planned |
+| F8 | Verification of the finished page against staging data through the SSH tunnel | Planned |
+
+### Frontend implementation notes (F6)
+
+`web/src/routes/analytics/`: `analyticsStatisticsModel.ts` / `AnalyticsStatistics.tsx`,
+`analyticsDataQualityModel.ts` / `AnalyticsDataQuality.tsx`,
+`analyticsSeriesName.ts` (one customer-facing name for a series everywhere),
+and per-bucket tooltip lines through `analyticsChartModel.ts` and
+`ChartFrame`'s optional `notes`.
+
+- **Statistics** shows the API's series `summary` as returned (Total for Energy
+  only, Average, Minimum, Maximum with `min_at` / `max_at` in site-local time);
+  nothing is computed in the browser. A value the API does not return is shown
+  as "—". The Total column is shown only when an Energy series is charted
+  (general rule). Values use the charts' existing two-decimal formatting; the
+  value precision per data point is still undecided.
+- **Data quality** follows the backend mapping of ADR-022 Amendment 6. Choices
+  the specification leaves open, made here and open to Product Owner review:
+  - Incomplete: a period's missing intervals are `assigned_expected_intervals`
+    − (`valid_intervals` + `reconstructed_intervals`) − `invalid_intervals`;
+    "could not be used" is `invalid_intervals`. Durations multiply the
+    intervals by the capture interval, read per period as the period width ÷
+    `expected_intervals` (the API does not return the capture interval).
+  - Tooltip wording: no accepted reading and nothing rejected → "Incomplete: no
+    readings received"; no accepted reading and nothing missing → "Incomplete:
+    readings could not be used"; otherwise "Incomplete: some readings not
+    received" / "…could not be used" / "…not received or could not be used".
+  - A period range runs from the first to the last affected period's start
+    time ("{time} – {time} · {k} periods"); the periods need not be contiguous.
+  - No recent data and its tooltip appear only when `stale` is `true`
+    (`null`, an unverified capture path, claims nothing).
+  - A `DATA_UNAVAILABLE` series with several reasons shows one line, the first
+    of: policy gap, policy change, timezone mismatch.
+  - A selection the catalogue cannot serve (D4, never requested) is listed
+    under "Series not shown in chart" with "This selection is not available."
+  - Names fall back to the catalogue when the API returns no asset name or
+    label, then to "Asset" / "Data point"; registry codes are never shown.
+- **Tooltip**: each series' lines for the hovered period, in group order; a
+  series with lines but no value (e.g. a period without readings) is listed
+  without a value.
+- Statistics and Data quality describe the applied query only: hidden until the
+  first successful Update, kept while loading and after a failed Update, and
+  rebuilt (expansion reset) on each successful Update.
+- Not exercised against real data yet: meter resets / rollovers have no
+  API-level test (Amendment 6), and reconstructed timing stays inactive while
+  reconstruction is OFF. Partial failure ("Some data could not be loaded…",
+  D51) cannot occur while the series endpoint is all-or-nothing.
 
 ## Pilot status
 
@@ -631,10 +684,29 @@ bottom, D72); the time-of-day refinement's granularity (any minute, D60).
 
 - 285: new `app/tests/test_energy_direction_status_inlining.py` (5: helper attributes and grants, body byte-identical to 279; inlining shown by `EXPLAIN`; all 4,096 counter combinations including NULL; series parity against a non-inlinable reference over the 284 randomised scenarios and a GOOD / INVALID / RESET / GAPS / ROLLOVER scenario, mutation-checked). Full backend suite 1848 passed locally (2026-09-29).
 
+- F6 (frontend): `analyticsDataQualityModel.test.ts` (durations, period
+  ranges, every "Series not shown" reason, all seven groups in order with no
+  internal codes in customer text, selection order including unserved
+  selections, catalogue name fallback, incomplete counts and durations,
+  Energy-only wording, resets/rollovers, stale only when `true`, System values
+  only under 3 Phase, tooltip lines for every condition in group order);
+  `analyticsStatisticsModel.test.ts` (rows in chart order, Energy-only Total,
+  values never computed); `AnalyticsResultSections.test.tsx` (Statistics with
+  site-local Min/Max times, Data quality expansion rules, a no-data series
+  explained while left out of the chart, tooltip lines, and the page flow:
+  hidden before Update, unchanged by draft edits, kept while loading and after
+  a failure, replaced on the next Update, absent after a failed first Update).
+
 ## Release status
 
-Not released to production. The backend (migrations 275–285) is deployed to
-staging; the Analytics page (frontend) is not implemented yet.
+Not released to production. The backend (migrations 275–288) is deployed to
+staging. The Analytics page is on staging through F5 (filters, date range,
+chart); F6 (Statistics, Data quality, tooltip quality lines) is implemented
+and awaiting review. Still open on the frontend: F7 (CSV export) and F8
+(verification against staging data through the tunnel). Backend dependencies
+still open: B3 (non-Energy series; until then the catalogue is Energy-only and
+3 Phase has no per-phase data) and B4 (the daily persisted tier, required
+before the first `point_telemetry_15m` chunks age out of retention).
 
 ## Known limitations
 

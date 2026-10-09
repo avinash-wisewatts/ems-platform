@@ -3,7 +3,8 @@
  * multi-series chart of the last successful Update. The chart is drawn from
  * the applied query only -- never the draft -- so it is unchanged while
  * filters have unapplied changes. Export CSV joins the toolbar with the CSV
- * step; Statistics and Data quality follow the card (F6).
+ * step; Statistics and Data quality follow the card (F6), and the tooltip
+ * carries each period's Data quality lines.
  */
 import { useMemo, useState } from "react";
 import type { AnalyticsCatalogResponse } from "../../api/types";
@@ -24,7 +25,10 @@ export function AnalyticsChart({
   width?: number;
 }) {
   const [collapsed, setCollapsed] = useState(false);
-  const model = useMemo(() => buildChartModel(applied.response, applied.range), [applied]);
+  const model = useMemo(
+    () => buildChartModel(applied.response, applied.range, catalog, timeZone),
+    [applied, catalog, timeZone],
+  );
   const title = chartTitle(applied, catalog, timeZone);
 
   return (

@@ -4,8 +4,8 @@
  * docs/07-features/analytics/README.md "User experience" is the screen
  * specification. F3 provides the page frame, the site's catalogue, the
  * draft/applied state and the Update flow; F4 the filter panel and the date
- * range; the chart (F5) and Statistics / Data quality (F6) plug into the
- * marked region.
+ * range; the chart (F5), then Statistics and Data quality (F6) in the result
+ * area.
  *
  * No site-name page header (D32): the site comes from the global site
  * selector. The navigation entry opens this page directly (D81).
@@ -22,6 +22,8 @@ import { Loading } from "../../components/states/Loading";
 import { MESSAGES, limitsFrom, resolveDraftRange } from "./analyticsQuery";
 import { useAnalyticsState, type UseAnalyticsState } from "./useAnalyticsState";
 import { AnalyticsChart } from "./AnalyticsChart";
+import { AnalyticsDataQuality } from "./AnalyticsDataQuality";
+import { AnalyticsStatistics } from "./AnalyticsStatistics";
 import { AnalyticsDateRange } from "./AnalyticsDateRange";
 import {
   AssetSelector,
@@ -197,12 +199,21 @@ function AnalyticsResultArea({
           <p className="analytics-empty__detail">{MESSAGES.emptyStateDetail}</p>
         </div>
       ) : (
-        // F6 adds Statistics and Data quality below the chart, from `applied`.
+        // Chart, Statistics, Data quality (D19) -- all from `applied`, so they
+        // describe the last successful Update, never the draft.
         <section className="analytics-result" data-testid="analytics-result">
           {/* Keyed per successful Update (each response has its own as_of):
               a new result starts unzoomed. */}
           <AnalyticsChart
             key={`${applied.response?.as_of ?? ""}|${applied.range.from}|${applied.range.to}`}
+            applied={applied}
+            catalog={catalog}
+            timeZone={timeZone}
+          />
+          <AnalyticsStatistics response={applied.response} catalog={catalog} timeZone={timeZone} />
+          {/* Keyed like the chart: each Update starts with the default expansion (DQ9). */}
+          <AnalyticsDataQuality
+            key={`dq|${applied.response?.as_of ?? ""}|${applied.range.from}|${applied.range.to}`}
             applied={applied}
             catalog={catalog}
             timeZone={timeZone}
