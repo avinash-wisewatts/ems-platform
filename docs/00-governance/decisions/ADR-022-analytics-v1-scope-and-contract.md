@@ -469,7 +469,11 @@ environmental points stay out of the registry.
    the asset name (`Power-Chiller 1`, `Reactive Power-Q1-AHU 2`), so
    different assets never share a label. Power is in Frequently Used.
 
-**Open (Product Owner):** verification of the line-to-line source mapping
-(Eniscope `U1`/`U2`/`U3` → L12/L23/L31, shown as V12/V23/V31) and a System
-code for Line to Line Voltage.
+**Line-to-line evidence (2026-10-09):** the mapping Eniscope `U1`/`U2`/`U3`
+→ L12/L23/L31 (shown V12/V23/V31) is recorded as a confirmed vendor mapping
+in `postgres/ddl/110_enhance_eniscope_energy_profile.sql`, and staging
+telemetry agrees (U/V = √3; `U` = mean of `U1`–`U3`; each field closest to
+its mapped pair). Line to Line Voltage System keeps its readable label (no
+authoritative code). **Open (Product Owner):** confirm the pair order from
+Eniscope documentation (not held in the repository).
 

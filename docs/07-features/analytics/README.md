@@ -828,11 +828,28 @@ bottom, D72); the time-of-day refinement's granularity (any minute, D60).
 
 1. *(Answered 2026-10-09: the B3 registry above; apparent and reactive
    energy/power other than Reactive Power, THD and phase angle stay out.)*
-   Reactive Power phases are Q1–Q3 (answered 2026-10-09). Open: the
-   line-to-line labels V12/V23/V31 follow the existing source mapping
-   (Eniscope `U`/`U1`/`U2`/`U3` → line-to-line average / L12 / L23 / L31,
-   baseline field mapping); that mapping is unverified against the meter
-   documentation, and Line to Line Voltage has no agreed System code.
+   Reactive Power phases are Q1–Q3 (answered 2026-10-09).
+   **Line-to-line mapping (evidence 2026-10-09, implementation unchanged):**
+   the platform maps Eniscope `U`/`U1`/`U2`/`U3` to the line-to-line
+   average / L12 / L23 / L31 (`postgres/ddl/110_enhance_eniscope_energy_profile.sql`
+   records "Confirmed vendor mappings: U1=L1-L2, U2=L2-L3, U3=L3-L1";
+   carried into the baseline field mapping). Staging telemetry (read-only,
+   46 devices, 1,288 one-minute samples) agrees: U / V = 1.7320 (√3, so `U`
+   is line-to-line, not phase voltage); `U` equals the mean of `U1`–`U3`
+   within 0.013 V; and on the 120° phasor relation each of `U1`/`U2`/`U3` is,
+   on average, closest to its mapped pair (L1-L2, L2-L3, L3-L1). The phase
+   imbalance is small (≈1.5 V), so the pair *order* is supported but not
+   proven by the data, and no Eniscope document is held in the repository.
+   The legacy views `postgres/init/08_energy_meter_view.sql` and
+   `postgres/ddl/23_views.sql` name `U1`–`U3` `voltage_l1`–`voltage_l3`;
+   they are pre-profile views (they also read `AE`, apparent energy, as
+   export energy) and are not used by Analytics. Open: confirm the pair
+   order from Eniscope documentation.
+   **Line to Line Voltage System label (decided 2026-10-09):** no
+   authoritative customer code exists (Eniscope's raw field name `U` is a
+   source identifier, never shown), so the System series keeps the readable
+   label "Line to Line Voltage" rather than an invented code or Voltage's
+   `V`. Revisit only if the Product Owner defines a code.
 2. **CSV quality context.** Whether the wide CSV carries any coverage or
    quality information (EMS-REQ-137, ADR-014).
 3. **Smaller open items:** "Export Energy" in the Power list (D67) versus
