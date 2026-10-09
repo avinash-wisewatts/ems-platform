@@ -1,6 +1,6 @@
 # Staging: one-time history restore for the 9 October 2026 bulk assignment
 
-Status: PLANNED (migration 294 implemented, not deployed; no restore executed) · Last reviewed: 2026-10-10
+Status: EXECUTED on staging 2026-10-10 (migration 294 deployed by PR #118, squash 47d8065) · Last reviewed: 2026-10-10
 Verification basis: Repository, local test database, Staging (read-only)
 
 ## Why
@@ -76,7 +76,7 @@ Power Factor, temperature, humidity; EN-AirCompressor-01's 11 points) keep
 their 10-05 start (separate investigation), and the 108 System Energy
 stand-in rows (separate proposal, below).
 
-## Procedure (each step needs explicit approval)
+## Procedure (each step needed explicit approval)
 
 1. Deploy migration 294 through the normal staging pipeline.
 2. Per gateway, in this order (Unit 2 first: its history is the oldest and
@@ -91,6 +91,38 @@ stand-in rows (separate proposal, below).
       `SKIPPED_START_CHANGED`; the Analytics catalogue and a B3 series for one
       asset show history from the proposed start; the excluded rows are
       unchanged. Stop at the first error or dropped connection.
+
+## Execution record (staging, 2026-10-10 IST)
+
+Each gateway: authoritative dry run of the deployed function (matched the
+plan above row for row: same rows, actions and proposed starts), explicit
+Product Owner approval, one transaction (`statement_timeout` 120 s,
+`lock_timeout` 5 s), then read-only verification (re-run dry run shows every
+restored row as `SKIPPED_START_CHANGED` at its approved start; audit
+before/after consistent; other gateways, the 108 stand-in rows and the 15
+rows of 2026-10-05 unchanged; staging healthy -- no crash recovery, no failed
+jobs, normalization at its usual lag).
+
+| Order | Gateway | Restored | Not restored | Audit record (`admin.onboarding_audit.id`) | Executed (IST) |
+|---|---|---|---|---|---|
+| 1 | Eniscope_1_Meenaxy_Unit2 | 448 | 0 | `b5099d1c-300b-47ec-8f25-7d2226e9e0a0` | 00:35:46 |
+| 2 | Eniscope_2_Meenaxy_Unit2 | 381 | 56 (P1-HeatVentUnit-01) | `f463d67b-db62-4f71-894e-d2f25e7dffe9` | 00:37:43 |
+| 3 | Eniscope_3_Meenaxy_Unit2 | 336 | 0 | `7f879f70-4453-4445-8783-c96c1769f04b` | 00:38:41 |
+| 4 | ENISCOPE_1_CHILLER | 447 | 0 | `e0233925-311d-4787-8bb5-d99fd7141f79` | 00:39:44 |
+| 5 | Eniscope_3_AHU | 456 | 1 (Banquet 2 AHU Energy Export gap) | `41672287-1e12-45c7-bae5-8acdc5fcf20f` | 00:41:28 |
+| 6 | Eniscope_4_Main_Kitchen | 448 | 0 | `aa9d4224-3e90-488a-95a7-294ce1ff9cb2` | 00:42:27 |
+| 7 | Eniscope_2_Plumbing | 448 | 0 | `91c9f653-6d49-4e00-a386-8f107bf0089a` | 00:43:10 |
+| | **Total** | **2,964** | **57** | | |
+
+Spot checks after the restore: Analytics history for P1-CoatingPan-01,
+Chiller1 and Banquet 2 AHU starts at the restored first reading (the partial
+first hour counts only readings after it; earlier hours are not assigned);
+Banquet 2 AHU daily System Energy still has no Export on 10-06 to 10-08; the
+AirSense points start 2026-09-09 17:23:00.72; the Plumbing assets' history
+ends 2026-10-08 16:00 (gateway offline since 10-08 15:47, separate
+investigation). Known inconsistency left by decision: EN-AirCompressor-01 and
+Banquet 2 AHU keep their 2026-10-05 rows (e.g. EN-AirCompressor-01 Power
+System and Current from 10-05 21:15, its other points from August).
 
 ## Deadline
 
