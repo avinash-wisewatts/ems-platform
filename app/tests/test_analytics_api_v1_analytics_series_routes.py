@@ -332,6 +332,32 @@ def test_bucket_state_follows_as_of(portal_client, monkeypatch) -> None:
     assert points[2]["data_state"] == "FUTURE"
 
 
+def test_summary_average_min_max_use_completed_periods_only(portal_client, monkeypatch) -> None:
+    # The in-progress hour (0.5 kWh so far) counts toward Total but is never
+    # the minimum and does not lower the average; the future hour is ignored.
+    _login(portal_client, monkeypatch)
+    as_of = T0 + timedelta(minutes=150)
+    rows = [_energy_row(ASSET_A, h, v, None) for h, v in ((0, 1.0), (1, 3.0), (2, 0.5), (3, None))]
+    rows[3]["import_data_state"] = "FUTURE"
+    _patch(monkeypatch, energy=rows, as_of=as_of)
+    series = _series(portal_client, f"{ASSET_A}:ENERGY_IMPORT", to="2026-09-20T04:00:00Z").json()["series"][0]
+    assert [p["bucket_state"] for p in series["points"]] == ["COMPLETE", "COMPLETE", "IN_PROGRESS", "FUTURE"]
+    assert series["summary"] == {
+        "total": 4.5, "average": 2.0, "min": 1.0, "min_at": "2026-09-20T00:00:00Z",
+        "max": 3.0, "max_at": "2026-09-20T01:00:00Z",
+    }
+
+
+def test_summary_with_only_an_in_progress_period_has_a_total_and_nothing_else(portal_client, monkeypatch) -> None:
+    _login(portal_client, monkeypatch)
+    as_of = T0 + timedelta(minutes=30)
+    _patch(monkeypatch, energy=[_energy_row(ASSET_A, 0, 0.4, None)], as_of=as_of)
+    series = _series(portal_client, f"{ASSET_A}:ENERGY_IMPORT", to="2026-09-20T01:00:00Z").json()["series"][0]
+    assert series["status"] == "OK"
+    assert series["points"][0]["bucket_state"] == "IN_PROGRESS"
+    assert series["summary"] == {"total": 0.4, "average": None, "min": None, "min_at": None, "max": None, "max_at": None}
+
+
 def test_stale_and_data_bounds_are_passed_through(portal_client, monkeypatch) -> None:
     _login(portal_client, monkeypatch)
     last = T0 + timedelta(minutes=70)

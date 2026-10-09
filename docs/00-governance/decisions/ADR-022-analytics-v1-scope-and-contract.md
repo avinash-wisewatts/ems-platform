@@ -396,3 +396,33 @@ counts (`assigned_expected_intervals`, `valid_intervals`, `invalid_intervals`,
 group 4 from series `stale` and `last_data_at`; group 5 from `GAPS_DETECTED`;
 group 6 from `RECONSTRUCTED_TIMING`; group 7 from `phase = three_phase` with a
 `TOTAL` qualifier; group 1 from series `status` / `status_reasons`.
+
+---
+
+## Amendment 7 (2026-10-09): Statistics semantics and F6 presentation decisions
+
+**Decision (Product Owner, 2026-10-09, on the review of PR #112).**
+
+1. **In-progress periods.** They stay visible in the chart (D17). Average,
+   Minimum and Maximum use completed periods only, so a period still filling
+   up is never reported as the minimum and never lowers the average. Total
+   is the Energy recorded so far in the applied range, the in-progress period
+   included. Statistics are never calculated in the browser: the API's series
+   `summary` implements this (feature document, API contract). Supersedes the
+   earlier contract (average / min / max over every bucket with a value).
+2. **Catch-up periods.** Where the API identifies a value as including Energy
+   from readings that resumed after a gap (`GAPS_DETECTED` on that period),
+   Statistics shows a concise disclosure on that Minimum or Maximum. Catch-up
+   is never inferred from a value's magnitude.
+3. **Unavailable selections.** In "Series not shown in chart", selections
+   with the same reason are grouped under that reason with a count and can be
+   expanded to list the selections in selection order.
+4. **Data quality.** Amendment 6 and the documented API counting rules apply.
+   Durations are not shown when the interval length is unknown. Several
+   reasons for one selection are each shown with their approved line. A
+   period range that spans unaffected periods must not read as continuous.
+5. **Formatting.** Two decimal places for this release. At daily resolution,
+   period times are shown as dates without a time of day.
+6. **Production readiness.** Scenarios that cannot be validated with current
+   staging data (meter reset / rollover, reconstructed timing, and others
+   recorded in the feature document) are recorded as unverified, not passed.
