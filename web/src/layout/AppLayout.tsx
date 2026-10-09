@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { useSession } from "../auth/SessionProvider";
@@ -15,6 +15,7 @@ import {
 } from "./navigation";
 import { NavIcon, type NavIconKey } from "./NavIcon";
 import { DATE_TIME_FORMAT } from "../time/format";
+import { COMPACT_SCREEN_QUERY, NARROW_SCREEN_QUERY, useMediaQuery } from "./useMediaQuery";
 
 /** SHELL_PRIMARY_NAV's "shell-alerts" key exists only to avoid a duplicate
  *  `nav-alerts` test id against the Archive section's own Alerts entry --
@@ -40,6 +41,12 @@ function shellNavIcon(key: string): NavIconKey {
  * it is only relocated into a labelled, collapsed-by-default section so the
  * new primary nav (Main Dashboard / Asset View / Analytics / Single Line
  * Diagram / Alerts / Settings) doesn't compete with it for attention.
+ *
+ * Responsive (same pattern as the Analytics filter panel, D82): on compact
+ * screens (tablets, <= 1199 px) the sidebar starts as the icon rail; on
+ * narrow screens (<= 900 px) it leaves the layout entirely and opens as a
+ * drawer from the header's menu button, so the content uses the full width.
+ * Crossing a breakpoint resets to that width's default; nothing is persisted.
  *
  * Navigation gating is UX only, as before -- the backend remains
  * authoritative for access.
@@ -421,15 +428,61 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const permissions = user?.permissions ?? [];
   const activeAlertCount = useActiveAlertCount(selectedSite?.site_id ?? null);
 
-  const [collapsed, setCollapsed] = useState(false);
+  const narrow = useMediaQuery(NARROW_SCREEN_QUERY);
+  const compact = useMediaQuery(COMPACT_SCREEN_QUERY);
+  // Wider screens: the icon rail (collapsed) or the full sidebar; it starts
+  // collapsed on compact screens and follows the breakpoint when it changes.
+  const [collapsed, setCollapsed] = useState(compact);
+  useEffect(() => setCollapsed(compact), [compact]);
+  // Narrow screens: the sidebar is a drawer, closed by default, on every
+  // route change and whenever the breakpoint changes.
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  useEffect(() => setDrawerOpen(false), [narrow, location.pathname]);
   const shellNav = visibleNav(SHELL_PRIMARY_NAV, permissions);
 
+  const menuRef = useRef<HTMLButtonElement | null>(null);
+  const toggleRef = useRef<HTMLButtonElement | null>(null);
+  const closeDrawer = useCallback(() => {
+    setDrawerOpen(false);
+    menuRef.current?.focus();
+  }, []);
+  // As a drawer the sidebar is modal: focus moves into it, Escape closes it.
+  useEffect(() => {
+    if (!narrow || !drawerOpen) return;
+    toggleRef.current?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeDrawer();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [narrow, drawerOpen, closeDrawer]);
+
+  const shellClass = [
+    "app-shell",
+    !narrow && collapsed ? "app-shell--collapsed" : "",
+    narrow ? "app-shell--narrow" : "",
+    narrow && drawerOpen ? "app-shell--drawer-open" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
-    <div
-      className={`app-shell${collapsed ? " app-shell--collapsed" : ""}`}
-      data-testid="app-shell"
-    >
+    <div className={shellClass} data-testid="app-shell">
       <header className="app-shell__header">
+        {narrow ? (
+          <button
+            ref={menuRef}
+            type="button"
+            className="app-shell__menu-toggle"
+            onClick={() => setDrawerOpen(true)}
+            aria-label="Open navigation"
+            aria-expanded={drawerOpen}
+            aria-controls="app-shell-sidebar"
+            data-testid="shell-menu-toggle"
+          >
+            ☰
+          </button>
+        ) : null}
         <div className="app-shell__brand">
           <BrandMark />
         </div>
@@ -454,19 +507,43 @@ export function AppLayout({ children }: { children: ReactNode }) {
       </header>
 
       <div className="app-shell__body">
-        <aside className="app-shell__sidebar">
+        {narrow && drawerOpen ? (
+          <div className="app-shell__backdrop" aria-hidden="true" onClick={closeDrawer} data-testid="shell-nav-backdrop" />
+        ) : null}
+        <aside
+          id="app-shell-sidebar"
+          className="app-shell__sidebar"
+          aria-label={narrow ? "Navigation" : undefined}
+          role={narrow && drawerOpen ? "dialog" : undefined}
+          aria-modal={narrow && drawerOpen ? true : undefined}
+          // A link chosen in the drawer closes it, even for the current page.
+          onClick={narrow ? (event) => (event.target as HTMLElement).closest("a") && setDrawerOpen(false) : undefined}
+        >
           <div className="app-shell__site-panel">
             <div className="app-shell__site-panel-header">
-              <button
-                type="button"
-                className="app-shell__collapse-toggle"
-                onClick={() => setCollapsed((c) => !c)}
-                aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-                aria-pressed={collapsed}
-                data-testid="sidebar-collapse-toggle"
-              >
-                ☰
-              </button>
+              {narrow ? (
+                <button
+                  ref={toggleRef}
+                  type="button"
+                  className="app-shell__collapse-toggle"
+                  onClick={closeDrawer}
+                  aria-label="Close navigation"
+                  data-testid="sidebar-collapse-toggle"
+                >
+                  ✕
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="app-shell__collapse-toggle"
+                  onClick={() => setCollapsed((c) => !c)}
+                  aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+                  aria-pressed={collapsed}
+                  data-testid="sidebar-collapse-toggle"
+                >
+                  ☰
+                </button>
+              )}
             </div>
             <div className="app-shell__field">
               <span className="app-shell__field-label">Organization</span>

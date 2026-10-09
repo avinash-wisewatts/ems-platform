@@ -18,6 +18,7 @@ import { useTenant } from "../../tenant/TenantProvider";
 import { localDateKey } from "../../time/calendarRanges";
 import { EmptyState } from "../../components/states/EmptyState";
 import { ErrorState } from "../../components/states/ErrorState";
+import { NARROW_SCREEN_QUERY, useMediaQuery } from "../../layout/useMediaQuery";
 import { Loading } from "../../components/states/Loading";
 import { MESSAGES, limitsFrom, resolveDraftRange } from "./analyticsQuery";
 import { useAnalyticsState, type UseAnalyticsState } from "./useAnalyticsState";
@@ -38,22 +39,12 @@ type CatalogState =
   | { status: "ready"; catalog: AnalyticsCatalogResponse }
   | { status: "error"; error: unknown };
 
-/** Narrow screens show the filters as a drawer/overlay (D82). */
-export const NARROW_QUERY = "(max-width: 900px)";
+/** Narrow screens show the filters as a drawer/overlay (D82) -- the same
+ *  breakpoint as the shell's navigation drawer. */
+export const NARROW_QUERY = NARROW_SCREEN_QUERY;
 
 function useIsNarrow(): boolean {
-  const query = useMemo(
-    () => (typeof window !== "undefined" && typeof window.matchMedia === "function" ? window.matchMedia(NARROW_QUERY) : null),
-    [],
-  );
-  const [narrow, setNarrow] = useState(query?.matches ?? false);
-  useEffect(() => {
-    if (!query) return;
-    const onChange = (event: MediaQueryListEvent) => setNarrow(event.matches);
-    query.addEventListener("change", onChange);
-    return () => query.removeEventListener("change", onChange);
-  }, [query]);
-  return narrow;
+  return useMediaQuery(NARROW_QUERY);
 }
 
 /** The earliest site-local date any catalogue data point has data from. */

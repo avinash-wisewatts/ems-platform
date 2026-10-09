@@ -284,6 +284,32 @@ a { color: var(--ww-teal-600); }
 
 .app-shell__content { flex: 1; min-width: 0; padding: 22px; }
 
+/* Narrow screens (<= 900 px, AppLayout's NARROW_SCREEN_QUERY): the sidebar
+   leaves the layout and opens as a drawer from the header's menu button;
+   the content takes the full width. */
+.app-shell__menu-toggle {
+  flex: 0 0 auto;
+  background: transparent; border: 1px solid rgba(255, 255, 255, 0.25); color: #fff;
+  width: 32px; height: 32px; padding: 0; border-radius: 6px; font-size: 16px; line-height: 1;
+}
+.app-shell__menu-toggle:hover { background: rgba(255, 255, 255, 0.1); }
+.app-shell__backdrop { position: fixed; inset: 0; z-index: 59; background: rgba(5, 36, 91, 0.28); }
+.app-shell--narrow .app-shell__header { padding: 8px 12px; gap: 10px; }
+.app-shell--narrow .app-shell__context { margin-left: 0; min-width: 0; flex: 1 1 auto; }
+.app-shell--narrow .app-shell__header-actions { gap: 8px; flex: 0 0 auto; }
+.app-shell--narrow .user-menu__identity,
+.app-shell--narrow .user-menu__chevron { display: none; }
+.app-shell--narrow .app-shell__brand-mark--logo { height: 28px; }
+.app-shell--narrow .app-shell__sidebar { display: none; }
+.app-shell--narrow.app-shell--drawer-open .app-shell__sidebar {
+  display: flex; position: fixed; top: 0; left: 0; bottom: 0; z-index: 60;
+  width: min(272px, 85vw); box-shadow: 4px 0 18px rgba(5, 36, 91, 0.25);
+}
+.app-shell--narrow .app-shell__content { padding: 14px; }
+@media (max-width: 480px) {
+  .app-shell--narrow .app-shell__context { display: none; }
+}
+
 /* ---------------------------------------------------------------------- */
 /* Generic page chrome (unchanged structure, re-themed)                    */
 /* ---------------------------------------------------------------------- */
