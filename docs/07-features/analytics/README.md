@@ -164,13 +164,28 @@ message is shown only when it has useful content; otherwise it is absent.
   TOTAL or AVG are never shown (D83). It resets to System on every visit and
   site change (D56).
 - 3 Phase expands each selected semantic point (still one catalogue item)
-  into phase series labelled P1–P3 (Active Power), I1–I3 (Current), V1–V3
-  (Voltage), PF1–PF3 (Power Factor), E1–E3 (Energy) and Ex1–Ex3 (Energy
-  Export), named e.g. `Main Incomer - P1` (D55, D63, D74). Each phase series
-  counts toward the 25-series limit (D70).
-- Without per-phase values the System value is shown under the normal
-  series name with no visible label; it is disclosed in Data quality
-  ("Shown as System values") (D57, D58, D63).
+  into phase series labelled P1–P3 (Power), Q1–Q3 (Reactive Power), V1–V3
+  (Voltage), V12/V23/V31 (Line to Line Voltage), I1–I3 (Current), PF1–PF3
+  (Power Factor), E1–E3 (Energy) and Ex1–Ex3 (Energy Export) (D55, D63,
+  D74). Each phase series counts toward the 25-series limit (D70).
+- **Series names** (PO naming convention, 2026-10-09; one shared rule in
+  `analyticsSeriesName.ts`):
+  - Chart legend and tooltip: `<Asset name>-<code>`. System codes are P
+    (Power), Q (Reactive Power), V (Voltage), I (Current), PF (Power Factor)
+    and F (Frequency), e.g. `Chiller 1-P`; phase series append the phase,
+    e.g. `Chiller 1-Q2`. Energy, Energy Export and Line to Line Voltage
+    have no System code and keep their name: `Chiller 1-Energy`,
+    `Chiller 1-Energy Export`, `Chiller 1-Line to Line Voltage`.
+  - Statistics and Data quality: the measurement name, with the phase code
+    for phase series: `Power`, `Reactive Power-Q1`, `Voltage-V2`,
+    `Energy-E3`.
+  - No extra context is added when two series share a name (e.g. Power for
+    two assets in Statistics); the chart colour swatch and order identify
+    them. A data point without a code reads by its label; a missing name
+    falls back to the catalogue, then to "Asset" / "Data point".
+- Without per-phase values the System value is shown under the System
+  series name; it is disclosed in Data quality ("Shown as System values")
+  (D57, D58, D63).
 
 ### Date and time range
 
@@ -367,11 +382,10 @@ message is shown only when it has useful content; otherwise it is absent.
    A phase series is that phase's own measurement: phase values are never
    presented as adding up to the System value (Current `TOTAL` and the voltage
    `AVG` points are averages; phase Energy comes from separate registers and
-   a different tier). The customer never sees qualifiers: System is shown as
-   the normal series name and phases as P1–P3, I1–I3, V1–V3, V12/V23/V31,
-   PF1–PF3, E1–E3, Ex1–Ex3 (D63, D74, D83; see User experience). Reactive
-   Power has no agreed phase prefix yet (D63): its phases read "Reactive
-   Power 1–3".
+   a different tier). The customer never sees qualifiers: series are named
+   by the naming convention in User experience (P, Q, V, I, PF, F; phases
+   P1–P3, Q1–Q3, V1–V3, V12/V23/V31, I1–I3, PF1–PF3, E1–E3, Ex1–Ex3; D63,
+   D74, D83).
 6. **Limits.** ≤ 5 distinct data points, ≤ 10 distinct assets, ≤ 25 series
    after phase expansion, enforced by the server [PO].
 7. **Time basis.** Transport is UTC; presentation is site-local
@@ -815,8 +829,11 @@ bottom, D72); the time-of-day refinement's granularity (any minute, D60).
 
 1. *(Answered 2026-10-09: the B3 registry above; apparent and reactive
    energy/power other than Reactive Power, THD and phase angle stay out.)*
-   Open: a phase prefix for Reactive Power (e.g. Q1–Q3) and confirmation of
-   V12/V23/V31 for line-to-line voltage (D63).
+   Reactive Power phases are Q1–Q3 (answered 2026-10-09). Open: the
+   line-to-line labels V12/V23/V31 follow the existing source mapping
+   (Eniscope `U`/`U1`/`U2`/`U3` → line-to-line average / L12 / L23 / L31,
+   baseline field mapping); that mapping is unverified against the meter
+   documentation, and Line to Line Voltage has no agreed System code.
 2. **CSV quality context.** Whether the wide CSV carries any coverage or
    quality information (EMS-REQ-137, ADR-014).
 3. **Smaller open items:** "Export Energy" in the Power list (D67) versus
@@ -830,7 +847,7 @@ bottom, D72); the time-of-day refinement's granularity (any minute, D60).
 - B0: `app/tests/test_site_timezone_immutable_with_telemetry.py`, `app/tests/test_database_error_messages.py`.
 - B1: `app/tests/test_analytics_catalog_read.py` (database read: lifecycle, effective-dating, parity-bridge classification, semantic-only, tenant isolation) and `app/tests/test_analytics_api_v1_analytics_catalog_routes.py` (route contract, registry filtering, no `attribution_basis` exposure).
 - Energy read (migration 279): `app/tests/test_asset_energy_tier_read.py` (30) — tiers, checkpoint composition, DST, source boundaries, reconstruction, retention, unmapped organization, tenant isolation, exact parity with the canonical read. Staging parity gate PT-1–PT-11 (2026-09-27, read-only): zero mismatches over 112,806 15-minute buckets, 56,510 30-minute buckets, 28,387 hours, 1,448 days, 211,817 minutes and 318 fingerprints (details in the platform-manual change history).
-- B3 (migration 292): `app/tests/test_analytics_point_series_read.py` (database: function security, retention floors, unit conversion incl. device override / offset / negative scale, raw 1m with rejected samples, IST 30m / 1h / 1d composition with exact means, assignment edges read from raw samples, interval counts / data state / quality, NOT_ASSIGNED and no data, per-phase Energy deltas in kWh with evidence and no 1m, retention-floor and capture reasons, series order and unservable selections, tenancy, availability bounds); route and catalogue tests updated for the registry, phases and the series plan; web tests for series names (V12/V23/V31, the Reactive Power fallback), Frequently Used "Power", measurement lines beside Energy bars, measurement Data quality and series counting.
+- B3 (migration 292): `app/tests/test_analytics_point_series_read.py` (database: function security, retention floors, unit conversion incl. device override / offset / negative scale, raw 1m with rejected samples, IST 30m / 1h / 1d composition with exact means, assignment edges read from raw samples, interval counts / data state / quality, NOT_ASSIGNED and no data, per-phase Energy deltas in kWh with evidence and no 1m, retention-floor and capture reasons, series order and unservable selections, tenancy, availability bounds); route and catalogue tests updated for the registry, phases and the series plan; web tests for series names (`analyticsSeriesName.test.ts`: chart, Statistics and Data quality names for every data point, System and 3 Phase, V12/V23/V31, fallbacks), Frequently Used "Power", measurement lines beside Energy bars, measurement Data quality and series counting.
 - B1b/280: `app/tests/test_analytics_energy_availability_read.py` (278's function dropped; availability and floors contracts; floors equal the live retention policies; availability from the daily start to the raw tail, beyond raw retention, binding start, parity-bridge rows unchanged).
 - B2/280: `app/tests/test_analytics_api_v1_analytics_series_routes.py` (validation, limits, statuses, Energy mapping, summary, retention floors) and `app/tests/test_analytics_api_v1_analytics_e2e.py` (HTTP to database with no data-layer mocking and **no Grafana mapping**: catalogue, every resolution agreeing on totals, UTC hour grid, IST days, 1m beyond raw retention `RESOLUTION_UNAVAILABLE`, tenant isolation).
 - Full backend suite passed locally (1798 tests, 2026-09-27). Migration 280 deployed to staging 2026-09-27.

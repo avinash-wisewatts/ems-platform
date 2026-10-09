@@ -1,23 +1,44 @@
 /**
- * Customer-facing series names, shared by the chart legend and tooltip, the
- * Statistics table and Data quality so one series reads the same everywhere.
+ * Customer-facing series names (PO naming convention, 2026-10-09), shared by
+ * the chart, the Statistics table and Data quality so one series is named by
+ * the same rule everywhere:
  *
- * Qualifiers are never shown (D83): System is the plain series name, phase
- * series are P1-P3, E1-E3, Ex1-Ex3 etc. (D55, D63, D74) and line-to-line
- * voltages V12, V23, V31. A data point without an agreed phase prefix
- * (Reactive Power, D63 open) reads "Asset · Reactive Power 1". Registry codes are
- * never shown either: a missing label falls back to the catalogue's label,
- * then to a generic word.
+ * - Chart legend and tooltip: "<Asset name>-<code>" -- System Chiller 1-P,
+ *   Chiller 1-Q, Chiller 1-V, Chiller 1-I, Chiller 1-PF, Chiller 1-F; 3 Phase
+ *   Chiller 1-P1 ... Chiller 1-PF3.
+ * - Statistics and Data quality: "<Measurement name>-<code><phase>" -- System
+ *   series have no suffix (Power), phase series Power-P1, Reactive Power-Q2.
+ * - Energy and Energy Export keep their readable names: Chiller 1-Energy,
+ *   Chiller 1-Energy Export; phases E1-E3 and Ex1-Ex3 (D55).
+ * - Line to Line Voltage phases are V12/V23/V31, taken from the existing
+ *   source mapping (Eniscope U1/U2/U3 -> L12/L23/L31), which is still to be
+ *   verified (README open question). Its System series has no agreed code
+ *   and reads by name: Chiller 1-Line to Line Voltage.
+ *
+ * Qualifiers and registry codes are never shown (D83): a data point without
+ * a code reads by its label, a missing label falls back to the catalogue's
+ * label, then to a generic word.
  */
 import type { AnalyticsCatalogResponse, AnalyticsDataPointCode, AnalyticsSeries } from "../../api/types";
 
-/** Phase series labels (D55, D63, D74): P1-P3, I1-I3, V1-V3, PF1-PF3,
- *  E1-E3, Ex1-Ex3; line-to-line voltage V12, V23, V31. */
-const PHASE_PREFIX: Readonly<Record<string, string>> = {
+/** System series codes (chart only). Energy, Energy Export and Line to Line
+ *  Voltage have none and use their name. */
+const SYSTEM_CODE: Readonly<Record<string, string>> = {
   ACTIVE_POWER: "P",
+  REACTIVE_POWER: "Q",
+  VOLTAGE_LINE_NEUTRAL: "V",
   CURRENT: "I",
+  POWER_FACTOR: "PF",
+  FREQUENCY: "F",
+};
+/** Phase series codes: P1-P3, Q1-Q3, V1-V3, I1-I3, PF1-PF3, E1-E3, Ex1-Ex3,
+ *  line-to-line V12/V23/V31. */
+const PHASE_CODE: Readonly<Record<string, string>> = {
+  ACTIVE_POWER: "P",
+  REACTIVE_POWER: "Q",
   VOLTAGE_LINE_NEUTRAL: "V",
   VOLTAGE_LINE_LINE: "V",
+  CURRENT: "I",
   POWER_FACTOR: "PF",
   ENERGY_IMPORT: "E",
   ENERGY_EXPORT: "Ex",
@@ -31,6 +52,7 @@ const PHASE_NUMBER: Readonly<Record<string, string>> = {
   L31: "31",
 };
 
+const SEPARATOR = "-";
 const FALLBACK_ASSET = "Asset";
 const FALLBACK_DATA_POINT = "Data point";
 
@@ -51,27 +73,37 @@ export function catalogDataPointLabel(
   return null;
 }
 
-/** "Asset · Data point" for a selection, without a series behind it. */
-export function selectionName(
-  catalog: AnalyticsCatalogResponse | null | undefined,
-  assetId: string,
-  dataPoint: AnalyticsDataPointCode,
-): string {
-  const asset = catalogAssetName(catalog, assetId) ?? FALLBACK_ASSET;
-  return `${asset} · ${catalogDataPointLabel(catalog, dataPoint) ?? FALLBACK_DATA_POINT}`;
+/** "P1", "V12"; a data point without a phase code reads "<label> 1". */
+function phaseSuffix(dataPoint: string, phase: string, label: string): string {
+  const code = PHASE_CODE[dataPoint];
+  return code ? `${code}${phase}` : `${label} ${phase}`;
 }
 
-/** Legend / tooltip / table name: "Asset · Data point" for System, "Asset - P1"
- *  for a phase series. */
-export function seriesName(s: AnalyticsSeries, catalog?: AnalyticsCatalogResponse | null): string {
+/** Statistics / Data quality name of a selection without a series behind it
+ *  (the System measurement name). */
+export function selectionName(
+  catalog: AnalyticsCatalogResponse | null | undefined,
+  dataPoint: AnalyticsDataPointCode,
+): string {
+  return catalogDataPointLabel(catalog, dataPoint) ?? FALLBACK_DATA_POINT;
+}
+
+/** Chart legend and tooltip name: "Chiller 1-P", "Chiller 1-P1",
+ *  "Chiller 1-Energy". */
+export function chartSeriesName(s: AnalyticsSeries, catalog?: AnalyticsCatalogResponse | null): string {
   const asset = s.asset_name ?? catalogAssetName(catalog, s.asset_id) ?? FALLBACK_ASSET;
   const label = s.label ?? catalogDataPointLabel(catalog, s.data_point) ?? FALLBACK_DATA_POINT;
   const phase = PHASE_NUMBER[s.qualifier];
-  if (phase) {
-    const prefix = PHASE_PREFIX[s.data_point];
-    return prefix ? `${asset} - ${prefix}${phase}` : `${asset} · ${label} ${phase}`;
-  }
-  return `${asset} · ${label}`;
+  const suffix = phase ? phaseSuffix(s.data_point, phase, label) : (SYSTEM_CODE[s.data_point] ?? label);
+  return `${asset}${SEPARATOR}${suffix}`;
+}
+
+/** Statistics and Data quality name: "Power", "Power-P1", "Energy-E2". */
+export function seriesName(s: AnalyticsSeries, catalog?: AnalyticsCatalogResponse | null): string {
+  const label = s.label ?? catalogDataPointLabel(catalog, s.data_point) ?? FALLBACK_DATA_POINT;
+  const phase = PHASE_NUMBER[s.qualifier];
+  if (!phase) return label;
+  return PHASE_CODE[s.data_point] ? `${label}${SEPARATOR}${phaseSuffix(s.data_point, phase, label)}` : `${label} ${phase}`;
 }
 
 /** Energy is the summed data point (business rule 10): it has a Total and

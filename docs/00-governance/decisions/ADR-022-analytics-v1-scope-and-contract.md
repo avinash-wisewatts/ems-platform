@@ -461,10 +461,15 @@ environmental points stay out of the registry.
    `GAP`) with interval counts at the site capture interval; `stale` is null
    for measurements and per-phase Energy; `summary.total` is null for
    measurements.
-6. Customer names: P/I/V/PF/E/Ex phase prefixes as D55/D63/D74; V12/V23/V31
-   for line-to-line voltage; Reactive Power phases read "Reactive Power 1–3"
-   until D63 gives it a prefix. Power is in Frequently Used.
+6. Customer names (PO naming convention, 2026-10-09): chart legend and
+   tooltip `<Asset name>-<code>` (System P, Q, V, I, PF, F; phases P1–P3,
+   Q1–Q3, V1–V3, I1–I3, PF1–PF3, E1–E3, Ex1–Ex3, line-to-line V12/V23/V31;
+   Energy, Energy Export and Line to Line Voltage System keep their name);
+   Statistics and Data quality use the measurement name plus the phase code
+   (`Power`, `Reactive Power-Q1`). No clash-dependent naming. Power is in
+   Frequently Used.
 
-**Open (Product Owner):** a Reactive Power phase prefix; confirmation of
-V12/V23/V31.
+**Open (Product Owner):** verification of the line-to-line source mapping
+(Eniscope `U1`/`U2`/`U3` → L12/L23/L31, shown as V12/V23/V31) and a System
+code for Line to Line Voltage.
 

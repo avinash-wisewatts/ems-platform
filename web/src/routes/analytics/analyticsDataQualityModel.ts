@@ -290,7 +290,7 @@ function notShownEntries(
     if (unavailable.has(pairKey)) {
       entries.push({
         key: `unavailable:${pairKey}`,
-        name: selectionName(catalog, pair.assetId, pair.dataPoint),
+        name: selectionName(catalog, pair.dataPoint),
         lines: [DQ_TEXT.reasonNotAvailable],
       });
       continue;

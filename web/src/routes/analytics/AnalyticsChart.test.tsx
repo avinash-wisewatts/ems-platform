@@ -72,7 +72,7 @@ describe("AnalyticsChart -- the chart card (F5)", () => {
     render(<AnalyticsChart applied={applied} catalog={catalogFixture()} timeZone="Asia/Kolkata" width={800} />);
     expect(screen.getByTestId("analytics-chart-title")).toHaveTextContent("3 assets, 05 Oct 2026 – 15 minutes, System");
     const legend = within(screen.getByTestId("chart-legend")).getAllByRole("listitem").map((i) => i.textContent);
-    expect(legend).toEqual(["Asset a1 · Energy", "Asset a3 · Energy"]);
+    expect(legend).toEqual(["Asset a1-Energy", "Asset a3-Energy"]);
     expect(document.querySelectorAll(".chart-frame__bar-series")).toHaveLength(2);
   });
 
@@ -135,7 +135,7 @@ describe("Analytics page -- the chart after Update", () => {
     await waitFor(() => expect(screen.getByTestId("analytics-chart")).toBeInTheDocument());
     expect(screen.queryByTestId("analytics-empty-state")).not.toBeInTheDocument();
     expect(screen.getByTestId("analytics-chart-title")).toHaveTextContent(/^Asset a1, .+ – 15 minutes, System$/);
-    expect(within(screen.getByTestId("chart-legend")).getByText("Asset a1 · Energy")).toBeInTheDocument();
+    expect(within(screen.getByTestId("chart-legend")).getByText("Asset a1-Energy")).toBeInTheDocument();
     const firstChart = screen.getByTestId("multi-series-chart");
 
     // Change the draft and Update again: a new chart instance (zoom reset).

@@ -19,7 +19,7 @@ import { formatSiteLocalDateTime } from "../../time/siteLocalTicks";
 import { formatDateKey } from "./AnalyticsDateRange";
 import { bucketQualityNotes } from "./analyticsDataQualityModel";
 import { RESOLUTION_OPTIONS, type AnalyticsDraft } from "./analyticsQuery";
-import { seriesName } from "./analyticsSeriesName";
+import { chartSeriesName } from "./analyticsSeriesName";
 import type { AppliedQuery } from "./useAnalyticsState";
 
 export type AnalyticsChartModel = {
@@ -28,7 +28,7 @@ export type AnalyticsChartModel = {
   range: { from: number; to: number };
 };
 
-export { seriesName } from "./analyticsSeriesName";
+export { chartSeriesName, seriesName } from "./analyticsSeriesName";
 
 /** The applied response as chart buckets and series (OK series only), each
  *  bucket carrying its Data quality lines for the tooltip (D22, DQ9). */
@@ -48,7 +48,7 @@ export function buildChartModel(
     const byStart = new Map(s.points.map((p) => [Date.parse(p.bucket_start), p]));
     return {
       key: `${s.asset_id}:${s.data_point}:${s.qualifier}`,
-      name: seriesName(s, catalog),
+      name: chartSeriesName(s, catalog),
       unit: s.unit,
       kind: s.chart_kind,
       values: buckets.map((b) => byStart.get(b.start)?.value ?? null),
