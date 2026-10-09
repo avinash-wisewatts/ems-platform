@@ -378,7 +378,8 @@ message is shown only when it has useful content; otherwise it is absent.
    -- it is the day's attributed 15-minute rows summed [IMPL, migration 279].
 10. **Aggregation.** Energy: kWh consumed per bucket (register delta from the
     persisted Energy tiers, ADR-020 semantics preserved); series Total is the
-    sum of buckets. Other data points: bucket value is the exact mean
+    sum of buckets with a value, the in-progress bucket included; Average,
+    Minimum and Maximum use completed buckets only (API contract, `summary`). Other data points: bucket value is the exact mean
     (Σ sum ÷ Σ sample count over `GOOD` samples), with the bucket's minimum and
     maximum sample.
 11. **Data quality evidence** [IMPL, migration 282; [ADR-022 Amendment 4](../../00-governance/decisions/ADR-022-analytics-v1-scope-and-contract.md#amendment-4-2026-09-29-data-quality-read-contract-migration-282)].
@@ -524,9 +525,19 @@ Query: `from`, `to` (ISO-8601 UTC, half-open), `resolution`
   `too_many_series`, `invalid_resolution`, `invalid_phase`,
   `invalid_time_range`, `time_range_too_large`. The whole request is
   validated before any access check or read.
-- Energy `min`/`max` per bucket are `null` (a bucket is a sum); series
-  `summary.min`/`max` are the smallest and largest bucket values;
-  `summary.average` is the mean of buckets with a value.
+- Energy `min`/`max` per bucket are `null` (a bucket is a sum).
+- Series `summary` ([ADR-022 Amendment 7](../../00-governance/decisions/ADR-022-analytics-v1-scope-and-contract.md#amendment-7-2026-10-09-statistics-semantics-and-f6-presentation-decisions)):
+  - `total`: the sum of every bucket with a value in the applied range,
+    **including the in-progress bucket** -- the Energy recorded so far.
+    Future buckets have no value and add nothing.
+  - `average`, `min` / `min_at`, `max` / `max_at`: over **completed buckets
+    only** (`bucket_state = COMPLETE`) that have a value; `average` is their
+    mean, `min` / `max` the smallest and largest of them (ties: the earliest),
+    `min_at` / `max_at` their `bucket_start`. All four are null when no
+    completed bucket has a value (e.g. only the first, in-progress period of
+    Today), while `total` is still returned.
+  - *(Superseded 2026-10-09: average, min and max over every bucket with a
+    value, the in-progress bucket included.)*
 - All timestamps are UTC (ADR-019), independent of the database session
   timezone.
 

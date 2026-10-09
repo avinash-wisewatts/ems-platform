@@ -832,17 +832,25 @@ def _energy_series(
             summary=AnalyticsSeriesSummary(),
         )
 
+    # Total: every period with a value in the range, the in-progress period
+    # included -- the Energy recorded so far. Average / min / max: completed
+    # periods only, so a period still filling up is never reported as the
+    # minimum or pulls the average down (Product Owner, 2026-10-09). With no
+    # completed period they are null.
     total = sum(p.value for p in valued)
-    lowest = min(valued, key=lambda p: (p.value, p.bucket_start))
-    highest = max(valued, key=lambda p: (p.value, -p.bucket_start.timestamp()))
-    summary = AnalyticsSeriesSummary(
-        total=total,
-        average=total / len(valued),
-        min=lowest.value,
-        min_at=lowest.bucket_start,
-        max=highest.value,
-        max_at=highest.bucket_start,
-    )
+    summary = AnalyticsSeriesSummary(total=total)
+    complete = [p for p in valued if p.bucket_state == "COMPLETE"]
+    if complete:
+        lowest = min(complete, key=lambda p: (p.value, p.bucket_start))
+        highest = max(complete, key=lambda p: (p.value, -p.bucket_start.timestamp()))
+        summary = AnalyticsSeriesSummary(
+            total=total,
+            average=sum(p.value for p in complete) / len(complete),
+            min=lowest.value,
+            min_at=lowest.bucket_start,
+            max=highest.value,
+            max_at=highest.bucket_start,
+        )
     return AnalyticsSeries(**base, **series_fields, status=STATUS_OK, points=points, summary=summary)
 
 
