@@ -14,6 +14,15 @@ import { buildStatistics } from "./analyticsStatisticsModel";
 
 const NOT_AVAILABLE = "—";
 
+/** The summary's basis (ADR-022 Amendment 7, wording approved 2026-10-09):
+ *  the API computes Average / Minimum / Maximum over completed periods and
+ *  Total over every period with a value, the in-progress one included. The
+ *  Total sentence is shown only when the Total column is. */
+export const STATISTICS_NOTE = {
+  completedOnly: "Average, Minimum and Maximum use completed periods only.",
+  totalIncludesCurrent: "Total includes the current, in-progress period.",
+} as const;
+
 function valueText(value: number | null | undefined, unit: string | null): string {
   if (value == null) return NOT_AVAILABLE;
   return unit ? `${formatValue(value)} ${unit}` : formatValue(value);
@@ -94,6 +103,10 @@ export function AnalyticsStatistics({
           </tbody>
         </table>
       </div>
+      <p className="analytics-stats__basis" data-testid="analytics-statistics-basis">
+        {STATISTICS_NOTE.completedOnly}
+        {showTotal ? ` ${STATISTICS_NOTE.totalIncludesCurrent}` : null}
+      </p>
     </section>
   );
 }

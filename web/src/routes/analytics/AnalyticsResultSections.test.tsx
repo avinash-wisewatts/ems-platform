@@ -63,6 +63,15 @@ describe("Statistics (F6)", () => {
     render(<AnalyticsStatistics response={seriesResponseFixture({ series: [power] })} catalog={catalog} timeZone={TZ} />);
     expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Series", "Average", "Minimum", "Maximum"]);
     expect(screen.getByTestId("analytics-statistics-row")).toHaveTextContent("12.40 kW");
+    // The note's Total sentence goes with the Total column.
+    expect(screen.getByTestId("analytics-statistics-basis")).toHaveTextContent(/^Average, Minimum and Maximum use completed periods only\.$/);
+  });
+
+  it("states the basis of the figures under the table (Amendment 7, approved wording)", () => {
+    render(<AnalyticsStatistics response={seriesResponseFixture({ series: [seriesFixture("a1", [1], { summary })] })} catalog={catalog} timeZone={TZ} />);
+    expect(screen.getByTestId("analytics-statistics-basis")).toHaveTextContent(
+      /^Average, Minimum and Maximum use completed periods only\. Total includes the current, in-progress period\.$/,
+    );
   });
 
   it("absent when nothing is charted", () => {

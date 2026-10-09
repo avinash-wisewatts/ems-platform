@@ -248,6 +248,9 @@ message is shown only when it has useful content; otherwise it is absent.
 - A Minimum or Maximum whose period the API marks as following missing
   readings carries "Includes Energy used while readings were missing"
   (Amendment 7; from the API's evidence only, never from the value's size).
+- Under the table, the approved note (2026-10-09): "Average, Minimum and
+  Maximum use completed periods only. Total includes the current, in-progress
+  period." The second sentence is shown only with the Total column.
 - Two decimal places in this release (Amendment 7).
 
 ### Data quality
@@ -596,7 +599,7 @@ the Asset View only ([ADR-022 amendment](../../00-governance/decisions/ADR-022-a
 | F3 | Page at `/features/analytics`, draft/applied state, Update, validation, loading and error behaviour | Merged to staging (PR #98, `feb7aec`) |
 | F4 | Filter panel (Assets, Data points, Resolution, Phase type, Comparison placeholder) and the date/time range | Merged to staging (PR #100, `ffe3dcc`); assignment periods in the selector added by PR #105 (migration 288) |
 | F5 | Chart card: multi-series chart, drag-to-zoom, range slider, Collapse / Expand | Merged to staging (PR #101, `6b9a805`) |
-| F6 | Statistics table, Data quality section (seven groups), per-period Data quality lines in the chart tooltip; ADR-022 Amendment 7 presentation decisions | Implemented, in review (PR #112, not merged); depends on PR #113 (series `summary` over completed periods) for the Statistics semantics; see "Frontend implementation notes (F6)" |
+| F6 | Statistics table, Data quality section (seven groups), per-period Data quality lines in the chart tooltip; ADR-022 Amendment 7 presentation decisions | Implemented, in review (PR #112); its Statistics semantics come from PR #113 (series `summary` over completed periods, merged to staging as `1632c64`); see "Frontend implementation notes (F6)" |
 | F7 | CSV export (wide format, local + UTC timestamps, full applied range) and the toolbar's **Export CSV** | Planned |
 | F8 | Verification of the finished page against staging data through the SSH tunnel | In progress; see "Staging verification (F8)" |
 
@@ -763,10 +766,9 @@ bottom, D72); the time-of-day refinement's granularity (any minute, D60).
 
 Not released to production. Staging (verified 2026-10-09 read-only: image
 `34c0988`; `admin.schema_migrations` lists 275–291 as applied) has the
-Analytics backend and the page through F5 (filters, date range, chart). In
-review, not merged: PR #113 (series `summary` over completed periods) and
-PR #112 (F6: Statistics, Data quality, tooltip quality lines), to be merged in
-that order. Still open on the frontend: F7 (CSV export) and F8
+Analytics backend and the page through F5 (filters, date range, chart). PR #113
+(series `summary` over completed periods) is merged to staging as `1632c64`;
+PR #112 (F6: Statistics, Data quality, tooltip quality lines) follows it. Still open on the frontend: F7 (CSV export) and F8
 (verification against staging data through the tunnel). Backend dependencies
 still open: B3 (non-Energy series; until then the catalogue is Energy-only and
 3 Phase has no per-phase data) and B4 (the daily persisted tier, required
