@@ -42,6 +42,12 @@ export function formatSiteLocalDateTime(t: number, timeZone: string | null | und
   return `${part("hour")}:${part("minute")} · ${part("day")} ${part("month")} ${part("year")}`;
 }
 
+/** "DD Mon YYYY" in the site timezone (UTC when unknown) -- for periods that
+ *  are whole site-local days, where a time of day says nothing. */
+export function formatSiteLocalDate(t: number, timeZone: string | null | undefined): string {
+  return formatSiteLocalDateTime(t, timeZone).split(" · ")[1]!;
+}
+
 function minuteTicks(from: number, to: number, step: number, timeZone: string | null | undefined): TimeTick[] {
   const ticks: TimeTick[] = [];
   const seen = new Set<number>();

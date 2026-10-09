@@ -5,7 +5,8 @@ import {
   bucketQualityNotes,
   buildDataQuality,
   formatDuration,
-  notShownReason,
+  groupByReason,
+  notShownReasons,
   periodRange,
   type DataQualityInput,
 } from "./analyticsDataQualityModel";
@@ -50,14 +51,28 @@ describe("periodRange -- site-local, first and last affected period", () => {
   it("one period", () => {
     expect(periodRange([pointFixture(0, 1)], TZ)).toBe("00:00 · 05 Oct 2026 · 1 period");
   });
-  it("several periods", () => {
-    expect(periodRange([pointFixture(1, 1), pointFixture(4, 1), pointFixture(9, 1)], TZ)).toBe(
-      "00:15 · 05 Oct 2026 – 02:15 · 05 Oct 2026 · 3 periods",
+  it("several periods without a break", () => {
+    expect(periodRange([pointFixture(1, 1), pointFixture(2, 1), pointFixture(3, 1)], TZ)).toBe(
+      "00:15 · 05 Oct 2026 – 00:45 · 05 Oct 2026 · 3 periods",
     );
+  });
+  it("periods with unaffected periods between them never read as continuous (Amendment 7)", () => {
+    expect(periodRange([pointFixture(1, 1), pointFixture(4, 1), pointFixture(9, 1)], TZ)).toBe(
+      "3 periods between 00:15 · 05 Oct 2026 and 02:15 · 05 Oct 2026",
+    );
+  });
+  it("daily periods show dates without a time (Amendment 7)", () => {
+    const day = (i: number) =>
+      pointFixture(0, 1, {
+        bucket_start: new Date(Date.parse(SERIES_FROM) + i * 86_400_000).toISOString(),
+        bucket_end: new Date(Date.parse(SERIES_FROM) + (i + 1) * 86_400_000).toISOString(),
+      });
+    expect(periodRange([day(0)], TZ, true)).toBe("05 Oct 2026 · 1 period");
+    expect(periodRange([day(0), day(1)], TZ, true)).toBe("05 Oct 2026 – 06 Oct 2026 · 2 periods");
   });
 });
 
-describe("notShownReason -- one approved line per status / reason, never a code", () => {
+describe("notShownReasons -- the approved line per status / reason, never a code", () => {
   it.each<[AnalyticsSeries["status"], AnalyticsSeries["status_reasons"], string]>([
     ["NO_DATA", ["NOT_ASSIGNED_IN_RANGE"], DQ_TEXT.reasonNotAssigned],
     ["NO_DATA", ["RANGE_IN_FUTURE"], DQ_TEXT.reasonFuture],
@@ -71,16 +86,26 @@ describe("notShownReason -- one approved line per status / reason, never a code"
     ["DATA_UNAVAILABLE", ["CAPTURE_POLICY_CHANGE"], DQ_TEXT.reasonPolicyChange],
     ["DATA_UNAVAILABLE", ["TIMEZONE_MISMATCH"], DQ_TEXT.reasonTimezone],
   ])("%s / %s", (status, reasons, line) => {
-    expect(notShownReason(notShownFixture("a1", status, reasons), TZ)).toBe(line);
+    expect(notShownReasons(notShownFixture("a1", status, reasons), TZ)).toEqual([line]);
   });
 
   it("before the retention floor names the site-local date data is available from", () => {
     const s = notShownFixture("a1", "RESOLUTION_UNAVAILABLE", ["BEFORE_RETENTION_FLOOR"], {
       resolution_available_from: "2026-06-30T18:30:00Z",
     });
-    expect(notShownReason(s, TZ)).toBe(
+    expect(notShownReasons(s, TZ)).toEqual([
       "Data is not available at this resolution for the full selected range. Data is available from 01 Jul 2026.",
-    );
+    ]);
+  });
+
+  it("several reasons: each approved line, in the table's order (Amendment 7)", () => {
+    const s = notShownFixture("a1", "DATA_UNAVAILABLE", ["TIMEZONE_MISMATCH", "CAPTURE_POLICY_GAP"]);
+    expect(notShownReasons(s, TZ)).toEqual([DQ_TEXT.reasonPolicyGap, DQ_TEXT.reasonTimezone]);
+  });
+
+  it("a retention-floor reason without its date makes no site-wide claim", () => {
+    const s = notShownFixture("a1", "RESOLUTION_UNAVAILABLE", ["BEFORE_RETENTION_FLOOR"]);
+    expect(notShownReasons(s, TZ)).toEqual([DQ_TEXT.reasonNotAvailable]);
   });
 });
 
@@ -166,13 +191,13 @@ describe("buildDataQuality -- groups", () => {
     expect(group!.explanation).toEqual([DQ_TEXT.incompleteExplanation, DQ_TEXT.incompleteEnergyExplanation]);
     expect(group!.entries[0]!.lines).toEqual([
       "Not received: 18 min · Could not be used: 2 min",
-      "00:15 · 05 Oct 2026 – 00:45 · 05 Oct 2026 · 2 periods",
+      "2 periods between 00:15 · 05 Oct 2026 and 00:45 · 05 Oct 2026",
     ]);
   });
 
   it("Incomplete: reconstructed intervals count as accounted for; unexpected intervals are not counted", () => {
     const s = seriesFixture("a1", [1, 2]);
-    s.points[0] = pointFixture(0, 1, { valid_intervals: 10, reconstructed_intervals: 5 });
+    s.points[0] = pointFixture(0, 1, { valid_intervals: 10, reconstructed_intervals: 5, evidence_flags: ["RECONSTRUCTED_TIMING"] });
     // Unassigned / before data: nothing expected.
     s.points[1] = pointFixture(1, null, { data_state: "NOT_ASSIGNED", assigned_expected_intervals: 0 });
     expect(buildDataQuality(input([s]), catalog, TZ).map((g) => g.id)).toEqual(["reconstructed"]);
@@ -183,6 +208,19 @@ describe("buildDataQuality -- groups", () => {
     s.points[0] = pointFixture(0, 1, { valid_intervals: 14 });
     const [group] = buildDataQuality(input([s]), catalog, TZ);
     expect(group!.explanation).toEqual([DQ_TEXT.incompleteExplanation]);
+  });
+
+  it("Incomplete: no duration is shown when the interval length is unknown (Amendment 7)", () => {
+    const s = seriesFixture("a1", [1]);
+    s.points[0] = pointFixture(0, 1, { valid_intervals: 10, expected_intervals: null });
+    const [group] = buildDataQuality(input([s]), catalog, TZ);
+    expect(group!.entries[0]!.lines).toEqual(["00:00 · 05 Oct 2026 · 1 period"]);
+  });
+
+  it("Reconstructed timing follows the evidence flag only (Amendment 6 mapping)", () => {
+    const s = seriesFixture("a1", [1]);
+    s.points[0] = pointFixture(0, 1, { valid_intervals: 10, reconstructed_intervals: 5 });
+    expect(buildDataQuality(input([s]), catalog, TZ)).toEqual([]);
   });
 
   it("Meter resets and rollovers: one line per event, in time order", () => {
@@ -216,6 +254,51 @@ describe("buildDataQuality -- groups", () => {
     const b = seriesFixture("a1", [1], { stale: true, last_data_at: "2026-10-05T06:00:00Z" });
     const [group] = buildDataQuality(input([a, b]), catalog, TZ);
     expect(group!.entries.map((e) => e.name)).toEqual(["Asset a2 · Energy", "Asset a1 · Energy"]);
+  });
+});
+
+describe("groupByReason -- repeated identical reasons with a count (Amendment 7)", () => {
+  it("groups by identical reason lines, first occurrence first, selections in selection order", () => {
+    const groups = buildDataQuality(
+      {
+        unavailable: [
+          { assetId: "x1", dataPoint: "ENERGY_IMPORT" },
+          { assetId: "a5", dataPoint: "SOMETHING_NEW" },
+        ],
+        order: [
+          { assetId: "a2", dataPoint: "ENERGY_IMPORT" },
+          { assetId: "x1", dataPoint: "ENERGY_IMPORT" },
+          { assetId: "a3", dataPoint: "ENERGY_IMPORT" },
+          { assetId: "a5", dataPoint: "SOMETHING_NEW" },
+          { assetId: "a4", dataPoint: "ENERGY_IMPORT" },
+        ],
+        response: seriesResponseFixture({
+          series: [
+            notShownFixture("a2", "NO_DATA", ["NO_DATA_IN_RANGE"]),
+            notShownFixture("a3", "NO_DATA", ["NOT_ASSIGNED_IN_RANGE"]),
+            notShownFixture("a4", "NO_DATA", ["RANGE_BEFORE_DATA"]),
+          ],
+        }),
+      },
+      catalog,
+      TZ,
+    );
+    const [notShown] = groups;
+    expect(notShown!.heading).toBe("Series not shown in chart · 5");
+    expect(notShown!.reasonGroups!.map((r) => [r.lines, r.entries.map((e) => e.name)])).toEqual([
+      [[DQ_TEXT.reasonNoData], ["Asset a2 · Energy", "Asset a4 · Energy"]],
+      [[DQ_TEXT.reasonNotAvailable], ["Asset x1 · Energy", "Asset a5 · Data point"]],
+      [[DQ_TEXT.reasonNotAssigned], ["Asset a3 · Energy"]],
+    ]);
+  });
+
+  it("a series with several reasons groups only with identical sets", () => {
+    const entries = [
+      { key: "1", name: "A", lines: ["x", "y"] },
+      { key: "2", name: "B", lines: ["x"] },
+      { key: "3", name: "C", lines: ["x", "y"] },
+    ];
+    expect(groupByReason(entries).map((g) => g.entries.map((e) => e.name))).toEqual([["A", "C"], ["B"]]);
   });
 });
 

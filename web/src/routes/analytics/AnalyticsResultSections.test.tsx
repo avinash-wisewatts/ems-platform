@@ -69,6 +69,26 @@ describe("Statistics (F6)", () => {
     render(<AnalyticsStatistics response={seriesResponseFixture({ series: [notShownFixture("a1", "NOT_AVAILABLE")] })} catalog={catalog} timeZone={TZ} />);
     expect(screen.queryByTestId("analytics-statistics")).not.toBeInTheDocument();
   });
+
+  it("a Maximum whose period follows missing readings carries the disclosure (Amendment 7)", () => {
+    const s = seriesFixture("a1", [3.2, 20.9], {
+      summary: { ...summary, min_at: "2026-10-04T18:30:00.000Z", max_at: "2026-10-04T18:45:00.000Z" },
+    });
+    s.points[1] = pointFixture(1, 20.9, { evidence_flags: ["GAPS_DETECTED"] });
+    render(<AnalyticsStatistics response={seriesResponseFixture({ series: [s] })} catalog={catalog} timeZone={TZ} />);
+    const [, , min, max] = within(screen.getByTestId("analytics-statistics-row")).getAllByRole("cell");
+    expect(within(max!).getByTestId("analytics-statistics-after-missing")).toHaveTextContent(DQ_TEXT.tipAfterMissing);
+    expect(within(min!).queryByTestId("analytics-statistics-after-missing")).not.toBeInTheDocument();
+  });
+
+  it("daily resolution shows Minimum / Maximum dates without 00:00 (Amendment 7)", () => {
+    const daily = seriesFixture("a1", [1], {
+      summary: { ...summary, min_at: "2026-10-04T18:30:00Z", max_at: "2026-10-05T18:30:00Z" },
+    });
+    render(<AnalyticsStatistics response={seriesResponseFixture({ resolution: "1d", series: [daily] })} catalog={catalog} timeZone={TZ} />);
+    const cells = within(screen.getByTestId("analytics-statistics-row")).getAllByRole("cell").map((c) => c.textContent);
+    expect(cells.slice(2)).toEqual(["3.20 kWh05 Oct 2026", "20.90 kWh06 Oct 2026"]);
+  });
 });
 
 describe("Data quality section (F6)", () => {
@@ -133,6 +153,32 @@ describe("Data quality section (F6)", () => {
     expect(within(notShown).getByText(DQ_TEXT.reasonNoData)).toBeInTheDocument();
   });
 
+  it("repeated identical reasons are one line with a count, expandable to the selections in selection order (Amendment 7)", async () => {
+    const a = applied([
+      notShownFixture("a3", "NO_DATA", ["NO_DATA_IN_RANGE"]),
+      notShownFixture("a1", "NO_DATA", ["RANGE_IN_FUTURE"]),
+      notShownFixture("a2", "NO_DATA", ["NO_DATA_EVER"]),
+    ]);
+    render(<AnalyticsDataQuality applied={a} catalog={catalog} timeZone={TZ} />);
+    const notShown = screen.getByTestId("analytics-dq-not-shown");
+    expect(within(notShown).getByRole("heading")).toHaveTextContent("Series not shown in chart · 3");
+    const grouped = within(notShown).getByTestId("analytics-dq-reason-group");
+    const details = grouped.querySelector("details")!;
+    expect(details.open).toBe(false);
+    const summaryLine = details.querySelector("summary")!;
+    expect(summaryLine).toHaveTextContent(DQ_TEXT.reasonNoData);
+    expect(summaryLine).toHaveTextContent("2 selections");
+    await userEvent.click(within(grouped).getByText(DQ_TEXT.reasonNoData));
+    expect(details.open).toBe(true);
+    expect(within(grouped).getAllByTestId("analytics-dq-entry").map((e) => e.textContent)).toEqual([
+      "Asset a3 · Energy",
+      "Asset a2 · Energy",
+    ]);
+    // A reason with one selection is listed directly.
+    expect(within(notShown).getByText("Asset a1 · Energy")).toBeVisible();
+    expect(within(notShown).getByText(DQ_TEXT.reasonFuture)).toBeVisible();
+  });
+
   it("3 Phase with System-only series lists them under 'Shown as System values'", () => {
     render(<AnalyticsDataQuality applied={applied([seriesFixture("a1", [1])], {}, "three_phase")} catalog={catalog} timeZone={TZ} />);
     const group = screen.getByTestId("analytics-dq-system-values");
@@ -164,6 +210,25 @@ describe("Chart tooltip -- the period's Data quality lines (D22, DQ9)", () => {
     expect(within(items[1]!).getByTestId("chart-tooltip-notes")).toHaveTextContent(DQ_TEXT.tipNoneReceived);
     expect(items[1]!.querySelector(".chart-frame__tooltip-value")).toBeNull();
     expect(within(items[2]!).queryByTestId("chart-tooltip-notes")).not.toBeInTheDocument();
+  });
+
+  it("at daily resolution the tooltip shows the date without 00:00 (Amendment 7)", () => {
+    const DAY = 86_400_000;
+    const s = seriesFixture("a1", [1, 2, 3, 4]);
+    s.points = s.points.map((p, i) => ({
+      ...p,
+      bucket_start: new Date(Date.parse(SERIES_FROM) + i * DAY).toISOString(),
+      bucket_end: new Date(Date.parse(SERIES_FROM) + (i + 1) * DAY).toISOString(),
+    }));
+    const a = applied([s]);
+    const daily: AppliedQuery = {
+      ...a,
+      range: { from: SERIES_FROM, to: new Date(Date.parse(SERIES_FROM) + 4 * DAY).toISOString() },
+      response: { ...a.response!, resolution: "1d" },
+    };
+    const { container } = render(<AnalyticsChart applied={daily} catalog={catalog} timeZone={TZ} width={800} />);
+    fireEvent.mouseMove(container.querySelector(".recharts-wrapper")!, { clientX: 400, clientY: 100, pageX: 400, pageY: 100 });
+    expect(screen.getByTestId("chart-tooltip").querySelector(".chart-frame__tooltip-time")!.textContent).toMatch(/^\d{2} Oct 2026$/);
   });
 });
 

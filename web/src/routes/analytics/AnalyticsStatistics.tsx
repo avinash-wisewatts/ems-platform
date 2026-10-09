@@ -1,13 +1,15 @@
 /**
  * Statistics (F6): one compact table below the chart, one row per charted
  * series -- Series · Total (Energy only) · Average · Minimum · Maximum, with
- * the site-local time beneath Minimum and Maximum (README "Statistics").
- * Absent when nothing is charted (general rule).
+ * the site-local time beneath Minimum and Maximum (the date only at daily
+ * resolution) and a short disclosure when that period includes Energy from
+ * missing readings (README "Statistics"; ADR-022 Amendment 7). Absent when
+ * nothing is charted (general rule).
  */
 import { useMemo } from "react";
 import type { AnalyticsCatalogResponse, AnalyticsSeriesResponse } from "../../api/types";
 import { formatValue, seriesColor } from "../../components/ChartFrame";
-import { formatSiteLocalDateTime } from "../../time/siteLocalTicks";
+import { DQ_TEXT, periodTime } from "./analyticsDataQualityModel";
 import { buildStatistics } from "./analyticsStatisticsModel";
 
 const NOT_AVAILABLE = "—";
@@ -17,11 +19,30 @@ function valueText(value: number | null | undefined, unit: string | null): strin
   return unit ? `${formatValue(value)} ${unit}` : formatValue(value);
 }
 
-function Extreme({ value, at, unit, timeZone }: { value: number | null; at: string | null; unit: string | null; timeZone: string | null | undefined }) {
+function Extreme({
+  value,
+  at,
+  afterMissing,
+  unit,
+  timeZone,
+  dateOnly,
+}: {
+  value: number | null;
+  at: string | null;
+  afterMissing: boolean;
+  unit: string | null;
+  timeZone: string | null | undefined;
+  dateOnly: boolean;
+}) {
   return (
     <>
       <span className="analytics-stats__value">{valueText(value, unit)}</span>
-      {at ? <span className="analytics-stats__time">{formatSiteLocalDateTime(Date.parse(at), timeZone)}</span> : null}
+      {at ? <span className="analytics-stats__time">{periodTime(Date.parse(at), timeZone, dateOnly)}</span> : null}
+      {afterMissing ? (
+        <span className="analytics-stats__note" data-testid="analytics-statistics-after-missing">
+          {DQ_TEXT.tipAfterMissing}
+        </span>
+      ) : null}
     </>
   );
 }
@@ -35,7 +56,7 @@ export function AnalyticsStatistics({
   catalog: AnalyticsCatalogResponse | null;
   timeZone: string | null | undefined;
 }) {
-  const { rows, showTotal } = useMemo(() => buildStatistics(response, catalog), [response, catalog]);
+  const { rows, showTotal, dateOnly } = useMemo(() => buildStatistics(response, catalog), [response, catalog]);
   if (rows.length === 0) return null;
   return (
     <section className="analytics-card analytics-stats" data-testid="analytics-statistics" aria-labelledby="analytics-stats-heading">
@@ -63,10 +84,10 @@ export function AnalyticsStatistics({
                 {showTotal ? <td>{row.total === undefined ? "" : valueText(row.total, row.unit)}</td> : null}
                 <td>{valueText(row.average, row.unit)}</td>
                 <td>
-                  <Extreme value={row.min} at={row.minAt} unit={row.unit} timeZone={timeZone} />
+                  <Extreme value={row.min} at={row.minAt} afterMissing={row.minAfterMissing} unit={row.unit} timeZone={timeZone} dateOnly={dateOnly} />
                 </td>
                 <td>
-                  <Extreme value={row.max} at={row.maxAt} unit={row.unit} timeZone={timeZone} />
+                  <Extreme value={row.max} at={row.maxAt} afterMissing={row.maxAfterMissing} unit={row.unit} timeZone={timeZone} dateOnly={dateOnly} />
                 </td>
               </tr>
             ))}

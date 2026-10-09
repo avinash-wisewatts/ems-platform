@@ -56,6 +56,7 @@ export function AnalyticsChart({
           series={model.series}
           range={model.range}
           timeZone={timeZone}
+          dateOnly={applied.response?.resolution === "1d"}
           ariaLabel={title}
           width={width}
         />

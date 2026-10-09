@@ -48,7 +48,7 @@ import {
   YAxis,
 } from "recharts";
 import type { CategoricalChartState } from "recharts/types/chart/types";
-import { formatSiteLocalDateTime, siteLocalTicks } from "../time/siteLocalTicks";
+import { formatSiteLocalDate, formatSiteLocalDateTime, siteLocalTicks } from "../time/siteLocalTicks";
 
 export type ChartPoint = {
   /** epoch milliseconds (UTC) */
@@ -278,6 +278,9 @@ export type MultiSeriesChartFrameProps = {
   range: { from: number; to: number };
   /** IANA timezone for ticks and the tooltip time (UTC when absent). */
   timeZone?: string | null;
+  /** Buckets are whole site-local days: the tooltip and range-slider labels
+   *  show the date only (no meaningless 00:00). */
+  dateOnly?: boolean;
   ariaLabel: string;
   height?: number;
   /** fixed width for tests / non-responsive contexts */
@@ -553,12 +556,14 @@ function SeriesTooltip({
   entries,
   rowsByStart,
   timeZone,
+  dateOnly,
   active,
   label,
 }: {
   entries: readonly TooltipEntry[];
   rowsByStart: ReadonlyMap<number, ChartRow>;
   timeZone?: string | null;
+  dateOnly?: boolean;
   // injected by Recharts' Tooltip
   active?: boolean;
   label?: number | string;
@@ -568,7 +573,9 @@ function SeriesTooltip({
   const values = entries.filter((e) => row[e.dataKey] != null || (e.notes.get(row.t)?.length ?? 0) > 0);
   return (
     <div className="chart-frame__tooltip" data-testid="chart-tooltip">
-      <p className="chart-frame__tooltip-time">{formatSiteLocalDateTime(row.t, timeZone)}</p>
+      <p className="chart-frame__tooltip-time">
+        {dateOnly ? formatSiteLocalDate(row.t, timeZone) : formatSiteLocalDateTime(row.t, timeZone)}
+      </p>
       {values.length > 0 ? (
         <ul className="chart-frame__tooltip-list">
           {values.map((e) => (
@@ -610,6 +617,7 @@ export function MultiSeriesChartFrame({
   series,
   range,
   timeZone,
+  dateOnly = false,
   ariaLabel,
   height = 360,
   width,
@@ -627,7 +635,10 @@ export function MultiSeriesChartFrame({
   const tickValues = useMemo(() => ticks.map((t) => t.t), [ticks]);
   const tickLabels = useMemo(() => new Map(ticks.map((t) => [t.t, t.label])), [ticks]);
   const formatTickLabel = useCallback((t: number) => tickLabels.get(t) ?? "", [tickLabels]);
-  const formatBrushLabel = useCallback((t: number) => formatSiteLocalDateTime(t, timeZone), [timeZone]);
+  const formatBrushLabel = useCallback(
+    (t: number) => (dateOnly ? formatSiteLocalDate(t, timeZone) : formatSiteLocalDateTime(t, timeZone)),
+    [timeZone, dateOnly],
+  );
 
   const bars = useMemo<BarSpec[]>(
     () =>
@@ -656,8 +667,8 @@ export function MultiSeriesChartFrame({
     [bars, rows, first, last, chartId],
   );
   const tooltipContent = useMemo(
-    () => <SeriesTooltip entries={entries} rowsByStart={rowsByStart} timeZone={timeZone} />,
-    [entries, rowsByStart, timeZone],
+    () => <SeriesTooltip entries={entries} rowsByStart={rowsByStart} timeZone={timeZone} dateOnly={dateOnly} />,
+    [entries, rowsByStart, timeZone, dateOnly],
   );
 
   const onBrushChange = useCallback(

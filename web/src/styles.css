@@ -650,6 +650,13 @@ summary.analytics-dq__heading { cursor: pointer; }
 .analytics-dq__entries { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 13px; }
 .analytics-dq__series { display: block; font-weight: 500; color: var(--text); }
 .analytics-dq__line { display: block; color: var(--muted); }
+.analytics-dq__reason > summary { cursor: pointer; }
+.analytics-dq__reason > summary .analytics-dq__line--reason { display: inline; color: var(--text); }
+.analytics-dq__reason > summary .analytics-dq__line--reason + .analytics-dq__line--reason::before { content: " "; }
+.analytics-dq__count { margin-left: 6px; color: var(--muted); }
+.analytics-dq__count::before { content: "· "; }
+.analytics-dq__names { list-style: none; margin: 4px 0 0 16px; padding: 0; display: grid; gap: 2px; color: var(--text); }
+.analytics-stats__note { display: block; color: var(--muted); font-size: 12px; font-style: italic; white-space: normal; max-width: 220px; }
 .chart-frame__tooltip-list li { flex-wrap: wrap; }
 .chart-frame__tooltip-notes { flex-basis: 100%; list-style: none; margin: 0 0 2px 16px; padding: 0; color: var(--muted); font-size: 12px; }
 

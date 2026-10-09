@@ -238,9 +238,17 @@ message is shown only when it has useful content; otherwise it is absent.
 
 - One compact table, one row per rendered series: **Series · Total (Energy
   only) · Average · Minimum · Maximum**, with Minimum and Maximum showing
-  their site-local time beneath the value (e.g. `892.4 kW` / `14:15 · 10 Sep
-  2026`). No cross-asset totals. Always the full applied range, never the
-  zoomed window (D19, D20, D21, D26).
+  their site-local time beneath the value (e.g. `892.40 kW` / `14:15 · 10 Sep
+  2026`; at daily resolution the date only). No cross-asset totals. Always the
+  full applied range, never the zoomed window (D19, D20, D21, D26).
+- Semantics ([ADR-022 Amendment 7](../../00-governance/decisions/ADR-022-analytics-v1-scope-and-contract.md#amendment-7-2026-10-09-statistics-semantics-and-f6-presentation-decisions)):
+  **Total** is the Energy recorded so far, the in-progress period included;
+  **Average, Minimum and Maximum** use completed periods only. All four come
+  from the API's series `summary`; nothing is calculated in the browser.
+- A Minimum or Maximum whose period the API marks as following missing
+  readings carries "Includes Energy used while readings were missing"
+  (Amendment 7; from the API's evidence only, never from the value's size).
+- Two decimal places in this release (Amendment 7).
 
 ### Data quality
 
@@ -577,9 +585,9 @@ the Asset View only ([ADR-022 amendment](../../00-governance/decisions/ADR-022-a
 | F3 | Page at `/features/analytics`, draft/applied state, Update, validation, loading and error behaviour | Merged to staging (PR #98, `feb7aec`) |
 | F4 | Filter panel (Assets, Data points, Resolution, Phase type, Comparison placeholder) and the date/time range | Merged to staging (PR #100, `ffe3dcc`); assignment periods in the selector added by PR #105 (migration 288) |
 | F5 | Chart card: multi-series chart, drag-to-zoom, range slider, Collapse / Expand | Merged to staging (PR #101, `6b9a805`) |
-| F6 | Statistics table, Data quality section (seven groups), per-period Data quality lines in the chart tooltip | Implemented (branch `feat/analytics-f6-statistics-quality`); see "Frontend implementation notes (F6)" |
+| F6 | Statistics table, Data quality section (seven groups), per-period Data quality lines in the chart tooltip; ADR-022 Amendment 7 presentation decisions | Implemented, in review (PR #112, not merged); depends on PR #113 (series `summary` over completed periods) for the Statistics semantics; see "Frontend implementation notes (F6)" |
 | F7 | CSV export (wide format, local + UTC timestamps, full applied range) and the toolbar's **Export CSV** | Planned |
-| F8 | Verification of the finished page against staging data through the SSH tunnel | Planned |
+| F8 | Verification of the finished page against staging data through the SSH tunnel | In progress; see "Staging verification (F8)" |
 
 ### Frontend implementation notes (F6)
 
@@ -587,45 +595,80 @@ the Asset View only ([ADR-022 amendment](../../00-governance/decisions/ADR-022-a
 `analyticsDataQualityModel.ts` / `AnalyticsDataQuality.tsx`,
 `analyticsSeriesName.ts` (one customer-facing name for a series everywhere),
 and per-bucket tooltip lines through `analyticsChartModel.ts` and
-`ChartFrame`'s optional `notes`.
+`ChartFrame`'s optional `notes` and `dateOnly`.
 
-- **Statistics** shows the API's series `summary` as returned (Total for Energy
-  only, Average, Minimum, Maximum with `min_at` / `max_at` in site-local time);
-  nothing is computed in the browser. A value the API does not return is shown
-  as "—". The Total column is shown only when an Energy series is charted
-  (general rule). Values use the charts' existing two-decimal formatting; the
-  value precision per data point is still undecided.
-- **Data quality** follows the backend mapping of ADR-022 Amendment 6. Choices
-  the specification leaves open, made here and open to Product Owner review:
+- **Statistics** shows the API's series `summary` as returned (Amendment 7
+  semantics, PR #113): nothing is computed in the browser; a value the API does
+  not return is "—"; the Total column appears only when an Energy series is
+  charted (general rule). The catch-up note is shown when the Minimum's or
+  Maximum's own period carries `GAPS_DETECTED`.
+- **Data quality** follows the Amendment 6 backend mapping and Amendment 7:
   - Incomplete: a period's missing intervals are `assigned_expected_intervals`
     − (`valid_intervals` + `reconstructed_intervals`) − `invalid_intervals`;
-    "could not be used" is `invalid_intervals`. Durations multiply the
-    intervals by the capture interval, read per period as the period width ÷
-    `expected_intervals` (the API does not return the capture interval).
+    "could not be used" is `invalid_intervals` (business rule 11). Durations
+    are the intervals × the period width ÷ `expected_intervals` (the API does
+    not return the capture interval); when that is unknown for any affected
+    period, no duration is shown -- only the period range.
   - Tooltip wording: no accepted reading and nothing rejected → "Incomplete: no
     readings received"; no accepted reading and nothing missing → "Incomplete:
     readings could not be used"; otherwise "Incomplete: some readings not
     received" / "…could not be used" / "…not received or could not be used".
-  - A period range runs from the first to the last affected period's start
-    time ("{time} – {time} · {k} periods"); the periods need not be contiguous.
+  - Period ranges: "{time} · 1 period"; "{time} – {time} · {k} periods" when the
+    affected periods run without a break; "{k} periods between {time} and
+    {time}" when unaffected periods lie between them. Times are the periods'
+    starts, the date only at daily resolution.
   - No recent data and its tooltip appear only when `stale` is `true`
     (`null`, an unverified capture path, claims nothing).
-  - A `DATA_UNAVAILABLE` series with several reasons shows one line, the first
-    of: policy gap, policy change, timezone mismatch.
-  - A selection the catalogue cannot serve (D4, never requested) is listed
-    under "Series not shown in chart" with "This selection is not available."
+  - Several reasons for one series: each approved reason line is shown. A
+    retention-floor reason without its date shows "This selection is not
+    available." rather than a site-wide claim.
+  - "Series not shown in chart": selections with identical reason line(s) are
+    one line with "{n} selections", expandable to the selections in selection
+    order; a reason with one selection lists it directly. Selections the
+    catalogue cannot serve (D4, never requested) are included.
+  - Reconstructed timing follows the `RECONSTRUCTED_TIMING` flag only.
   - Names fall back to the catalogue when the API returns no asset name or
     label, then to "Asset" / "Data point"; registry codes are never shown.
 - **Tooltip**: each series' lines for the hovered period, in group order; a
-  series with lines but no value (e.g. a period without readings) is listed
-  without a value.
+  series with lines but no value is listed without a value. At daily
+  resolution the tooltip and range-slider labels show the date only.
 - Statistics and Data quality describe the applied query only: hidden until the
   first successful Update, kept while loading and after a failed Update, and
   rebuilt (expansion reset) on each successful Update.
-- Not exercised against real data yet: meter resets / rollovers have no
-  API-level test (Amendment 6), and reconstructed timing stays inactive while
-  reconstruction is OFF. Partial failure ("Some data could not be loaded…",
-  D51) cannot occur while the series endpoint is all-or-nothing.
+- Partial failure ("Some data could not be loaded…", D51) cannot occur while
+  the series endpoint is all-or-nothing.
+
+### Staging verification (F8)
+
+Method: the F6 branch on the local Vite dev server, `/api` proxied through an
+SSH tunnel to the staging EMS backend (staging image `34c0988`), plus
+SELECT-only SQL on staging in a read-only session to find the data each
+scenario needs. Status values: **Verified**, **Unverified** (cannot be
+exercised with current staging data), **Pending** (not yet run).
+
+Staging data available (2026-10-09, persisted 15-minute Energy tier, last 90
+days): 176,138 periods; 5,105 with missing readings on 54 devices (e.g. site
+Unit 2: P1-Heater-01, EN-AirCompressor-01); 783 with rejected readings;
+**0** meter resets, **0** rollovers, **0** reconstructed periods. Assignment
+windows: e.g. Coimbatore / Banquet 2 AHU assigned from 05 Oct 2026 21:04.
+
+| # | Scenario | Status |
+|---|---|---|
+| 1 | Statistics: Total, Average, Minimum, Maximum and their times against the chart | Pending |
+| 2 | Statistics exclude the in-progress period from Average / Minimum / Maximum | Unverified until PR #113 is deployed to staging (staging still serves the previous summary) |
+| 3 | Incomplete data: durations, period range, tooltip lines (Unit 2 assets) | Pending |
+| 4 | Values after missing readings and the Statistics catch-up note | Pending |
+| 5 | Assignment window: range before the assignment gives "not assigned" | Pending |
+| 6 | 3 Phase: every Energy series under "Shown as System values" | Pending |
+| 7 | Failed Update keeps the previous chart, Statistics and Data quality | Pending |
+| 8 | Narrow screen: filter drawer, Statistics table scroll, Data quality readable | Pending |
+| 9 | Daily resolution: dates without 00:00 | Pending |
+| 10 | Meter resets and rollovers | **Unverified** -- none in staging data; no API-level test either (Amendment 6) |
+| 11 | Reconstructed timing | **Unverified** -- reconstruction is OFF (ADR-020) |
+| 12 | No recent data (stale) | Depends on a device being late at test time |
+| 13 | Unknown freshness (`stale` null, 900 s capture) | **Unverified** -- no such site on staging |
+| 14 | Retention-floor reason with its date | Depends on a floor inside the selectable range |
+| 15 | Non-Energy data points, real per-phase series | **Unverified** -- backend B3 not implemented |
 
 ## Pilot status
 
@@ -684,25 +727,35 @@ bottom, D72); the time-of-day refinement's granularity (any minute, D60).
 
 - 285: new `app/tests/test_energy_direction_status_inlining.py` (5: helper attributes and grants, body byte-identical to 279; inlining shown by `EXPLAIN`; all 4,096 counter combinations including NULL; series parity against a non-inlinable reference over the 284 randomised scenarios and a GOOD / INVALID / RESET / GAPS / ROLLOVER scenario, mutation-checked). Full backend suite 1848 passed locally (2026-09-29).
 
-- F6 (frontend): `analyticsDataQualityModel.test.ts` (durations, period
-  ranges, every "Series not shown" reason, all seven groups in order with no
+- Series summary (Amendment 7, PR #113): `test_analytics_api_v1_analytics_series_routes.py`
+  (average / min / max over completed periods with in-progress and future
+  buckets present; a series with only an in-progress value keeps its Total).
+- F6 (frontend): `analyticsDataQualityModel.test.ts` (durations and unknown
+  durations, continuous and non-continuous period ranges, daily dates, every
+  "Series not shown" reason and several reasons at once, reason grouping, all
+  seven groups in order with no
   internal codes in customer text, selection order including unserved
   selections, catalogue name fallback, incomplete counts and durations,
   Energy-only wording, resets/rollovers, stale only when `true`, System values
   only under 3 Phase, tooltip lines for every condition in group order);
   `analyticsStatisticsModel.test.ts` (rows in chart order, Energy-only Total,
-  values never computed); `AnalyticsResultSections.test.tsx` (Statistics with
-  site-local Min/Max times, Data quality expansion rules, a no-data series
-  explained while left out of the chart, tooltip lines, and the page flow:
+  values never computed, catch-up only from the API's evidence, daily flag);
+  `AnalyticsResultSections.test.tsx` (Statistics with site-local Min/Max
+  times, daily dates and the catch-up note, Data quality expansion rules,
+  grouped reasons with a count, a no-data series
+  explained while left out of the chart, tooltip lines and daily tooltip
+  dates, and the page flow:
   hidden before Update, unchanged by draft edits, kept while loading and after
   a failure, replaced on the next Update, absent after a failed first Update).
 
 ## Release status
 
-Not released to production. The backend (migrations 275–288) is deployed to
-staging. The Analytics page is on staging through F5 (filters, date range,
-chart); F6 (Statistics, Data quality, tooltip quality lines) is implemented
-and awaiting review. Still open on the frontend: F7 (CSV export) and F8
+Not released to production. Staging (verified 2026-10-09 read-only: image
+`34c0988`; `admin.schema_migrations` lists 275–291 as applied) has the
+Analytics backend and the page through F5 (filters, date range, chart). In
+review, not merged: PR #113 (series `summary` over completed periods) and
+PR #112 (F6: Statistics, Data quality, tooltip quality lines), to be merged in
+that order. Still open on the frontend: F7 (CSV export) and F8
 (verification against staging data through the tunnel). Backend dependencies
 still open: B3 (non-Energy series; until then the catalogue is Energy-only and
 3 Phase has no per-phase data) and B4 (the daily persisted tier, required

@@ -27,7 +27,7 @@ import type {
 } from "../../api/types";
 import type { AnalyticsSelection } from "../../api/endpoints";
 import { localDateKey } from "../../time/calendarRanges";
-import { formatSiteLocalDateTime } from "../../time/siteLocalTicks";
+import { formatSiteLocalDate, formatSiteLocalDateTime } from "../../time/siteLocalTicks";
 import { formatDateKey } from "./AnalyticsDateRange";
 import { isEnergySeries, selectionName, seriesName } from "./analyticsSeriesName";
 
@@ -42,12 +42,18 @@ export type DataQualityGroupId =
 
 export type DataQualityEntry = { key: string; name: string; lines: string[] };
 
+/** "Series not shown in chart": the selections sharing the same reason
+ *  line(s), in selection order (ADR-022 Amendment 7, decision 3). */
+export type NotShownReasonGroup = { key: string; lines: string[]; entries: DataQualityEntry[] };
+
 export type DataQualityGroup = {
   id: DataQualityGroupId;
   /** e.g. "Incomplete data · 2 series". */
   heading: string;
   explanation: string[];
   entries: DataQualityEntry[];
+  /** Group 1 only: entries grouped by identical reason, first occurrence first. */
+  reasonGroups?: NotShownReasonGroup[];
 };
 
 /** Approved wording (README "Data quality" table). */
@@ -129,13 +135,29 @@ function intervalSeconds(p: AnalyticsSeriesPoint): number | null {
   return (Date.parse(p.bucket_end) - Date.parse(p.bucket_start)) / 1000 / p.expected_intervals;
 }
 
-/** "{time} – {time} · {k} periods", or "{time} · 1 period"; times are the
- *  first and last affected periods' starts, site-local. */
-export function periodRange(points: readonly AnalyticsSeriesPoint[], timeZone: string | null | undefined): string {
-  const first = Date.parse(points[0]!.bucket_start);
-  if (points.length === 1) return `${formatSiteLocalDateTime(first, timeZone)} · 1 period`;
-  const last = Date.parse(points[points.length - 1]!.bucket_start);
-  return `${formatSiteLocalDateTime(first, timeZone)} – ${formatSiteLocalDateTime(last, timeZone)} · ${points.length} periods`;
+/** A period's site-local start: the date only for daily periods (no
+ *  meaningless 00:00, Amendment 7 decision 5), otherwise "HH:MM · DD Mon YYYY". */
+export function periodTime(t: number, timeZone: string | null | undefined, dateOnly = false): string {
+  return dateOnly ? formatSiteLocalDate(t, timeZone) : formatSiteLocalDateTime(t, timeZone);
+}
+
+/**
+ * The affected periods (in time order) by the first and last period's start:
+ * "{time} · 1 period"; "{time} – {time} · {k} periods" when they run without
+ * a break; otherwise "{k} periods between {time} and {time}", so the range
+ * never reads as if every period in between was affected (Amendment 7,
+ * decision 4).
+ */
+export function periodRange(
+  points: readonly AnalyticsSeriesPoint[],
+  timeZone: string | null | undefined,
+  dateOnly = false,
+): string {
+  const first = periodTime(Date.parse(points[0]!.bucket_start), timeZone, dateOnly);
+  if (points.length === 1) return `${first} · 1 period`;
+  const last = periodTime(Date.parse(points[points.length - 1]!.bucket_start), timeZone, dateOnly);
+  const continuous = points.every((p, i) => i === 0 || Date.parse(p.bucket_start) === Date.parse(points[i - 1]!.bucket_end));
+  return continuous ? `${first} – ${last} · ${points.length} periods` : `${points.length} periods between ${first} and ${last}`;
 }
 
 // ---- Per-bucket conditions --------------------------------------------------------
@@ -198,31 +220,49 @@ export function bucketQualityNotes(
 
 // ---- Groups ---------------------------------------------------------------------------
 
-/** The customer reason line for a series that is not charted. */
-export function notShownReason(s: AnalyticsSeries, timeZone: string | null | undefined): string {
+/** The customer reason line(s) for a series that is not charted: one per
+ *  reason that applies, each with its approved wording, in the table's order
+ *  (Amendment 7, decision 4). */
+export function notShownReasons(s: AnalyticsSeries, timeZone: string | null | undefined): string[] {
   const reasons = s.status_reasons;
   switch (s.status) {
     case "NO_DATA":
-      if (reasons.includes("NOT_ASSIGNED_IN_RANGE")) return DQ_TEXT.reasonNotAssigned;
-      if (reasons.includes("RANGE_IN_FUTURE")) return DQ_TEXT.reasonFuture;
-      return DQ_TEXT.reasonNoData;
+      // NO_DATA carries exactly one reason.
+      if (reasons.includes("NOT_ASSIGNED_IN_RANGE")) return [DQ_TEXT.reasonNotAssigned];
+      if (reasons.includes("RANGE_IN_FUTURE")) return [DQ_TEXT.reasonFuture];
+      return [DQ_TEXT.reasonNoData];
     case "RESOLUTION_UNAVAILABLE":
-      if (reasons.includes("CAPTURE_INTERVAL_TOO_COARSE")) return DQ_TEXT.reasonResolutionCoarse;
+      if (reasons.includes("CAPTURE_INTERVAL_TOO_COARSE")) return [DQ_TEXT.reasonResolutionCoarse];
       if (s.resolution_available_from) {
-        return reasonBeforeFloor(formatDateKey(localDateKey(new Date(s.resolution_available_from), timeZone)));
+        return [reasonBeforeFloor(formatDateKey(localDateKey(new Date(s.resolution_available_from), timeZone)))];
       }
-      return DQ_TEXT.reasonResolutionCoarse;
-    case "DATA_UNAVAILABLE":
-      // All reasons that apply are listed by the API; show the first in the
-      // table's order.
-      if (reasons.includes("CAPTURE_POLICY_GAP")) return DQ_TEXT.reasonPolicyGap;
-      if (reasons.includes("CAPTURE_POLICY_CHANGE")) return DQ_TEXT.reasonPolicyChange;
-      if (reasons.includes("TIMEZONE_MISMATCH")) return DQ_TEXT.reasonTimezone;
-      return DQ_TEXT.reasonNoData;
+      // Never claim a site-wide limitation the API did not state.
+      return [DQ_TEXT.reasonNotAvailable];
+    case "DATA_UNAVAILABLE": {
+      // The API lists every reason that applies.
+      const lines: string[] = [];
+      if (reasons.includes("CAPTURE_POLICY_GAP")) lines.push(DQ_TEXT.reasonPolicyGap);
+      if (reasons.includes("CAPTURE_POLICY_CHANGE")) lines.push(DQ_TEXT.reasonPolicyChange);
+      if (reasons.includes("TIMEZONE_MISMATCH")) lines.push(DQ_TEXT.reasonTimezone);
+      return lines.length > 0 ? lines : [DQ_TEXT.reasonNoData];
+    }
     case "NOT_AVAILABLE":
     default:
-      return DQ_TEXT.reasonNotAvailable;
+      return [DQ_TEXT.reasonNotAvailable];
   }
+}
+
+/** Group 1's entries grouped by identical reason line(s): groups in the order
+ *  of their first selection, entries in selection order. */
+export function groupByReason(entries: readonly DataQualityEntry[]): NotShownReasonGroup[] {
+  const groups = new Map<string, NotShownReasonGroup>();
+  for (const entry of entries) {
+    const key = entry.lines.join("\n");
+    const existing = groups.get(key);
+    if (existing) existing.entries.push(entry);
+    else groups.set(key, { key, lines: entry.lines, entries: [entry] });
+  }
+  return [...groups.values()];
 }
 
 const seriesKey = (s: AnalyticsSeries) => `${s.asset_id}:${s.data_point}:${s.qualifier}`;
@@ -258,19 +298,19 @@ function notShownEntries(
     for (const s of series) {
       if (s.asset_id !== pair.assetId || s.data_point !== pair.dataPoint || seen.has(s)) continue;
       seen.add(s);
-      if (s.status !== "OK") entries.push({ key: seriesKey(s), name: seriesName(s, catalog), lines: [notShownReason(s, timeZone)] });
+      if (s.status !== "OK") entries.push({ key: seriesKey(s), name: seriesName(s, catalog), lines: notShownReasons(s, timeZone) });
     }
   }
   // Anything the API returned outside the selection order (never expected).
   for (const s of series) {
     if (!seen.has(s) && s.status !== "OK") {
-      entries.push({ key: seriesKey(s), name: seriesName(s, catalog), lines: [notShownReason(s, timeZone)] });
+      entries.push({ key: seriesKey(s), name: seriesName(s, catalog), lines: notShownReasons(s, timeZone) });
     }
   }
   return entries;
 }
 
-function incompleteEntry(s: AnalyticsSeries, name: string, timeZone: string | null | undefined): DataQualityEntry | null {
+function incompleteEntry(s: AnalyticsSeries, name: string, timeZone: string | null | undefined, dateOnly: boolean): DataQualityEntry | null {
   const affected = s.points.filter(isIncomplete);
   if (affected.length === 0) return null;
   let notReceived = 0;
@@ -290,14 +330,14 @@ function incompleteEntry(s: AnalyticsSeries, name: string, timeZone: string | nu
   if (durationKnown && notReceived > 0) durations.push(`Not received: ${formatDuration(notReceived)}`);
   if (durationKnown && notUsable > 0) durations.push(`Could not be used: ${formatDuration(notUsable)}`);
   const lines = durations.length > 0 ? [durations.join(" · ")] : [];
-  lines.push(periodRange(affected, timeZone));
+  lines.push(periodRange(affected, timeZone, dateOnly));
   return { key: seriesKey(s), name, lines };
 }
 
-function resetEntry(s: AnalyticsSeries, name: string, timeZone: string | null | undefined): DataQualityEntry | null {
+function resetEntry(s: AnalyticsSeries, name: string, timeZone: string | null | undefined, dateOnly: boolean): DataQualityEntry | null {
   const lines: string[] = [];
   for (const p of s.points) {
-    const at = formatSiteLocalDateTime(Date.parse(p.bucket_start), timeZone);
+    const at = periodTime(Date.parse(p.bucket_start), timeZone, dateOnly);
     if (has(p, "RESET_DETECTED")) lines.push(`${DQ_TEXT.tipReset} · ${at}`);
     if (has(p, "ROLLOVER_DETECTED")) lines.push(`${DQ_TEXT.tipRollover} · ${at}`);
   }
@@ -312,13 +352,14 @@ function noRecentEntry(s: AnalyticsSeries, name: string, asOf: string | undefine
   return { key: seriesKey(s), name, lines: [parts.join(" · ")] };
 }
 
-function afterMissingEntry(s: AnalyticsSeries, name: string, timeZone: string | null | undefined): DataQualityEntry | null {
+function afterMissingEntry(s: AnalyticsSeries, name: string, timeZone: string | null | undefined, dateOnly: boolean): DataQualityEntry | null {
   const affected = s.points.filter((p) => has(p, "GAPS_DETECTED"));
-  return affected.length > 0 ? { key: seriesKey(s), name, lines: [periodRange(affected, timeZone)] } : null;
+  return affected.length > 0 ? { key: seriesKey(s), name, lines: [periodRange(affected, timeZone, dateOnly)] } : null;
 }
 
-function reconstructedEntry(s: AnalyticsSeries, name: string, timeZone: string | null | undefined): DataQualityEntry | null {
-  const affected = s.points.filter((p) => has(p, "RECONSTRUCTED_TIMING") || p.reconstructed_intervals > 0);
+function reconstructedEntry(s: AnalyticsSeries, name: string, timeZone: string | null | undefined, dateOnly: boolean): DataQualityEntry | null {
+  // Amendment 6 mapping: the RECONSTRUCTED_TIMING evidence flag.
+  const affected = s.points.filter((p) => has(p, "RECONSTRUCTED_TIMING"));
   if (affected.length === 0) return null;
   let seconds = 0;
   let known = true;
@@ -328,7 +369,7 @@ function reconstructedEntry(s: AnalyticsSeries, name: string, timeZone: string |
     else seconds += p.reconstructed_intervals * width;
   }
   const lines = known && seconds > 0 ? [`Timing reconstructed: ${formatDuration(seconds)}`] : [];
-  lines.push(periodRange(affected, timeZone));
+  lines.push(periodRange(affected, timeZone, dateOnly));
   return { key: seriesKey(s), name, lines };
 }
 
@@ -349,6 +390,7 @@ export function buildDataQuality(
   timeZone: string | null | undefined,
 ): DataQualityGroup[] {
   const response = input.response;
+  const dateOnly = response?.resolution === "1d";
   const charted = (response?.series ?? []).filter((s) => s.status === "OK");
   const named = charted.map((s) => ({ s, name: seriesName(s, catalog) }));
   const collect = (f: (s: AnalyticsSeries, name: string) => DataQualityEntry | null) =>
@@ -357,16 +399,18 @@ export function buildDataQuality(
       return entry ? [entry] : [];
     });
 
-  const incomplete = collect((s, name) => incompleteEntry(s, name, timeZone));
+  const incomplete = collect((s, name) => incompleteEntry(s, name, timeZone, dateOnly));
   const incompleteExplanation: string[] = [DQ_TEXT.incompleteExplanation];
   if (charted.some((s) => isEnergySeries(s) && s.points.some(isIncomplete))) {
     incompleteExplanation.push(DQ_TEXT.incompleteEnergyExplanation);
   }
 
+  const notShown = group("not-shown", DQ_TEXT.notShownHeading, [], notShownEntries(input, catalog, timeZone), "");
+  if (notShown) notShown.reasonGroups = groupByReason(notShown.entries);
   const groups = [
-    group("not-shown", DQ_TEXT.notShownHeading, [], notShownEntries(input, catalog, timeZone), ""),
+    notShown,
     group("incomplete", DQ_TEXT.incompleteHeading, incompleteExplanation, incomplete),
-    group("resets", DQ_TEXT.resetsHeading, [DQ_TEXT.resetsExplanation], collect((s, name) => resetEntry(s, name, timeZone))),
+    group("resets", DQ_TEXT.resetsHeading, [DQ_TEXT.resetsExplanation], collect((s, name) => resetEntry(s, name, timeZone, dateOnly))),
     group(
       "no-recent-data",
       DQ_TEXT.noRecentHeading,
@@ -377,13 +421,13 @@ export function buildDataQuality(
       "after-missing",
       DQ_TEXT.afterMissingHeading,
       [DQ_TEXT.afterMissingExplanation],
-      collect((s, name) => afterMissingEntry(s, name, timeZone)),
+      collect((s, name) => afterMissingEntry(s, name, timeZone, dateOnly)),
     ),
     group(
       "reconstructed",
       DQ_TEXT.reconstructedHeading,
       [DQ_TEXT.reconstructedExplanation],
-      collect((s, name) => reconstructedEntry(s, name, timeZone)),
+      collect((s, name) => reconstructedEntry(s, name, timeZone, dateOnly)),
     ),
     group(
       "system-values",
