@@ -473,10 +473,12 @@ def test_manifest_registers_migration_292():
     assert files.index("292_analytics_point_series.sql") > files.index("291_environment_loader_bounded_update.sql")
 
 
-def test_manifest_registers_migration_293_last():
+def test_manifest_registers_migration_293():
     migrations = _manifest_migrations()
-    assert migrations[-1]["source_file"] == "293_analytics_point_series_planner_fences.sql"
-    assert migrations[-1]["target_path"] == "postgres/migrations/293_analytics_point_series_planner_fences.sql"
+    files = [r["source_file"] for r in migrations]
+    row = migrations[files.index("293_analytics_point_series_planner_fences.sql")]
+    assert row["target_path"] == "postgres/migrations/293_analytics_point_series_planner_fences.sql"
+    assert files.index("293_analytics_point_series_planner_fences.sql") > files.index("292_analytics_point_series.sql")
 
 
 def test_series_read_carries_the_migration_293_planner_fences(tx):
