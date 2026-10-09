@@ -599,9 +599,9 @@ the Asset View only ([ADR-022 amendment](../../00-governance/decisions/ADR-022-a
 | F3 | Page at `/features/analytics`, draft/applied state, Update, validation, loading and error behaviour | Merged to staging (PR #98, `feb7aec`) |
 | F4 | Filter panel (Assets, Data points, Resolution, Phase type, Comparison placeholder) and the date/time range | Merged to staging (PR #100, `ffe3dcc`); assignment periods in the selector added by PR #105 (migration 288) |
 | F5 | Chart card: multi-series chart, drag-to-zoom, range slider, Collapse / Expand | Merged to staging (PR #101, `6b9a805`) |
-| F6 | Statistics table, Data quality section (seven groups), per-period Data quality lines in the chart tooltip; ADR-022 Amendment 7 presentation decisions | Implemented, in review (PR #112); its Statistics semantics come from PR #113 (series `summary` over completed periods, merged to staging as `1632c64`); see "Frontend implementation notes (F6)" |
+| F6 | Statistics table, Data quality section (seven groups), per-period Data quality lines in the chart tooltip; ADR-022 Amendment 7 presentation decisions | Merged to staging (PR #112, `6ab676b`) and deployed (Deploy to Staging run 37879050881, 2026-10-09); its Statistics semantics come from PR #113 (series `summary` over completed periods, `1632c64`, deployed the same day); see "Frontend implementation notes (F6)" |
 | F7 | CSV export (wide format, local + UTC timestamps, full applied range) and the toolbar's **Export CSV** | Planned |
-| F8 | Verification of the finished page against staging data through the SSH tunnel | In progress; see "Staging verification (F8)" |
+| F8 | Verification of the finished page against staging data through the SSH tunnel | Partly done (2026-10-09): 6 scenarios verified, the rest pending or unverifiable on staging; see "Staging verification (F8)" |
 
 ### Frontend implementation notes (F6)
 
@@ -654,35 +654,69 @@ and per-bucket tooltip lines through `analyticsChartModel.ts` and
 
 ### Staging verification (F8)
 
-Method: the F6 branch on the local Vite dev server, `/api` proxied through an
-SSH tunnel to the staging EMS backend (staging image `34c0988`), plus
-SELECT-only SQL on staging in a read-only session to find the data each
-scenario needs. Status values: **Verified**, **Unverified** (cannot be
-exercised with current staging data), **Pending** (not yet run).
+Method: the F6 frontend (identical to the deployed `6ab676b`) on the local Vite
+dev server, `/api` proxied through an SSH tunnel to the staging EMS backend
+(staging image `6ab676b`, which includes PR #113), exercised by the Product
+Owner in the browser on 2026-10-09; plus SELECT-only SQL on staging in a
+read-only session to find the data each scenario needs. Status values:
+**Verified** (exercised on staging, outcome as specified), **Pending** (not
+yet run or not yet confirmed), **Deferred** (postponed by the Product Owner),
+**Unverified** (cannot be exercised with current staging data).
 
 Staging data available (2026-10-09, persisted 15-minute Energy tier, last 90
 days): 176,138 periods; 5,105 with missing readings on 54 devices (e.g. site
 Unit 2: P1-Heater-01, EN-AirCompressor-01); 783 with rejected readings;
-**0** meter resets, **0** rollovers, **0** reconstructed periods. Assignment
-windows: e.g. Coimbatore / Banquet 2 AHU assigned from 05 Oct 2026 21:04.
+**0** meter resets, **0** rollovers, **0** reconstructed periods.
 
 | # | Scenario | Status |
 |---|---|---|
-| 1 | Statistics: Total, Average, Minimum, Maximum and their times against the chart | Pending |
-| 2 | Statistics exclude the in-progress period from Average / Minimum / Maximum | Unverified until PR #113 is deployed to staging (staging still serves the previous summary) |
-| 3 | Incomplete data: durations, period range, tooltip lines (Unit 2 assets) | Pending |
-| 4 | Values after missing readings and the Statistics catch-up note | Pending |
-| 5 | Assignment window: range before the assignment gives "not assigned" | Pending |
-| 6 | 3 Phase: every Energy series under "Shown as System values" | Pending |
-| 7 | Failed Update keeps the previous chart, Statistics and Data quality | Pending |
-| 8 | Narrow screen: filter drawer, Statistics table scroll, Data quality readable | Pending |
-| 9 | Daily resolution: dates without 00:00 | Pending |
+| 1 | Statistics: Total, Average, Minimum, Maximum and their times against the chart | **Verified** (Product Owner, 2026-10-09) |
+| 2 | Statistics note ("Average, Minimum and Maximum use completed periods only. Total includes the current, in-progress period.") | **Verified** (Product Owner, 2026-10-09) |
+| 3 | Incomplete data / missing readings: durations, period range, tooltip lines (Unit 2 assets) | **Verified** (Product Owner, 2026-10-09) |
+| 4 | Values after missing readings and the Statistics catch-up disclosure | **Verified** (Product Owner, 2026-10-09) |
+| 5 | Daily resolution: dates without 00:00 | **Verified** (Product Owner, 2026-10-09) |
+| 6 | Narrow screen: the filter panel collapses to a drawer below 900 px; Statistics and Data quality usable | **Verified** (Product Owner, 2026-10-09) |
+| 7 | Assignment window (see the steps below) | **Pending** -- not yet run |
+| 8 | 3 Phase fallback: Energy listed under "Shown as System values" | **Pending** -- the System-only Energy behaviour is explained below; the fallback disclosure itself has not been confirmed |
+| 9 | Failed Update keeps the previous chart, Statistics and Data quality | **Deferred** (Product Owner, 2026-10-09); covered by unit tests only |
 | 10 | Meter resets and rollovers | **Unverified** -- none in staging data; no API-level test either (Amendment 6) |
 | 11 | Reconstructed timing | **Unverified** -- reconstruction is OFF (ADR-020) |
-| 12 | No recent data (stale) | Depends on a device being late at test time |
+| 12 | No recent data (stale) | **Pending** -- needs a device that is late at test time |
 | 13 | Unknown freshness (`stale` null, 900 s capture) | **Unverified** -- no such site on staging |
-| 14 | Retention-floor reason with its date | Depends on a floor inside the selectable range |
-| 15 | Non-Energy data points, real per-phase series | **Unverified** -- backend B3 not implemented |
+| 14 | Retention-floor reason with its date | **Pending** -- needs a floor inside the selectable range |
+| 15 | Non-Energy data points; real per-phase series | **Unverified** -- see "Per-phase Energy" below and backend B3 |
+
+**Assignment-window steps (scenario 7).** It checks that Analytics respects when
+a data point was assigned to an asset: periods outside the assignment are
+neither zero nor "Incomplete", and a range wholly outside it is explained under
+"Series not shown in chart" as "This data point was not assigned to the asset
+during the selected range." On staging (read-only check, 2026-10-09) Coimbatore
+/ Banquet 2 AHU's **Energy Export** is assigned until 05 Oct 2026 21:04 IST and
+then closed; its Energy (import) is assigned without an end, so it cannot
+exercise this. Steps: (a) Today, Banquet 2 AHU, Energy Export → not charted,
+listed with the "not assigned" line; (b) 7 Days → Energy Export bars stop at 05
+Oct around 21:00 with no "Incomplete data" entry for the periods after.
+*(An earlier note pointed at the asset's Energy (import) before 05 Oct; that
+cannot produce "not assigned".)*
+
+**Per-phase Energy (why 3 Phase shows System values for Energy).** Read-only
+investigation on staging, 2026-10-09, layer by layer:
+
+| Layer | Finding |
+|---|---|
+| Meter capability | Meters measure per-phase Energy: all 46 devices reporting in the last 6 hours sent non-null L1/L2/L3 import and export energy registers (and per-phase power) in `telemetry.energy_measurements`. |
+| Ingestion / raw storage | Captured: the raw table has `import_energy_l1_wh`–`l3_wh` and `export_energy_l1_wh`–`l3_wh` populated; logical points `ENERGY_IMPORT_L1`–`L3` and `ENERGY_EXPORT_L1`–`L3` are defined. |
+| Pipeline / persisted tiers | Partly: the customer Energy tiers (`energy_consumption_15min` / hourly / daily), which the Analytics series reads, hold System (total) import/export only. Per-phase register deltas are persisted since migration 290 (`analytics.energy_register_delta_15min`: L1–L3 import/export rows for 54 devices in the last 24 h) to preserve the history, with no customer read path by design. |
+| Asset attribution | Only `ENERGY_IMPORT_TOTAL` (54 assets) and `ENERGY_EXPORT_TOTAL` (53) are assigned in `metadata.asset_points`; no asset has an L1–L3 Energy point assigned, so the catalogue cannot offer per-phase Energy for any asset. |
+| Analytics API / catalogue | Energy is System-only by contract in v1 (business rule 5): the registry defines `ENERGY_IMPORT` / `ENERGY_EXPORT` with the System qualifier only, so 3 Phase never expands Energy, and the catalogue reports `phases.three_phase = false`. |
+
+So per-phase Energy is not missing at the meter or in ingestion; it is held back
+by the v1 API contract, by the missing per-phase asset assignments and by the
+absent read path from the 290 tier. Showing it needs all three: a registry
+change (per-phase qualifiers for Energy), L1–L3 Energy assignments through the
+Asset Data Point Assignment workflow, and a series read over the 290 tier (or
+per-phase Energy tiers), with the Data quality evidence that tier provides. This
+is not scheduled; it is a Product Owner decision alongside B3.
 
 ## Pilot status
 
@@ -764,12 +798,12 @@ bottom, D72); the time-of-day refinement's granularity (any minute, D60).
 
 ## Release status
 
-Not released to production. Staging (verified 2026-10-09 read-only: image
-`34c0988`; `admin.schema_migrations` lists 275–291 as applied) has the
-Analytics backend and the page through F5 (filters, date range, chart). PR #113
-(series `summary` over completed periods) is merged to staging as `1632c64`;
-PR #112 (F6: Statistics, Data quality, tooltip quality lines) follows it. Still open on the frontend: F7 (CSV export) and F8
-(verification against staging data through the tunnel). Backend dependencies
+Not released to production. Staging (verified 2026-10-09 read-only:
+`admin.schema_migrations` lists 275–291 as applied; image `6ab676b`, both
+containers healthy, `/health` 200) has the Analytics backend, PR #113 (series
+`summary` over completed periods, `1632c64`) and the page through F6 (PR #112,
+`6ab676b`). Still open on the frontend: F7 (CSV export) and the rest of F8
+(scenarios pending, deferred or unverifiable above). Backend dependencies
 still open: B3 (non-Energy series; until then the catalogue is Energy-only and
 3 Phase has no per-phase data) and B4 (the daily persisted tier, required
 before the first `point_telemetry_15m` chunks age out of retention).
