@@ -47,7 +47,7 @@ describe("Statistics (F6)", () => {
     const rows = screen.getAllByTestId("analytics-statistics-row");
     expect(rows).toHaveLength(1);
     const cells = within(rows[0]!).getAllByRole("cell").map((c) => c.textContent);
-    expect(within(rows[0]!).getByRole("rowheader")).toHaveTextContent(/^Energy$/);
+    expect(within(rows[0]!).getByRole("rowheader")).toHaveTextContent(/^Energy-Asset a1$/);
     // 04:00Z and 08:45Z are 09:30 and 14:15 IST.
     expect(cells).toEqual(["298.10 kWh", "12.40 kWh", "3.20 kWh09:30 · 05 Oct 2026", "20.90 kWh14:15 · 05 Oct 2026"]);
   });
@@ -127,7 +127,7 @@ describe("Data quality section (F6)", () => {
     ]);
     const notShown = screen.getByTestId("analytics-dq-not-shown");
     expect(notShown.tagName).toBe("SECTION");
-    expect(within(notShown).getByText("Energy")).toBeVisible();
+    expect(within(notShown).getByText("Energy-Asset a2")).toBeVisible();
     expect(within(notShown).getByText(DQ_TEXT.reasonFuture)).toBeVisible();
 
     const noRecent = screen.getByTestId("analytics-dq-no-recent-data") as HTMLDetailsElement;
@@ -159,7 +159,7 @@ describe("Data quality section (F6)", () => {
     expect(within(screen.getByTestId("chart-legend")).queryByText("Asset a2-Energy")).not.toBeInTheDocument();
     expect(within(screen.getByTestId("chart-legend")).getByText("Asset a1-Energy")).toBeInTheDocument();
     const notShown = screen.getByTestId("analytics-dq-not-shown");
-    expect(within(notShown).getByText("Energy")).toBeInTheDocument();
+    expect(within(notShown).getByText("Energy-Asset a2")).toBeInTheDocument();
     expect(within(notShown).getByText(DQ_TEXT.reasonNoData)).toBeInTheDocument();
   });
 
@@ -181,11 +181,11 @@ describe("Data quality section (F6)", () => {
     await userEvent.click(within(grouped).getByText(DQ_TEXT.reasonNoData));
     expect(details.open).toBe(true);
     expect(within(grouped).getAllByTestId("analytics-dq-entry").map((e) => e.textContent)).toEqual([
-      "Energy",
-      "Energy",
+      "Energy-Asset a3",
+      "Energy-Asset a2",
     ]);
     // A reason with one selection is listed directly.
-    expect(within(notShown).getAllByText("Energy").filter((e) => !grouped.contains(e))).toHaveLength(1);
+    expect(within(notShown).getByText("Energy-Asset a1")).toBeVisible();
     expect(within(notShown).getByText(DQ_TEXT.reasonFuture)).toBeVisible();
   });
 
@@ -194,8 +194,7 @@ describe("Data quality section (F6)", () => {
     const group = screen.getByTestId("analytics-dq-system-values");
     expect(group).toHaveTextContent("Shown as System values · 1 series");
     expect(group).toHaveTextContent(DQ_TEXT.systemValuesExplanation);
-    expect(group).toHaveTextContent(/Energy$/);
-    expect(group).not.toHaveTextContent("Asset a1");
+    expect(group).toHaveTextContent("Energy-Asset a1");
   });
 });
 
@@ -347,7 +346,7 @@ describe("Analytics page -- Statistics and Data quality after Update", () => {
     await waitFor(() => expect(screen.getByTestId("analytics-statistics-row")).toHaveTextContent("7.00 kWh"));
     expect(screen.queryByTestId("analytics-dq-no-recent-data")).not.toBeInTheDocument();
     const notShown = screen.getByTestId("analytics-dq-not-shown");
-    expect(within(notShown).getByText("Energy Export")).toBeInTheDocument();
+    expect(within(notShown).getByText("Energy Export-Asset a1")).toBeInTheDocument();
     expect(within(notShown).getByText(DQ_TEXT.reasonNoData)).toBeInTheDocument();
     expect(screen.queryByText(MESSAGES.updateFailed)).not.toBeInTheDocument();
   });

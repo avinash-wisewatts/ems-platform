@@ -465,9 +465,9 @@ environmental points stay out of the registry.
    tooltip `<Asset name>-<code>` (System P, Q, V, I, PF, F; phases P1–P3,
    Q1–Q3, V1–V3, I1–I3, PF1–PF3, E1–E3, Ex1–Ex3, line-to-line V12/V23/V31;
    Energy, Energy Export and Line to Line Voltage System keep their name);
-   Statistics and Data quality use the measurement name plus the phase code
-   (`Power`, `Reactive Power-Q1`). No clash-dependent naming. Power is in
-   Frequently Used.
+   Statistics and Data quality use the measurement name, the phase code and
+   the asset name (`Power-Chiller 1`, `Reactive Power-Q1-AHU 2`), so
+   different assets never share a label. Power is in Frequently Used.
 
 **Open (Product Owner):** verification of the line-to-line source mapping
 (Eniscope `U1`/`U2`/`U3` → L12/L23/L31, shown as V12/V23/V31) and a System

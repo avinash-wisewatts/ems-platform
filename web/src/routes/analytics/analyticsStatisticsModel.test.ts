@@ -13,8 +13,8 @@ describe("buildStatistics -- one row per charted series, the API's own summary",
       catalogFixture(),
     );
     expect(model.rows.map((r) => [r.key, r.name, r.index])).toEqual([
-      ["a2:ENERGY_IMPORT:TOTAL", "Energy", 0],
-      ["a1:ENERGY_IMPORT:TOTAL", "Energy", 1],
+      ["a2:ENERGY_IMPORT:TOTAL", "Energy-Asset a2", 0],
+      ["a1:ENERGY_IMPORT:TOTAL", "Energy-Asset a1", 1],
     ]);
     expect(model.rows[0]).toMatchObject({ total: 298.1, average: 12.4, min: 3.2, minAt: summary.min_at, max: 20.9, maxAt: summary.max_at, unit: "kWh" });
   });

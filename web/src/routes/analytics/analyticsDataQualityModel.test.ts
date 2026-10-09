@@ -167,17 +167,17 @@ describe("buildDataQuality -- groups", () => {
     );
     expect(groups).toHaveLength(1);
     expect(groups[0]!.entries).toEqual([
-      { key: "a2:ENERGY_IMPORT:TOTAL", name: "Energy", lines: [DQ_TEXT.reasonNotAssigned] },
-      { key: "unavailable:x1:ENERGY_IMPORT", name: "Energy", lines: [DQ_TEXT.reasonNotAvailable] },
+      { key: "a2:ENERGY_IMPORT:TOTAL", name: "Energy-Asset a2", lines: [DQ_TEXT.reasonNotAssigned] },
+      { key: "unavailable:x1:ENERGY_IMPORT", name: "Energy-Asset x1", lines: [DQ_TEXT.reasonNotAvailable] },
     ]);
   });
 
   it("a NOT_AVAILABLE series without a name or label is named from the catalogue, never by its code", () => {
     const s = notShownFixture("a3", "NOT_AVAILABLE", [], { asset_name: null, label: null });
     const groups = buildDataQuality(input([s]), catalog, TZ);
-    expect(groups[0]!.entries[0]!.name).toBe("Energy");
+    expect(groups[0]!.entries[0]!.name).toBe("Energy-Asset a3");
     const unknown = notShownFixture("gone", "NOT_AVAILABLE", [], { asset_name: null, label: null, data_point: "SOMETHING_NEW" });
-    expect(buildDataQuality(input([unknown]), catalog, TZ)[0]!.entries[0]!.name).toBe("Data point");
+    expect(buildDataQuality(input([unknown]), catalog, TZ)[0]!.entries[0]!.name).toBe("Data point-Asset");
   });
 
   it("Incomplete: not received and could not be used as durations at the capture interval, and the period range", () => {
@@ -268,14 +268,14 @@ describe("buildDataQuality -- groups", () => {
     });
     const phase = seriesFixture("a2", [1], { data_point: "ACTIVE_POWER", label: "Power", qualifier: "L1" });
     const groups = buildDataQuality(input([frequency, phase], {}, "three_phase"), catalog, TZ);
-    expect(groups.find((g) => g.id === "system-values")!.entries.map((e) => e.name)).toEqual(["Frequency"]);
+    expect(groups.find((g) => g.id === "system-values")!.entries.map((e) => e.name)).toEqual(["Frequency-Asset a1"]);
   });
 
   it("Shown as System values: only under 3 Phase, series name only", () => {
     const s = seriesFixture("a1", [1]);
     expect(buildDataQuality(input([s]), catalog, TZ)).toEqual([]);
     const [group] = buildDataQuality(input([s], {}, "three_phase"), catalog, TZ);
-    expect(group!.entries).toEqual([{ key: "a1:ENERGY_IMPORT:TOTAL", name: "Energy", lines: [] }]);
+    expect(group!.entries).toEqual([{ key: "a1:ENERGY_IMPORT:TOTAL", name: "Energy-Asset a1", lines: [] }]);
     // Per-phase series are not System values.
     const phase = seriesFixture("a2", [1], { qualifier: "L1" });
     expect(buildDataQuality(input([phase], {}, "three_phase"), catalog, TZ)).toEqual([]);
@@ -286,8 +286,8 @@ describe("buildDataQuality -- groups", () => {
     const b = seriesFixture("a1", [1], { stale: true, last_data_at: "2026-10-05T06:00:00Z" });
     const [group] = buildDataQuality(input([a, b]), catalog, TZ);
     expect(group!.entries.map((e) => [e.key, e.name])).toEqual([
-      ["a2:ENERGY_IMPORT:TOTAL", "Energy"],
-      ["a1:ENERGY_IMPORT:TOTAL", "Energy"],
+      ["a2:ENERGY_IMPORT:TOTAL", "Energy-Asset a2"],
+      ["a1:ENERGY_IMPORT:TOTAL", "Energy-Asset a1"],
     ]);
   });
 });
@@ -321,9 +321,9 @@ describe("groupByReason -- repeated identical reasons with a count (Amendment 7)
     const [notShown] = groups;
     expect(notShown!.heading).toBe("Series not shown in chart · 5");
     expect(notShown!.reasonGroups!.map((r) => [r.lines, r.entries.map((e) => [e.key, e.name])])).toEqual([
-      [[DQ_TEXT.reasonNoData], [["a2:ENERGY_IMPORT:TOTAL", "Energy"], ["a4:ENERGY_IMPORT:TOTAL", "Energy"]]],
-      [[DQ_TEXT.reasonNotAvailable], [["unavailable:x1:ENERGY_IMPORT", "Energy"], ["unavailable:a5:SOMETHING_NEW", "Data point"]]],
-      [[DQ_TEXT.reasonNotAssigned], [["a3:ENERGY_IMPORT:TOTAL", "Energy"]]],
+      [[DQ_TEXT.reasonNoData], [["a2:ENERGY_IMPORT:TOTAL", "Energy-Asset a2"], ["a4:ENERGY_IMPORT:TOTAL", "Energy-Asset a4"]]],
+      [[DQ_TEXT.reasonNotAvailable], [["unavailable:x1:ENERGY_IMPORT", "Energy-Asset x1"], ["unavailable:a5:SOMETHING_NEW", "Data point-Asset a5"]]],
+      [[DQ_TEXT.reasonNotAssigned], [["a3:ENERGY_IMPORT:TOTAL", "Energy-Asset a3"]]],
     ]);
   });
 

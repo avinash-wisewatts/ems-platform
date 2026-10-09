@@ -6,8 +6,9 @@
  * - Chart legend and tooltip: "<Asset name>-<code>" -- System Chiller 1-P,
  *   Chiller 1-Q, Chiller 1-V, Chiller 1-I, Chiller 1-PF, Chiller 1-F; 3 Phase
  *   Chiller 1-P1 ... Chiller 1-PF3.
- * - Statistics and Data quality: "<Measurement name>-<code><phase>" -- System
- *   series have no suffix (Power), phase series Power-P1, Reactive Power-Q2.
+ * - Statistics and Data quality: "<Measurement name>[-<code><phase>]-<Asset
+ *   name>" -- System Power-Chiller 1, phase Reactive Power-Q2-Chiller 1, so
+ *   the same measurement on different assets never reads the same.
  * - Energy and Energy Export keep their readable names: Chiller 1-Energy,
  *   Chiller 1-Energy Export; phases E1-E3 and Ex1-Ex3 (D55).
  * - Line to Line Voltage phases are V12/V23/V31, taken from the existing
@@ -79,13 +80,15 @@ function phaseSuffix(dataPoint: string, phase: string, label: string): string {
   return code ? `${code}${phase}` : `${label} ${phase}`;
 }
 
-/** Statistics / Data quality name of a selection without a series behind it
- *  (the System measurement name). */
+/** Statistics / Data quality name of a selection without a series behind it:
+ *  "Power-Chiller 1". */
 export function selectionName(
   catalog: AnalyticsCatalogResponse | null | undefined,
+  assetId: string,
   dataPoint: AnalyticsDataPointCode,
 ): string {
-  return catalogDataPointLabel(catalog, dataPoint) ?? FALLBACK_DATA_POINT;
+  const asset = catalogAssetName(catalog, assetId) ?? FALLBACK_ASSET;
+  return `${catalogDataPointLabel(catalog, dataPoint) ?? FALLBACK_DATA_POINT}${SEPARATOR}${asset}`;
 }
 
 /** Chart legend and tooltip name: "Chiller 1-P", "Chiller 1-P1",
@@ -98,12 +101,17 @@ export function chartSeriesName(s: AnalyticsSeries, catalog?: AnalyticsCatalogRe
   return `${asset}${SEPARATOR}${suffix}`;
 }
 
-/** Statistics and Data quality name: "Power", "Power-P1", "Energy-E2". */
+/** Statistics and Data quality name: "Power-Chiller 1",
+ *  "Reactive Power-Q1-Chiller 1", "Energy-E2-AHU 2". */
 export function seriesName(s: AnalyticsSeries, catalog?: AnalyticsCatalogResponse | null): string {
+  const asset = s.asset_name ?? catalogAssetName(catalog, s.asset_id) ?? FALLBACK_ASSET;
   const label = s.label ?? catalogDataPointLabel(catalog, s.data_point) ?? FALLBACK_DATA_POINT;
   const phase = PHASE_NUMBER[s.qualifier];
-  if (!phase) return label;
-  return PHASE_CODE[s.data_point] ? `${label}${SEPARATOR}${phaseSuffix(s.data_point, phase, label)}` : `${label} ${phase}`;
+  let measurement = label;
+  if (phase) {
+    measurement = PHASE_CODE[s.data_point] ? `${label}${SEPARATOR}${phaseSuffix(s.data_point, phase, label)}` : `${label} ${phase}`;
+  }
+  return `${measurement}${SEPARATOR}${asset}`;
 }
 
 /** Energy is the summed data point (business rule 10): it has a Total and

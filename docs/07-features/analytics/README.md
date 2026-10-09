@@ -176,13 +176,12 @@ message is shown only when it has useful content; otherwise it is absent.
     e.g. `Chiller 1-Q2`. Energy, Energy Export and Line to Line Voltage
     have no System code and keep their name: `Chiller 1-Energy`,
     `Chiller 1-Energy Export`, `Chiller 1-Line to Line Voltage`.
-  - Statistics and Data quality: the measurement name, with the phase code
-    for phase series: `Power`, `Reactive Power-Q1`, `Voltage-V2`,
-    `Energy-E3`.
-  - No extra context is added when two series share a name (e.g. Power for
-    two assets in Statistics); the chart colour swatch and order identify
-    them. A data point without a code reads by its label; a missing name
-    falls back to the catalogue, then to "Asset" / "Data point".
+  - Statistics and Data quality: `<Measurement name>-<Asset name>`, with
+    the phase code before the asset for phase series: `Power-Chiller 1`,
+    `Power-AHU 2`, `Reactive Power-Q1-Chiller 1`, `Energy-E3-AHU 2`. The
+    same measurement on different assets therefore never reads the same.
+  - A data point without a code reads by its label; a missing name falls
+    back to the catalogue, then to "Asset" / "Data point".
 - Without per-phase values the System value is shown under the System
   series name; it is disclosed in Data quality ("Shown as System values")
   (D57, D58, D63).
