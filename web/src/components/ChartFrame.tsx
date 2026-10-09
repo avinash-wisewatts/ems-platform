@@ -48,7 +48,7 @@ import {
   YAxis,
 } from "recharts";
 import type { CategoricalChartState } from "recharts/types/chart/types";
-import { formatSiteLocalDateTime, siteLocalTicks } from "../time/siteLocalTicks";
+import { formatSiteLocalDate, formatSiteLocalDateTime, siteLocalTicks } from "../time/siteLocalTicks";
 
 export type ChartPoint = {
   /** epoch milliseconds (UTC) */
@@ -262,6 +262,10 @@ export type ChartSeries = {
   kind: "bar" | "line";
   /** One value per bucket, aligned with `buckets`; null is a gap, never 0. */
   values: readonly (number | null)[];
+  /** Optional tooltip lines per bucket, aligned with `buckets` (e.g. a
+   *  period's data quality). A bucket with lines is listed in the tooltip
+   *  even without a value. */
+  notes?: readonly (readonly string[])[];
 };
 
 /** Visible window as inclusive bucket indices; null = the whole range. */
@@ -274,6 +278,9 @@ export type MultiSeriesChartFrameProps = {
   range: { from: number; to: number };
   /** IANA timezone for ticks and the tooltip time (UTC when absent). */
   timeZone?: string | null;
+  /** Buckets are whole site-local days: the tooltip and range-slider labels
+   *  show the date only (no meaningless 00:00). */
+  dateOnly?: boolean;
   ariaLabel: string;
   height?: number;
   /** fixed width for tests / non-responsive contexts */
@@ -535,38 +542,59 @@ function BarPathsLayer({
   );
 }
 
-type TooltipEntry = { name: string; unit: string | null; color: string; kind: "bar" | "line"; dataKey: string };
+type TooltipEntry = {
+  name: string;
+  unit: string | null;
+  color: string;
+  kind: "bar" | "line";
+  dataKey: string;
+  /** bucket start -> tooltip lines */
+  notes: ReadonlyMap<number, readonly string[]>;
+};
 
 function SeriesTooltip({
   entries,
   rowsByStart,
   timeZone,
+  dateOnly,
   active,
   label,
 }: {
   entries: readonly TooltipEntry[];
   rowsByStart: ReadonlyMap<number, ChartRow>;
   timeZone?: string | null;
+  dateOnly?: boolean;
   // injected by Recharts' Tooltip
   active?: boolean;
   label?: number | string;
 }) {
   const row = active && label != null ? rowsByStart.get(Number(label)) : undefined;
   if (!row) return null;
-  const values = entries.filter((e) => row[e.dataKey] != null);
+  const values = entries.filter((e) => row[e.dataKey] != null || (e.notes.get(row.t)?.length ?? 0) > 0);
   return (
     <div className="chart-frame__tooltip" data-testid="chart-tooltip">
-      <p className="chart-frame__tooltip-time">{formatSiteLocalDateTime(row.t, timeZone)}</p>
+      <p className="chart-frame__tooltip-time">
+        {dateOnly ? formatSiteLocalDate(row.t, timeZone) : formatSiteLocalDateTime(row.t, timeZone)}
+      </p>
       {values.length > 0 ? (
         <ul className="chart-frame__tooltip-list">
           {values.map((e) => (
             <li key={e.dataKey}>
               <span className={`chart-frame__swatch chart-frame__swatch--${e.kind}`} style={{ background: e.color }} />
               <span className="chart-frame__tooltip-name">{e.name}</span>
-              <span className="chart-frame__tooltip-value">
-                {formatValue(row[e.dataKey])}
-                {e.unit ? ` ${e.unit}` : ""}
-              </span>
+              {row[e.dataKey] != null ? (
+                <span className="chart-frame__tooltip-value">
+                  {formatValue(row[e.dataKey])}
+                  {e.unit ? ` ${e.unit}` : ""}
+                </span>
+              ) : null}
+              {(e.notes.get(row.t)?.length ?? 0) > 0 ? (
+                <ul className="chart-frame__tooltip-notes" data-testid="chart-tooltip-notes">
+                  {e.notes.get(row.t)!.map((note, i) => (
+                    <li key={i}>{note}</li>
+                  ))}
+                </ul>
+              ) : null}
             </li>
           ))}
         </ul>
@@ -589,6 +617,7 @@ export function MultiSeriesChartFrame({
   series,
   range,
   timeZone,
+  dateOnly = false,
   ariaLabel,
   height = 360,
   width,
@@ -606,7 +635,10 @@ export function MultiSeriesChartFrame({
   const tickValues = useMemo(() => ticks.map((t) => t.t), [ticks]);
   const tickLabels = useMemo(() => new Map(ticks.map((t) => [t.t, t.label])), [ticks]);
   const formatTickLabel = useCallback((t: number) => tickLabels.get(t) ?? "", [tickLabels]);
-  const formatBrushLabel = useCallback((t: number) => formatSiteLocalDateTime(t, timeZone), [timeZone]);
+  const formatBrushLabel = useCallback(
+    (t: number) => (dateOnly ? formatSiteLocalDate(t, timeZone) : formatSiteLocalDateTime(t, timeZone)),
+    [timeZone, dateOnly],
+  );
 
   const bars = useMemo<BarSpec[]>(
     () =>
@@ -616,8 +648,15 @@ export function MultiSeriesChartFrame({
     [series],
   );
   const entries = useMemo<TooltipEntry[]>(
-    () => series.map((s, i) => ({ name: s.name, unit: s.unit, color: seriesColor(i), kind: s.kind, dataKey: dataKeyOf(i) })),
-    [series],
+    () =>
+      series.map((s, i) => {
+        const notes = new Map<number, readonly string[]>();
+        s.notes?.forEach((lines, b) => {
+          if (lines.length > 0 && buckets[b]) notes.set(buckets[b]!.start, lines);
+        });
+        return { name: s.name, unit: s.unit, color: seriesColor(i), kind: s.kind, dataKey: dataKeyOf(i), notes };
+      }),
+    [series, buckets],
   );
   const first = view?.start ?? 0;
   const last = view?.end ?? rows.length - 1;
@@ -628,8 +667,8 @@ export function MultiSeriesChartFrame({
     [bars, rows, first, last, chartId],
   );
   const tooltipContent = useMemo(
-    () => <SeriesTooltip entries={entries} rowsByStart={rowsByStart} timeZone={timeZone} />,
-    [entries, rowsByStart, timeZone],
+    () => <SeriesTooltip entries={entries} rowsByStart={rowsByStart} timeZone={timeZone} dateOnly={dateOnly} />,
+    [entries, rowsByStart, timeZone, dateOnly],
   );
 
   const onBrushChange = useCallback(

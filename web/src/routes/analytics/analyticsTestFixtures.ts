@@ -1,4 +1,4 @@
-import type { AnalyticsCatalogResponse, AnalyticsSeriesResponse } from "../../api/types";
+import type { AnalyticsCatalogResponse, AnalyticsSeries, AnalyticsSeriesPoint, AnalyticsSeriesResponse } from "../../api/types";
 
 /** An IST site catalogue: assets a1..a12 with Energy and Energy Export; a1 and
  *  a2 also have per-phase Energy; "x1" serves only Energy Export. */
@@ -63,4 +63,71 @@ export function seriesResponseFixture(overrides: Partial<AnalyticsSeriesResponse
     series: [],
     ...overrides,
   };
+}
+
+/** 05 Oct 2026, 00:00 IST. */
+export const SERIES_FROM = "2026-10-04T18:30:00.000Z";
+export const SERIES_TO = "2026-10-05T18:30:00.000Z";
+const QUARTER_HOUR = 15 * 60_000;
+
+/** A fully measured 15-minute Energy point at bucket `i` from SERIES_FROM
+ *  (60 s capture: 15 expected intervals); override any field. */
+export function pointFixture(i: number, value: number | null, overrides: Partial<AnalyticsSeriesPoint> = {}): AnalyticsSeriesPoint {
+  const start = Date.parse(SERIES_FROM) + i * QUARTER_HOUR;
+  return {
+    bucket_start: new Date(start).toISOString(),
+    bucket_end: new Date(start + QUARTER_HOUR).toISOString(),
+    value,
+    min: null,
+    max: null,
+    bucket_state: "COMPLETE",
+    data_state: value == null ? "GAP" : "MEASURED",
+    expected_intervals: 15,
+    assigned_expected_intervals: 15,
+    valid_intervals: value == null ? 0 : 15,
+    invalid_intervals: 0,
+    reconstructed_intervals: 0,
+    evidence_flags: [],
+    evidence_status: value == null ? null : "GOOD",
+    quality: null,
+    is_partial: false,
+    ...overrides,
+  };
+}
+
+/** An OK Energy series for asset `assetId` with the given values. */
+export function seriesFixture(
+  assetId: string,
+  values: (number | null)[],
+  overrides: Partial<AnalyticsSeries> = {},
+): AnalyticsSeries {
+  return {
+    asset_id: assetId,
+    asset_name: `Asset ${assetId}`,
+    data_point: "ENERGY_IMPORT",
+    label: "Energy",
+    qualifier: "TOTAL",
+    unit: "kWh",
+    chart_kind: "bar",
+    aggregation: "sum",
+    status: "OK",
+    status_reasons: [],
+    resolution_available_from: null,
+    first_data_at: SERIES_FROM,
+    last_data_at: null,
+    stale: false,
+    points: values.map((v, i) => pointFixture(i, v)),
+    summary: { total: null, average: null, min: null, min_at: null, max: null, max_at: null },
+    ...overrides,
+  };
+}
+
+/** A series the chart does not draw, with no points. */
+export function notShownFixture(
+  assetId: string,
+  status: AnalyticsSeries["status"],
+  reasons: AnalyticsSeries["status_reasons"] = [],
+  overrides: Partial<AnalyticsSeries> = {},
+): AnalyticsSeries {
+  return seriesFixture(assetId, [], { status, status_reasons: reasons, first_data_at: null, ...overrides });
 }
