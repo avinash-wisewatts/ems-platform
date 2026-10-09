@@ -167,17 +167,17 @@ describe("buildDataQuality -- groups", () => {
     );
     expect(groups).toHaveLength(1);
     expect(groups[0]!.entries).toEqual([
-      { key: "a2:ENERGY_IMPORT:TOTAL", name: "Asset a2 · Energy", lines: [DQ_TEXT.reasonNotAssigned] },
-      { key: "unavailable:x1:ENERGY_IMPORT", name: "Asset x1 · Energy", lines: [DQ_TEXT.reasonNotAvailable] },
+      { key: "a2:ENERGY_IMPORT:TOTAL", name: "Energy-Asset a2", lines: [DQ_TEXT.reasonNotAssigned] },
+      { key: "unavailable:x1:ENERGY_IMPORT", name: "Energy-Asset x1", lines: [DQ_TEXT.reasonNotAvailable] },
     ]);
   });
 
   it("a NOT_AVAILABLE series without a name or label is named from the catalogue, never by its code", () => {
     const s = notShownFixture("a3", "NOT_AVAILABLE", [], { asset_name: null, label: null });
     const groups = buildDataQuality(input([s]), catalog, TZ);
-    expect(groups[0]!.entries[0]!.name).toBe("Asset a3 · Energy");
+    expect(groups[0]!.entries[0]!.name).toBe("Energy-Asset a3");
     const unknown = notShownFixture("gone", "NOT_AVAILABLE", [], { asset_name: null, label: null, data_point: "SOMETHING_NEW" });
-    expect(buildDataQuality(input([unknown]), catalog, TZ)[0]!.entries[0]!.name).toBe("Asset · Data point");
+    expect(buildDataQuality(input([unknown]), catalog, TZ)[0]!.entries[0]!.name).toBe("Data point-Asset");
   });
 
   it("Incomplete: not received and could not be used as durations at the capture interval, and the period range", () => {
@@ -239,11 +239,43 @@ describe("buildDataQuality -- groups", () => {
     expect(buildDataQuality(input([seriesFixture("a1", [1], { stale: null, last_data_at: "2026-10-05T04:15:00Z" })]), catalog, TZ)).toEqual([]);
   });
 
+  it("measurements: missing samples are Incomplete data without the Energy-only explanation", () => {
+    const voltage = seriesFixture("a1", [230, 231], {
+      data_point: "VOLTAGE_LINE_NEUTRAL",
+      label: "Voltage",
+      unit: "V",
+      chart_kind: "line",
+      aggregation: "mean",
+      points: [
+        pointFixture(0, 230, { quality: "GOOD", evidence_status: null }),
+        pointFixture(1, 231, { valid_intervals: 10, quality: "PARTIAL", evidence_status: null }),
+      ],
+    });
+    const groups = buildDataQuality(input([voltage]), catalog, TZ);
+    const incomplete = groups.find((g) => g.id === "incomplete")!;
+    expect(incomplete.explanation).toEqual([DQ_TEXT.incompleteExplanation]);
+    expect(incomplete.entries[0]!.lines[0]).toBe("Not received: 5 min");
+    expect(bucketQualityNotes(voltage, voltage.points[1]!, TZ)).toEqual([DQ_TEXT.tipNotReceived]);
+  });
+
+  it("a data point without phases (Frequency) is disclosed as System values under 3 Phase", () => {
+    const frequency = seriesFixture("a1", [50], {
+      data_point: "FREQUENCY",
+      label: "Frequency",
+      unit: "Hz",
+      chart_kind: "line",
+      aggregation: "mean",
+    });
+    const phase = seriesFixture("a2", [1], { data_point: "ACTIVE_POWER", label: "Power", qualifier: "L1" });
+    const groups = buildDataQuality(input([frequency, phase], {}, "three_phase"), catalog, TZ);
+    expect(groups.find((g) => g.id === "system-values")!.entries.map((e) => e.name)).toEqual(["Frequency-Asset a1"]);
+  });
+
   it("Shown as System values: only under 3 Phase, series name only", () => {
     const s = seriesFixture("a1", [1]);
     expect(buildDataQuality(input([s]), catalog, TZ)).toEqual([]);
     const [group] = buildDataQuality(input([s], {}, "three_phase"), catalog, TZ);
-    expect(group!.entries).toEqual([{ key: "a1:ENERGY_IMPORT:TOTAL", name: "Asset a1 · Energy", lines: [] }]);
+    expect(group!.entries).toEqual([{ key: "a1:ENERGY_IMPORT:TOTAL", name: "Energy-Asset a1", lines: [] }]);
     // Per-phase series are not System values.
     const phase = seriesFixture("a2", [1], { qualifier: "L1" });
     expect(buildDataQuality(input([phase], {}, "three_phase"), catalog, TZ)).toEqual([]);
@@ -253,7 +285,10 @@ describe("buildDataQuality -- groups", () => {
     const a = seriesFixture("a2", [1], { stale: true, last_data_at: "2026-10-05T06:00:00Z" });
     const b = seriesFixture("a1", [1], { stale: true, last_data_at: "2026-10-05T06:00:00Z" });
     const [group] = buildDataQuality(input([a, b]), catalog, TZ);
-    expect(group!.entries.map((e) => e.name)).toEqual(["Asset a2 · Energy", "Asset a1 · Energy"]);
+    expect(group!.entries.map((e) => [e.key, e.name])).toEqual([
+      ["a2:ENERGY_IMPORT:TOTAL", "Energy-Asset a2"],
+      ["a1:ENERGY_IMPORT:TOTAL", "Energy-Asset a1"],
+    ]);
   });
 });
 
@@ -285,10 +320,10 @@ describe("groupByReason -- repeated identical reasons with a count (Amendment 7)
     );
     const [notShown] = groups;
     expect(notShown!.heading).toBe("Series not shown in chart · 5");
-    expect(notShown!.reasonGroups!.map((r) => [r.lines, r.entries.map((e) => e.name)])).toEqual([
-      [[DQ_TEXT.reasonNoData], ["Asset a2 · Energy", "Asset a4 · Energy"]],
-      [[DQ_TEXT.reasonNotAvailable], ["Asset x1 · Energy", "Asset a5 · Data point"]],
-      [[DQ_TEXT.reasonNotAssigned], ["Asset a3 · Energy"]],
+    expect(notShown!.reasonGroups!.map((r) => [r.lines, r.entries.map((e) => [e.key, e.name])])).toEqual([
+      [[DQ_TEXT.reasonNoData], [["a2:ENERGY_IMPORT:TOTAL", "Energy-Asset a2"], ["a4:ENERGY_IMPORT:TOTAL", "Energy-Asset a4"]]],
+      [[DQ_TEXT.reasonNotAvailable], [["unavailable:x1:ENERGY_IMPORT", "Energy-Asset x1"], ["unavailable:a5:SOMETHING_NEW", "Data point-Asset a5"]]],
+      [[DQ_TEXT.reasonNotAssigned], [["a3:ENERGY_IMPORT:TOTAL", "Energy-Asset a3"]]],
     ]);
   });
 

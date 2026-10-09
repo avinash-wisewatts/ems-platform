@@ -436,13 +436,16 @@ def test_migration_291_bound_is_derived_only_from_correctable_candidates():
     assert "plan_cache_mode" not in body
 
 
-def test_manifest_registers_migration_291_last():
+def test_manifest_registers_migration_291():
     import csv
 
     rows = list(csv.DictReader(MANIFEST.read_text(encoding="utf-8").splitlines()))
     migrations = [r for r in rows if r["target_category"] == "migration"]
-    assert migrations[-1]["source_file"] == "291_environment_loader_bounded_update.sql"
-    assert migrations[-1]["target_path"] == "postgres/migrations/291_environment_loader_bounded_update.sql"
+    files = [r["source_file"] for r in migrations]
+    assert "291_environment_loader_bounded_update.sql" in files
+    row = migrations[files.index("291_environment_loader_bounded_update.sql")]
+    assert row["target_path"] == "postgres/migrations/291_environment_loader_bounded_update.sql"
+    assert files.index("291_environment_loader_bounded_update.sql") > files.index("290_energy_register_delta_15min.sql")
 
 
 def test_migration_227_embedded_body_is_the_228_body_minus_the_device_predicate():

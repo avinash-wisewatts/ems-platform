@@ -175,6 +175,34 @@ describe("renderedSeriesCount (D70)", () => {
     // a1 Energy has phases (3); a1 Export, a3 Energy, a3 Export do not (1 each).
     expect(renderedSeriesCount(selections, "three_phase", catalog)).toBe(6);
   });
+
+  it("measurements: line-to-line voltage expands to its three phases, Frequency stays one series", () => {
+    const base = catalogFixture();
+    const a1 = base.assets[0]!;
+    const measurement = (data_point: string, label: string, unit: string, threePhase: boolean) => ({
+      ...a1.data_points[0]!,
+      data_point,
+      label,
+      unit,
+      chart_kind: "line" as const,
+      aggregation: "mean" as const,
+      phases: { system: true, three_phase: threePhase },
+    });
+    const withMeasurements = catalogFixture({
+      assets: [
+        {
+          ...a1,
+          data_points: [measurement("VOLTAGE_LINE_LINE", "Line to Line Voltage", "V", true), measurement("FREQUENCY", "Frequency", "Hz", false)],
+        },
+      ],
+    });
+    const { selections } = planSelections(
+      draft({ assetIds: ["a1"], dataPoints: ["VOLTAGE_LINE_LINE", "FREQUENCY"] }),
+      withMeasurements,
+    );
+    expect(renderedSeriesCount(selections, "three_phase", withMeasurements)).toBe(4);
+    expect(renderedSeriesCount(selections, "system", withMeasurements)).toBe(2);
+  });
 });
 
 describe("validateForUpdate (D45, D46, D48, D78)", () => {

@@ -104,8 +104,8 @@ export type DataPointGroupName = (typeof DATA_POINT_GROUP_ORDER)[number];
  * this table only decides where each one is listed. It covers every platform
  * parameter whose D67 placement is unambiguous:
  * - Frequently Used: CURRENT (Current), ENERGY_IMPORT (Energy, also in
- *   Power), POWER_FACTOR (Power Factor), VOLTAGE_LINE_NEUTRAL (Voltage). The
- *   Frequently Used item "Power" (active power) has no platform parameter yet.
+ *   Power), POWER_FACTOR (Power Factor), VOLTAGE_LINE_NEUTRAL (Voltage),
+ *   ACTIVE_POWER (Power -- active power, Frequently Used only in D67).
  * - Power: ENERGY_EXPORT, APPARENT_ENERGY, APPARENT_POWER, FREQUENCY,
  *   REACTIVE_POWER, VOLTAGE_LINE_LINE (Line to Line Voltage).
  * - Environmental: TEMPERATURE, HUMIDITY (Relative Humidity), ILLUMINANCE
@@ -113,10 +113,12 @@ export type DataPointGroupName = (typeof DATA_POINT_GROUP_ORDER)[number];
  * - Misc/Other: BATTERY_VOLTAGE.
  * Codes with no unambiguous D67 item (CURRENT_THD, PHASE_ANGLE, DEW_POINT,
  * OCCUPANCY_ACTIVITY, OCCUPANCY_TIME_SINCE_LAST_EVENT) and codes added later
- * are listed under Misc/Other, so a catalogue point is never hidden. The v1
- * registry serves only ENERGY_IMPORT and ENERGY_EXPORT (ADR-022 decision 3).
+ * are listed under Misc/Other, so a catalogue point is never hidden. The
+ * registry (B3) serves Energy, Energy Export, Power, Reactive Power, Current,
+ * Voltage, Line to Line Voltage, Power Factor and Frequency.
  */
 export const DATA_POINT_GROUPS: Readonly<Record<string, readonly DataPointGroupName[]>> = {
+  ACTIVE_POWER: ["Frequently Used"],
   CURRENT: ["Frequently Used"],
   ENERGY_IMPORT: ["Frequently Used", "Power"],
   POWER_FACTOR: ["Frequently Used"],

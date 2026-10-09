@@ -477,9 +477,11 @@ export type AlertListResponse = {
 // timestamps are UTC ISO-8601 strings; site-local presentation is the
 // frontend's job (ADR-019).
 
-/** Registry data-point codes. v1 serves only ENERGY_IMPORT ("Energy") and
- *  ENERGY_EXPORT ("Energy Export"); the registry can grow, so any code the
- *  catalogue returns is accepted. */
+/** Registry data-point codes (B3): ENERGY_IMPORT ("Energy"), ENERGY_EXPORT
+ *  ("Energy Export"), ACTIVE_POWER ("Power"), REACTIVE_POWER, CURRENT,
+ *  VOLTAGE_LINE_NEUTRAL ("Voltage"), VOLTAGE_LINE_LINE, POWER_FACTOR and
+ *  FREQUENCY; the registry can grow, so any code the catalogue returns is
+ *  accepted. */
 export type AnalyticsDataPointCode = "ENERGY_IMPORT" | "ENERGY_EXPORT" | (string & {});
 
 export type AnalyticsResolutionCode = "1m" | "15m" | "30m" | "1h" | "1d";
@@ -627,7 +629,8 @@ export type AnalyticsSeries = {
   asset_name: string | null;
   data_point: AnalyticsDataPointCode;
   label: string | null;
-  /** "TOTAL" = System; "L1"/"L2"/"L3" per phase. Never shown to customers (D83). */
+  /** "TOTAL" = System; "L1"/"L2"/"L3" per phase ("L12"/"L23"/"L31" for
+   *  line-to-line voltage). Never shown to customers (D83). */
   qualifier: string;
   unit: string | null;
   chart_kind: "bar" | "line";

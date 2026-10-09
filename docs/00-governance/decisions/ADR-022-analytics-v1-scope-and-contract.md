@@ -426,3 +426,54 @@ group 6 from `RECONSTRUCTED_TIMING`; group 7 from `phase = three_phase` with a
 6. **Production readiness.** Scenarios that cannot be validated with current
    staging data (meter reset / rollover, reconstructed timing, and others
    recorded in the feature document) are recorded as unverified, not passed.
+
+## Amendment 8 (2026-10-09): B3 — measurements and per-phase Energy
+
+**Decision (Product Owner, 2026-10-09).** After every enabled data point was
+assigned on staging (55 asset–device pairs, 3,021 assignments, effective
+2026-10-09 12:56:55 IST), the registry grows beyond the Energy-only pilot
+(decision 3) to: Energy, Energy Export, Power (active), Reactive Power,
+Current, Voltage (line-to-neutral), Line to Line Voltage, Power Factor and
+Frequency. 3 Phase is served wherever the source data and the assignments
+support it, including per-phase Energy. Apparent power and energy, the
+reactive energy registers, Current THD, phase angle, neutral current and
+environmental points stay out of the registry.
+
+**Implementation (B3, migration 292; not deployed).**
+
+1. Measurements are read from `telemetry.normalized_points` (1m) and
+   `analytics.point_telemetry_15m` composed into the site-local
+   15m/30m/1h/1d grid (business rule 10's exact mean, with min / max).
+   `analytics.point_telemetry_1h` is not read: it is on the UTC hour grid.
+   1d is limited to the 120-day 15-minute tier until B4.
+2. Values are converted from the stored source unit to the logical point's
+   unit exactly as live telemetry converts them (field-mapping scale and
+   offset, migration 025), as migration 289 required of this layer.
+3. Per-phase Energy is read from `analytics.energy_register_delta_15min`
+   (migration 290) at 15m and coarser, in kWh, with the register evidence;
+   at 1m 3 Phase shows System Energy (no 1-minute per-phase source). System
+   Energy is unchanged (migrations 279–286). Phase series are never presented
+   as summing to the System series.
+4. Attribution: a persisted 15-minute row counts only when it lies entirely
+   inside an assignment; a partial first / last 15 minutes is read from raw
+   samples by their own time. New assignments are never backfilled.
+5. Measurement Data quality uses the existing lattice (`GOOD` / `PARTIAL` /
+   `GAP`) with interval counts at the site capture interval; `stale` is null
+   for measurements and per-phase Energy; `summary.total` is null for
+   measurements.
+6. Customer names (PO naming convention, 2026-10-09): chart legend and
+   tooltip `<Asset name>-<code>` (System P, Q, V, I, PF, F; phases P1–P3,
+   Q1–Q3, V1–V3, I1–I3, PF1–PF3, E1–E3, Ex1–Ex3, line-to-line V12/V23/V31;
+   Energy, Energy Export and Line to Line Voltage System keep their name);
+   Statistics and Data quality use the measurement name, the phase code and
+   the asset name (`Power-Chiller 1`, `Reactive Power-Q1-AHU 2`), so
+   different assets never share a label. Power is in Frequently Used.
+
+**Line-to-line evidence (2026-10-09):** the mapping Eniscope `U1`/`U2`/`U3`
+→ L12/L23/L31 (shown V12/V23/V31) is recorded as a confirmed vendor mapping
+in `postgres/ddl/110_enhance_eniscope_energy_profile.sql`, and staging
+telemetry agrees (U/V = √3; `U` = mean of `U1`–`U3`; each field closest to
+its mapped pair). Line to Line Voltage System keeps its readable label (no
+authoritative code). **Open (Product Owner):** confirm the pair order from
+Eniscope documentation (not held in the repository).
+

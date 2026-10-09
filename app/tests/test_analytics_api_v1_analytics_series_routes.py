@@ -119,7 +119,8 @@ def _login(portal_client, monkeypatch: pytest.MonkeyPatch) -> None:
     assert response.status_code == 303
 
 
-def _patch(monkeypatch, *, allowed=True, catalog=None, energy=None, calls=None, floors=None, as_of=AS_OF):
+def _patch(monkeypatch, *, allowed=True, catalog=None, energy=None, calls=None, floors=None, as_of=AS_OF,
+           points=None, point_floors=None):
     calls = calls if calls is not None else []
 
     async def access(portal_user_id, site_id):
@@ -150,7 +151,18 @@ def _patch(monkeypatch, *, allowed=True, catalog=None, energy=None, calls=None, 
     monkeypatch.setattr("src.routers.analytics_api.fetch_analytics_as_of", fetch_as_of)
     monkeypatch.setattr("src.routers.analytics_api.fetch_analytics_catalog", fetch_catalog)
     monkeypatch.setattr("src.routers.analytics_api.fetch_analytics_energy_series", fetch_energy)
+    async def fetch_points(portal_user_id, site_id, specs, dt_from, dt_to, resolution, read_as_of):
+        if specs:
+            calls.append(("points", tuple((str(s.asset_id), s.data_point, s.qualifier) for s in specs), resolution))
+        return points(specs, resolution) if callable(points) else (points or [])
+
+    async def fetch_point_floors(read_as_of=None):
+        calls.append(("point_floors", read_as_of))
+        return point_floors if point_floors is not None else {"mean": dict(NO_FLOORS), "delta": dict(NO_FLOORS)}
+
     monkeypatch.setattr("src.routers.analytics_api.fetch_analytics_energy_resolution_floors", fetch_floors)
+    monkeypatch.setattr("src.routers.analytics_api.fetch_analytics_point_series", fetch_points)
+    monkeypatch.setattr("src.routers.analytics_api.fetch_analytics_point_resolution_floors", fetch_point_floors)
     return calls
 
 
@@ -186,7 +198,9 @@ def test_series_inaccessible_site_is_404_without_reading(portal_client, monkeypa
 def test_contract_is_validated_before_access_or_reads(portal_client, monkeypatch) -> None:
     _login(portal_client, monkeypatch)
     calls = _patch(monkeypatch)
-    response = _series(portal_client, f"{ASSET_A}:CURRENT")
+    # Apparent Power is assigned on staging but deliberately not in the
+    # B3 registry (Product Owner scope, 2026-10-09).
+    response = _series(portal_client, f"{ASSET_A}:APPARENT_POWER")
     assert response.status_code == 422
     assert response.json()["error"] == "unknown_data_point"
     assert calls == []
@@ -580,3 +594,185 @@ def test_floors_are_not_read_when_nothing_is_available(portal_client, monkeypatc
     calls = _patch(monkeypatch)
     assert _series(portal_client, f"{ASSET_X}:ENERGY_IMPORT").status_code == 200
     assert not any(isinstance(c, tuple) and c[0] == "floors" for c in calls)
+
+
+# ---------------------------------------------------------------------------
+# B3: measurements and per-phase Energy (migration 292 reads mocked)
+# ---------------------------------------------------------------------------
+
+
+def _measure_row(asset_id, code, qualifier, name, unit, *, cat_qualifier=None) -> dict:
+    row = _catalog_row(asset_id, name, code, qualifier if cat_qualifier is None else cat_qualifier)
+    row.update({"data_point_name": code.replace("_", " ").title(), "category": "Power", "unit": unit})
+    return row
+
+
+B3_CATALOG = CATALOG + [
+    *(_catalog_row(ASSET_A, "Chiller 1", "ENERGY_IMPORT", q) for q in ("L1", "L2", "L3")),
+    *(_measure_row(ASSET_A, "ACTIVE_POWER", q, "Chiller 1", "kW") for q in ("TOTAL", "L1", "L2", "L3")),
+    *(_measure_row(ASSET_A, "VOLTAGE_LINE_LINE", q, "Chiller 1", "V") for q in ("AVG", "L12", "L23", "L31")),
+    _measure_row(ASSET_A, "FREQUENCY", None, "Chiller 1", "Hz"),
+    _measure_row(ASSET_B, "ACTIVE_POWER", "TOTAL", "AHU 2", "kW"),
+]
+
+
+def _point_rows(index, *, values=(12.5, None), quality=("GOOD", "GAP"), reasons=None, kind="mean", start=T0) -> list[dict]:
+    if reasons:
+        return [{"series_index": index, "bucket_start": None, "bucket_end": None, "unavailable_reasons": reasons,
+                 "source_kind": kind}]
+    rows = []
+    for i, value in enumerate(values):
+        s = start + timedelta(hours=i)
+        rows.append({
+            "series_index": index, "source_kind": kind, "bucket_start": s, "bucket_end": s + timedelta(hours=1),
+            "value": None if value is None else Decimal(str(value)),
+            "min_value": None if value is None else Decimal(str(value - 1)),
+            "max_value": None if value is None else Decimal(str(value + 1)),
+            "valid_intervals": 60 if value is not None else 0, "invalid_intervals": 0, "gap_intervals": 0,
+            "reset_intervals": 0, "rollover_intervals": 0, "expected_intervals": 60,
+            "assigned_expected_intervals": 60, "data_state": "MEASURED" if value is not None else "GAP",
+            "quality": quality[i] if kind == "mean" else None, "unavailable_reasons": [],
+            "first_data_at": T0 - timedelta(days=1), "last_data_at": AS_OF - timedelta(minutes=1),
+            "assigned_in_range": True,
+        })
+    return rows
+
+
+def _points_by_spec(rows_for):
+    """Return rows for each requested spec index via rows_for(index, spec)."""
+
+    def fetch(specs, resolution):
+        out = []
+        for i, spec in enumerate(specs, start=1):
+            out += rows_for(i, spec)
+        return out
+
+    return fetch
+
+
+def _point_calls(calls):
+    return [c for c in calls if isinstance(c, tuple) and c[0] == "points"]
+
+
+def test_measurement_system_series_is_a_mean_line_without_total(portal_client, monkeypatch) -> None:
+    _login(portal_client, monkeypatch)
+    calls = _patch(monkeypatch, catalog=B3_CATALOG, points=_points_by_spec(lambda i, s: _point_rows(i)))
+    body = _series(portal_client, f"{ASSET_A}:ACTIVE_POWER").json()
+    s = body["series"][0]
+    assert (s["status"], s["qualifier"], s["chart_kind"], s["aggregation"], s["unit"], s["label"]) == (
+        "OK", "TOTAL", "line", "mean", "kW", "Power")
+    assert [(p["value"], p["min"], p["max"], p["quality"], p["evidence_status"]) for p in s["points"]] == [
+        (12.5, 11.5, 13.5, "GOOD", None), (None, None, None, "GAP", None)]
+    assert s["summary"]["total"] is None and s["summary"]["average"] == 12.5
+    assert s["stale"] is None
+    assert _point_calls(calls) == [("points", ((ASSET_A, "ACTIVE_POWER", "TOTAL"),), "1h")]
+    assert _energy_calls(calls) == []
+
+
+def test_avg_and_unqualified_system_points_are_reported_as_total(portal_client, monkeypatch) -> None:
+    _login(portal_client, monkeypatch)
+    calls = _patch(monkeypatch, catalog=B3_CATALOG, points=_points_by_spec(lambda i, s: _point_rows(i)))
+    body = _series(portal_client, f"{ASSET_A}:VOLTAGE_LINE_LINE", f"{ASSET_A}:FREQUENCY").json()
+    assert [(s["data_point"], s["qualifier"], s["status"]) for s in body["series"]] == [
+        ("VOLTAGE_LINE_LINE", "TOTAL", "OK"), ("FREQUENCY", "TOTAL", "OK")]
+    assert _point_calls(calls) == [("points", ((ASSET_A, "VOLTAGE_LINE_LINE", "AVG"), (ASSET_A, "FREQUENCY", None)), "1h")]
+
+
+def test_three_phase_expands_where_every_phase_is_assigned(portal_client, monkeypatch) -> None:
+    """Chiller 1 has P1-P3 and V12/V23/V31; AHU 2 has only System power (the
+    fallback); Frequency has no phases (System)."""
+
+    _login(portal_client, monkeypatch)
+    calls = _patch(monkeypatch, catalog=B3_CATALOG, points=_points_by_spec(lambda i, s: _point_rows(i)))
+    body = _series(
+        portal_client, f"{ASSET_A}:ACTIVE_POWER", f"{ASSET_B}:ACTIVE_POWER", f"{ASSET_A}:VOLTAGE_LINE_LINE",
+        f"{ASSET_A}:FREQUENCY", phase="three_phase",
+    ).json()
+    assert [(s["asset_id"], s["data_point"], s["qualifier"]) for s in body["series"]] == [
+        (ASSET_A, "ACTIVE_POWER", "L1"), (ASSET_A, "ACTIVE_POWER", "L2"), (ASSET_A, "ACTIVE_POWER", "L3"),
+        (ASSET_B, "ACTIVE_POWER", "TOTAL"),
+        (ASSET_A, "VOLTAGE_LINE_LINE", "L12"), (ASSET_A, "VOLTAGE_LINE_LINE", "L23"), (ASSET_A, "VOLTAGE_LINE_LINE", "L31"),
+        (ASSET_A, "FREQUENCY", "TOTAL"),
+    ]
+    assert {s["status"] for s in body["series"]} == {"OK"}
+    specs = _point_calls(calls)[0][1]
+    assert specs[3] == (ASSET_B, "ACTIVE_POWER", "TOTAL") and specs[7] == (ASSET_A, "FREQUENCY", None)
+
+
+def test_per_phase_energy_reads_the_register_tier_from_15m(portal_client, monkeypatch) -> None:
+    _login(portal_client, monkeypatch)
+    calls = _patch(monkeypatch, catalog=B3_CATALOG,
+                   points=_points_by_spec(lambda i, s: _point_rows(i, values=(1.5, 2.0), kind="delta")))
+    body = _series(portal_client, f"{ASSET_A}:ENERGY_IMPORT", phase="three_phase").json()
+    assert [(s["qualifier"], s["chart_kind"], s["aggregation"], s["summary"]["total"]) for s in body["series"]] == [
+        ("L1", "bar", "sum", 3.5), ("L2", "bar", "sum", 3.5), ("L3", "bar", "sum", 3.5)]
+    point = body["series"][0]["points"][0]
+    assert (point["min"], point["max"], point["quality"], point["evidence_status"]) == (None, None, None, "GOOD")
+    assert _energy_calls(calls) == []
+
+
+def test_per_phase_energy_at_1m_falls_back_to_system_energy(portal_client, monkeypatch) -> None:
+    _login(portal_client, monkeypatch)
+    calls = _patch(monkeypatch, catalog=B3_CATALOG, energy=[_energy_row(ASSET_A, 0, 1.0, 0.1)])
+    body = _series(portal_client, f"{ASSET_A}:ENERGY_IMPORT", phase="three_phase", resolution="1m",
+                   to="2026-09-20T01:00:00Z").json()
+    assert [s["qualifier"] for s in body["series"]] == ["TOTAL"]
+    assert _point_calls(calls) == []
+    assert [c[0] for c in _energy_calls(calls)] == ["energy"]
+
+
+def test_a_point_series_the_database_did_not_return_is_not_available(portal_client, monkeypatch) -> None:
+    """No rows for a spec (e.g. an asset the user cannot access) is
+    NOT_AVAILABLE, indistinguishable from an unknown asset."""
+
+    _login(portal_client, monkeypatch)
+    _patch(monkeypatch, catalog=B3_CATALOG,
+           points=_points_by_spec(lambda i, s: [] if s.asset_id.hex.startswith("bbbb") else _point_rows(i)))
+    body = _series(portal_client, f"{ASSET_A}:ACTIVE_POWER", f"{ASSET_B}:ACTIVE_POWER").json()
+    assert [(s["asset_id"], s["status"], s["asset_name"]) for s in body["series"]] == [
+        (ASSET_A, "OK", "Chiller 1"), (ASSET_B, "NOT_AVAILABLE", None)]
+
+
+def test_measurement_no_data_and_retention_floor_statuses(portal_client, monkeypatch) -> None:
+    _login(portal_client, monkeypatch)
+    floor = T0 + timedelta(days=1)
+
+    def rows(i, spec):
+        if spec.data_point == "FREQUENCY":
+            return _point_rows(i, reasons=["BEFORE_RETENTION_FLOOR"])
+        empty = _point_rows(i, values=(None,), quality=("GAP",))
+        for r in empty:
+            r.update(first_data_at=None, last_data_at=None)
+        return empty
+
+    _patch(monkeypatch, catalog=B3_CATALOG, points=_points_by_spec(rows),
+           point_floors={"mean": {**NO_FLOORS, "1h": floor}, "delta": dict(NO_FLOORS)})
+    body = _series(portal_client, f"{ASSET_A}:ACTIVE_POWER", f"{ASSET_A}:FREQUENCY").json()
+    power, frequency = body["series"]
+    assert (power["status"], power["status_reasons"]) == ("NO_DATA", ["NO_DATA_EVER"])
+    assert (frequency["status"], frequency["status_reasons"]) == ("RESOLUTION_UNAVAILABLE", ["BEFORE_RETENTION_FLOOR"])
+    assert frequency["resolution_available_from"] == "2026-09-21T00:00:00Z"
+
+
+def test_auto_respects_the_latest_floor_across_sources(portal_client, monkeypatch) -> None:
+    """Energy could serve 15m, but the measurement source cannot: Auto picks
+    a resolution both can serve."""
+
+    _login(portal_client, monkeypatch)
+    calls = _patch(monkeypatch, catalog=B3_CATALOG, energy=[_energy_row(ASSET_A, 0, 1.0, 0.1)],
+                   points=_points_by_spec(lambda i, s: _point_rows(i)),
+                   point_floors={"mean": {**NO_FLOORS, "15m": T0 + timedelta(minutes=1)}, "delta": dict(NO_FLOORS)})
+    body = _series(portal_client, f"{ASSET_A}:ENERGY_IMPORT", f"{ASSET_A}:ACTIVE_POWER", resolution=None).json()
+    assert (body["requested_resolution"], body["resolution"]) == ("auto", "1h")
+    assert _energy_calls(calls)[0][2] == "1h" and _point_calls(calls)[0][2] == "1h"
+
+
+def test_series_limit_counts_registry_phases(portal_client, monkeypatch) -> None:
+    """3 Phase counts three series per phased data point before any read."""
+
+    _login(portal_client, monkeypatch)
+    calls = _patch(monkeypatch, catalog=B3_CATALOG)
+    assets = [f"{i:08x}-aaaa-4aaa-8aaa-aaaaaaaaaaaa" for i in range(1, 10)]
+    response = _series(portal_client, *(f"{a}:ACTIVE_POWER" for a in assets), phase="three_phase")
+    assert response.status_code == 422 and response.json()["error"] == "too_many_series"   # 27 > 25
+    assert calls == []

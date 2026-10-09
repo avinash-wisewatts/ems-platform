@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AnalyticsSeries, AnalyticsSeriesPoint } from "../../api/types";
-import { appliedRangeLabel, buildChartModel, chartTitle, seriesName } from "./analyticsChartModel";
+import { appliedRangeLabel, buildChartModel, chartTitle } from "./analyticsChartModel";
 import { INITIAL_DRAFT, type AnalyticsDraft } from "./analyticsQuery";
 import { catalogFixture, seriesResponseFixture } from "./analyticsTestFixtures";
 
@@ -59,7 +59,7 @@ describe("buildChartModel -- the applied response on the chart", () => {
     const model = buildChartModel(seriesResponseFixture({ series: [series()] }), RANGE);
     expect(model.buckets).toEqual([0, 1, 2, 3].map((i) => ({ start: T0 + i * Q, end: T0 + (i + 1) * Q })));
     expect(model.series).toHaveLength(1);
-    expect(model.series[0]).toMatchObject({ name: "Asset a1 · Energy", unit: "kWh", kind: "bar", values: [1.5, null, 0.4, null] });
+    expect(model.series[0]).toMatchObject({ name: "Asset a1-Energy", unit: "kWh", kind: "bar", values: [1.5, null, 0.4, null] });
   });
 
   it("only OK series are drawn; NO_DATA / NOT_AVAILABLE / RESOLUTION_UNAVAILABLE / DATA_UNAVAILABLE are omitted (D6)", () => {
@@ -75,7 +75,26 @@ describe("buildChartModel -- the applied response on the chart", () => {
       }),
       RANGE,
     );
-    expect(model.series.map((s) => s.name)).toEqual(["Asset a2 · Energy"]);
+    expect(model.series.map((s) => s.name)).toEqual(["Asset a2-Energy"]);
+  });
+
+  it("measurements are lines with their own unit beside Energy bars (one Y axis per unit)", () => {
+    const power = series({
+      asset_id: "a2",
+      asset_name: "Asset a2",
+      data_point: "ACTIVE_POWER",
+      label: "Power",
+      unit: "kW",
+      chart_kind: "line",
+      aggregation: "mean",
+      points: [point(0, 12.5), point(1, 13)],
+    });
+    const model = buildChartModel(seriesResponseFixture({ series: [series(), power] }), RANGE);
+    expect(model.series.map((s) => [s.name, s.unit, s.kind])).toEqual([
+      ["Asset a1-Energy", "kWh", "bar"],
+      ["Asset a2-P", "kW", "line"],
+    ]);
+    expect(model.series[1]!.values).toEqual([12.5, 13, null, null]);
   });
 
   it("aligns series on one grid; a bucket one series lacks is a gap for it", () => {
@@ -101,16 +120,6 @@ describe("buildChartModel -- the applied response on the chart", () => {
 
   it("the X range is exactly the applied range", () => {
     expect(buildChartModel(seriesResponseFixture({ series: [series()] }), RANGE).range).toEqual({ from: T0, to: Date.parse(TO) });
-  });
-});
-
-describe("seriesName -- qualifiers are never shown (D83)", () => {
-  it("System: asset and data point", () => {
-    expect(seriesName(series())).toBe("Asset a1 · Energy");
-  });
-  it("phase series: Asset - P1 style labels (D55, D63, D74)", () => {
-    expect(seriesName(series({ data_point: "ACTIVE_POWER", qualifier: "L1" }))).toBe("Asset a1 - P1");
-    expect(seriesName(series({ data_point: "ENERGY_EXPORT", qualifier: "L3" }))).toBe("Asset a1 - Ex3");
   });
 });
 

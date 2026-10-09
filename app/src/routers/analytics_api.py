@@ -177,9 +177,13 @@ from src.auth.models import AuthenticatedPortalUser
 from src.analytics_trends_service import (
     AnalyticsCatalogResponse,
     AnalyticsSeriesResponse,
+    SOURCE_DELTA,
+    SOURCE_ENERGY,
+    SOURCE_MEAN,
     apply_floor_aware_auto,
     build_analytics_catalog_response,
     build_analytics_series_response,
+    combined_floors,
     energy_asset_ids,
     energy_resolution_retained,
     fetch_analytics_as_of,
@@ -187,8 +191,15 @@ from src.analytics_trends_service import (
     fetch_analytics_energy_availability,
     fetch_analytics_energy_resolution_floors,
     fetch_analytics_energy_series,
+    fetch_analytics_point_availability,
+    fetch_analytics_point_resolution_floors,
+    fetch_analytics_point_series,
     fetch_analytics_site,
     parse_series_request,
+    plan_series,
+    planned_kinds,
+    point_availability_requests,
+    point_specs,
 )
 from src.analytics_api_service import (
     ASSET_ENERGY_MAX_WINDOW,
@@ -1113,6 +1124,9 @@ async def get_site_analytics_catalog(
 
     rows = await fetch_analytics_catalog(user.portal_user_id, site_id)
     availability = await fetch_analytics_energy_availability(user.portal_user_id, site_id)
+    availability += await fetch_analytics_point_availability(
+        user.portal_user_id, site_id, point_availability_requests()
+    )
     floors = await fetch_analytics_energy_resolution_floors(site_id)
     return build_analytics_catalog_response(site=site, rows=rows, availability=availability, floors=floors)
 
@@ -1140,9 +1154,12 @@ async def get_site_analytics_series(
     ),
     resolution: str | None = Query(
         None,
-        description="auto (default), 1m, 15m, 30m, 1h or 1d. 1h is the UTC hour grid; 1d the site-local day.",
+        description="auto (default), 1m, 15m, 30m, 1h or 1d. 30m and 1h are on the site-local grid; 1d the site-local day.",
     ),
-    phase: str | None = Query(None, description="system (default) or three_phase."),
+    phase: str | None = Query(
+        None,
+        description="system (default) or three_phase (per-phase series where every phase is assigned; per-phase Energy from 15m).",
+    ),
     selection: list[str] | None = Query(
         None,
         description="Repeated <asset_id>:<DATA_POINT> pair, one per selected series.",
@@ -1151,11 +1168,13 @@ async def get_site_analytics_series(
     """Validates the whole request (resolution, ADR-019 maximum windows,
     phase, selections and ADR-022 limits) before any database access. A
     selection the site's catalogue cannot serve is returned with status
-    NOT_AVAILABLE, never dropped. Energy selections read the persisted
-    Energy tiers through analytics.get_portal_asset_energy_series (migration
-    282). Every read uses the same as_of. Auto is floor-aware; a request
-    starting before the served resolution's retention floor is
-    RESOLUTION_UNAVAILABLE without reading them."""
+    NOT_AVAILABLE, never dropped. System Energy reads the persisted Energy
+    tiers through analytics.get_portal_asset_energy_series (migration 282);
+    measurements and per-phase Energy read
+    analytics.get_portal_asset_point_series (migration 292, B3). Every read
+    uses the same as_of. Auto is floor-aware across every source the request
+    uses; a request starting before a source's retention floor is
+    RESOLUTION_UNAVAILABLE for those series."""
 
     user = _require_portal_user(request)
 
@@ -1179,13 +1198,24 @@ async def get_site_analytics_series(
 
     as_of = await fetch_analytics_as_of()
     catalog_rows = await fetch_analytics_catalog(user.portal_user_id, site_id)
-    asset_ids = energy_asset_ids(series_request, catalog_rows)
-    retained = True
+
+    # Which sources the request needs, then floor-aware Auto across all of
+    # them, then the final plan at the resolved resolution.
+    kinds = planned_kinds(plan_series(series_request, catalog_rows))
     floors: dict = {}
+    point_floors: dict = {}
+    if SOURCE_ENERGY in kinds:
+        floors = await fetch_analytics_energy_resolution_floors(site_id, as_of)
+    if kinds & {SOURCE_MEAN, SOURCE_DELTA}:
+        point_floors = await fetch_analytics_point_resolution_floors(as_of)
+    if kinds:
+        series_request = apply_floor_aware_auto(series_request, combined_floors(kinds, floors, point_floors))
+    planned = plan_series(series_request, catalog_rows)
+
+    asset_ids = energy_asset_ids(planned)
+    retained = True
     energy_rows: list = []
     if asset_ids:
-        floors = await fetch_analytics_energy_resolution_floors(site_id, as_of)
-        series_request = apply_floor_aware_auto(series_request, floors)
         retained = energy_resolution_retained(series_request, floors)
         if retained:
             energy_rows = await fetch_analytics_energy_series(
@@ -1197,6 +1227,15 @@ async def get_site_analytics_series(
                 series_request.resolution,
                 as_of,
             )
+    point_rows = await fetch_analytics_point_series(
+        user.portal_user_id,
+        site_id,
+        point_specs(planned),
+        series_request.dt_from,
+        series_request.dt_to,
+        series_request.resolution,
+        as_of,
+    )
     return build_analytics_series_response(
         site=site,
         request=series_request,
@@ -1205,6 +1244,8 @@ async def get_site_analytics_series(
         as_of=as_of,
         floors=floors,
         energy_resolution_available=retained,
+        point_rows=point_rows,
+        point_floors=point_floors,
     )
 
 
