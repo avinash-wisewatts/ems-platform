@@ -239,6 +239,38 @@ describe("buildDataQuality -- groups", () => {
     expect(buildDataQuality(input([seriesFixture("a1", [1], { stale: null, last_data_at: "2026-10-05T04:15:00Z" })]), catalog, TZ)).toEqual([]);
   });
 
+  it("measurements: missing samples are Incomplete data without the Energy-only explanation", () => {
+    const voltage = seriesFixture("a1", [230, 231], {
+      data_point: "VOLTAGE_LINE_NEUTRAL",
+      label: "Voltage",
+      unit: "V",
+      chart_kind: "line",
+      aggregation: "mean",
+      points: [
+        pointFixture(0, 230, { quality: "GOOD", evidence_status: null }),
+        pointFixture(1, 231, { valid_intervals: 10, quality: "PARTIAL", evidence_status: null }),
+      ],
+    });
+    const groups = buildDataQuality(input([voltage]), catalog, TZ);
+    const incomplete = groups.find((g) => g.id === "incomplete")!;
+    expect(incomplete.explanation).toEqual([DQ_TEXT.incompleteExplanation]);
+    expect(incomplete.entries[0]!.lines[0]).toBe("Not received: 5 min");
+    expect(bucketQualityNotes(voltage, voltage.points[1]!, TZ)).toEqual([DQ_TEXT.tipNotReceived]);
+  });
+
+  it("a data point without phases (Frequency) is disclosed as System values under 3 Phase", () => {
+    const frequency = seriesFixture("a1", [50], {
+      data_point: "FREQUENCY",
+      label: "Frequency",
+      unit: "Hz",
+      chart_kind: "line",
+      aggregation: "mean",
+    });
+    const phase = seriesFixture("a2", [1], { data_point: "ACTIVE_POWER", label: "Power", qualifier: "L1" });
+    const groups = buildDataQuality(input([frequency, phase], {}, "three_phase"), catalog, TZ);
+    expect(groups.find((g) => g.id === "system-values")!.entries.map((e) => e.name)).toEqual(["Asset a1 · Frequency"]);
+  });
+
   it("Shown as System values: only under 3 Phase, series name only", () => {
     const s = seriesFixture("a1", [1]);
     expect(buildDataQuality(input([s]), catalog, TZ)).toEqual([]);

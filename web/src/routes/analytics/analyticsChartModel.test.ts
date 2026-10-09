@@ -78,6 +78,25 @@ describe("buildChartModel -- the applied response on the chart", () => {
     expect(model.series.map((s) => s.name)).toEqual(["Asset a2 · Energy"]);
   });
 
+  it("measurements are lines with their own unit beside Energy bars (one Y axis per unit)", () => {
+    const power = series({
+      asset_id: "a2",
+      asset_name: "Asset a2",
+      data_point: "ACTIVE_POWER",
+      label: "Power",
+      unit: "kW",
+      chart_kind: "line",
+      aggregation: "mean",
+      points: [point(0, 12.5), point(1, 13)],
+    });
+    const model = buildChartModel(seriesResponseFixture({ series: [series(), power] }), RANGE);
+    expect(model.series.map((s) => [s.name, s.unit, s.kind])).toEqual([
+      ["Asset a1 · Energy", "kWh", "bar"],
+      ["Asset a2 · Power", "kW", "line"],
+    ]);
+    expect(model.series[1]!.values).toEqual([12.5, 13, null, null]);
+  });
+
   it("aligns series on one grid; a bucket one series lacks is a gap for it", () => {
     const short = series({ asset_id: "a2", asset_name: "Asset a2", points: [point(1, 2)] });
     const model = buildChartModel(seriesResponseFixture({ series: [series(), short] }), RANGE);
@@ -111,6 +130,26 @@ describe("seriesName -- qualifiers are never shown (D83)", () => {
   it("phase series: Asset - P1 style labels (D55, D63, D74)", () => {
     expect(seriesName(series({ data_point: "ACTIVE_POWER", qualifier: "L1" }))).toBe("Asset a1 - P1");
     expect(seriesName(series({ data_point: "ENERGY_EXPORT", qualifier: "L3" }))).toBe("Asset a1 - Ex3");
+    expect(seriesName(series({ data_point: "CURRENT", qualifier: "L2" }))).toBe("Asset a1 - I2");
+    expect(seriesName(series({ data_point: "VOLTAGE_LINE_NEUTRAL", qualifier: "L1" }))).toBe("Asset a1 - V1");
+    expect(seriesName(series({ data_point: "POWER_FACTOR", qualifier: "L3" }))).toBe("Asset a1 - PF3");
+  });
+  it("line-to-line voltage phases are V12, V23, V31", () => {
+    expect(seriesName(series({ data_point: "VOLTAGE_LINE_LINE", qualifier: "L12" }))).toBe("Asset a1 - V12");
+    expect(seriesName(series({ data_point: "VOLTAGE_LINE_LINE", qualifier: "L31" }))).toBe("Asset a1 - V31");
+  });
+  it("a phase without an agreed prefix keeps the data point label (D63 open)", () => {
+    expect(seriesName(series({ data_point: "REACTIVE_POWER", label: "Reactive Power", qualifier: "L2" }))).toBe(
+      "Asset a1 · Reactive Power 2",
+    );
+  });
+  it("System measurement series: the plain name, never a qualifier", () => {
+    expect(seriesName(series({ data_point: "FREQUENCY", label: "Frequency", qualifier: "TOTAL" }))).toBe(
+      "Asset a1 · Frequency",
+    );
+    expect(seriesName(series({ data_point: "VOLTAGE_LINE_LINE", label: "Line to Line Voltage" }))).toBe(
+      "Asset a1 · Line to Line Voltage",
+    );
   });
 });
 

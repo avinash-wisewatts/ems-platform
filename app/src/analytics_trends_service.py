@@ -4,6 +4,9 @@ data-point registry and data access.
 B1  GET /api/v1/sites/{site_id}/analytics/catalog
 B1b data availability per catalogue data point (added to the catalogue)
 B2  GET /api/v1/sites/{site_id}/analytics/series (Energy data points)
+B3  measurements and per-phase Energy in the catalogue and the series
+    (analytics.get_portal_asset_point_series and its availability and floor
+    reads, migration 292)
 
 Every value comes from a portal-scoped SECURITY DEFINER read:
 analytics.get_portal_analytics_catalog (migration 276),
@@ -35,42 +38,92 @@ from src.analytics_api_service import ApiContractError, _read_rows, parse_time_r
 
 
 # ---------------------------------------------------------------------------
-# Curated data-point registry (ADR-022 decision 2).
+# Curated data-point registry (ADR-022 decision 2, B3 scope decided by the
+# Product Owner 2026-10-09: Energy, active and reactive power, voltage,
+# current, power factor and frequency).
 #
 # A confirmed asset_points binding appears in the customer catalogue only if
 # its parameter is listed here AND its qualifier is one this registry can
-# serve. v1 is the Energy-only pilot (ADR-022 decision 3): Active Energy
-# Import and Export, System (TOTAL) only -- the Energy tiers that serve them
-# are attributed through the *_TOTAL logical points, so per-phase Energy
-# is not offered even where L1/L2/L3 points exist. Adding a parameter here is
-# gated on the open Product Owner questions recorded in
-# docs/07-features/analytics/README.md.
+# serve. `qualifiers[0]` is the System qualifier (the canonical system-level
+# logical point: TOTAL, the AVG voltage, or None for an unqualified point
+# such as Frequency); the rest are the phase qualifiers 3 Phase expands into.
+# The API always reports a System series with qualifier "TOTAL" (D83 -- the
+# customer never sees qualifiers) and a phase series with its own qualifier.
+#
+# Energy System keeps the persisted Energy tiers (migrations 279-286);
+# per-phase Energy (L1-L3) is read from the register-delta tier (migration
+# 290) and has no 1-minute source. Measurements are read through
+# analytics.get_portal_asset_point_series (migration 292). A phase value is
+# that phase's own measurement: phase series never claim to add up to the
+# System series (Current TOTAL and the voltage AVG are averages, and phase
+# register deltas are separate registers).
 # ---------------------------------------------------------------------------
 
 SYSTEM_QUALIFIER = "TOTAL"
 THREE_PHASE_QUALIFIERS: tuple[str, ...] = ("L1", "L2", "L3")
+LINE_LINE_QUALIFIERS: tuple[str, ...] = ("L12", "L23", "L31")
 
 
 @dataclass(frozen=True)
 class DataPointDefinition:
     chart_kind: str          # "bar" | "line"
     aggregation: str         # "sum" | "mean"
-    qualifiers: tuple[str, ...]
+    # qualifiers[0] = System qualifier (None = unqualified point); the rest
+    # are the phase qualifiers.
+    qualifiers: tuple[str | None, ...]
     energy_direction: str | None = None   # "import" | "export" for the Energy tiers
     # Customer-facing label. None falls back to the parameter name.
     label: str | None = None
 
+    @property
+    def system_qualifier(self) -> str | None:
+        return self.qualifiers[0]
+
+    @property
+    def phase_qualifiers(self) -> tuple[str, ...]:
+        return tuple(q for q in self.qualifiers[1:] if q is not None)
+
 
 # Labels: platform-wide Energy terminology (Analytics UI decision D73):
 # "Energy" is consumed/imported energy, "Energy Export" is exported energy.
+# Measurement labels follow the D67 data-point list ("Power" is active power,
+# "Voltage" line-to-neutral, "Line to Line Voltage").
 ANALYTICS_DATA_POINTS: dict[str, DataPointDefinition] = {
     "ENERGY_IMPORT": DataPointDefinition(
-        chart_kind="bar", aggregation="sum", qualifiers=(SYSTEM_QUALIFIER,), energy_direction="import",
-        label="Energy",
+        chart_kind="bar", aggregation="sum", qualifiers=(SYSTEM_QUALIFIER, *THREE_PHASE_QUALIFIERS),
+        energy_direction="import", label="Energy",
     ),
     "ENERGY_EXPORT": DataPointDefinition(
-        chart_kind="bar", aggregation="sum", qualifiers=(SYSTEM_QUALIFIER,), energy_direction="export",
-        label="Energy Export",
+        chart_kind="bar", aggregation="sum", qualifiers=(SYSTEM_QUALIFIER, *THREE_PHASE_QUALIFIERS),
+        energy_direction="export", label="Energy Export",
+    ),
+    "ACTIVE_POWER": DataPointDefinition(
+        chart_kind="line", aggregation="mean", qualifiers=(SYSTEM_QUALIFIER, *THREE_PHASE_QUALIFIERS),
+        label="Power",
+    ),
+    "REACTIVE_POWER": DataPointDefinition(
+        chart_kind="line", aggregation="mean", qualifiers=(SYSTEM_QUALIFIER, *THREE_PHASE_QUALIFIERS),
+        label="Reactive Power",
+    ),
+    "CURRENT": DataPointDefinition(
+        chart_kind="line", aggregation="mean", qualifiers=(SYSTEM_QUALIFIER, *THREE_PHASE_QUALIFIERS),
+        label="Current",
+    ),
+    "VOLTAGE_LINE_NEUTRAL": DataPointDefinition(
+        chart_kind="line", aggregation="mean", qualifiers=("AVG", *THREE_PHASE_QUALIFIERS),
+        label="Voltage",
+    ),
+    "VOLTAGE_LINE_LINE": DataPointDefinition(
+        chart_kind="line", aggregation="mean", qualifiers=("AVG", *LINE_LINE_QUALIFIERS),
+        label="Line to Line Voltage",
+    ),
+    "POWER_FACTOR": DataPointDefinition(
+        chart_kind="line", aggregation="mean", qualifiers=(SYSTEM_QUALIFIER, *THREE_PHASE_QUALIFIERS),
+        label="Power Factor",
+    ),
+    "FREQUENCY": DataPointDefinition(
+        chart_kind="line", aggregation="mean", qualifiers=(None,),
+        label="Frequency",
     ),
 }
 
@@ -313,9 +366,12 @@ class SeriesRequest:
 
 
 def _series_count(selection: Selection, phase: str) -> int:
+    """Series a selection can expand into (the registry's phases; an asset
+    without per-phase values returns fewer, never more)."""
+
     definition = ANALYTICS_DATA_POINTS[selection.data_point]
-    if phase == "three_phase" and set(THREE_PHASE_QUALIFIERS) <= set(definition.qualifiers):
-        return len(THREE_PHASE_QUALIFIERS)
+    if phase == "three_phase" and definition.phase_qualifiers:
+        return len(definition.phase_qualifiers)
     return 1
 
 
@@ -495,6 +551,98 @@ async def fetch_analytics_energy_resolution_floors(
     return {row["resolution"]: row["earliest_available"] for row in rows}
 
 
+# Source kinds of the generic read (migration 292): "mean" = measurements,
+# "delta" = per-phase Energy register deltas. "energy" = the Energy System
+# tiers (above).
+SOURCE_ENERGY = "energy"
+SOURCE_MEAN = "mean"
+SOURCE_DELTA = "delta"
+
+
+@dataclass(frozen=True)
+class PointSpec:
+    """One series of the generic read: asset, parameter code and the
+    qualifier of the logical point (None = unqualified)."""
+
+    asset_id: UUID
+    data_point: str
+    qualifier: str | None
+
+
+async def fetch_analytics_point_availability(
+    portal_user_id: int, site_id: UUID, points: list[tuple[str, str | None]]
+) -> list[dict[str, Any]]:
+    """First / last data per (asset, parameter, qualifier) for the requested
+    registry points, from analytics.get_portal_analytics_point_availability
+    (migration 292). Null bounds = assigned, no data yet."""
+
+    if not points:
+        return []
+    return await _read_rows(
+        """
+        SELECT asset_id, data_point, qualifier, available_from, available_to
+        FROM analytics.get_portal_analytics_point_availability(%s, %s, %s::text[], %s::text[])
+        """,
+        (portal_user_id, str(site_id), [p for p, _ in points], [q for _, q in points]),
+    )
+
+
+async def fetch_analytics_point_series(
+    portal_user_id: int,
+    site_id: UUID,
+    specs: list[PointSpec],
+    dt_from: datetime,
+    dt_to: datetime,
+    resolution: str,
+    as_of: datetime,
+) -> list[dict[str, Any]]:
+    """Generic series rows (migration 292), series_index = 1-based position
+    in `specs`."""
+
+    if not specs:
+        return []
+    return await _read_rows(
+        """
+        SELECT
+            series_index, asset_id, data_point, qualifier, source_kind,
+            bucket_start, bucket_end, value, min_value, max_value,
+            valid_intervals, invalid_intervals, gap_intervals, reset_intervals, rollover_intervals,
+            expected_intervals, assigned_expected_intervals, data_state, quality,
+            unavailable_reasons, first_data_at, last_data_at, assigned_in_range
+        FROM analytics.get_portal_asset_point_series(
+            %s, %s, %s::uuid[], %s::text[], %s::text[], %s, %s, %s, %s)
+        """,
+        (
+            portal_user_id,
+            str(site_id),
+            [str(s.asset_id) for s in specs],
+            [s.data_point for s in specs],
+            [s.qualifier for s in specs],
+            dt_from,
+            dt_to,
+            resolution,
+            as_of,
+        ),
+    )
+
+
+async def fetch_analytics_point_resolution_floors(
+    as_of: datetime | None = None,
+) -> dict[str, dict[str, datetime | None]]:
+    """source kind -> resolution -> earliest instant its source retains
+    (migration 292). A missing resolution means the source cannot serve it
+    (per-phase Energy has no 1m)."""
+
+    rows = await _read_rows(
+        "SELECT source_kind, resolution, earliest_available FROM analytics.get_analytics_point_resolution_floors(%s)",
+        (as_of,),
+    )
+    floors: dict[str, dict[str, datetime | None]] = {}
+    for row in rows:
+        floors.setdefault(row["source_kind"], {})[row["resolution"]] = row["earliest_available"]
+    return floors
+
+
 def apply_floor_aware_auto(request: SeriesRequest, floors: dict[str, datetime | None]) -> SeriesRequest:
     """Auto never lands on a resolution that cannot serve the range: when the
     window-based choice starts before its retention floor, the next coarser
@@ -560,6 +708,31 @@ def _available_pairs(rows: list[dict[str, Any]]) -> dict[tuple[str, str], dict[s
     return pairs
 
 
+def _catalog_qualifiers(rows: list[dict[str, Any]]) -> dict[tuple[str, str], set[str | None]]:
+    """(asset_id, data_point) -> the registry-servable qualifiers the asset
+    has an assignment of (any period)."""
+
+    present: dict[tuple[str, str], set[str | None]] = {}
+    for row in rows:
+        definition = ANALYTICS_DATA_POINTS.get(row["data_point"])
+        if definition is None or row["qualifier"] not in definition.qualifiers:
+            continue
+        present.setdefault((str(row["asset_id"]), row["data_point"]), set()).add(row["qualifier"])
+    return present
+
+
+def point_availability_requests() -> list[tuple[str, str | None]]:
+    """(parameter, System qualifier) of every registry point that is not
+    served by the Energy System tiers -- the bounds the catalogue needs from
+    analytics.get_portal_analytics_point_availability."""
+
+    return [
+        (code, definition.system_qualifier)
+        for code, definition in ANALYTICS_DATA_POINTS.items()
+        if definition.energy_direction is None
+    ]
+
+
 def _merge_periods(
     periods: set[tuple[datetime | None, datetime | None]],
 ) -> list[AnalyticsAssignmentPeriod]:
@@ -604,10 +777,15 @@ def build_analytics_catalog_response(
     periods (one catalogue row per period since migration 288).
     """
 
-    bounds = {
-        (str(r["asset_id"]), r["data_point"]): (r.get("available_from"), r.get("available_to"))
-        for r in (availability or [])
-    }
+    bounds: dict[tuple[str, str], tuple[datetime | None, datetime | None]] = {}
+    for r in availability or []:
+        key = (str(r["asset_id"]), r["data_point"])
+        low, high = bounds.get(key, (None, None))
+        start, end = _utc(r.get("available_from")), _utc(r.get("available_to"))
+        bounds[key] = (
+            start if low is None else (low if start is None else min(low, start)),
+            end if high is None else (high if end is None else max(high, end)),
+        )
     assets: dict[str, dict[str, Any]] = {}
     qualifiers: dict[tuple[str, str], set[str]] = {}
     periods: dict[tuple[str, str], set[tuple[datetime | None, datetime | None]]] = {}
@@ -644,8 +822,9 @@ def build_analytics_catalog_response(
                     chart_kind=definition.chart_kind,
                     aggregation=definition.aggregation,
                     phases=AnalyticsPhases(
-                        system=SYSTEM_QUALIFIER in present,
-                        three_phase=set(THREE_PHASE_QUALIFIERS) <= present,
+                        system=definition.system_qualifier in present,
+                        three_phase=bool(definition.phase_qualifiers)
+                        and set(definition.phase_qualifiers) <= present,
                     ),
                     available_from=_utc(available_from),
                     available_to=_utc(available_to),
@@ -683,18 +862,105 @@ def build_analytics_catalog_response(
 # Response building -- series.
 # ---------------------------------------------------------------------------
 
-def energy_asset_ids(request: SeriesRequest, catalog_rows: list[dict[str, Any]]) -> list[UUID]:
-    """Assets whose Energy selections the catalogue can serve -- the only
-    assets the Energy series read is asked for."""
+@dataclass(frozen=True)
+class PlannedSeries:
+    """One response series: which source serves it, and with what qualifier.
+
+    kind: SOURCE_ENERGY (Energy System tiers), SOURCE_MEAN (measurements),
+    SOURCE_DELTA (per-phase Energy) or None (NOT_AVAILABLE)."""
+
+    selection: Selection
+    kind: str | None
+    qualifier: str                     # API qualifier: "TOTAL" for System
+    spec: PointSpec | None = None      # generic-read spec (mean / delta)
+    catalog_row: dict[str, Any] | None = None
+
+
+def plan_series(request: SeriesRequest, catalog_rows: list[dict[str, Any]]) -> list[PlannedSeries]:
+    """Expand the selections into response series, in request order.
+
+    A selection the catalogue cannot serve is one NOT_AVAILABLE series.
+    System: one series. 3 Phase: one series per phase when the asset has
+    every phase of the point assigned (per-phase Energy only from 15m:
+    there is no 1-minute per-phase source); otherwise the System series is
+    returned (the 3-phase fallback, qualifier TOTAL)."""
 
     pairs = _available_pairs(catalog_rows)
-    ids = {
-        s.asset_id
-        for s in request.selections
-        if ANALYTICS_DATA_POINTS[s.data_point].energy_direction
-        and (str(s.asset_id), s.data_point) in pairs
-    }
-    return sorted(ids, key=str)
+    present = _catalog_qualifiers(catalog_rows)
+    planned: list[PlannedSeries] = []
+    for selection in request.selections:
+        definition = ANALYTICS_DATA_POINTS[selection.data_point]
+        key = (str(selection.asset_id), selection.data_point)
+        row = pairs.get(key)
+        qualifiers = present.get(key, set())
+        if row is None:
+            planned.append(PlannedSeries(selection, None, SYSTEM_QUALIFIER))
+            continue
+
+        phased = (
+            request.phase == "three_phase"
+            and bool(definition.phase_qualifiers)
+            and set(definition.phase_qualifiers) <= qualifiers
+            and not (definition.energy_direction and request.resolution == "1m")
+        )
+        if phased:
+            kind = SOURCE_DELTA if definition.energy_direction else SOURCE_MEAN
+            for qualifier in definition.phase_qualifiers:
+                planned.append(
+                    PlannedSeries(
+                        selection, kind, qualifier,
+                        PointSpec(selection.asset_id, selection.data_point, qualifier), row,
+                    )
+                )
+        elif definition.system_qualifier not in qualifiers:
+            planned.append(PlannedSeries(selection, None, SYSTEM_QUALIFIER))
+        elif definition.energy_direction:
+            planned.append(PlannedSeries(selection, SOURCE_ENERGY, SYSTEM_QUALIFIER, None, row))
+        else:
+            planned.append(
+                PlannedSeries(
+                    selection, SOURCE_MEAN, SYSTEM_QUALIFIER,
+                    PointSpec(selection.asset_id, selection.data_point, definition.system_qualifier), row,
+                )
+            )
+    return planned
+
+
+def planned_kinds(planned: list[PlannedSeries]) -> set[str]:
+    return {p.kind for p in planned if p.kind is not None}
+
+
+def energy_asset_ids(planned: list[PlannedSeries]) -> list[UUID]:
+    """Assets with an Energy System series -- the only assets the Energy
+    series read is asked for."""
+
+    return sorted({p.selection.asset_id for p in planned if p.kind == SOURCE_ENERGY}, key=str)
+
+
+def point_specs(planned: list[PlannedSeries]) -> list[PointSpec]:
+    """Generic-read specs, in response order (series_index = position + 1)."""
+
+    return [p.spec for p in planned if p.spec is not None]
+
+
+def combined_floors(
+    kinds: set[str],
+    energy_floors: dict[str, datetime | None],
+    point_floors: dict[str, dict[str, datetime | None]],
+) -> dict[str, datetime | None]:
+    """Per resolution, the latest retention floor across the sources the
+    request uses -- what floor-aware Auto must respect so every series can
+    be served. A source that cannot serve a resolution at all (per-phase
+    Energy at 1m) does not constrain it: that series falls back to System."""
+
+    combined: dict[str, datetime | None] = {code: None for code in ANALYTICS_RESOLUTION_WINDOWS}
+    maps = ([energy_floors] if SOURCE_ENERGY in kinds else []) + [
+        point_floors.get(kind, {}) for kind in (SOURCE_MEAN, SOURCE_DELTA) if kind in kinds
+    ]
+    for code in combined:
+        values = [_utc(m[code]) for m in maps if m.get(code) is not None]
+        combined[code] = max(values) if values else None
+    return combined
 
 
 def _float(value: Any) -> float | None:
@@ -741,9 +1007,86 @@ def _no_data_reason(
     return "NO_DATA_IN_RANGE"
 
 
+def _summary(points: list[AnalyticsSeriesPoint], *, summed: bool) -> AnalyticsSeriesSummary:
+    """Total (summed points only): every period with a value in the range,
+    the in-progress period included -- the Energy recorded so far. Average /
+    min / max: completed periods only, so a period still filling up is never
+    reported as the minimum or pulls the average down (Product Owner,
+    2026-10-09). With no completed period they are null. A measurement has no
+    Total (its periods are averages)."""
+
+    valued = [p for p in points if p.value is not None]
+    total = sum(p.value for p in valued) if summed and valued else None
+    complete = [p for p in valued if p.bucket_state == "COMPLETE"]
+    if not complete:
+        return AnalyticsSeriesSummary(total=total)
+    lowest = min(complete, key=lambda p: (p.value, p.bucket_start))
+    highest = max(complete, key=lambda p: (p.value, -p.bucket_start.timestamp()))
+    return AnalyticsSeriesSummary(
+        total=total,
+        average=sum(p.value for p in complete) / len(complete),
+        min=lowest.value,
+        min_at=lowest.bucket_start,
+        max=highest.value,
+        max_at=highest.bucket_start,
+    )
+
+
+def _unavailable(base: dict[str, Any], reasons: list[str], available_from: datetime | None) -> AnalyticsSeries:
+    status = STATUS_RESOLUTION_UNAVAILABLE if set(reasons) <= RESOLUTION_REASONS else STATUS_DATA_UNAVAILABLE
+    return AnalyticsSeries(
+        **base,
+        status=status,
+        status_reasons=reasons,
+        resolution_available_from=available_from if "BEFORE_RETENTION_FLOOR" in reasons else None,
+        points=[],
+        summary=AnalyticsSeriesSummary(),
+    )
+
+
+def _finish(
+    base: dict[str, Any],
+    points: list[AnalyticsSeriesPoint],
+    *,
+    request: SeriesRequest,
+    as_of: datetime,
+    first_data_at: datetime | None,
+    last_data_at: datetime | None,
+    assigned_in_range: bool | None,
+    stale: bool | None,
+    summed: bool,
+) -> AnalyticsSeries:
+    series_fields = dict(first_data_at=first_data_at, last_data_at=last_data_at, stale=stale)
+    if not any(p.value is not None for p in points):
+        return AnalyticsSeries(
+            **base,
+            **series_fields,
+            status=STATUS_NO_DATA,
+            status_reasons=[_no_data_reason(request, as_of, assigned_in_range, first_data_at, last_data_at)],
+            points=points,
+            summary=AnalyticsSeriesSummary(),
+        )
+    return AnalyticsSeries(
+        **base, **series_fields, status=STATUS_OK, points=points, summary=_summary(points, summed=summed)
+    )
+
+
+def _series_base(plan: PlannedSeries, definition: DataPointDefinition) -> dict[str, Any]:
+    row = plan.catalog_row or {}
+    return dict(
+        asset_id=plan.selection.asset_id,
+        asset_name=row.get("asset_name"),
+        data_point=plan.selection.data_point,
+        label=data_point_label(plan.selection.data_point, row.get("data_point_name")),
+        qualifier=plan.qualifier,
+        unit=row.get("unit"),
+        chart_kind=definition.chart_kind,
+        aggregation=definition.aggregation,
+    )
+
+
 def _energy_series(
-    selection: Selection,
-    catalog_row: dict[str, Any],
+    plan: PlannedSeries,
     definition: DataPointDefinition,
     rows: list[dict[str, Any]],
     *,
@@ -752,16 +1095,7 @@ def _energy_series(
     floors: dict[str, datetime | None],
 ) -> AnalyticsSeries:
     direction = definition.energy_direction
-    base = dict(
-        asset_id=selection.asset_id,
-        asset_name=catalog_row["asset_name"],
-        data_point=selection.data_point,
-        label=data_point_label(selection.data_point, catalog_row["data_point_name"]),
-        qualifier=SYSTEM_QUALIFIER,
-        unit=catalog_row.get("unit"),
-        chart_kind=definition.chart_kind,
-        aggregation=definition.aggregation,
-    )
+    base = _series_base(plan, definition)
 
     reasons: list[str] = []
     for row in rows:
@@ -769,26 +1103,9 @@ def _energy_series(
             if reason not in reasons:
                 reasons.append(reason)
     if reasons:
-        status = (
-            STATUS_RESOLUTION_UNAVAILABLE if set(reasons) <= RESOLUTION_REASONS else STATUS_DATA_UNAVAILABLE
-        )
-        return AnalyticsSeries(
-            **base,
-            status=status,
-            status_reasons=reasons,
-            resolution_available_from=(
-                _utc(floors.get(request.resolution)) if "BEFORE_RETENTION_FLOOR" in reasons else None
-            ),
-            points=[],
-            summary=AnalyticsSeriesSummary(),
-        )
+        return _unavailable(base, reasons, _utc(floors.get(request.resolution)))
 
     head = rows[0] if rows else {}
-    first_data_at = _utc(head.get(f"{direction}_first_data_at"))
-    last_data_at = _utc(head.get(f"{direction}_last_data_at"))
-    assigned_in_range = head.get(f"{direction}_assigned_in_range")
-    stale = head.get(f"{direction}_stale")
-
     points: list[AnalyticsSeriesPoint] = []
     for row in rows:
         start, end = _utc(row["bucket_start"]), _utc(row["bucket_end"])
@@ -820,38 +1137,91 @@ def _energy_series(
             )
         )
 
-    series_fields = dict(first_data_at=first_data_at, last_data_at=last_data_at, stale=stale)
-    valued = [p for p in points if p.value is not None]
-    if not valued:
-        return AnalyticsSeries(
-            **base,
-            **series_fields,
-            status=STATUS_NO_DATA,
-            status_reasons=[_no_data_reason(request, as_of, assigned_in_range, first_data_at, last_data_at)],
-            points=points,
-            summary=AnalyticsSeriesSummary(),
+    return _finish(
+        base,
+        points,
+        request=request,
+        as_of=as_of,
+        first_data_at=_utc(head.get(f"{direction}_first_data_at")),
+        last_data_at=_utc(head.get(f"{direction}_last_data_at")),
+        assigned_in_range=head.get(f"{direction}_assigned_in_range"),
+        stale=head.get(f"{direction}_stale"),
+        summed=True,
+    )
+
+
+def _point_series(
+    plan: PlannedSeries,
+    definition: DataPointDefinition,
+    rows: list[dict[str, Any]],
+    *,
+    request: SeriesRequest,
+    as_of: datetime,
+    point_floors: dict[str, dict[str, datetime | None]],
+) -> AnalyticsSeries:
+    """A series of the generic read (migration 292). Measurements carry
+    the bucket mean with its min / max and the GOOD/PARTIAL/GAP quality;
+    per-phase Energy carries the summed register deltas with the Energy
+    evidence flags. stale is not evaluated for these sources (null)."""
+
+    base = _series_base(plan, definition)
+    summed = plan.kind == SOURCE_DELTA
+
+    reasons: list[str] = []
+    for row in rows:
+        for reason in row.get("unavailable_reasons") or []:
+            if reason not in reasons:
+                reasons.append(reason)
+    if reasons:
+        floor = point_floors.get(plan.kind or "", {}).get(request.resolution)
+        return _unavailable(base, reasons, _utc(floor))
+
+    head = rows[0] if rows else {}
+    points: list[AnalyticsSeriesPoint] = []
+    for row in rows:
+        start, end = _utc(row["bucket_start"]), _utc(row["bucket_end"])
+        counts = {
+            "valid": _int(row.get("valid_intervals")),
+            "invalid": _int(row.get("invalid_intervals")),
+            "gap": _int(row.get("gap_intervals")),
+            "reset": _int(row.get("reset_intervals")),
+            "rollover": _int(row.get("rollover_intervals")),
+        }
+        value = _float(row.get("value"))
+        flags = _evidence_flags(counts)
+        expected = row.get("expected_intervals")
+        assigned_expected = row.get("assigned_expected_intervals")
+        points.append(
+            AnalyticsSeriesPoint(
+                bucket_start=start,
+                bucket_end=end,
+                value=value,
+                min=None if summed else _float(row.get("min_value")),
+                max=None if summed else _float(row.get("max_value")),
+                bucket_state=_bucket_state(start, end, as_of),
+                data_state=row.get("data_state"),
+                expected_intervals=None if expected is None else int(expected),
+                assigned_expected_intervals=None if assigned_expected is None else int(assigned_expected),
+                valid_intervals=counts["valid"],
+                invalid_intervals=counts["invalid"],
+                evidence_flags=flags,
+                evidence_status=(flags[0] if flags else "GOOD") if summed and value is not None else None,
+                quality=None if summed else row.get("quality"),
+                is_partial=end > as_of,
+            )
         )
 
-    # Total: every period with a value in the range, the in-progress period
-    # included -- the Energy recorded so far. Average / min / max: completed
-    # periods only, so a period still filling up is never reported as the
-    # minimum or pulls the average down (Product Owner, 2026-10-09). With no
-    # completed period they are null.
-    total = sum(p.value for p in valued)
-    summary = AnalyticsSeriesSummary(total=total)
-    complete = [p for p in valued if p.bucket_state == "COMPLETE"]
-    if complete:
-        lowest = min(complete, key=lambda p: (p.value, p.bucket_start))
-        highest = max(complete, key=lambda p: (p.value, -p.bucket_start.timestamp()))
-        summary = AnalyticsSeriesSummary(
-            total=total,
-            average=sum(p.value for p in complete) / len(complete),
-            min=lowest.value,
-            min_at=lowest.bucket_start,
-            max=highest.value,
-            max_at=highest.bucket_start,
-        )
-    return AnalyticsSeries(**base, **series_fields, status=STATUS_OK, points=points, summary=summary)
+    return _finish(
+        base,
+        points,
+        request=request,
+        as_of=as_of,
+        first_data_at=_utc(head.get("first_data_at")),
+        last_data_at=_utc(head.get("last_data_at")),
+        assigned_in_range=head.get("assigned_in_range"),
+        stale=None,
+        summed=summed,
+    )
 
 
 def build_analytics_series_response(
@@ -863,47 +1233,64 @@ def build_analytics_series_response(
     as_of: datetime,
     floors: dict[str, datetime | None] | None = None,
     energy_resolution_available: bool = True,
+    point_rows: list[dict[str, Any]] | None = None,
+    point_floors: dict[str, dict[str, datetime | None]] | None = None,
 ) -> AnalyticsSeriesResponse:
-    """One series per selection, in request order. A selection the
-    catalogue cannot serve (asset not an ACTIVE asset of this site, or data
-    point not assigned to it) is returned as NOT_AVAILABLE -- never dropped,
-    and never distinguishable from an asset that does not exist."""
+    """Series in request order (a selection expands to its phases under 3
+    Phase). A selection the catalogue cannot serve (asset not an ACTIVE
+    asset of this site, or data point not assigned to it) is returned as
+    NOT_AVAILABLE -- never dropped, and never distinguishable from an asset
+    that does not exist. So is a generic-read series the database returned
+    no rows for (an asset the portal user cannot access)."""
 
     as_of = _utc(as_of)
     floors = floors or {}
-    pairs = _available_pairs(catalog_rows)
+    point_floors = point_floors or {}
+    planned = plan_series(request, catalog_rows)
+
     energy_by_asset: dict[str, list[dict[str, Any]]] = {}
     for row in energy_rows:
         energy_by_asset.setdefault(str(row["asset_id"]), []).append(row)
+    point_by_index: dict[int, list[dict[str, Any]]] = {}
+    for row in point_rows or []:
+        point_by_index.setdefault(int(row["series_index"]), []).append(row)
+
+    def by_bucket(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return sorted(rows, key=lambda r: (r["bucket_start"] is not None, r["bucket_start"] or datetime.min))
 
     series: list[AnalyticsSeries] = []
-    for selection in request.selections:
-        definition = ANALYTICS_DATA_POINTS[selection.data_point]
-        catalog_row = pairs.get((str(selection.asset_id), selection.data_point))
-        if catalog_row is None or definition.energy_direction is None:
-            series.append(
-                AnalyticsSeries(
-                    asset_id=selection.asset_id,
-                    data_point=selection.data_point,
-                    qualifier=SYSTEM_QUALIFIER,
-                    chart_kind=definition.chart_kind,
-                    aggregation=definition.aggregation,
-                    status=STATUS_NOT_AVAILABLE,
-                    points=[],
-                    summary=AnalyticsSeriesSummary(),
-                )
-            )
-            continue
-        if not energy_resolution_available:
-            rows = [{"unavailable_reasons": ["BEFORE_RETENTION_FLOOR"]}]
-        else:
-            rows = sorted(
-                energy_by_asset.get(str(selection.asset_id), []),
-                key=lambda r: (r["bucket_start"] is not None, r["bucket_start"] or datetime.min),
-            )
-        series.append(
-            _energy_series(selection, catalog_row, definition, rows, request=request, as_of=as_of, floors=floors)
+    spec_index = 0
+    for plan in planned:
+        definition = ANALYTICS_DATA_POINTS[plan.selection.data_point]
+        not_available = AnalyticsSeries(
+            asset_id=plan.selection.asset_id,
+            data_point=plan.selection.data_point,
+            qualifier=plan.qualifier,
+            chart_kind=definition.chart_kind,
+            aggregation=definition.aggregation,
+            status=STATUS_NOT_AVAILABLE,
+            points=[],
+            summary=AnalyticsSeriesSummary(),
         )
+        if plan.kind is None:
+            series.append(not_available)
+        elif plan.kind == SOURCE_ENERGY:
+            if not energy_resolution_available:
+                rows = [{"unavailable_reasons": ["BEFORE_RETENTION_FLOOR"]}]
+            else:
+                rows = by_bucket(energy_by_asset.get(str(plan.selection.asset_id), []))
+            series.append(_energy_series(plan, definition, rows, request=request, as_of=as_of, floors=floors))
+        else:
+            spec_index += 1
+            rows = point_by_index.get(spec_index)
+            if not rows:
+                series.append(not_available)
+            else:
+                series.append(
+                    _point_series(
+                        plan, definition, by_bucket(rows), request=request, as_of=as_of, point_floors=point_floors
+                    )
+                )
 
     return AnalyticsSeriesResponse(
         site_id=site["site_id"],

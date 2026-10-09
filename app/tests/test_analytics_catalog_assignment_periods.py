@@ -61,7 +61,7 @@ def test_rows_the_registry_cannot_serve_contribute_no_period():
     b = datetime(2026, 9, 5, tzinfo=UTC)
     response = build_analytics_catalog_response(
         site=SITE,
-        rows=[_row("ENERGY_IMPORT", "TOTAL", a, b), _row("ENERGY_IMPORT", "L1", None, None)],  # L1 is not served
+        rows=[_row("ENERGY_IMPORT", "TOTAL", a, b), _row("ENERGY_IMPORT", "NEUTRAL", None, None)],  # not served
     )
     assert _periods(response) == [(a, b)]
 

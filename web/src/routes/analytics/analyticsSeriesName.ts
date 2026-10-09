@@ -3,23 +3,33 @@
  * Statistics table and Data quality so one series reads the same everywhere.
  *
  * Qualifiers are never shown (D83): System is the plain series name, phase
- * series are P1-P3, E1-E3, Ex1-Ex3 etc. (D55, D63, D74). Registry codes are
+ * series are P1-P3, E1-E3, Ex1-Ex3 etc. (D55, D63, D74) and line-to-line
+ * voltages V12, V23, V31. A data point without an agreed phase prefix
+ * (Reactive Power, D63 open) reads "Asset · Reactive Power 1". Registry codes are
  * never shown either: a missing label falls back to the catalogue's label,
  * then to a generic word.
  */
 import type { AnalyticsCatalogResponse, AnalyticsDataPointCode, AnalyticsSeries } from "../../api/types";
 
 /** Phase series labels (D55, D63, D74): P1-P3, I1-I3, V1-V3, PF1-PF3,
- *  E1-E3, Ex1-Ex3. */
+ *  E1-E3, Ex1-Ex3; line-to-line voltage V12, V23, V31. */
 const PHASE_PREFIX: Readonly<Record<string, string>> = {
   ACTIVE_POWER: "P",
   CURRENT: "I",
   VOLTAGE_LINE_NEUTRAL: "V",
+  VOLTAGE_LINE_LINE: "V",
   POWER_FACTOR: "PF",
   ENERGY_IMPORT: "E",
   ENERGY_EXPORT: "Ex",
 };
-const PHASE_NUMBER: Readonly<Record<string, string>> = { L1: "1", L2: "2", L3: "3" };
+const PHASE_NUMBER: Readonly<Record<string, string>> = {
+  L1: "1",
+  L2: "2",
+  L3: "3",
+  L12: "12",
+  L23: "23",
+  L31: "31",
+};
 
 const FALLBACK_ASSET = "Asset";
 const FALLBACK_DATA_POINT = "Data point";

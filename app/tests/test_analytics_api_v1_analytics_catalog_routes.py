@@ -81,7 +81,8 @@ def _login_global_admin(portal_client, monkeypatch: pytest.MonkeyPatch) -> None:
     assert response.status_code == 303
 
 
-def _patch(monkeypatch, *, allowed=True, site=SITE, rows=None, calls=None, availability=None, floors=None):
+def _patch(monkeypatch, *, allowed=True, site=SITE, rows=None, calls=None, availability=None, floors=None,
+           point_availability=None):
     async def access(portal_user_id, site_id):
         return allowed(site_id) if callable(allowed) else allowed
 
@@ -111,6 +112,13 @@ def _patch(monkeypatch, *, allowed=True, site=SITE, rows=None, calls=None, avail
         return floors if floors is not None else {r: None for r in ("1m", "15m", "30m", "1h", "1d")}
 
     monkeypatch.setattr("src.routers.analytics_api.fetch_analytics_energy_resolution_floors", fetch_floors)
+
+    async def fetch_point_availability(portal_user_id, site_id, points):
+        if calls is not None:
+            calls.append("point_availability")
+        return point_availability if point_availability is not None else []
+
+    monkeypatch.setattr("src.routers.analytics_api.fetch_analytics_point_availability", fetch_point_availability)
 
 
 def _catalog(portal_client, site_id: str = SITE_ID):
@@ -234,10 +242,28 @@ def test_catalog_is_get_only(portal_client, monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_registry_is_the_energy_only_pilot() -> None:
-    assert set(ANALYTICS_DATA_POINTS) == {"ENERGY_IMPORT", "ENERGY_EXPORT"}
-    for definition in ANALYTICS_DATA_POINTS.values():
-        assert (definition.chart_kind, definition.aggregation, definition.qualifiers) == ("bar", "sum", ("TOTAL",))
+def test_registry_is_the_b3_scope() -> None:
+    """Product Owner scope (2026-10-09): Energy, active and reactive power,
+    voltage, current, power factor and frequency -- nothing else."""
+
+    assert set(ANALYTICS_DATA_POINTS) == {
+        "ENERGY_IMPORT", "ENERGY_EXPORT", "ACTIVE_POWER", "REACTIVE_POWER", "CURRENT",
+        "VOLTAGE_LINE_NEUTRAL", "VOLTAGE_LINE_LINE", "POWER_FACTOR", "FREQUENCY",
+    }
+    shape = {code: (d.chart_kind, d.aggregation, d.system_qualifier, d.phase_qualifiers, d.label)
+             for code, d in ANALYTICS_DATA_POINTS.items()}
+    phases = ("L1", "L2", "L3")
+    assert shape == {
+        "ENERGY_IMPORT": ("bar", "sum", "TOTAL", phases, "Energy"),
+        "ENERGY_EXPORT": ("bar", "sum", "TOTAL", phases, "Energy Export"),
+        "ACTIVE_POWER": ("line", "mean", "TOTAL", phases, "Power"),
+        "REACTIVE_POWER": ("line", "mean", "TOTAL", phases, "Reactive Power"),
+        "CURRENT": ("line", "mean", "TOTAL", phases, "Current"),
+        "VOLTAGE_LINE_NEUTRAL": ("line", "mean", "AVG", phases, "Voltage"),
+        "VOLTAGE_LINE_LINE": ("line", "mean", "AVG", ("L12", "L23", "L31"), "Line to Line Voltage"),
+        "POWER_FACTOR": ("line", "mean", "TOTAL", phases, "Power Factor"),
+        "FREQUENCY": ("line", "mean", None, (), "Frequency"),
+    }
     assert (MAX_DATA_POINTS, MAX_ASSETS, MAX_SERIES) == (5, 10, 25)
 
 
@@ -255,19 +281,23 @@ def test_resolutions_follow_adr_019_windows() -> None:
     }
 
 
-def test_non_registry_parameters_are_not_offered() -> None:
+def test_non_registry_parameters_and_qualifiers_are_not_offered() -> None:
+    """Apparent Power and Current THD are assigned on staging but outside
+    the B3 scope; the neutral current is not a phase of Current."""
+
     response = build_analytics_catalog_response(site=SITE, rows=[
         _row(ASSET_A, "Chiller 1", "ENERGY_IMPORT"),
-        _row(ASSET_A, "Chiller 1", "CURRENT", "L1"),
-        _row(ASSET_B, "AHU 2", "CURRENT", "TOTAL"),
+        _row(ASSET_A, "Chiller 1", "APPARENT_POWER", "TOTAL"),
+        _row(ASSET_A, "Chiller 1", "CURRENT", "NEUTRAL"),
+        _row(ASSET_B, "AHU 2", "CURRENT_THD", "TOTAL"),
     ])
     assert [a.asset_name for a in response.assets] == ["Chiller 1"]
     assert [p.data_point for p in response.assets[0].data_points] == ["ENERGY_IMPORT"]
 
 
-def test_per_phase_energy_is_not_offered_in_v1() -> None:
-    """The canonical Energy read resolves only *_TOTAL points: an asset whose
-    only Energy binding is per-phase has nothing chartable in v1."""
+def test_phases_follow_the_assigned_qualifiers() -> None:
+    """3 Phase is offered only when every phase of the point is assigned;
+    System only when the System point is. Per-phase Energy is offered (B3)."""
 
     response = build_analytics_catalog_response(site=SITE, rows=[
         _row(ASSET_A, "Chiller 1", "ENERGY_IMPORT", "L1"),
@@ -275,10 +305,20 @@ def test_per_phase_energy_is_not_offered_in_v1() -> None:
         _row(ASSET_A, "Chiller 1", "ENERGY_IMPORT", "L3"),
         _row(ASSET_B, "AHU 2", "ENERGY_IMPORT", "TOTAL"),
         _row(ASSET_B, "AHU 2", "ENERGY_IMPORT", "L1"),
+        _row(ASSET_B, "AHU 2", "VOLTAGE_LINE_LINE", "AVG"),
+        _row(ASSET_B, "AHU 2", "VOLTAGE_LINE_LINE", "L12"),
+        _row(ASSET_B, "AHU 2", "VOLTAGE_LINE_LINE", "L23"),
+        _row(ASSET_B, "AHU 2", "VOLTAGE_LINE_LINE", "L31"),
+        _row(ASSET_B, "AHU 2", "FREQUENCY", None),
     ])
-    assert [a.asset_name for a in response.assets] == ["AHU 2"]
-    phases = response.assets[0].data_points[0].phases
-    assert (phases.system, phases.three_phase) == (True, False)
+    phases = {(a.asset_name, p.data_point): (p.phases.system, p.phases.three_phase)
+              for a in response.assets for p in a.data_points}
+    assert phases == {
+        ("AHU 2", "ENERGY_IMPORT"): (True, False),
+        ("AHU 2", "VOLTAGE_LINE_LINE"): (True, True),
+        ("AHU 2", "FREQUENCY"): (True, False),
+        ("Chiller 1", "ENERGY_IMPORT"): (False, True),
+    }
 
 
 def test_assets_sorted_by_name_and_points_by_registry_order() -> None:
@@ -320,3 +360,32 @@ def test_catalog_attaches_availability_bounds_per_data_point(portal_client, monk
         "2026-08-28T18:30:00Z", "2026-09-27T10:30:00Z",
     )
     assert (points[1]["available_from"], points[1]["available_to"]) == (None, None)
+
+
+def test_catalog_carries_measurement_bounds_and_null_for_no_history(portal_client, monkeypatch) -> None:
+    """B3: non-Energy bounds come from the point availability read (System
+    qualifier); an assigned point without data has null bounds."""
+
+    _login_global_admin(portal_client, monkeypatch)
+    calls: list[str] = []
+    _patch(
+        monkeypatch,
+        calls=calls,
+        rows=[
+            _row(ASSET_A, "Chiller 1", "CURRENT", "TOTAL"),
+            _row(ASSET_A, "Chiller 1", "FREQUENCY", None),
+        ],
+        point_availability=[
+            {"asset_id": ASSET_A, "data_point": "CURRENT", "qualifier": "TOTAL",
+             "available_from": "2026-08-28T06:45:00+00:00", "available_to": "2026-10-09T10:30:00+00:00"},
+            {"asset_id": ASSET_A, "data_point": "FREQUENCY", "qualifier": None,
+             "available_from": None, "available_to": None},
+        ],
+    )
+    body = _catalog(portal_client).json()
+    points = {p["data_point"]: p for p in body["assets"][0]["data_points"]}
+    assert (points["CURRENT"]["available_from"], points["CURRENT"]["available_to"]) == (
+        "2026-08-28T06:45:00Z", "2026-10-09T10:30:00Z")
+    assert (points["FREQUENCY"]["available_from"], points["FREQUENCY"]["available_to"]) == (None, None)
+    assert (points["CURRENT"]["label"], points["FREQUENCY"]["label"]) == ("Current", "Frequency")
+    assert "point_availability" in calls

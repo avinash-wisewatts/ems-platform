@@ -109,8 +109,10 @@ describe("data point groups (D39-D41, D66, D67, D75)", () => {
 });
 
 describe("D67 placement of every platform parameter", () => {
-  // All 19 config.parameters codes (migrations 223, 229), with the backend's fallback label (the parameter name).
+  // Every config.parameters code (migrations 223, 229, 254), with the label the catalogue returns
+  // (the registry label for B3 points, otherwise the parameter name).
   const ALL = [
+    ["ACTIVE_POWER", "Power"],
     ["APPARENT_ENERGY", "Apparent Energy"],
     ["APPARENT_POWER", "Apparent Power"],
     ["BATTERY_VOLTAGE", "Battery Voltage"],
@@ -135,7 +137,7 @@ describe("D67 placement of every platform parameter", () => {
   it("lists every catalogue point in its D67 group; none is dropped", () => {
     const groups = groupDataPoints(ALL);
     expect(groups.map((g) => [g.name, g.points.map((p) => p.code)])).toEqual([
-      ["Frequently Used", ["CURRENT", "ENERGY_IMPORT", "POWER_FACTOR", "VOLTAGE_LINE_NEUTRAL"]],
+      ["Frequently Used", ["CURRENT", "ENERGY_IMPORT", "ACTIVE_POWER", "POWER_FACTOR", "VOLTAGE_LINE_NEUTRAL"]],
       ["Power", ["APPARENT_ENERGY", "APPARENT_POWER", "ENERGY_IMPORT", "ENERGY_EXPORT", "FREQUENCY", "REACTIVE_POWER", "VOLTAGE_LINE_LINE"]],
       ["Environmental", ["ILLUMINANCE", "HUMIDITY", "TEMPERATURE"]],
       [
@@ -145,6 +147,17 @@ describe("D67 placement of every platform parameter", () => {
     ]);
     expect(dataPointVisualOrder(groups)).toHaveLength(ALL.length);
     expect(new Set(dataPointVisualOrder(groups))).toEqual(new Set(ALL.map((p) => p.code)));
+  });
+
+  it("Frequently Used is the fixed D67 list: Current, Energy, Power, Power Factor, Voltage", () => {
+    const frequentlyUsed = groupDataPoints(ALL).find((g) => g.name === "Frequently Used")!;
+    expect(frequentlyUsed.points.map((p) => p.label)).toEqual([
+      "Current",
+      "Energy",
+      "Power",
+      "Power Factor",
+      "Voltage (Line-Neutral)",
+    ]);
   });
 
   it("Temperature is not in Frequently Used (D67)", () => {

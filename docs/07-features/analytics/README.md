@@ -149,7 +149,10 @@ message is shown only when it has useful content; otherwise it is absent.
   - **Misc/Other:** Battery Voltage; Flow Temperature; Signal Strength;
     Volume; Volume Flow.
 - Customer labels: **Energy** (consumed/imported) and **Energy Export**
-  (D73). The v1 registry serves only these two (business rule 2).
+  (D73). The registry (business rule 2, B3) also serves **Power** (active
+  power, Frequently Used), **Reactive Power**, **Current**, **Voltage**
+  (line-to-neutral), **Line to Line Voltage**, **Power Factor** and
+  **Frequency**.
 
 ### Resolution and phase type
 
@@ -334,9 +337,17 @@ message is shown only when it has useful content; otherwise it is absent.
    and the Grafana selector view are never used.
 2. **Curation.** Only logical points mapped to a semantic parameter
    (`metadata.logical_points.parameter_id`) and listed in the Analytics
-   data-point registry appear. v1 registry: `ENERGY_IMPORT`, `ENERGY_EXPORT`
-   [IMPL]. Further entries require an open question to be resolved (see
-   question 2).
+   data-point registry appear. Registry [IMPL; B3 scope decided by the
+   Product Owner 2026-10-09]: `ENERGY_IMPORT` (Energy), `ENERGY_EXPORT`
+   (Energy Export), `ACTIVE_POWER` (Power, kW), `REACTIVE_POWER` (Reactive
+   Power, kvar), `CURRENT` (Current, A), `VOLTAGE_LINE_NEUTRAL` (Voltage, V),
+   `VOLTAGE_LINE_LINE` (Line to Line Voltage, V), `POWER_FACTOR` (Power
+   Factor, no unit) and `FREQUENCY` (Frequency, Hz). Each has a System
+   qualifier (`TOTAL`; `AVG` for both voltages; none for Frequency) and
+   phase qualifiers (`L1`–`L3`; `L12`/`L23`/`L31` for line-to-line voltage;
+   none for Frequency). Assigned but not served: Apparent Power and Energy,
+   reactive energy registers, Current THD, Phase Angle, neutral current and
+   the environmental points.
 3. **Lifecycle.** Only `ACTIVE` assets appear [PO].
 4. **Parity-bridge rows.** The staging-only parity-bridge assignments
    (`effective_from = '-infinity'`) are catalogue-eligible for development
@@ -349,9 +360,18 @@ message is shown only when it has useful content; otherwise it is absent.
    one series (System: `TOTAL`) or three (3 phase: `L1`, `L2`, `L3`). Under 3
    phase, a data point without per-phase values returns its System series
    [REF: the reference mockup shows single-phase assets as System series
-   under 3 phase]. Energy is System-only in v1. The customer never sees
-   qualifiers: System is shown as the normal series name and phases as P1–P3,
-   E1–E3, Ex1–Ex3 etc. (D63, D74, D83; see User experience).
+   under 3 phase]. 3 phase expands a pair only when every phase of the point
+   is assigned to the asset. Per-phase Energy (B3) is read from the
+   register-delta tier (migration 290) at 15m and coarser; at 1m 3 phase
+   returns the System Energy series (there is no 1-minute per-phase source).
+   A phase series is that phase's own measurement: phase values are never
+   presented as adding up to the System value (Current `TOTAL` and the voltage
+   `AVG` points are averages; phase Energy comes from separate registers and
+   a different tier). The customer never sees qualifiers: System is shown as
+   the normal series name and phases as P1–P3, I1–I3, V1–V3, V12/V23/V31,
+   PF1–PF3, E1–E3, Ex1–Ex3 (D63, D74, D83; see User experience). Reactive
+   Power has no agreed phase prefix yet (D63): its phases read "Reactive
+   Power 1–3".
 6. **Limits.** ≤ 5 distinct data points, ≤ 10 distinct assets, ≤ 25 series
    after phase expansion, enforced by the server [PO].
 7. **Time basis.** Transport is UTC; presentation is site-local
@@ -377,7 +397,12 @@ message is shown only when it has useful content; otherwise it is absent.
    silently empty [IMPL, migrations 280/282]. **Auto is floor-aware**: when its
    window-based choice starts before that resolution's floor, the next coarser
    resolution that can serve it is used (1d as the last resort); an explicit
-   resolution is never changed [IMPL, migration 282].
+   resolution is never changed [IMPL, migration 282]. Measurements and
+   per-phase Energy (B3, migration 292) have their own floors from the live
+   retention policies: measurements 1m `telemetry.normalized_points` (90
+   days), 15m–1d `analytics.point_telemetry_15m` (120 days); per-phase Energy
+   15m–1d `analytics.energy_register_delta_15min` (2 years). Auto uses the
+   latest floor of every source in the request.
 9. **1 day.** One bucket per site-local calendar day,
    `[local midnight, next local midnight)`, so a bucket is 23, 24 or 25
    hours on DST transition days. Derived from the 15-minute tier, which nests
@@ -392,7 +417,10 @@ message is shown only when it has useful content; otherwise it is absent.
     sum of buckets with a value, the in-progress bucket included; Average,
     Minimum and Maximum use completed buckets only (API contract, `summary`). Other data points: bucket value is the exact mean
     (Σ sum ÷ Σ sample count over `GOOD` samples), with the bucket's minimum and
-    maximum sample.
+    maximum sample [IMPL, B3]; they have no Total. Values are converted from
+    the stored source unit (Eniscope W / var) to the point's unit exactly as
+    live telemetry converts them (field-mapping scale and offset, migration
+    025). Per-phase Energy: the summed valid register deltas, in kWh.
 11. **Data quality evidence** [IMPL, migration 282; [ADR-022 Amendment 4](../../00-governance/decisions/ADR-022-analytics-v1-scope-and-contract.md#amendment-4-2026-09-29-data-quality-read-contract-migration-282)].
     *(Superseded: the per-bucket and summary `coverage_ratio` of migrations
     278/280 is removed.)* Per bucket and direction:
@@ -414,9 +442,17 @@ message is shown only when it has useful content; otherwise it is absent.
       severe, in the Energy tiers' precedence) is kept for compatibility.
 
     Energy evidence is **not** mapped onto the five-value lattice: the MVP-4
-    decision pack keeps Energy evidence separate from it [C]. Non-Energy
-    buckets will use the existing lattice `GOOD / GAP / ESTIMATED / INVALID /
-    PARTIAL` ([terminology](../../01-product/terminology.md)).
+    decision pack keeps Energy evidence separate from it [C]. Measurement
+    buckets carry `quality` from the existing lattice
+    ([terminology](../../01-product/terminology.md)) [IMPL, B3]: `GOOD` when
+    every assigned expected interval has a `GOOD` sample, `PARTIAL` when some
+    do, `GAP` when none do; `ESTIMATED` and `INVALID` are not produced
+    (nothing is estimated; the 15-minute tier holds `GOOD` samples only).
+    Their `valid_intervals` are the `GOOD` samples (capped at the bucket's
+    expected intervals) and `invalid_intervals` the rejected samples, counted
+    only where raw samples are read (1m and assignment edges). Per-phase
+    Energy carries the register evidence (`invalid`, `gap`, `reset`,
+    `rollover` counts and flags) like System Energy.
 12. **Data bounds and stale** [IMPL, migration 282]. Per series:
     `first_data_at` / `last_data_at` are the first measured interval start and
     the last measured interval end of the bound source(s) inside their binding
@@ -529,7 +565,13 @@ Query: `from`, `to` (ISO-8601 UTC, half-open), `resolution`
 
   Unavailable series have no points.
 - 3-phase fallback is `phase = three_phase` with a `TOTAL` qualifier (no
-  separate field); Energy is System-only in v1.
+  separate field). Phase series carry `L1`/`L2`/`L3` (`L12`/`L23`/`L31` for
+  line-to-line voltage). A System series always has qualifier `TOTAL`, even
+  where the underlying point is the voltage average or unqualified (D83).
+- Measurements (B3): `chart_kind` `line`, `aggregation` `mean`, per-bucket
+  `min` / `max`, `quality`; `summary.total` is null; `stale` is null
+  (data latency is evaluated for the Energy pipeline only). Per-phase Energy:
+  `bar` / `sum`, a Total, register evidence flags, `stale` null.
 - 422 codes (existing `/api/v1` codes reused where they exist):
   `invalid_selection`, `duplicate_selection`, `unknown_data_point` (not in
   the registry), `too_many_data_points`, `too_many_assets`,
@@ -559,8 +601,17 @@ Query: `from`, `to` (ISO-8601 UTC, half-open), `resolution`
 | 1m | raw `v_energy_consumption_native` (60 s capture on every current site), only within raw retention | `telemetry.normalized_points` (`GOOD`), 90-day retention |
 | 15m | persisted `analytics.energy_consumption_15min`; newer than its checkpoint, `v_energy_semantic_rollup_15min` (read through the bounded helper `analytics.energy_semantic_rollup_15min_range` since migration 283) | `analytics.point_telemetry_15m` |
 | 30m | the 15-minute rows, summed per site-local 30-minute bucket | derived from `point_telemetry_15m` |
-| 1h | site-local hours (migration 282): persisted `analytics.energy_consumption_hourly` (UTC hours) only where local hours are UTC hours; otherwise, and for newer hours and hours a binding changes inside, summed from 15m. Never the site-local `v_energy_reporting_hourly` | `analytics.point_telemetry_1h` |
-| 1d | persisted `analytics.energy_consumption_daily` (site-local days, DST-exact); unprocessed days and days a binding changes inside are summed from 15m | new `analytics.point_telemetry_1d` (site-local days, from 15m), plus the open day from 15m |
+| 1h | site-local hours (migration 282): persisted `analytics.energy_consumption_hourly` (UTC hours) only where local hours are UTC hours; otherwise, and for newer hours and hours a binding changes inside, summed from 15m. Never the site-local `v_energy_reporting_hourly` | composed from `point_telemetry_15m` (B3). `analytics.point_telemetry_1h` is on the UTC hour grid and is not read: site-local hours are not UTC hours at either staging site (IST) |
+| 1d | persisted `analytics.energy_consumption_daily` (site-local days, DST-exact); unprocessed days and days a binding changes inside are summed from 15m | composed from `point_telemetry_15m` (B3), so limited to its 120 days; B4's `analytics.point_telemetry_1d` will serve older days |
+
+Per-phase Energy (B3): 15m / 30m / 1h / 1d from
+`analytics.energy_register_delta_15min` (migration 290), composed into the
+site-local grid; no 1m. Measurements at 15m+ use a persisted 15-minute row
+only when it lies entirely inside an assignment; when an assignment starts or
+ends mid-bucket (e.g. the 2026-10-09 12:56:55 bulk assignment) that partial
+15 minutes is read from the raw samples by their own time, so telemetry from
+before an assignment is never attributed. Per-phase Energy rows are used only
+when entirely inside an assignment.
 
 Asset attribution for every row resolves through effective-dated
 `metadata.asset_points` windows (ADR-018 Amendment 7).
@@ -578,6 +629,13 @@ canonical-read-era `analytics.get_portal_analytics_energy_series` (278) is
 dropped by 280; `analytics.get_canonical_energy_read` stays for Grafana and
 the Asset View only ([ADR-022 amendment](../../00-governance/decisions/ADR-022-analytics-v1-scope-and-contract.md#amendment-1-2026-09-27-option-b--analytics-energy-from-the-persisted-tiers)).
 
+B3 reads (migration 292): `analytics.get_portal_asset_point_series`
+(measurements and per-phase Energy, explicit `(asset, parameter, qualifier)`
+selections), `analytics.get_portal_analytics_point_availability` (catalogue
+bounds for non-Energy points) and
+`analytics.get_analytics_point_resolution_floors`; all portal-scoped
+SECURITY DEFINER, ems_app-only, never Grafana-keyed.
+
 ## Implementation plan
 
 | Step | Scope | Status |
@@ -592,7 +650,7 @@ the Asset View only ([ADR-022 amendment](../../00-governance/decisions/ADR-022-a
 | 283 | Read latency, Option 1: the fresh 15-minute tail is read through `analytics.energy_semantic_rollup_15min_range` (the rollup view bounded to a whole-bucket UTC range before grouping, so chunk exclusion applies); results unchanged | Deployed to staging 2026-09-29 (`e6754de`, PR #91). Read-only validation: helper↔view parity on live data 0 differing rows; value and Data Quality snapshot 282→283 identical (140,132 rows, 36 columns); tail read pruned to the current chunk |
 | 284 | Read latency, Option 2: the per-bucket Data Quality subqueries of 282 (NOT_ASSIGNED, the device-first INITIAL count, assigned expected intervals) are replaced by set-based, request-level computation (computed once per request and joined to the bucket grid); 7-argument API, Energy values, Data Quality semantics, 283's tail pruning, views, tiers, jobs and storage unchanged | Deployed to staging 2026-09-29 (`17b1843`, PR #92, deploy run 36541126955). Read-only validation: value and Data Quality snapshot 283→284 identical (140,132 rows, 36 columns); helper↔view parity still 0 differing rows; latency improved only about 10–25%, all resolutions remain above the 500 ms target |
 | 285 | Read latency: `analytics.energy_direction_status` `RESET search_path`, so its IMMUTABLE `CASE` is inlined into the series read (was one function call per 15-minute row per direction); body, grants and the series function unchanged | Deployed to staging 2026-09-29 (`6b09475`, PR #93, deploy run 36551005201; checksum `926d7ae4…`). Read-only validation: 284→285 snapshot identical (140,132 rows, 36 columns); helper inlined (0 helper executions per 15m request, against 42,958); latency improved only about 0–10% (median) |
-| B3 | Generic series path (1m / 15m / 30m / 1h) | Planned — returns `NOT_AVAILABLE` until non-Energy assignments exist |
+| B3 | Measurements (Power, Reactive Power, Current, Voltage, Line to Line Voltage, Power Factor, Frequency) and per-phase Energy: registry, catalogue phases and availability, series at 1m–1d (migration 292), Analytics UI naming and grouping | Implemented (PR pending review); not deployed. Staging coverage 2026-10-09: 46 of 54 ACTIVE assets report every B3 point; 8 Unit 2 assets (E2_EM1–EM8) have no telemetry; history starts at each assignment (mostly 2026-10-09 12:56:55 IST) |
 | B4 | `analytics.point_telemetry_1d` persisted tier (job-built from 15m, upsert-only, 35-day reconcile, backfill, 8-year retention, compression after 90 days; ADR-019 D1/D5) and the 1d read path | Planned — must be live before the first `point_telemetry_15m` chunks age out of 120-day retention |
 | F1 | Calendar quick ranges in the site timezone, application-wide (ADR-022 Amendment 5, D61/D62) | Merged to staging (PR #96, `a420a88`) |
 | F2 | Analytics v1 API client (`getAnalyticsCatalog`, `getAnalyticsSeries`) | Merged to staging (PR #97, `11e8123`) |
@@ -684,7 +742,7 @@ Unit 2: P1-Heater-01, EN-AirCompressor-01); 783 with rejected readings;
 | 12 | No recent data (stale) | **Pending** -- needs a device that is late at test time |
 | 13 | Unknown freshness (`stale` null, 900 s capture) | **Unverified** -- no such site on staging |
 | 14 | Retention-floor reason with its date | **Pending** -- needs a floor inside the selectable range |
-| 15 | Non-Energy data points; real per-phase series | **Unverified** -- see "Per-phase Energy" below and backend B3 |
+| 15 | Non-Energy data points; real per-phase series | **Pending** -- implemented by B3 (not deployed); history only from 2026-10-09 12:56:55 IST for most points |
 
 **Assignment-window steps (scenario 7).** It checks that Analytics respects when
 a data point was assigned to an asset: periods outside the assignment are
@@ -710,6 +768,10 @@ investigation on staging, 2026-10-09, layer by layer:
 | Asset attribution | Only `ENERGY_IMPORT_TOTAL` (54 assets) and `ENERGY_EXPORT_TOTAL` (53) are assigned in `metadata.asset_points`; no asset has an L1–L3 Energy point assigned, so the catalogue cannot offer per-phase Energy for any asset. |
 | Analytics API / catalogue | Energy is System-only by contract in v1 (business rule 5): the registry defines `ENERGY_IMPORT` / `ENERGY_EXPORT` with the System qualifier only, so 3 Phase never expands Energy, and the catalogue reports `phases.three_phase = false`. |
 
+*(Update 2026-10-09: the L1–L3 Energy points are now assigned on staging by
+the bulk assignment, and B3 adds the registry change and the read path over
+the 290 tier, so this is resolved once B3 is deployed.)*
+
 So per-phase Energy is not missing at the meter or in ingestion; it is held back
 by the v1 API contract, by the missing per-phase asset assignments and by the
 absent read path from the 290 tier. Showing it needs all three: a registry
@@ -727,9 +789,14 @@ Production has no `asset_points` rows, so its catalogue is empty until the
 Asset Data Point Assignment workflow is deployed and assets are commissioned
 there.
 
-**Blocked on the Asset Data Point Assignment workflow (ADR-018 Amendments
-5–8):** every non-Energy data point, 3 phase selection, Power / Power Quality
-grouping, and customer-meaningful data point names.
+**Assignments (2026-10-09, Product Owner decision):** every enabled data
+point of every device was assigned on staging to each asset the device
+serves (55 asset–device pairs, 3,021 new assignments, effective 2026-10-09
+12:56:55 IST, through `admin.save_asset_point_assignments`; existing
+assignments unchanged). New assignments have **no history before that
+instant** -- Analytics never backfills them (only a DRAFT asset's initial
+commissioning backfills, ADR-018). B3 serves them; production has no such
+assignments.
 
 ## Open Product Owner questions
 
@@ -746,11 +813,10 @@ up to 10 assets." / "You can select up to 5 data points."); the Comparison
 placeholder text ("Coming soon"); the "Other" asset group's position (at the
 bottom, D72); the time-of-day refinement's granularity (any minute, D60).
 
-1. **Curated non-Energy registry.** Which parameters join the registry once
-   assignments exist? Cumulative registers other than Active Energy
-   Import/Export (apparent and reactive energy) cannot be shown as averages;
-   they need a delta calculation first. Labels for non-Energy points are part
-   of this question.
+1. *(Answered 2026-10-09: the B3 registry above; apparent and reactive
+   energy/power other than Reactive Power, THD and phase angle stay out.)*
+   Open: a phase prefix for Reactive Power (e.g. Q1–Q3) and confirmation of
+   V12/V23/V31 for line-to-line voltage (D63).
 2. **CSV quality context.** Whether the wide CSV carries any coverage or
    quality information (EMS-REQ-137, ADR-014).
 3. **Smaller open items:** "Export Energy" in the Power list (D67) versus
@@ -764,6 +830,7 @@ bottom, D72); the time-of-day refinement's granularity (any minute, D60).
 - B0: `app/tests/test_site_timezone_immutable_with_telemetry.py`, `app/tests/test_database_error_messages.py`.
 - B1: `app/tests/test_analytics_catalog_read.py` (database read: lifecycle, effective-dating, parity-bridge classification, semantic-only, tenant isolation) and `app/tests/test_analytics_api_v1_analytics_catalog_routes.py` (route contract, registry filtering, no `attribution_basis` exposure).
 - Energy read (migration 279): `app/tests/test_asset_energy_tier_read.py` (30) — tiers, checkpoint composition, DST, source boundaries, reconstruction, retention, unmapped organization, tenant isolation, exact parity with the canonical read. Staging parity gate PT-1–PT-11 (2026-09-27, read-only): zero mismatches over 112,806 15-minute buckets, 56,510 30-minute buckets, 28,387 hours, 1,448 days, 211,817 minutes and 318 fingerprints (details in the platform-manual change history).
+- B3 (migration 292): `app/tests/test_analytics_point_series_read.py` (database: function security, retention floors, unit conversion incl. device override / offset / negative scale, raw 1m with rejected samples, IST 30m / 1h / 1d composition with exact means, assignment edges read from raw samples, interval counts / data state / quality, NOT_ASSIGNED and no data, per-phase Energy deltas in kWh with evidence and no 1m, retention-floor and capture reasons, series order and unservable selections, tenancy, availability bounds); route and catalogue tests updated for the registry, phases and the series plan; web tests for series names (V12/V23/V31, the Reactive Power fallback), Frequently Used "Power", measurement lines beside Energy bars, measurement Data quality and series counting.
 - B1b/280: `app/tests/test_analytics_energy_availability_read.py` (278's function dropped; availability and floors contracts; floors equal the live retention policies; availability from the daily start to the raw tail, beyond raw retention, binding start, parity-bridge rows unchanged).
 - B2/280: `app/tests/test_analytics_api_v1_analytics_series_routes.py` (validation, limits, statuses, Energy mapping, summary, retention floors) and `app/tests/test_analytics_api_v1_analytics_e2e.py` (HTTP to database with no data-layer mocking and **no Grafana mapping**: catalogue, every resolution agreeing on totals, UTC hour grid, IST days, 1m beyond raw retention `RESOLUTION_UNAVAILABLE`, tenant isolation).
 - Full backend suite passed locally (1798 tests, 2026-09-27). Migration 280 deployed to staging 2026-09-27.
