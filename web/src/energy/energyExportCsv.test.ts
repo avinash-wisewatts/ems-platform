@@ -622,6 +622,59 @@ describe("buildEnergyConsumptionExportCsv -- CSV escaping in real fields", () =>
   });
 });
 
+describe("buildEnergyConsumptionExportCsv -- formula injection (CWE-1236, issue #124)", () => {
+  function exportFor(siteOverrides: Partial<SiteSummary>, resultOverrides: Partial<ComparisonResult> = {}): string {
+    return buildEnergyConsumptionExportCsv({
+      site: site(siteOverrides),
+      current: current(),
+      basis: "PREVIOUS_PERIOD",
+      result: comparisonResult(resultOverrides),
+      referenceResult: null,
+      evidence: evidence(),
+      freshness: freshness(),
+    });
+  }
+
+  it.each([
+    ["=", '=HYPERLINK("http://evil.example","x")'],
+    ["+", "+1+cmd|' /C calc'!A0"],
+    ["-", "-2+3"],
+    ["@", "@SUM(1+1)"],
+    ["tab", "\tTabbed"],
+    ["carriage return", "\rReturned"],
+    ["line feed", "\nFed"],
+  ])("a site name starting with %s is prefixed with ' on every row", (_, name) => {
+    const csv = exportFor({ site_name: name });
+    for (let row = 0; row < THREE_POINT_SERIES.length; row++) {
+      expect(cell(csv, "site_name", row)).toBe(`'${name}`);
+    }
+  });
+
+  it("a site code starting with a formula character is prefixed too", () => {
+    expect(cell(exportFor({ site_code: "=1+1" }), "site_code")).toBe("'=1+1");
+  });
+
+  it("ordinary text is unchanged, including formula characters after the start", () => {
+    const csv = exportFor({ site_name: "Unit 2 = Main", site_code: "UNIT-2" });
+    expect(cell(csv, "site_name")).toBe("Unit 2 = Main");
+    expect(cell(csv, "site_code")).toBe("UNIT-2");
+    expect(cell(csv, "comparison_basis")).toBe("PREVIOUS_PERIOD");
+    expect(cell(csv, "chart_timestamp")).toBe("2026-09-01T00:00:00Z");
+  });
+
+  it("negative numeric values stay numbers, never prefixed", () => {
+    const csv = exportFor({}, { deltaKwh: -234.567, deltaPercent: -23.4567, comparisonTotalKwh: 1469.134 });
+    expect(cell(csv, "delta_kwh")).toBe("-234.6");
+    expect(cell(csv, "delta_percent")).toBe("-23.5");
+    expect(cell(csv, "comparison_value_kwh")).toBe("1469.1");
+  });
+
+  it("the column set is unchanged", () => {
+    const { header } = parseCsvRows(exportFor({ site_name: "=x" }));
+    expect(header).toEqual([...CSV_COLUMNS]);
+  });
+});
+
 describe("energyConsumptionExportFilename", () => {
   it("slugifies the site name and includes the date-only period bounds", () => {
     const name = energyConsumptionExportFilename({

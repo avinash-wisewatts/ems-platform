@@ -32,23 +32,16 @@
  */
 import type { AnalyticsCatalogResponse, AnalyticsSeries, AnalyticsSeriesResponse } from "../../api/types";
 import { csvField } from "../../energy/energyExportCsv";
+import { neutralizeSpreadsheetText } from "../../export/spreadsheetSafety";
 import { localDateKey, type CalendarRange } from "../../time/calendarRanges";
 import { seriesName } from "./analyticsSeriesName";
+
+export { neutralizeSpreadsheetText } from "../../export/spreadsheetSafety";
 
 export const CSV_TIMESTAMP_LOCAL = "Timestamp local";
 export const CSV_TIMESTAMP_UTC = "Timestamp UTC";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-/** Characters that make a spreadsheet read a cell as a formula (OWASP CSV
- *  injection guidance). */
-const FORMULA_START = /^[=+\-@\t\r\n]/;
-
-/** A text cell made inert for spreadsheets: a leading formula character is
- *  escaped with `'`. Only for text; never apply it to numbers. */
-export function neutralizeSpreadsheetText(text: string): string {
-  return FORMULA_START.test(text) ? `'${text}` : text;
-}
 
 /** Column name: "<series name> (<unit>)", or the name alone without a unit. */
 export function csvColumnName(s: AnalyticsSeries, catalog?: AnalyticsCatalogResponse | null): string {

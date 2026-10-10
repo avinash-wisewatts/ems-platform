@@ -249,6 +249,14 @@ Export area, and size-tiered delivery remain unimplemented. See
 [§12](../../02-requirements/requirements-traceability.md) (chart-data
 correction) for the full record.
 
+Formula-injection protection (issue #124, 2026-10-10; implementation
+hardening, not a scope change): every cell passes through
+`web/src/export/spreadsheetSafety.ts` before CSV escaping, so a text value
+such as `site_name` or `site_code` that starts with `=`, `+`, `-`, `@`, a tab
+or a line break is prefixed with `'` (CWE-1236). Numeric cells, including the
+`.toFixed(1)` strings such as `-3.5`, are never prefixed. The column set is
+unchanged. The Analytics CSV (ADR-022, F7) uses the same helper.
+
 ## Validation references
 
 Frontend test suite, `tsc --noEmit`, `eslint --max-warnings 0`, and
