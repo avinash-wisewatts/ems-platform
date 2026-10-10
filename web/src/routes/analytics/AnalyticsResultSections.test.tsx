@@ -79,15 +79,17 @@ describe("Statistics (F6)", () => {
     expect(screen.queryByTestId("analytics-statistics")).not.toBeInTheDocument();
   });
 
-  it("a Maximum whose period follows missing readings carries the disclosure (Amendment 7)", () => {
+  it("no data-quality notes: a Maximum whose period follows missing readings shows just the API's value", () => {
     const s = seriesFixture("a1", [3.2, 20.9], {
       summary: { ...summary, min_at: "2026-10-04T18:30:00.000Z", max_at: "2026-10-04T18:45:00.000Z" },
     });
     s.points[1] = pointFixture(1, 20.9, { evidence_flags: ["GAPS_DETECTED"] });
     render(<AnalyticsStatistics response={seriesResponseFixture({ series: [s] })} catalog={catalog} />);
-    const [, , min, max] = within(screen.getByTestId("analytics-statistics-row")).getAllByRole("cell");
-    expect(within(max!).getByTestId("analytics-statistics-after-missing")).toHaveTextContent(DQ_TEXT.tipAfterMissing);
-    expect(within(min!).queryByTestId("analytics-statistics-after-missing")).not.toBeInTheDocument();
+    const cells = within(screen.getByTestId("analytics-statistics-row")).getAllByRole("cell").map((c) => c.textContent);
+    // The value is the API's own summary, unchanged; only the note is gone.
+    expect(cells).toEqual(["298.10 kWh", "12.40 kWh", "3.20 kWh", "20.90 kWh"]);
+    expect(screen.getByTestId("analytics-statistics")).not.toHaveTextContent(DQ_TEXT.tipAfterMissing);
+    expect(screen.queryByTestId("analytics-statistics-after-missing")).not.toBeInTheDocument();
   });
 
   it.each(["15m", "1d"] as const)("no Minimum / Maximum time or date at %s resolution", (resolution) => {
@@ -100,7 +102,7 @@ describe("Statistics (F6)", () => {
     expect(table.querySelector(".analytics-stats__time")).toBeNull();
   });
 
-  it("grouped by data point -- Energy first, the others alphabetically -- with assets in natural order", () => {
+  it("ordered by data point -- Energy first, the others alphabetically -- with assets in natural order, and no group headings", () => {
     const measure = (assetId: string, assetName: string, dataPoint: string, label: string, unit: string, qualifier = "TOTAL") =>
       seriesFixture(assetId, [1], { asset_name: assetName, data_point: dataPoint, label, unit, qualifier, aggregation: "mean", chart_kind: "line", summary: { ...summary, total: null } });
     const energy = (assetId: string, assetName: string) => seriesFixture(assetId, [1], { asset_name: assetName, summary });
@@ -116,13 +118,10 @@ describe("Statistics (F6)", () => {
       ],
     });
     render(<AnalyticsStatistics response={response} catalog={catalog} />);
-    expect(screen.getAllByTestId("analytics-statistics-group-label").map((g) => g.textContent)).toEqual([
-      "Energy",
-      "Current",
-      "Energy Export",
-      "Power",
-      "Voltage",
-    ]);
+    // Every body row is a series row: no heading rows between the groups.
+    const bodyRows = screen.getByRole("table").querySelectorAll("tbody tr");
+    expect(bodyRows).toHaveLength(7);
+    expect(screen.queryByTestId("analytics-statistics-group-label")).not.toBeInTheDocument();
     expect(screen.getAllByTestId("analytics-statistics-row").map((r) => within(r).getByRole("rowheader").textContent)).toEqual([
       "Energy-Chiller 2",
       "Energy-Chiller 10",
@@ -134,10 +133,10 @@ describe("Statistics (F6)", () => {
     ]);
   });
 
-  it("a group heading never shows a data point's internal code (falls back to 'Data point')", () => {
+  it("never shows a data point's internal code (unlabelled series fall back to 'Data point')", () => {
     const unlabeled = seriesFixture("a1", [1], { data_point: "REACTIVE_POWER", label: null, aggregation: "mean", chart_kind: "line", unit: "kvar", summary: { ...summary, total: null } });
     render(<AnalyticsStatistics response={seriesResponseFixture({ series: [unlabeled] })} catalog={null} />);
-    expect(screen.getByTestId("analytics-statistics-group-label")).toHaveTextContent(/^Data point$/);
+    expect(within(screen.getByTestId("analytics-statistics-row")).getByRole("rowheader")).toHaveTextContent(/^Data point-Asset a1$/);
     expect(screen.getByTestId("analytics-statistics")).not.toHaveTextContent("REACTIVE_POWER");
   });
 

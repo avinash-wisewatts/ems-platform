@@ -52,21 +52,16 @@ describe("buildStatistics -- one row per charted series, the API's own summary",
     expect(buildStatistics(seriesResponseFixture({ series: [notShownFixture("a1", "NOT_AVAILABLE")] })).rows).toEqual([]);
   });
 
-  it("discloses a Minimum or Maximum whose period follows missing readings -- from the API's evidence only (Amendment 7)", () => {
-    // Bucket 1 (00:15) is the maximum and carries GAPS_DETECTED; bucket 0 is the minimum without it.
+  it("rows carry no data-quality flags; values stay the API's even when a period follows missing readings", () => {
     const s = seriesFixture("a1", [1, 9], {
       summary: { total: 10, average: 5, min: 1, min_at: "2026-10-04T18:30:00.000Z", max: 9, max_at: "2026-10-04T18:45:00.000Z" },
     });
     s.points[1] = pointFixture(1, 9, { evidence_flags: ["GAPS_DETECTED"] });
     const [row] = buildStatistics(seriesResponseFixture({ series: [s] })).rows;
-    expect(row).toMatchObject({ minAfterMissing: false, maxAfterMissing: true });
-    // A large value alone is never treated as catch-up.
-    const big = seriesFixture("a1", [1, 900], {
-      summary: { total: 901, average: 450.5, min: 1, min_at: "2026-10-04T18:30:00.000Z", max: 900, max_at: "2026-10-04T18:45:00.000Z" },
-    });
-    expect(buildStatistics(seriesResponseFixture({ series: [big] })).rows[0]).toMatchObject({ maxAfterMissing: false });
+    expect(row).toMatchObject({ total: 10, average: 5, min: 1, max: 9 });
+    expect(row).not.toHaveProperty("minAfterMissing");
+    expect(row).not.toHaveProperty("maxAfterMissing");
   });
-
 });
 
 describe("buildStatistics -- grouped by data point (Product Owner, 2026-10-10)", () => {
