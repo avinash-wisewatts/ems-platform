@@ -47,8 +47,8 @@ EMS-REQ-129 – EMS-REQ-139 refine EMS-REQ-037 (Trends, MUST).
 | EMS-REQ-132 | Phase selection: System (default) or 3 Phase. 3 Phase expands a data point into phase series (P1–P3, E1–E3, Ex1–Ex3 …); without per-phase values the System value is shown under the normal name; qualifiers are never shown. | [REF] · [PO] D53–D58, D63, D74, D83 |
 | EMS-REQ-133 | Shared date/time range: two-month calendar; quick ranges Today, 7 Days, 30 Days, 3 Months, 1 Year (calendar-based, application-wide, Sunday week start); date-first with an optional time-of-day refinement that a quick range resets; Apply / Cancel / click-outside to close; the chart reloads only on **Update**; selectable dates bounded by data availability. All ranges are site-local (site IANA timezone, DST-correct). | [REF] controls · [C] ADR-019 time basis · [PO] D8, D10–D15, D60–D62, D76 |
 | EMS-REQ-134 | Resolution: exactly one of Auto (default), 1 minute, 15 minutes, 30 minutes, 1 hour, 1 day. Auto and the per-resolution maximum windows follow ADR-019; options whose maximum window the range exceeds are unavailable. 30 minutes and 1 hour are on the site-local grid (superseding "1 hour is on the UTC grid"); 1 day is the site-local calendar day. Auto never selects a resolution whose retention floor is after the range start. | [REF] options, Auto default · [C] ADR-019 · [PO] site-local 30m/1h (D24, supersedes 1h UTC grid), 1d required in v1 |
-| EMS-REQ-135 | Chart: Energy as grouped bars, every other data point as a line; one Y axis per unit, auto-scaled; visual-only drag-to-zoom, "show all" reset and a two-handle range slider; a legend entry per rendered series; a selected series with no data is omitted; at most 25 rendered series. | [REF] chart behaviour · [PO] grouped bars, 25 series, D6, D26 |
-| EMS-REQ-136 | Statistics table: one compact table, one row per rendered series, with Total (Energy only), Average, Minimum and Maximum (Min/Max with site-local times); full applied range. No cross-asset aggregate totals. | [PO] D19–D21, D26 |
+| EMS-REQ-135 | Chart: Energy as grouped bars, every other data point as a line; one Y axis per unit, auto-scaled with nice ticks and only the decimals the scale needs; visual-only drag-to-zoom, "show all" reset and a two-handle range slider; a legend entry per rendered series that shows / hides it (visual only); validated, consistent series colours; a selected series with no data is omitted; at most 25 rendered series. | [REF] chart behaviour · [PO] grouped bars, 25 series, D6, D26; chart UX 2026-10-10 |
+| EMS-REQ-136 | Statistics table: one compact table, one row per rendered series, with Total (Energy only), Average, Minimum and Maximum (values only: no times, no data-quality notes); ordered by data point (no group headings), Energy first then alphabetical, assets in natural name order; full applied range. No cross-asset aggregate totals. | [PO] D19–D21, D26; order, no times, no notes 2026-10-10 |
 | EMS-REQ-137 | CSV download: full applied range; wide format, one row per timestamp with site-local and UTC timestamps and one column per rendered series; missing values and no-data series blank; filename with the site name. Generated client-side. | [REF] download · [C] ADR-014 export pattern · [PO] D28–D31, D77 |
 | EMS-REQ-138 | Data quality and coverage: every bucket carries its interval counts, bucket and data state and evidence flags (business rule 11; the per-bucket coverage ratio was removed); a Data quality section lists conditions in seven fixed groups; a selection with no data, or no longer available, is omitted from the chart and listed under "Series not shown" with its reason, never dropped; the section is absent when nothing applies. | [C] ADR-011 · [PO] D6, DQ1–DQ23 |
 | EMS-REQ-139 | Chart options: CSV download and collapse-to-header only. No Administration App functionality on this page. | [REF] · [C] ADR-006 |
@@ -246,6 +246,36 @@ message is shown only when it has useful content; otherwise it is absent.
   Statistics or CSV; **Show all / Reset** restores the full applied range
   (D26; range slider decided 2026-09-29, EMS-REQ-135). Toolbar: **Export CSV** and **Collapse /
   Expand** only — no print, share or previous/next (D27).
+- Chart UX (Product Owner, 2026-10-10; F9):
+  - **Axis precision.** Each Y axis uses "nice" ticks (steps of 1, 2 or 5 ×
+    10ⁿ, about five ticks, the axis widened to whole steps), and the labels
+    have as many decimals as the step needs: whole numbers for steps of 1 or
+    more, one decimal for 0.1–0.5, two only for finer steps such as Power
+    Factor 0.90–1.00 in 0.02 steps, so no two labels read the same. The
+    tooltip and Statistics keep two decimals (Amendment 7).
+  - **Interactive legend.** Each legend entry is a toggle button: select it
+    to hide that series (bars and lines alike, any asset or phase), select
+    it again to show it. A hidden series stays in the legend struck through;
+    it leaves the plot, the tooltip and the axis scaling (a unit with no
+    shown series loses its axis). Like zoom it is visual only: Statistics,
+    Data quality and the CSV still include every series and the full applied
+    range. Hidden series reset on the next Update, like the zoom.
+  - **Series colours.** Eight validated hues in a fixed order, each at least
+    3:1 against the white panel (WCAG 1.4.11; lowest 3.07), adjacent-pair
+    ΔE ≥ 8.4 under colour-vision-deficiency simulation and ≥ 19.3 under
+    normal vision. Series 9–16 reuse the hues dashed (lines) or
+    hatched at 45° (bars), 17–24 dotted / hatched at 135°, the 25th
+    dash-dot / cross-hatched. A series keeps its colour across Updates while
+    the page stays on the site, even when series are added, removed or
+    reordered; a new series takes the lowest free colour. The chart, legend,
+    tooltip and Statistics use the same colour for a series. Series are
+    always named in the legend, tooltip and Statistics, so colour is never
+    the only way to tell them apart.
+  - **Toolbar icons.** Export CSV is a download icon; Collapse / Expand is
+    an up chevron (shown, select to collapse) or a down chevron (collapsed,
+    select to expand). Both have an accessible name and a tooltip ("Export
+    CSV", "Collapse chart" / "Expand chart"), `aria-expanded` on the
+    collapse control, and a visible keyboard focus ring.
 - Tooltip: series name, value and unit, site-local date/time, and that
   period's Data quality lines in group order; no technical details (D22,
   DQ9). No quality marks on the chart; edge periods get no special treatment
@@ -254,17 +284,26 @@ message is shown only when it has useful content; otherwise it is absent.
 ### Statistics
 
 - One compact table, one row per rendered series: **Series · Total (Energy
-  only) · Average · Minimum · Maximum**, with Minimum and Maximum showing
-  their site-local time beneath the value (e.g. `892.40 kW` / `14:15 · 10 Sep
-  2026`; at daily resolution the date only). No cross-asset totals. Always the
+  only) · Average · Minimum · Maximum**. No cross-asset totals. Always the
   full applied range, never the zoomed window (D19, D20, D21, D26).
+- Order (Product Owner, 2026-10-10; F9): rows are ordered by data point --
+  **Energy first**, then every other data point alphabetically by its
+  customer label (e.g. Current, Energy Export, Frequency, Power, Power
+  Factor, Voltage). Within a data point, assets are in natural name order
+  ("Chiller 2" before "Chiller 10"), then phase (System, L1, L2, L3 / L12,
+  L23, L31). The order does not depend on the selection order. No group
+  headings are shown; each row's series name already names its data point.
+- Minimum and Maximum show the value only (Product Owner, 2026-10-10; this
+  supersedes the site-local time / date beneath each value, D21).
+- No data-quality notes in Statistics (Product Owner, 2026-10-10; this
+  supersedes Amendment 7 decision 2's "Includes Energy used while readings
+  were missing" beside a Minimum or Maximum). The values are unchanged -- the
+  API's own summary -- and the condition is still reported in Data quality
+  (group 5, "Values after missing readings") and in the chart tooltip.
 - Semantics ([ADR-022 Amendment 7](../../00-governance/decisions/ADR-022-analytics-v1-scope-and-contract.md#amendment-7-2026-10-09-statistics-semantics-and-f6-presentation-decisions)):
   **Total** is the Energy recorded so far, the in-progress period included;
   **Average, Minimum and Maximum** use completed periods only. All four come
   from the API's series `summary`; nothing is calculated in the browser.
-- A Minimum or Maximum whose period the API marks as following missing
-  readings carries "Includes Energy used while readings were missing"
-  (Amendment 7; from the API's evidence only, never from the value's size).
 - Under the table, the approved note (2026-10-09): "Average, Minimum and
   Maximum use completed periods only. Total includes the current, in-progress
   period." The second sentence is shown only with the Total column.
@@ -710,6 +749,7 @@ SECURITY DEFINER, ems_app-only, never Grafana-keyed.
 | F6 | Statistics table, Data quality section (seven groups), per-period Data quality lines in the chart tooltip; ADR-022 Amendment 7 presentation decisions | Merged to staging (PR #112, `6ab676b`) and deployed (Deploy to Staging run 37879050881, 2026-10-09); its Statistics semantics come from PR #113 (series `summary` over completed periods, `1632c64`, deployed the same day); see "Frontend implementation notes (F6)" |
 | F7 | CSV export (wide format, local + UTC timestamps, full applied range) and the toolbar's **Export CSV** | Merged to staging (PR #123, squash `837d87d`) and deployed (Deploy to Staging run 38041980073, 2026-10-10). Frontend only; see "CSV" |
 | F8 | Verification of the finished page against staging data through the SSH tunnel | Partly done (2026-10-09): 6 scenarios verified, the rest pending or unverifiable on staging; see "Staging verification (F8)" |
+| F9 | Chart UX (Product Owner, 2026-10-10): axis precision, Statistics ordered by data point without group headings, Min/Max times or data-quality notes, interactive legend, validated and consistent series colours, icon toolbar; see "Chart" and "Statistics" | Implemented (PR pending review); not merged or deployed. Frontend only |
 
 ### Frontend implementation notes (F6)
 
@@ -722,8 +762,9 @@ and per-bucket tooltip lines through `analyticsChartModel.ts` and
 - **Statistics** shows the API's series `summary` as returned (Amendment 7
   semantics, PR #113): nothing is computed in the browser; a value the API does
   not return is "—"; the Total column appears only when an Energy series is
-  charted (general rule). The catch-up note is shown when the Minimum's or
-  Maximum's own period carries `GAPS_DETECTED`.
+  charted (general rule). The catch-up note was shown when the Minimum's or
+  Maximum's own period carried `GAPS_DETECTED` (removed 2026-10-10, F9: no
+  data-quality notes in Statistics).
 - **Data quality** follows the Amendment 6 backend mapping and Amendment 7:
   - Incomplete: a period's missing intervals are `assigned_expected_intervals`
     − (`valid_intervals` + `reconstructed_intervals`) − `invalid_intervals`;
@@ -931,6 +972,22 @@ bottom, D72); the time-of-day refinement's granularity (any minute, D60).
   dates, and the page flow:
   hidden before Update, unchanged by draft edits, kept while loading and after
   a failure, replaced on the next Update, absent after a failed first Update).
+- F9 (frontend): `chartAxisAndPalette.test.tsx` (nice ticks and label
+  precision for kW / kWh / Power Factor / frequency-like ranges, distinct
+  labels, no float noise, zero anchor, negative ranges, flat ranges; palette
+  order and second encoding beyond eight); `analyticsSeriesStyles.test.ts`
+  (a colour follows its series across added / removed / reordered series,
+  returns when free, never shared, idempotent); `MultiSeriesChartFrame.test.tsx`
+  (Y-axis labels, legend toggles for bars and lines with aria-pressed and
+  tooltips, unit axis removal and rescaling, keyboard, tooltip excludes hidden
+  series, styled / hatched / dashed series); `analyticsStatisticsModel.test.ts`
+  and `AnalyticsResultSections.test.tsx` (ordering: Energy first,
+  alphabetical, natural asset order, phase order, request-order independence;
+  no group headings; no Min/Max times at 15m and 1d; no data-quality notes
+  with the API's values unchanged; no internal codes; swatch colour); `AnalyticsChart.test.tsx`
+  (icon toolbar names, tooltips, aria-expanded / aria-controls, chevron
+  direction, keyboard, CSV unchanged when series are hidden, colours kept
+  across Updates and shared with Statistics).
 - F7 (frontend): `analyticsCsvModel.test.ts` (column order and names with
   units, per-phase codes and no qualifiers, quoting, one row per bucket with
   site-local and UTC timestamps, blank never 0, unrounded values, Energy bars
