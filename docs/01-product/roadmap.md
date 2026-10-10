@@ -155,8 +155,9 @@ matches the DDS roadmap's own Phase 8 exit criterion ("empty shell").
   (PR #123, squash `837d87d`; Deploy to Staging run 38041980073,
   2026-10-10); not released to production. See
   [07-features/analytics/README.md §CSV](../07-features/analytics/README.md#csv).
-  Follow-up: the Energy screen CSV has no spreadsheet formula-injection
-  guard yet (issue #124); the Analytics CSV has one.
+  Follow-up: the Energy screen CSV's spreadsheet formula-injection guard
+  (issue #124) is implemented on a pull request, not yet merged or
+  deployed; both exports then share one helper.
 - **Q76 (Reporting) — one report type decided and implemented, not yet
   deployed (2026-09-14)**: the Site Performance Report (catalogue,
   configuration, generation, structure, optional PDF, error handling) is

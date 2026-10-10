@@ -47,8 +47,16 @@
  * "no data" message is invented here; the existing NoDataYet component's
  * "No data for the selected range." wording remains the on-screen
  * equivalent and is not duplicated into the CSV as a new column.
+ *
+ * Formula injection (CWE-1236, issue #124): every cell goes through
+ * export/spreadsheetSafety.ts before CSV escaping, so tenant-entered text
+ * (site_name, site_code) starting with `=`, `+`, `-`, `@`, a tab or a line
+ * break is prefixed with `'` and shown as text by a spreadsheet. Numeric
+ * cells -- numbers, and the `.toFixed(1)` strings such as "-3.5" -- are never
+ * prefixed. The column set is unchanged.
  */
 
+import { spreadsheetSafeCell } from "../export/spreadsheetSafety";
 import type { ComparisonBasis } from "../time/ranges";
 import { COMPARISON_BASIS_LABELS } from "../time/ranges";
 import type { ComparisonResult, TypicalReferenceResult } from "./comparison";
@@ -134,7 +142,7 @@ function fixed1(value: number | null | undefined): string | null {
 }
 
 function formatRow(row: CsvRow): string {
-  return CSV_COLUMNS.map((col) => csvField(row[col])).join(",");
+  return CSV_COLUMNS.map((col) => csvField(spreadsheetSafeCell(row[col]))).join(",");
 }
 
 /** Pure CSV construction -- no network, no DOM, no side effects. One row
