@@ -82,21 +82,51 @@ describe("AnalyticsChart -- the chart card (F5)", () => {
   it("Collapse hides the chart (kept mounted, so the zoom survives); Expand shows it again", async () => {
     render(<AnalyticsChart applied={appliedQuery([okSeries("a1", [1, 2])], ["a1"])} catalog={catalogFixture()} timeZone="Asia/Kolkata" width={800} />);
     const toggle = screen.getByTestId("analytics-chart-collapse");
-    expect(toggle).toHaveTextContent("Collapse");
+    expect(toggle).toHaveAccessibleName("Collapse chart");
+    expect(toggle).toHaveAttribute("title", "Collapse chart");
+    expect(toggle.querySelector("svg")).toHaveAttribute("data-direction", "up");
     expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(toggle).toHaveAttribute("aria-controls", screen.getByTestId("analytics-chart-body").id);
     await userEvent.click(toggle);
     expect(screen.getByTestId("analytics-chart-body")).not.toBeVisible();
     expect(screen.getByTestId("multi-series-chart")).toBeInTheDocument();
-    expect(toggle).toHaveTextContent("Expand");
+    expect(toggle).toHaveAccessibleName("Expand chart");
+    expect(toggle).toHaveAttribute("title", "Expand chart");
+    expect(toggle.querySelector("svg")).toHaveAttribute("data-direction", "down");
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     await userEvent.click(toggle);
     expect(screen.getByTestId("analytics-chart-body")).toBeVisible();
   });
 
-  it("the toolbar has Export CSV and Collapse / Expand only (D27)", () => {
+  it("the toolbar has Export CSV and Collapse / Expand only (D27), as named icon buttons with tooltips", () => {
     render(<AnalyticsChart applied={appliedQuery([okSeries("a1", [1])], ["a1"])} catalog={catalogFixture()} timeZone="Asia/Kolkata" width={800} />);
-    const header = screen.getByTestId("analytics-chart").querySelector(".analytics-chart__toolbar")!;
-    expect(within(header as HTMLElement).getAllByRole("button").map((b) => b.textContent)).toEqual(["Export CSV", "Collapse"]);
+    const toolbar = screen.getByRole("group", { name: "Chart options" });
+    const buttons = within(toolbar).getAllByRole("button");
+    expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual(["Export CSV", "Collapse chart"]);
+    expect(buttons.map((b) => b.getAttribute("title"))).toEqual(["Export CSV", "Collapse chart"]);
+    // Icons only: no visible text, and the icons are hidden from assistive technology.
+    for (const b of buttons) {
+      expect(b.textContent).toBe("");
+      expect(b.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+    }
+  });
+
+  it("the toolbar works from the keyboard", async () => {
+    render(<AnalyticsChart applied={appliedQuery([okSeries("a1", [1])], ["a1"])} catalog={catalogFixture()} timeZone="Asia/Kolkata" width={800} />);
+    const exportButton = screen.getByRole("button", { name: "Export CSV" });
+    const collapse = screen.getByRole("button", { name: "Collapse chart" });
+    exportButton.focus();
+    await userEvent.tab();
+    expect(collapse).toHaveFocus();
+    await userEvent.keyboard("{Enter}");
+    expect(screen.getByRole("button", { name: "Expand chart" })).toHaveFocus();
+    expect(screen.getByTestId("analytics-chart-body")).not.toBeVisible();
+  });
+
+  it("chart series use the colours the page assigned", () => {
+    const styles = new Map([["a1:ENERGY_IMPORT:TOTAL", { color: "#e34948", pattern: 0 as const }]]);
+    render(<AnalyticsChart applied={appliedQuery([okSeries("a1", [1, 2])], ["a1"])} catalog={catalogFixture()} timeZone="Asia/Kolkata" styles={styles} width={800} />);
+    expect(document.querySelector(".chart-frame__bar-series")).toHaveAttribute("fill", "#e34948");
   });
 });
 
@@ -138,6 +168,26 @@ describe("AnalyticsChart -- Export CSV (F7)", () => {
     await userEvent.click(screen.getByTestId("analytics-chart-export-csv"));
     const csv = vi.mocked(downloadCsv).mock.calls[0]![1];
     expect(csv.trimEnd().split("\r\n").slice(1).map((r) => r.split(",")[2])).toEqual(["1", "2", "3", "4"]);
+  });
+
+  it("series hidden in the legend are still exported, with their full values (hiding is visual only)", async () => {
+    render(
+      <AnalyticsChart
+        applied={appliedQuery([okSeries("a1", [1, 2]), okSeries("a2", [5, null])], ["a1", "a2"])}
+        catalog={catalogFixture()}
+        timeZone="Asia/Kolkata"
+        siteName="Coimbatore"
+        width={800}
+      />,
+    );
+    await userEvent.click(within(screen.getByTestId("chart-legend")).getByRole("button", { name: "Asset a1-Energy" }));
+    expect(document.querySelectorAll(".chart-frame__bar-series")).toHaveLength(1);
+    await userEvent.click(screen.getByRole("button", { name: "Export CSV" }));
+    expect(vi.mocked(downloadCsv).mock.calls[0]![1]).toBe(
+      "Timestamp local,Timestamp UTC,Energy-Asset a1 (kWh),Energy-Asset a2 (kWh)\r\n" +
+        "2026-10-05 00:00,2026-10-04T18:30:00Z,1,5\r\n" +
+        "2026-10-05 00:15,2026-10-04T18:45:00Z,2,\r\n",
+    );
   });
 
   it("disabled when nothing could be requested", () => {
@@ -193,5 +243,66 @@ describe("Analytics page -- the chart after Update", () => {
     await userEvent.click(within(screen.getByTestId("data-point-group-Power")).getByRole("checkbox", { name: "Energy Export" }));
     await userEvent.click(screen.getByTestId("analytics-update"));
     await waitFor(() => expect(screen.getByTestId("multi-series-chart")).not.toBe(firstChart));
+  });
+});
+
+describe("Analytics page -- series colours across Updates", () => {
+  const SITE_ID = SITES_ONE.sites[0]!.site_id;
+
+  it("a series keeps its colour when another is added before it; chart and Statistics agree", async () => {
+    let call = 0;
+    const energy = okSeries("a1", [1, 2, 3, 4]);
+    const energyExport = okSeries("a1", [4, 3, 2, 1], { data_point: "ENERGY_EXPORT", label: "Energy Export" });
+    stubFetch((url) => {
+      const parsed = new URL(url, "http://localhost");
+      if (parsed.pathname.endsWith(`/sites/${SITE_ID}/analytics/catalog`)) return { jsonBody: catalogFixture({ site_id: SITE_ID }) };
+      if (parsed.pathname.endsWith(`/sites/${SITE_ID}/analytics/series`)) {
+        call += 1;
+        return {
+          jsonBody: seriesResponseFixture({
+            site_id: SITE_ID,
+            from: parsed.searchParams.get("from")!,
+            to: parsed.searchParams.get("to")!,
+            as_of: `2026-10-05T07:00:0${call}Z`,
+            // The second response lists the new series FIRST.
+            series: call === 1 ? [energy] : [energyExport, energy],
+          }),
+        };
+      }
+      return { status: 404, jsonBody: { error: "not_found", detail: "unexpected" } };
+    });
+    renderWithProviders(<AnalyticsPage />, { sites: () => Promise.resolve(SITES_ONE) });
+    await screen.findByTestId("analytics-filters");
+    const assets = screen.getByTestId("asset-selector");
+    await userEvent.click(within(assets).getByRole("button", { name: /^Unassigned/ }));
+    await userEvent.click(within(assets).getByRole("checkbox", { name: "Asset a1" }));
+    const points = screen.getByTestId("data-point-selector");
+    await userEvent.click(within(points).getByRole("button", { name: /^Frequently Used/ }));
+    await userEvent.click(within(points).getByRole("checkbox", { name: "Energy" }));
+    await userEvent.click(screen.getByTestId("analytics-update"));
+    await waitFor(() => expect(screen.getByTestId("analytics-chart")).toBeInTheDocument());
+
+    const barFill = (name: string) => {
+      const swatch = within(screen.getByTestId("chart-legend")).getByRole("button", { name }).querySelector("svg rect");
+      return swatch?.getAttribute("fill");
+    };
+    const statsFill = (name: string) =>
+      screen
+        .getAllByTestId("analytics-statistics-row")
+        .find((r) => within(r).getByRole("rowheader").textContent === name)!
+        .querySelector("svg rect")!
+        .getAttribute("fill");
+    const energyColour = barFill("Asset a1-Energy");
+    expect(statsFill("Energy-Asset a1")).toBe(energyColour);
+
+    await userEvent.click(within(points).getByRole("button", { name: /^Power/ }));
+    await userEvent.click(within(screen.getByTestId("data-point-group-Power")).getByRole("checkbox", { name: "Energy Export" }));
+    await userEvent.click(screen.getByTestId("analytics-update"));
+    await waitFor(() => expect(within(screen.getByTestId("chart-legend")).getAllByRole("button")).toHaveLength(2));
+
+    expect(barFill("Asset a1-Energy")).toBe(energyColour);
+    expect(barFill("Asset a1-Energy Export")).not.toBe(energyColour);
+    expect(statsFill("Energy-Asset a1")).toBe(energyColour);
+    expect(statsFill("Energy Export-Asset a1")).toBe(barFill("Asset a1-Energy Export"));
   });
 });

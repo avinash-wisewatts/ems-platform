@@ -1,15 +1,17 @@
 /**
  * Statistics (F6): one compact table below the chart, one row per charted
- * series -- Series · Total (Energy only) · Average · Minimum · Maximum, with
- * the site-local time beneath Minimum and Maximum (the date only at daily
- * resolution) and a short disclosure when that period includes Energy from
- * missing readings (README "Statistics"; ADR-022 Amendment 7). Absent when
- * nothing is charted (general rule).
+ * series -- Series · Total (Energy only) · Average · Minimum · Maximum --
+ * grouped by data point (Energy first, then alphabetically), assets in a
+ * consistent order within each group (analyticsStatisticsModel.ts). Minimum
+ * and Maximum show values only (Product Owner, 2026-10-10: no times), with a
+ * short disclosure when that period includes Energy from missing readings
+ * (README "Statistics"; ADR-022 Amendment 7). Each series wears its chart
+ * colour. Absent when nothing is charted (general rule).
  */
 import { useMemo } from "react";
 import type { AnalyticsCatalogResponse, AnalyticsSeriesResponse } from "../../api/types";
-import { formatValue, seriesColor } from "../../components/ChartFrame";
-import { DQ_TEXT, periodTime } from "./analyticsDataQualityModel";
+import { SeriesSwatch, formatValue, seriesStyleForSlot, type SeriesStyle } from "../../components/ChartFrame";
+import { DQ_TEXT } from "./analyticsDataQualityModel";
 import { buildStatistics } from "./analyticsStatisticsModel";
 
 const NOT_AVAILABLE = "—";
@@ -28,25 +30,10 @@ function valueText(value: number | null | undefined, unit: string | null): strin
   return unit ? `${formatValue(value)} ${unit}` : formatValue(value);
 }
 
-function Extreme({
-  value,
-  at,
-  afterMissing,
-  unit,
-  timeZone,
-  dateOnly,
-}: {
-  value: number | null;
-  at: string | null;
-  afterMissing: boolean;
-  unit: string | null;
-  timeZone: string | null | undefined;
-  dateOnly: boolean;
-}) {
+function Extreme({ value, afterMissing, unit }: { value: number | null; afterMissing: boolean; unit: string | null }) {
   return (
     <>
       <span className="analytics-stats__value">{valueText(value, unit)}</span>
-      {at ? <span className="analytics-stats__time">{periodTime(Date.parse(at), timeZone, dateOnly)}</span> : null}
       {afterMissing ? (
         <span className="analytics-stats__note" data-testid="analytics-statistics-after-missing">
           {DQ_TEXT.tipAfterMissing}
@@ -59,14 +46,16 @@ function Extreme({
 export function AnalyticsStatistics({
   response,
   catalog,
-  timeZone,
+  styles,
 }: {
   response: AnalyticsSeriesResponse | null;
   catalog: AnalyticsCatalogResponse | null;
-  timeZone: string | null | undefined;
+  /** Series colours by series key, shared with the chart. */
+  styles?: ReadonlyMap<string, SeriesStyle>;
 }) {
-  const { rows, showTotal, dateOnly } = useMemo(() => buildStatistics(response, catalog), [response, catalog]);
+  const { groups, rows, showTotal } = useMemo(() => buildStatistics(response, catalog), [response, catalog]);
   if (rows.length === 0) return null;
+  const columns = showTotal ? 5 : 4;
   return (
     <section className="analytics-card analytics-stats" data-testid="analytics-statistics" aria-labelledby="analytics-stats-heading">
       <h2 id="analytics-stats-heading" className="analytics-card__title">
@@ -83,24 +72,31 @@ export function AnalyticsStatistics({
               <th scope="col">Maximum</th>
             </tr>
           </thead>
-          <tbody>
-            {rows.map((row) => (
-              <tr key={row.key} data-testid="analytics-statistics-row">
-                <th scope="row" className="analytics-stats__series">
-                  <span className="chart-frame__swatch" style={{ background: seriesColor(row.index) }} aria-hidden="true" />
-                  {row.name}
+          {groups.map((group) => (
+            <tbody key={group.dataPoint} data-testid="analytics-statistics-group">
+              <tr className="analytics-stats__group">
+                <th scope="rowgroup" colSpan={columns} data-testid="analytics-statistics-group-label">
+                  {group.label}
                 </th>
-                {showTotal ? <td>{row.total === undefined ? "" : valueText(row.total, row.unit)}</td> : null}
-                <td>{valueText(row.average, row.unit)}</td>
-                <td>
-                  <Extreme value={row.min} at={row.minAt} afterMissing={row.minAfterMissing} unit={row.unit} timeZone={timeZone} dateOnly={dateOnly} />
-                </td>
-                <td>
-                  <Extreme value={row.max} at={row.maxAt} afterMissing={row.maxAfterMissing} unit={row.unit} timeZone={timeZone} dateOnly={dateOnly} />
-                </td>
               </tr>
-            ))}
-          </tbody>
+              {group.rows.map((row) => (
+                <tr key={row.key} data-testid="analytics-statistics-row">
+                  <th scope="row" className="analytics-stats__series">
+                    <SeriesSwatch kind={row.kind} style={styles?.get(row.key) ?? seriesStyleForSlot(rows.indexOf(row))} />
+                    {row.name}
+                  </th>
+                  {showTotal ? <td>{row.total === undefined ? "" : valueText(row.total, row.unit)}</td> : null}
+                  <td>{valueText(row.average, row.unit)}</td>
+                  <td>
+                    <Extreme value={row.min} afterMissing={row.minAfterMissing} unit={row.unit} />
+                  </td>
+                  <td>
+                    <Extreme value={row.max} afterMissing={row.maxAfterMissing} unit={row.unit} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          ))}
         </table>
       </div>
       <p className="analytics-stats__basis" data-testid="analytics-statistics-basis">

@@ -25,6 +25,7 @@ import { useAnalyticsState, type UseAnalyticsState } from "./useAnalyticsState";
 import { AnalyticsChart } from "./AnalyticsChart";
 import { AnalyticsDataQuality } from "./AnalyticsDataQuality";
 import { AnalyticsStatistics } from "./AnalyticsStatistics";
+import { assignSeriesSlots, seriesKey, seriesStyles } from "./analyticsSeriesStyles";
 import { AnalyticsDateRange } from "./AnalyticsDateRange";
 import {
   AssetSelector,
@@ -185,6 +186,16 @@ function AnalyticsResultArea({
   siteName: string;
 }) {
   const { applied, loading } = analytics.state;
+  // Page-wide series colours: a series keeps its colour slot across Updates
+  // (reset on a site change, which remounts this area), so the chart, its
+  // legend and Statistics agree and a colour never moves to another series.
+  const slots = useRef<ReadonlyMap<string, number>>(new Map());
+  const response = applied?.response ?? null;
+  const styles = useMemo(() => {
+    const keys = (response?.series ?? []).filter((s) => s.status === "OK").map(seriesKey);
+    slots.current = assignSeriesSlots(slots.current, keys);
+    return seriesStyles(slots.current, keys);
+  }, [response]);
   return (
     // A section, not <main>: the app shell already provides the page's main landmark.
     <section className="analytics-main" data-testid="analytics-main" aria-busy={loading}>
@@ -206,8 +217,9 @@ function AnalyticsResultArea({
             catalog={catalog}
             timeZone={timeZone}
             siteName={siteName}
+            styles={styles}
           />
-          <AnalyticsStatistics response={applied.response} catalog={catalog} timeZone={timeZone} />
+          <AnalyticsStatistics response={applied.response} catalog={catalog} styles={styles} />
           {/* Keyed like the chart: each Update starts with the default expansion (DQ9). */}
           <AnalyticsDataQuality
             key={`dq|${applied.response?.as_of ?? ""}|${applied.range.from}|${applied.range.to}`}

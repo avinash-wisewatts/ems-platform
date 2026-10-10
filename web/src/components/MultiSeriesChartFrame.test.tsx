@@ -212,3 +212,103 @@ describe("ChartFrame (single series) is unchanged for its existing callers", () 
     expect(screen.queryByTestId("chart-show-all")).not.toBeInTheDocument();
   });
 });
+
+const yTickLabels = (container: HTMLElement) =>
+  [...container.querySelectorAll(".recharts-yAxis .recharts-cartesian-axis-tick-value")].map((t) => t.textContent);
+const legendToggle = (name: string) =>
+  // A string name matches the accessible name exactly.
+  within(screen.getByTestId("chart-legend")).getByRole("button", { name });
+
+describe("MultiSeriesChartFrame -- Y axis precision", () => {
+  it("whole-number ticks for an Energy axis, never 2 fixed decimals", () => {
+    const { container } = renderChart([energy]); // 1, 2, null, 4 kWh
+    expect(yTickLabels(container)).toEqual(["0", "1", "2", "3", "4"]);
+  });
+
+  it("decimals only where the scale needs them; one precision per axis", () => {
+    const pf: ChartSeries = { key: "a1:PF", name: "Asset 1 · Power Factor", unit: null, kind: "line", values: [0.912, 0.95, null, 0.987] };
+    const { container } = renderChart([energy, pf]);
+    const labels = yTickLabels(container);
+    expect(labels).toEqual(expect.arrayContaining(["0", "4", "0.90", "1.00"]));
+    expect(labels.filter((l) => l?.startsWith("0.9"))).toEqual(["0.90", "0.92", "0.94", "0.96", "0.98"]);
+  });
+});
+
+describe("MultiSeriesChartFrame -- interactive legend", () => {
+  it("every legend entry is a pressed toggle button named after its series", () => {
+    renderChart([energy, energyExport, power]);
+    const toggles = within(screen.getByTestId("chart-legend")).getAllByRole("button");
+    expect(toggles.map((b) => b.textContent)).toEqual(["Asset 1 · Energy", "Asset 1 · Energy Export", "Asset 1 · Power"]);
+    for (const b of toggles) expect(b).toHaveAttribute("aria-pressed", "true");
+    expect(toggles[0]).toHaveAttribute("title", "Hide Asset 1 · Energy");
+  });
+
+  it("clicking a bar series hides it and clicking again shows it; the other series keep their colour", async () => {
+    const { container } = renderChart([energy, energyExport, power]);
+    const fills = () => [...container.querySelectorAll(".chart-frame__bar-series")].map((p) => p.getAttribute("fill"));
+    const before = fills();
+    expect(before).toHaveLength(2);
+    await userEvent.click(legendToggle("Asset 1 · Energy"));
+    expect(legendToggle("Asset 1 · Energy")).toHaveAttribute("aria-pressed", "false");
+    expect(legendToggle("Asset 1 · Energy")).toHaveAttribute("title", "Show Asset 1 · Energy");
+    expect(fills()).toEqual([before[1]]);
+    expect(visibleLines(container)).toHaveLength(1);
+    await userEvent.click(legendToggle("Asset 1 · Energy"));
+    expect(fills()).toEqual(before);
+  });
+
+  it("hides and shows a line series", async () => {
+    const { container } = renderChart([energy, power]);
+    expect(visibleLines(container)).toHaveLength(1);
+    await userEvent.click(legendToggle("Asset 1 · Power"));
+    expect(visibleLines(container)).toHaveLength(0);
+    expect(container.querySelectorAll(".chart-frame__bar-series")).toHaveLength(1);
+    await userEvent.click(legendToggle("Asset 1 · Power"));
+    expect(visibleLines(container)).toHaveLength(1);
+  });
+
+  it("hiding every series of a unit removes that unit's axis; the remaining axis rescales", async () => {
+    const big: ChartSeries = { ...energyExport, key: "a2:E", name: "Asset 2 · Energy", values: [100, 200, 300, 400] };
+    const { container } = renderChart([energy, big, power]);
+    expect(container.querySelectorAll(".recharts-yAxis")).toHaveLength(2);
+    await userEvent.click(legendToggle("Asset 1 · Power"));
+    expect(container.querySelectorAll(".recharts-yAxis")).toHaveLength(1);
+    expect(yTickLabels(container).at(-1)).toBe("400");
+    await userEvent.click(legendToggle("Asset 2 · Energy"));
+    expect(yTickLabels(container).at(-1)).toBe("4");
+  });
+
+  it("works from the keyboard (Enter and Space)", async () => {
+    const { container } = renderChart([energy, power]);
+    legendToggle("Asset 1 · Power").focus();
+    await userEvent.keyboard("{Enter}");
+    expect(visibleLines(container)).toHaveLength(0);
+    await userEvent.keyboard(" ");
+    expect(visibleLines(container)).toHaveLength(1);
+  });
+
+  it("a hidden series is left out of the tooltip", async () => {
+    const { container } = renderChart([energy, power]);
+    await userEvent.click(legendToggle("Asset 1 · Power"));
+    const wrapper = container.querySelector(".recharts-wrapper")!;
+    fireEvent.mouseMove(wrapper, { clientX: 200, clientY: 100, pageX: 200, pageY: 100 });
+    const tooltip = screen.getByTestId("chart-tooltip");
+    expect(tooltip).toHaveTextContent("Asset 1 · Energy");
+    expect(tooltip).not.toHaveTextContent("Asset 1 · Power");
+  });
+
+  it("a series' own style wins over its position", () => {
+    const styled: ChartSeries = { ...energy, style: { color: "#6250d6", pattern: 0 } };
+    const { container } = renderChart([styled]);
+    expect(container.querySelector(".chart-frame__bar-series")).toHaveAttribute("fill", "#6250d6");
+  });
+
+  it("a hatched style fills bars with a pattern and dashes lines", () => {
+    const hatched: ChartSeries = { ...energy, style: { color: "#2a78d6", pattern: 1 } };
+    const dashed: ChartSeries = { ...power, style: { color: "#eb6834", pattern: 1 } };
+    const { container } = renderChart([hatched, dashed]);
+    expect(container.querySelector(".chart-frame__bar-series")!.getAttribute("fill")).toMatch(/^url\(#.+-hatch-/);
+    expect(container.querySelector(".chart-frame__bars pattern")).not.toBeNull();
+    expect(visibleLines(container)[0]).toHaveAttribute("stroke-dasharray", "6 4");
+  });
+});

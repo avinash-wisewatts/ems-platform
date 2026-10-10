@@ -266,6 +266,9 @@ export type ChartSeries = {
    *  period's data quality). A bucket with lines is listed in the tooltip
    *  even without a value. */
   notes?: readonly (readonly string[])[];
+  /** Colour and pattern; defaults to the series' position. Callers that
+   *  want a series to keep its colour across updates pass it. */
+  style?: SeriesStyle;
 };
 
 /** Visible window as inclusive bucket indices; null = the whole range. */
@@ -287,23 +290,123 @@ export type MultiSeriesChartFrameProps = {
   width?: number;
 };
 
-/** Series colours, in series order (repeating beyond twelve). */
+/**
+ * Categorical series colours, in this fixed order. A validated set (the
+ * dataviz reference palette): on the white chart panel every adjacent pair
+ * is at least ΔE 9.1 apart under simulated colour-vision deficiency and 19.6
+ * under normal vision. The order is part of that guarantee, so keep it. Three
+ * hues are below 3:1 contrast against white, which is acceptable only because
+ * series are always named in the legend, the tooltip and the Statistics
+ * table -- colour is never the only way to tell series apart.
+ */
 export const SERIES_COLORS = [
-  "#03a9a0",
-  "#0f4694",
-  "#ff9966",
-  "#8e5ea2",
-  "#d4a200",
-  "#d94f70",
-  "#3e9b4f",
-  "#6b7a8f",
-  "#00a6d6",
-  "#b5651d",
-  "#7cb342",
-  "#c2185b",
+  "#2a78d6", // blue
+  "#eb6834", // orange
+  "#1baf7a", // aqua
+  "#eda100", // yellow
+  "#e87ba4", // magenta
+  "#008300", // green
+  "#6250d6", // violet
+  "#e34948", // red
 ] as const;
 
-export const seriesColor = (index: number): string => SERIES_COLORS[index % SERIES_COLORS.length]!;
+/** Beyond eight series the hues repeat with a second encoding instead of new
+ *  colours: 0 solid, then dashed / dotted / dash-dot lines and 45° / 135° /
+ *  crossed hatching for bars. */
+export type SeriesPattern = 0 | 1 | 2 | 3;
+export type SeriesStyle = { color: string; pattern: SeriesPattern };
+
+const LINE_DASH: readonly (string | undefined)[] = [undefined, "6 4", "2 3", "8 3 2 3"];
+
+/** The style of colour slot `slot`: hue `slot mod 8`, pattern `slot div 8`
+ *  (capped at the last pattern). */
+export function seriesStyleForSlot(slot: number): SeriesStyle {
+  const n = SERIES_COLORS.length;
+  const s = Math.max(0, Math.floor(slot));
+  return { color: SERIES_COLORS[s % n]!, pattern: Math.min(3, Math.floor(s / n)) as SeriesPattern };
+}
+
+/** A line's dash pattern for a series style (undefined = solid). */
+export const lineDash = (style: SeriesStyle): string | undefined => LINE_DASH[style.pattern];
+
+/** SVG <pattern> for a hatched bar fill (pattern > 0). */
+function HatchPattern({ id, style }: { id: string; style: SeriesStyle }) {
+  const angle = style.pattern === 2 ? 135 : 45;
+  return (
+    <pattern id={id} width={6} height={6} patternUnits="userSpaceOnUse" patternTransform={`rotate(${angle})`}>
+      <rect width={6} height={6} fill={style.color} fillOpacity={0.25} />
+      <line x1={0} y1={0} x2={0} y2={6} stroke={style.color} strokeWidth={3} />
+      {style.pattern === 3 ? <line x1={0} y1={0} x2={6} y2={0} stroke={style.color} strokeWidth={3} /> : null}
+    </pattern>
+  );
+}
+
+/** The legend / tooltip / Statistics marker of a series: a small bar block
+ *  (solid or hatched) or a line sample (solid or dashed). */
+export function SeriesSwatch({ kind, style }: { kind: "bar" | "line"; style: SeriesStyle }) {
+  const id = `swatch-${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
+  return (
+    <svg className={`chart-frame__swatch chart-frame__swatch--${kind}`} width={14} height={10} viewBox="0 0 14 10" aria-hidden="true" focusable="false">
+      {kind === "bar" ? (
+        <>
+          {style.pattern > 0 ? (
+            <defs>
+              <HatchPattern id={id} style={style} />
+            </defs>
+          ) : null}
+          <rect x={2} y={0} width={10} height={10} rx={2} fill={style.pattern > 0 ? `url(#${id})` : style.color} stroke={style.pattern > 0 ? style.color : "none"} />
+        </>
+      ) : (
+        <line x1={0} y1={5} x2={14} y2={5} stroke={style.color} strokeWidth={2.5} strokeDasharray={lineDash(style)} strokeLinecap="round" />
+      )}
+    </svg>
+  );
+}
+
+/**
+ * A value axis with "nice" ticks: a step of 1, 2 or 5 × 10^n, about `target`
+ * ticks, and the domain widened to whole steps. The label precision follows
+ * the step -- whole numbers for a step of 1 or more, one decimal for 0.5 /
+ * 0.2 / 0.1, more only when the step is finer (e.g. power factor 0.90-1.00 in
+ * 0.02 steps) -- so labels never show meaningless decimals and no two labels
+ * read the same.
+ */
+export type NiceAxis = { domain: [number, number]; ticks: number[]; decimals: number };
+
+export function niceAxis(lo: number, hi: number, target = 5): NiceAxis {
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) {
+    const base = Number.isFinite(lo) ? lo : 0;
+    return niceAxis(base, base + 1, target);
+  }
+  const raw = (hi - lo) / Math.max(1, target - 1);
+  const magnitude = 10 ** Math.floor(Math.log10(raw));
+  const span = (s: number) => [Math.floor(lo / s + 1e-9), Math.ceil(hi / s - 1e-9)] as const;
+  // The 1 / 2 / 5 step whose tick count is closest to the target; on a tie
+  // the finer one, which leaves less empty headroom above the data.
+  let step = magnitude;
+  let best = Infinity;
+  for (const m of [1, 2, 5, 10]) {
+    const [a, b] = span(m * magnitude);
+    const miss = Math.abs(b - a + 1 - target);
+    if (miss < best) {
+      best = miss;
+      step = m * magnitude;
+    }
+  }
+  const decimals = Math.max(0, -Math.floor(Math.log10(step) + 1e-9));
+  const round = (v: number) => Number(v.toFixed(decimals));
+  const [first, last] = span(step);
+  const ticks: number[] = [];
+  for (let k = first; k <= last; k++) ticks.push(round(k * step));
+  return { domain: [ticks[0]!, ticks[ticks.length - 1]!], ticks, decimals };
+}
+
+/** An axis tick label at the axis's precision; never "-0". */
+export function formatAxisTick(value: unknown, decimals: number): string {
+  if (typeof value !== "number") return String(value);
+  const text = value.toFixed(decimals);
+  return Number(text) === 0 ? (0).toFixed(decimals) : text;
+}
 
 export type ChartRow = Record<string, number | null> & { t: number; tEnd: number };
 
@@ -398,7 +501,7 @@ export function unitDomains(
   return domains;
 }
 
-type BarSpec = { dataKey: string; axisId: string; color: string };
+type BarSpec = { dataKey: string; axisId: string; style: SeriesStyle };
 type AxisLike = { scale: (value: number) => number };
 type Scale = (value: number) => number;
 
@@ -532,11 +635,24 @@ function BarPathsLayer({
     return layoutBars(rows, scaled, first, last, x.scale);
   }, [bars, rows, first, last, xAxisMap, yAxisMap]);
 
-  const colours = new Map(bars.map((b) => [b.dataKey, b.color]));
+  const hatchId = (dataKey: string) => `${clipId}-hatch-${dataKey}`;
+  const styles = new Map(bars.map((b) => [b.dataKey, b.style]));
+  const fillOf = (dataKey: string) => {
+    const style = styles.get(dataKey);
+    if (!style) return undefined;
+    return style.pattern > 0 ? `url(#${hatchId(dataKey)})` : style.color;
+  };
   return (
     <g className="chart-frame__bars" clipPath={`url(#${clipId})`} data-bar-mode={layout?.mode}>
+      <defs>
+        {bars
+          .filter((b) => b.style.pattern > 0)
+          .map((b) => (
+            <HatchPattern key={b.dataKey} id={hatchId(b.dataKey)} style={b.style} />
+          ))}
+      </defs>
       {(layout?.paths ?? []).map((p) => (
-        <path key={p.dataKey} className="chart-frame__bar-series" data-series={p.dataKey} d={p.d} fill={colours.get(p.dataKey)} />
+        <path key={p.dataKey} className="chart-frame__bar-series" data-series={p.dataKey} d={p.d} fill={fillOf(p.dataKey)} />
       ))}
     </g>
   );
@@ -545,7 +661,7 @@ function BarPathsLayer({
 type TooltipEntry = {
   name: string;
   unit: string | null;
-  color: string;
+  style: SeriesStyle;
   kind: "bar" | "line";
   dataKey: string;
   /** bucket start -> tooltip lines */
@@ -580,7 +696,7 @@ function SeriesTooltip({
         <ul className="chart-frame__tooltip-list">
           {values.map((e) => (
             <li key={e.dataKey}>
-              <span className={`chart-frame__swatch chart-frame__swatch--${e.kind}`} style={{ background: e.color }} />
+              <SeriesSwatch kind={e.kind} style={e.style} />
               <span className="chart-frame__tooltip-name">{e.name}</span>
               {row[e.dataKey] != null ? (
                 <span className="chart-frame__tooltip-value">
@@ -608,9 +724,12 @@ const CHART_MARGIN = { top: 8, right: 16, bottom: 8, left: 8 };
 /**
  * Several series on one time grid. The X axis shows exactly `range` in the
  * site timezone; bar series are one path each, line series Recharts lines;
- * one Y axis per unit. Drag across the plot to zoom, use the range slider,
+ * one Y axis per unit, with nice ticks labelled at the precision the step
+ * needs (niceAxis). Drag across the plot to zoom, use the range slider,
  * or Show all to return to the whole range -- zooming changes only what is
- * visible. Remount (change `key`) to reset the zoom.
+ * visible. Each legend entry shows or hides its series, also visual only (a
+ * unit with no shown series loses its axis). Remount (change `key`) to reset
+ * the zoom and the hidden series.
  */
 export function MultiSeriesChartFrame({
   buckets,
@@ -624,12 +743,33 @@ export function MultiSeriesChartFrame({
 }: MultiSeriesChartFrameProps) {
   const [view, setView] = useState<ChartView | null>(null);
   const [drag, setDrag] = useState<{ a: number; b: number } | null>(null);
+  // Series hidden from the legend, by key: visual only, like the zoom.
+  const [hidden, setHidden] = useState<ReadonlySet<string>>(() => new Set());
   const chartId = `multi-series-chart-${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
+
+  const toggleSeries = useCallback((key: string) => {
+    setHidden((current) => {
+      const next = new Set(current);
+      if (!next.delete(key)) next.add(key);
+      return next;
+    });
+  }, []);
+  const styles = useMemo(() => series.map((s, i) => s.style ?? seriesStyleForSlot(i)), [series]);
+  // Visible series keep their position in `series`, which names their data key.
+  const visible = useMemo(
+    () => series.map((s, i) => ({ s, i })).filter(({ s }) => !hidden.has(s.key)),
+    [series, hidden],
+  );
+  const visibleSeries = useMemo(() => visible.map(({ s }) => s), [visible]);
 
   const rows = useMemo(() => chartRows(buckets, series), [buckets, series]);
   const rowsByStart = useMemo(() => new Map(rows.map((r) => [r.t, r])), [rows]);
-  const units = useMemo(() => [...new Set(series.map((s) => s.unit))], [series]);
-  const domains = useMemo(() => unitDomains(series, view, buckets.length), [series, view, buckets.length]);
+  const units = useMemo(() => [...new Set(visibleSeries.map((s) => s.unit))], [visibleSeries]);
+  const domains = useMemo(() => unitDomains(visibleSeries, view, buckets.length), [visibleSeries, view, buckets.length]);
+  const axes = useMemo(
+    () => new Map([...domains].map(([unit, [lo, hi]]) => [unit, niceAxis(lo, hi)] as const)),
+    [domains],
+  );
   const xDomain = useMemo(() => viewDomain(view, buckets, range), [view, buckets, range]);
   const ticks = useMemo(() => siteLocalTicks(xDomain[0], xDomain[1], timeZone), [xDomain, timeZone]);
   const tickValues = useMemo(() => ticks.map((t) => t.t), [ticks]);
@@ -642,21 +782,21 @@ export function MultiSeriesChartFrame({
 
   const bars = useMemo<BarSpec[]>(
     () =>
-      series.flatMap((s, i) =>
-        s.kind === "bar" ? [{ dataKey: dataKeyOf(i), axisId: axisIdOf(s.unit), color: seriesColor(i) }] : [],
+      visible.flatMap(({ s, i }) =>
+        s.kind === "bar" ? [{ dataKey: dataKeyOf(i), axisId: axisIdOf(s.unit), style: styles[i]! }] : [],
       ),
-    [series],
+    [visible, styles],
   );
   const entries = useMemo<TooltipEntry[]>(
     () =>
-      series.map((s, i) => {
+      visible.map(({ s, i }) => {
         const notes = new Map<number, readonly string[]>();
         s.notes?.forEach((lines, b) => {
           if (lines.length > 0 && buckets[b]) notes.set(buckets[b]!.start, lines);
         });
-        return { name: s.name, unit: s.unit, color: seriesColor(i), kind: s.kind, dataKey: dataKeyOf(i), notes };
+        return { name: s.name, unit: s.unit, style: styles[i]!, kind: s.kind, dataKey: dataKeyOf(i), notes };
       }),
-    [series, buckets],
+    [visible, styles, buckets],
   );
   const first = view?.start ?? 0;
   const last = view?.end ?? rows.length - 1;
@@ -728,8 +868,10 @@ export function MultiSeriesChartFrame({
           key={axisIdOf(unit)}
           yAxisId={axisIdOf(unit)}
           orientation={i % 2 === 0 ? "left" : "right"}
-          domain={domains.get(unit)}
-          tickFormatter={formatValue}
+          domain={axes.get(unit)?.domain}
+          ticks={axes.get(unit)?.ticks}
+          interval={0}
+          tickFormatter={(v: unknown) => formatAxisTick(v, axes.get(unit)?.decimals ?? 0)}
           width={56}
           label={
             unit
@@ -746,17 +888,18 @@ export function MultiSeriesChartFrame({
       <YAxis yAxisId={ANCHOR_AXIS} hide domain={[0, 1]} />
       <Tooltip content={tooltipContent} isAnimationActive={false} />
       <Customized component={barsLayer} />
-      {series.map((s, i) =>
+      {visible.map(({ s, i }) =>
         s.kind === "line" ? (
           <Line
             key={dataKeyOf(i)}
             dataKey={dataKeyOf(i)}
             yAxisId={axisIdOf(s.unit)}
             name={s.name}
-            stroke={seriesColor(i)}
+            stroke={styles[i]!.color}
+            strokeDasharray={lineDash(styles[i]!)}
             type="linear"
             dot={false}
-            strokeWidth={1.5}
+            strokeWidth={2}
             isAnimationActive={false}
             connectNulls={false}
             legendType="none"
@@ -809,13 +952,27 @@ export function MultiSeriesChartFrame({
         </ResponsiveContainer>
       )}
       {series.length > 0 ? (
-        <ul className="chart-frame__legend" data-testid="chart-legend">
-          {series.map((s, i) => (
-            <li key={s.key} className="chart-frame__legend-item">
-              <span className={`chart-frame__swatch chart-frame__swatch--${s.kind}`} style={{ background: seriesColor(i) }} />
-              {s.name}
-            </li>
-          ))}
+        // Each entry is a toggle: pressed = shown. Hiding a series is visual
+        // only -- the data, Statistics and CSV are unchanged.
+        <ul className="chart-frame__legend" data-testid="chart-legend" aria-label="Series (select to show or hide)">
+          {series.map((s, i) => {
+            const shown = !hidden.has(s.key);
+            return (
+              <li key={s.key} className="chart-frame__legend-item">
+                <button
+                  type="button"
+                  className={`chart-frame__legend-toggle${shown ? "" : " chart-frame__legend-toggle--hidden"}`}
+                  aria-pressed={shown}
+                  title={shown ? `Hide ${s.name}` : `Show ${s.name}`}
+                  onClick={() => toggleSeries(s.key)}
+                  data-testid="chart-legend-toggle"
+                >
+                  <SeriesSwatch kind={s.kind} style={styles[i]!} />
+                  <span className="chart-frame__legend-name">{s.name}</span>
+                </button>
+              </li>
+            );
+          })}
         </ul>
       ) : null}
     </figure>

@@ -37,30 +37,30 @@ function applied(series: AnalyticsSeries[], overrides: Partial<AppliedQuery> = {
 }
 
 describe("Statistics (F6)", () => {
-  it("one row per charted series: Total (Energy), Average, Minimum and Maximum with site-local times", () => {
+  it("one row per charted series: Total (Energy), Average, Minimum and Maximum -- values only, no times", () => {
     const response = seriesResponseFixture({
       series: [seriesFixture("a1", [1], { summary }), notShownFixture("a2", "NO_DATA", ["NO_DATA_IN_RANGE"])],
     });
-    render(<AnalyticsStatistics response={response} catalog={catalog} timeZone={TZ} />);
+    render(<AnalyticsStatistics response={response} catalog={catalog} />);
     const table = screen.getByRole("table");
     expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Series", "Total", "Average", "Minimum", "Maximum"]);
     const rows = screen.getAllByTestId("analytics-statistics-row");
     expect(rows).toHaveLength(1);
     const cells = within(rows[0]!).getAllByRole("cell").map((c) => c.textContent);
     expect(within(rows[0]!).getByRole("rowheader")).toHaveTextContent(/^Energy-Asset a1$/);
-    // 04:00Z and 08:45Z are 09:30 and 14:15 IST.
-    expect(cells).toEqual(["298.10 kWh", "12.40 kWh", "3.20 kWh09:30 · 05 Oct 2026", "20.90 kWh14:15 · 05 Oct 2026"]);
+    // Minimum and Maximum show the value only (Product Owner, 2026-10-10).
+    expect(cells).toEqual(["298.10 kWh", "12.40 kWh", "3.20 kWh", "20.90 kWh"]);
   });
 
-  it("a value the API does not return shows as not available, without a time", () => {
-    render(<AnalyticsStatistics response={seriesResponseFixture({ series: [seriesFixture("a1", [1])] })} catalog={catalog} timeZone={TZ} />);
+  it("a value the API does not return shows as not available", () => {
+    render(<AnalyticsStatistics response={seriesResponseFixture({ series: [seriesFixture("a1", [1])] })} catalog={catalog} />);
     const cells = within(screen.getByTestId("analytics-statistics-row")).getAllByRole("cell").map((c) => c.textContent);
     expect(cells).toEqual(["—", "—", "—", "—"]);
   });
 
   it("no Total column without an Energy series", () => {
     const power = seriesFixture("a1", [1], { data_point: "ACTIVE_POWER", label: "Active Power", aggregation: "mean", chart_kind: "line", unit: "kW", summary: { ...summary, total: null } });
-    render(<AnalyticsStatistics response={seriesResponseFixture({ series: [power] })} catalog={catalog} timeZone={TZ} />);
+    render(<AnalyticsStatistics response={seriesResponseFixture({ series: [power] })} catalog={catalog} />);
     expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Series", "Average", "Minimum", "Maximum"]);
     expect(screen.getByTestId("analytics-statistics-row")).toHaveTextContent("12.40 kW");
     // The note's Total sentence goes with the Total column.
@@ -68,14 +68,14 @@ describe("Statistics (F6)", () => {
   });
 
   it("states the basis of the figures under the table (Amendment 7, approved wording)", () => {
-    render(<AnalyticsStatistics response={seriesResponseFixture({ series: [seriesFixture("a1", [1], { summary })] })} catalog={catalog} timeZone={TZ} />);
+    render(<AnalyticsStatistics response={seriesResponseFixture({ series: [seriesFixture("a1", [1], { summary })] })} catalog={catalog} />);
     expect(screen.getByTestId("analytics-statistics-basis")).toHaveTextContent(
       /^Average, Minimum and Maximum use completed periods only\. Total includes the current, in-progress period\.$/,
     );
   });
 
   it("absent when nothing is charted", () => {
-    render(<AnalyticsStatistics response={seriesResponseFixture({ series: [notShownFixture("a1", "NOT_AVAILABLE")] })} catalog={catalog} timeZone={TZ} />);
+    render(<AnalyticsStatistics response={seriesResponseFixture({ series: [notShownFixture("a1", "NOT_AVAILABLE")] })} catalog={catalog} />);
     expect(screen.queryByTestId("analytics-statistics")).not.toBeInTheDocument();
   });
 
@@ -84,19 +84,61 @@ describe("Statistics (F6)", () => {
       summary: { ...summary, min_at: "2026-10-04T18:30:00.000Z", max_at: "2026-10-04T18:45:00.000Z" },
     });
     s.points[1] = pointFixture(1, 20.9, { evidence_flags: ["GAPS_DETECTED"] });
-    render(<AnalyticsStatistics response={seriesResponseFixture({ series: [s] })} catalog={catalog} timeZone={TZ} />);
+    render(<AnalyticsStatistics response={seriesResponseFixture({ series: [s] })} catalog={catalog} />);
     const [, , min, max] = within(screen.getByTestId("analytics-statistics-row")).getAllByRole("cell");
     expect(within(max!).getByTestId("analytics-statistics-after-missing")).toHaveTextContent(DQ_TEXT.tipAfterMissing);
     expect(within(min!).queryByTestId("analytics-statistics-after-missing")).not.toBeInTheDocument();
   });
 
-  it("daily resolution shows Minimum / Maximum dates without 00:00 (Amendment 7)", () => {
-    const daily = seriesFixture("a1", [1], {
-      summary: { ...summary, min_at: "2026-10-04T18:30:00Z", max_at: "2026-10-05T18:30:00Z" },
+  it.each(["15m", "1d"] as const)("no Minimum / Maximum time or date at %s resolution", (resolution) => {
+    const s = seriesFixture("a1", [1], {
+      summary: { ...summary, min_at: "2026-10-04T18:30:00Z", max_at: "2026-10-05T08:45:00Z" },
     });
-    render(<AnalyticsStatistics response={seriesResponseFixture({ resolution: "1d", series: [daily] })} catalog={catalog} timeZone={TZ} />);
-    const cells = within(screen.getByTestId("analytics-statistics-row")).getAllByRole("cell").map((c) => c.textContent);
-    expect(cells.slice(2)).toEqual(["3.20 kWh05 Oct 2026", "20.90 kWh06 Oct 2026"]);
+    render(<AnalyticsStatistics response={seriesResponseFixture({ resolution, series: [s] })} catalog={catalog} />);
+    const table = screen.getByRole("table");
+    expect(table).not.toHaveTextContent(/\d{2}:\d{2}|Oct 2026/);
+    expect(table.querySelector(".analytics-stats__time")).toBeNull();
+  });
+
+  it("grouped by data point -- Energy first, the others alphabetically -- with assets in natural order", () => {
+    const measure = (assetId: string, assetName: string, dataPoint: string, label: string, unit: string, qualifier = "TOTAL") =>
+      seriesFixture(assetId, [1], { asset_name: assetName, data_point: dataPoint, label, unit, qualifier, aggregation: "mean", chart_kind: "line", summary: { ...summary, total: null } });
+    const energy = (assetId: string, assetName: string) => seriesFixture(assetId, [1], { asset_name: assetName, summary });
+    const response = seriesResponseFixture({
+      series: [
+        measure("a3", "Chiller 10", "VOLTAGE_LINE_NEUTRAL", "Voltage", "V"),
+        measure("a1", "Chiller 2", "ACTIVE_POWER", "Power", "kW"),
+        energy("a3", "Chiller 10"),
+        seriesFixture("a1", [1], { asset_name: "Chiller 2", data_point: "ENERGY_EXPORT", label: "Energy Export", summary }),
+        measure("a3", "Chiller 10", "ACTIVE_POWER", "Power", "kW"),
+        energy("a1", "Chiller 2"),
+        measure("a2", "AHU 1", "CURRENT", "Current", "A"),
+      ],
+    });
+    render(<AnalyticsStatistics response={response} catalog={catalog} />);
+    expect(screen.getAllByTestId("analytics-statistics-group-label").map((g) => g.textContent)).toEqual([
+      "Energy",
+      "Current",
+      "Energy Export",
+      "Power",
+      "Voltage",
+    ]);
+    expect(screen.getAllByTestId("analytics-statistics-row").map((r) => within(r).getByRole("rowheader").textContent)).toEqual([
+      "Energy-Chiller 2",
+      "Energy-Chiller 10",
+      "Current-AHU 1",
+      "Energy Export-Chiller 2",
+      "Power-Chiller 2",
+      "Power-Chiller 10",
+      "Voltage-Chiller 10",
+    ]);
+  });
+
+  it("each row's swatch wears the colour the page assigned to that series", () => {
+    const styles = new Map([["a1:ENERGY_IMPORT:TOTAL", { color: "#6250d6", pattern: 0 as const }]]);
+    render(<AnalyticsStatistics response={seriesResponseFixture({ series: [seriesFixture("a1", [1], { summary })] })} catalog={catalog} styles={styles} />);
+    const swatch = within(screen.getByTestId("analytics-statistics-row")).getByRole("rowheader").querySelector("svg rect");
+    expect(swatch).toHaveAttribute("fill", "#6250d6");
   });
 });
 
