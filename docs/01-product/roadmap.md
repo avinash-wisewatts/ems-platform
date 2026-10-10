@@ -151,9 +151,12 @@ matches the DDS roadmap's own Phase 8 exit criterion ("empty shell").
   CSV (Q75 Increment 1) landed on staging in PR #64 and PR #65
   (2026-09-15). The Analytics page's wide CSV (Analytics F7, `EMS-REQ-137`,
   ADR-022 Amendment 5 D28–D31/D77; no quality or coverage columns in v1 by
-  Product Owner decision 2026-10-10) is implemented on a pull request, not
-  yet merged or deployed. See
+  Product Owner decision 2026-10-10) is merged and deployed to staging
+  (PR #123, squash `837d87d`; Deploy to Staging run 38041980073,
+  2026-10-10); not released to production. See
   [07-features/analytics/README.md §CSV](../07-features/analytics/README.md#csv).
+  Follow-up: the Energy screen CSV has no spreadsheet formula-injection
+  guard yet (issue #124); the Analytics CSV has one.
 - **Q76 (Reporting) — one report type decided and implemented, not yet
   deployed (2026-09-14)**: the Site Performance Report (catalogue,
   configuration, generation, structure, optional PDF, error handling) is
@@ -245,7 +248,7 @@ are parity-proven against Grafana.
 | Attention / Issues | MVP-3 | **DONE** — Energy Attention only (±15%); Demand/PQ informational only, no threshold rule |
 | Data freshness/quality on energy & demand | MVP-4 | Primitive scaffolded; real backing MISSING |
 | Metric grammar/definitions/units | MVP-5 | Content only, no platform dependency |
-| Export | MVP-6 | Energy screen CSV **landed** (PR #64/#65, ADR-014); Analytics wide CSV (F7) **implemented, PR pending, not deployed** (2026-10-10) |
+| Export | MVP-6 | Energy screen CSV **landed** (PR #64/#65, ADR-014); Analytics wide CSV (F7) **landed on staging** (PR #123, `837d87d`, 2026-10-10) |
 | Basic reporting | MVP-6 | Site Performance Report **implemented 2026-09-14, not yet deployed**, see ADR-015; broader Reporting scope still MISSING; depends on MVP-3 |
 | Basic alerts | MVP-7 | **IMPLEMENTED 2026-09-14, staging validation pending** (ADR-016/ADR-017); Site-level Energy Attention only — Space/Asset-level Attention doesn't exist yet |
 | Portfolio | MVP-8 | MISSING; lowest MVP priority by decision |
