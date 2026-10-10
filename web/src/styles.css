@@ -355,9 +355,12 @@ a { color: var(--ww-teal-600); }
 .chart-frame__legend-item { display: inline-flex; align-items: center; }
 /* Legend entries are show/hide toggles (pressed = shown). */
 .chart-frame__legend-toggle { display: inline-flex; align-items: center; gap: 6px; border: 1px solid transparent; background: none; border-radius: 6px; padding: 2px 6px; margin: 0 -6px; font: inherit; color: var(--text); cursor: pointer; }
-.chart-frame__legend-toggle:hover { border-color: var(--line); }
+/* Out-ranks the site-wide button[aria-pressed="true"] chip (teal border and
+   fill): legend entries stay borderless whether shown or hidden. */
+.chart-frame__legend-toggle[aria-pressed] { border-color: transparent; background: none; color: var(--text); }
+.chart-frame__legend-toggle[aria-pressed]:hover { border-color: var(--line); }
 .chart-frame__legend-toggle:focus-visible { outline: 2px solid var(--ww-navy-600); outline-offset: 1px; }
-.chart-frame__legend-toggle--hidden { color: var(--muted); }
+.chart-frame__legend-toggle--hidden[aria-pressed] { color: var(--muted); }
 .chart-frame__legend-toggle--hidden .chart-frame__legend-name { text-decoration: line-through; }
 .chart-frame__legend-toggle--hidden .chart-frame__swatch { opacity: 0.35; }
 .chart-frame__swatch { display: inline-block; flex: 0 0 auto; width: 14px; height: 10px; overflow: visible; }

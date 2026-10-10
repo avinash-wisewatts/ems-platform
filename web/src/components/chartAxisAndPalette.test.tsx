@@ -53,6 +53,36 @@ describe("niceAxis -- tick precision follows the scale", () => {
   });
 });
 
+/** WCAG 2.x relative luminance contrast ratio of two #rrggbb colours. */
+function contrast(a: string, b: string): number {
+  const luminance = (hex: string) => {
+    const [r, g, bl] = [1, 3, 5].map((i) => {
+      const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * r! + 0.7152 * g! + 0.0722 * bl!;
+  };
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi! + 0.05) / (lo! + 0.05);
+}
+
+/** The chart panel background (styles.css --panel). */
+const PANEL = "#ffffff";
+
+describe("series palette -- contrast on the chart panel", () => {
+  it("the validated order, with the darker aqua, yellow and magenta steps", () => {
+    expect([...SERIES_COLORS]).toEqual(["#2a78d6", "#eb6834", "#199e70", "#c98500", "#d55181", "#008300", "#6250d6", "#e34948"]);
+  });
+
+  it.each([...SERIES_COLORS])("%s is at least 3:1 against the white panel (WCAG 1.4.11)", (color) => {
+    expect(contrast(color, PANEL)).toBeGreaterThanOrEqual(3);
+  });
+
+  it("the replaced low-contrast hues are gone", () => {
+    for (const old of ["#1baf7a", "#eda100", "#e87ba4"]) expect(SERIES_COLORS).not.toContain(old);
+  });
+});
+
 describe("series palette", () => {
   it("eight distinct hues in a fixed order, then the same hues with a second encoding", () => {
     expect(new Set(SERIES_COLORS).size).toBe(8);

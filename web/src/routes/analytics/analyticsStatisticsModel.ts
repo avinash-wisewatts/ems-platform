@@ -19,7 +19,7 @@
  * flagged -- from that evidence only, never from the value's size.
  */
 import type { AnalyticsCatalogResponse, AnalyticsSeries, AnalyticsSeriesResponse } from "../../api/types";
-import { catalogAssetName, catalogDataPointLabel, isEnergySeries, seriesName } from "./analyticsSeriesName";
+import { FALLBACK_DATA_POINT, catalogAssetName, catalogDataPointLabel, isEnergySeries, seriesName } from "./analyticsSeriesName";
 import { seriesKey } from "./analyticsSeriesStyles";
 
 export type StatisticsRow = {
@@ -79,7 +79,9 @@ export function buildStatistics(
   catalog?: AnalyticsCatalogResponse | null,
 ): StatisticsModel {
   const charted = (response?.series ?? []).filter((s) => s.status === "OK");
-  const label = (s: AnalyticsSeries) => s.label ?? catalogDataPointLabel(catalog, s.data_point) ?? s.data_point;
+  // Group heading: the series' label, else the catalogue's, else the same
+  // generic word series names use -- never the registry code (D83).
+  const label = (s: AnalyticsSeries) => s.label ?? catalogDataPointLabel(catalog, s.data_point) ?? FALLBACK_DATA_POINT;
   const asset = (s: AnalyticsSeries) => s.asset_name ?? catalogAssetName(catalog, s.asset_id) ?? "";
 
   const byDataPoint = new Map<string, AnalyticsSeries[]>();

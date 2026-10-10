@@ -132,3 +132,17 @@ describe("buildStatistics -- grouped by data point (Product Owner, 2026-10-10)",
     expect(forward).toEqual(["a1:ENERGY_IMPORT:TOTAL", "a1:ACTIVE_POWER:TOTAL", "a2:ACTIVE_POWER:TOTAL"]);
   });
 });
+
+describe("buildStatistics -- group heading fallback (D83)", () => {
+  it("a data point without a label in the series or the catalogue reads 'Data point', never its code", () => {
+    const unlabeled = seriesFixture("a1", [1], { data_point: "ACTIVE_POWER", label: null, aggregation: "mean", chart_kind: "line", unit: "kW" });
+    const model = buildStatistics(seriesResponseFixture({ series: [unlabeled] }), null);
+    expect(model.groups.map((g) => g.label)).toEqual(["Data point"]);
+    expect(JSON.stringify(model.groups.map((g) => g.label))).not.toContain("ACTIVE_POWER");
+  });
+
+  it("the catalogue's label is used before the fallback", () => {
+    const unlabeled = seriesFixture("a1", [1], { label: null });
+    expect(buildStatistics(seriesResponseFixture({ series: [unlabeled] }), catalogFixture()).groups[0]!.label).toBe("Energy");
+  });
+});

@@ -260,17 +260,17 @@ message is shown only when it has useful content; otherwise it is absent.
     shown series loses its axis). Like zoom it is visual only: Statistics,
     Data quality and the CSV still include every series and the full applied
     range. Hidden series reset on the next Update, like the zoom.
-  - **Series colours.** Eight validated hues in a fixed order (adjacent-pair
-    ΔE ≥ 9.1 under colour-vision-deficiency simulation, ≥ 19.6 under normal
-    vision, on the white panel). Series 9–16 reuse the hues dashed (lines) or
+  - **Series colours.** Eight validated hues in a fixed order, each at least
+    3:1 against the white panel (WCAG 1.4.11; lowest 3.07), adjacent-pair
+    ΔE ≥ 8.4 under colour-vision-deficiency simulation and ≥ 19.3 under
+    normal vision. Series 9–16 reuse the hues dashed (lines) or
     hatched at 45° (bars), 17–24 dotted / hatched at 135°, the 25th
     dash-dot / cross-hatched. A series keeps its colour across Updates while
     the page stays on the site, even when series are added, removed or
     reordered; a new series takes the lowest free colour. The chart, legend,
     tooltip and Statistics use the same colour for a series. Series are
     always named in the legend, tooltip and Statistics, so colour is never
-    the only way to tell them apart (three hues are below 3:1 contrast
-    against white).
+    the only way to tell them apart.
   - **Toolbar icons.** Export CSV is a download icon; Collapse / Expand is
     an up chevron (shown, select to collapse) or a down chevron (collapsed,
     select to expand). Both have an accessible name and a tooltip ("Export

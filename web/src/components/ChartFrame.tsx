@@ -292,19 +292,20 @@ export type MultiSeriesChartFrameProps = {
 
 /**
  * Categorical series colours, in this fixed order. A validated set (the
- * dataviz reference palette): on the white chart panel every adjacent pair
- * is at least ΔE 9.1 apart under simulated colour-vision deficiency and 19.6
- * under normal vision. The order is part of that guarantee, so keep it. Three
- * hues are below 3:1 contrast against white, which is acceptable only because
- * series are always named in the legend, the tooltip and the Statistics
- * table -- colour is never the only way to tell series apart.
+ * dataviz reference palette, with its darker steps for aqua, yellow and
+ * magenta): on the white chart panel every hue is at least 3:1 against the
+ * background (WCAG 1.4.11 graphical objects; lowest 3.07, yellow), and every
+ * adjacent pair is at least ΔE 8.4 apart under simulated colour-vision
+ * deficiency and 19.3 under normal vision. The order is part of that
+ * guarantee, so keep it. Series are also always named in the legend, the
+ * tooltip and the Statistics table -- colour is never the only distinction.
  */
 export const SERIES_COLORS = [
   "#2a78d6", // blue
   "#eb6834", // orange
-  "#1baf7a", // aqua
-  "#eda100", // yellow
-  "#e87ba4", // magenta
+  "#199e70", // aqua
+  "#c98500", // yellow
+  "#d55181", // magenta
   "#008300", // green
   "#6250d6", // violet
   "#e34948", // red

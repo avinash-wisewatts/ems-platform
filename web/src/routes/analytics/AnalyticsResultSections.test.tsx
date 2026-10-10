@@ -134,6 +134,13 @@ describe("Statistics (F6)", () => {
     ]);
   });
 
+  it("a group heading never shows a data point's internal code (falls back to 'Data point')", () => {
+    const unlabeled = seriesFixture("a1", [1], { data_point: "REACTIVE_POWER", label: null, aggregation: "mean", chart_kind: "line", unit: "kvar", summary: { ...summary, total: null } });
+    render(<AnalyticsStatistics response={seriesResponseFixture({ series: [unlabeled] })} catalog={null} />);
+    expect(screen.getByTestId("analytics-statistics-group-label")).toHaveTextContent(/^Data point$/);
+    expect(screen.getByTestId("analytics-statistics")).not.toHaveTextContent("REACTIVE_POWER");
+  });
+
   it("each row's swatch wears the colour the page assigned to that series", () => {
     const styles = new Map([["a1:ENERGY_IMPORT:TOTAL", { color: "#6250d6", pattern: 0 as const }]]);
     render(<AnalyticsStatistics response={seriesResponseFixture({ series: [seriesFixture("a1", [1], { summary })] })} catalog={catalog} styles={styles} />);
