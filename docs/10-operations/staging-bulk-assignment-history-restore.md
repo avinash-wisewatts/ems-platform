@@ -139,16 +139,42 @@ The audit record of each executed call lists every restored row with
 separately approved write. Dropping migration 294's four functions removes
 the capability without touching data.
 
-## System Energy stand-in rows (separate proposal; unchanged)
+## System Energy stand-in rows (migration 295; planned, not executed)
 
 The 108 `-infinity` rows (Energy Import/Export of every asset, written
-2026-09-25 21:06) are left untouched. Assessed one meter at a time
-(6–7 s each, read-only): narrowing each to its meter's first good register
-reading would hide **no** 15-minute and **no** 1-minute System Energy rows on
-any of the 54 meters; the only rows near the boundary are the first 15-minute
-periods that straddle the first reading (7.408 kWh in total), which stay with
-the assignment that starts inside them (the Energy read's rule, see
-`test_binding_change_inside_a_15m_bucket_incoming_source_owns_it`).
+2026-09-25 21:06:21.442284 IST, no audit record) are unchanged. Assessed one
+meter at a time (read-only): narrowing each to its meter point's first good
+register reading hides **no** 15-minute and **no** 1-minute System Energy
+row on any meter; the first 15-minute periods straddling the first reading
+(7.408 kWh in total) stay with the assignment that starts inside them (the
+Energy read's rule, `test_binding_change_inside_a_15m_bucket_incoming_source_owns_it`).
+
+Migration 295 (`admin.narrow_standin_energy_assignments_20260925(actor,
+gateway_id, dry_run DEFAULT true, confirm_count DEFAULT NULL)`, not granted)
+narrows them one gateway per call: 92 rows in scope; the 16
+Eniscope_2_Plumbing rows are refused by the wrapper. Guards: the stand-in
+set must still number 108; no change when there is no reading, its raw
+readings expired, a closed row ends first, or any valid System Energy
+15-minute / 1-minute row would fall before the new start. Execution needs
+the dry run's count and writes one `NARROW_STANDIN_ENERGY_ASSIGNMENTS`
+audit record; `admin.revert_standin_energy_narrowing(actor, audit_id, ...)`
+puts `-infinity` back on rows that still carry the recorded start.
+
+Read-only plan on staging (2026-10-10): 92 NARROW, 0 refused -- Unit 2
+gateways 08-24 20:55:58–59, ENISCOPE_1_CHILLER 08-28 12:14:58–59,
+Eniscope_3_AHU 08-28 12:37:24–25 (Banquet 2 AHU Export, closed 10-05 21:04,
+to 12:37:25), Eniscope_4_Main_Kitchen 08-28 12:25:58–59.
+
+Consequence (Product Owner decision): narrowed rows no longer read as
+stand-ins (`PARITY_BRIDGE` is derived from the `-infinity` start, migration
+288) and the catalogue's assignment period starts at the first reading.
+
+Per gateway (each needs explicit approval): dry run in a read-only session
+(`statement_timeout` 120 s) and compare with the counts above; execute with
+the confirmation count in one transaction (`lock_timeout` 5 s); verify the
+re-run dry run shows `SKIPPED_NOT_INFINITY`, the audit record's before/after,
+unchanged System Energy daily totals for one asset, and staging health.
+Must run before about 2026-11-22 (Unit 2 raw readings from 08-24 expire).
 
 ## Related
 
