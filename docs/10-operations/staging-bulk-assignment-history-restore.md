@@ -160,7 +160,7 @@ The audit record of each executed call lists every restored row with
 separately approved write. Dropping migration 294's four functions removes
 the capability without touching data.
 
-## System Energy stand-in rows (migration 295; planned, not executed)
+## System Energy stand-in rows (migration 295; executed 2026-10-10 for 92 rows)
 
 The 108 `-infinity` rows (Energy Import/Export of every asset, written
 2026-09-25 21:06:21.442284 IST, no audit record) are unchanged. Assessed one
@@ -196,6 +196,29 @@ the confirmation count in one transaction (`lock_timeout` 5 s); verify the
 re-run dry run shows `SKIPPED_NOT_INFINITY`, the audit record's before/after,
 unchanged System Energy daily totals for one asset, and staging health.
 Must run before about 2026-11-22 (Unit 2 raw readings from 08-24 expire).
+
+Execution record (2026-10-10 IST). The Product Owner approved the
+reclassification of the 92 in-scope rows from stand-in to confirmed
+assignments, then each gateway separately. Each gateway: staging health
+check, a read-only recheck that matched the reviewed count and starts, one
+transaction (statement_timeout 120 s, lock_timeout 5 s, confirmation count),
+then verification -- re-run dry run `SKIPPED_NOT_INFINITY`, audit record
+before `-infinity` / after = current start, one asset's daily System Energy
+(2026-08-20 to 10-09) byte-identical before and after, staging healthy.
+
+| Gateway | Narrowed | Snapshot asset (identical) | Audit record | Executed |
+|---|---|---|---|---|
+| Eniscope_1_Meenaxy_Unit2 | 16 | P1-CoatingPan-01 | `2b02ca9c-6be5-483b-a4c6-350133ec6fba` | 12:39:24 |
+| Eniscope_2_Meenaxy_Unit2 | 16 | EN-AirCompressor-02 | `a2ffba6b-9203-4aa0-8abb-808121e6d55c` | 12:40:07 |
+| Eniscope_3_Meenaxy_Unit2 | 12 | P1-Heater-01 | `f5f2e311-c827-4c40-959b-cc04b9a95a1c` | 12:40:55 |
+| ENISCOPE_1_CHILLER | 16 | Chiller1 | `0ea952b4-5fa6-4a34-9ab5-acb2825a250b` | 12:42:40 |
+| Eniscope_3_AHU | 16 | Banquet 2 AHU (Export gap 10-06 to 10-08 unchanged) | `ca99cc5f-3293-44f1-9cf1-bccb19e4bf62` | 12:46:32 |
+| Eniscope_4_Main_Kitchen | 16 | Kitchen GF WalkIn Freezer | `037e3430-ebc5-4621-ba79-4deaeb02184d` | 12:48:19 |
+| **Total** | **92** | | | |
+
+The 16 Eniscope_2_Plumbing stand-in rows remain at `-infinity` (excluded by
+decision). Banquet 2 AHU Energy Export now runs 2026-08-28 12:37:25 ->
+2026-10-05 21:04:25, then 2026-10-09 12:56:55 -> open (gap preserved).
 
 ## Related
 
