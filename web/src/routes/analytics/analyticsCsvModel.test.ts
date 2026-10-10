@@ -6,6 +6,7 @@ import {
   csvColumnName,
   formatCsvLocalTimestamp,
   formatCsvUtcTimestamp,
+  neutralizeSpreadsheetText,
   normalizeSiteName,
 } from "./analyticsCsvModel";
 import {
@@ -230,6 +231,54 @@ describe("analyticsCsvFilename (D31)", () => {
     expect(normalizeSiteName("Hôtel Paris")).toBe("Hôtel_Paris");
     expect(normalizeSiteName("")).toBe("Site");
     expect(normalizeSiteName(null)).toBe("Site");
+  });
+});
+
+describe("formula injection (CWE-1236)", () => {
+  it.each([
+    ["=", '=HYPERLINK("http://evil.example","x")'],
+    ["+", "+1+cmd|' /C calc'!A0"],
+    ["-", "-2+3"],
+    ["@", "@SUM(1+1)"],
+    ["tab", "\tTabbed"],
+    ["carriage return", "\rReturned"],
+    ["line feed", "\nFed"],
+  ])("a column name starting with %s is prefixed with ' (and quoted when it needs to be)", (_, label) => {
+    const response = seriesResponseFixture({ series: [seriesFixture("a1", [1], { label })] });
+    const csv = buildAnalyticsCsv(response, catalogFixture(), IST);
+    const cell = `'${label}-Asset a1 (kWh)`;
+    const quoted = /[",\r\n]/.test(cell) ? `"${cell.replace(/"/g, '""')}"` : cell;
+    expect(csv.startsWith(`Timestamp local,Timestamp UTC,${quoted}\r\n`)).toBe(true);
+    expect(csv).not.toContain(`,${label}-Asset`);
+  });
+
+  it("a formula-like asset name inside the cell is not at the start, so it is left as written", () => {
+    const response = seriesResponseFixture({ series: [seriesFixture("a1", [1], { asset_name: "=1+1" })] });
+    expect(buildAnalyticsCsv(response, null, IST).split("\r\n")[0]).toBe("Timestamp local,Timestamp UTC,Energy-=1+1 (kWh)");
+  });
+
+  it("a formula-like name from the catalogue fallback is neutralized too", () => {
+    const catalog = catalogFixture();
+    catalog.assets[0]!.data_points[0]!.label = "@Energy";
+    const response = seriesResponseFixture({ series: [seriesFixture("a1", [1], { label: null })] });
+    expect(buildAnalyticsCsv(response, catalog, IST).split("\r\n")[0]).toBe(
+      "Timestamp local,Timestamp UTC,'@Energy-Asset a1 (kWh)",
+    );
+  });
+
+  it("numeric values are never prefixed: a negative value stays a number", () => {
+    const response = seriesResponseFixture({
+      series: [measurement("a1", "REACTIVE_POWER", "Reactive Power", "kvar", [-3.5, 0, -0.25])],
+    });
+    const { rows } = parse(buildAnalyticsCsv(response, catalogFixture(), IST));
+    expect(rows.map((r) => r[2])).toEqual(["-3.5", "0", "-0.25"]);
+  });
+
+  it("neutralizeSpreadsheetText leaves ordinary text unchanged", () => {
+    expect(neutralizeSpreadsheetText("Power-Chiller 1 (kW)")).toBe("Power-Chiller 1 (kW)");
+    expect(neutralizeSpreadsheetText("Timestamp UTC")).toBe("Timestamp UTC");
+    expect(neutralizeSpreadsheetText("")).toBe("");
+    expect(neutralizeSpreadsheetText("=A1")).toBe("'=A1");
   });
 });
 

@@ -364,6 +364,11 @@ message is shown only when it has useful content; otherwise it is absent.
     quality lists them).
   - Values are the API's own numbers, unrounded. RFC 4180 quoting, CRLF line
     endings, UTF-8, generated client-side (`export/downloadCsv.ts`).
+  - Formula injection (CWE-1236): a text cell (the column names, built from
+    tenant-entered asset names and labels) that starts with `=`, `+`, `-`,
+    `@`, a tab or a line break is prefixed with `'`, so a spreadsheet shows it
+    as text. Numeric values are never prefixed (negative values stay
+    numbers).
   - Filename dates are the local dates of the range's first and last
     instants; the site name keeps letters and digits, every other run of
     characters becomes one `_`.
@@ -931,7 +936,9 @@ bottom, D72); the time-of-day refinement's granularity (any minute, D60).
   site-local and UTC timestamps, blank never 0, unrounded values, Energy bars
   and measurement lines on shared rows, all-blank columns for series not
   charted, header only when nothing was requested, no quality columns, DST
-  fall-back, filenames); `AnalyticsChart.test.tsx` (toolbar Export CSV and
+  fall-back, filenames, formula-injection prefixes for every leading
+  `=`/`+`/`-`/`@`/tab/CR/LF including the catalogue-name fallback, negative
+  values left numeric; mutation-checked: removing the guard fails 8 tests); `AnalyticsChart.test.tsx` (toolbar Export CSV and
   Collapse only, the downloaded file name and content, the full applied range
   after a drag-to-zoom, disabled when nothing could be requested).
 

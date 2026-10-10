@@ -17,6 +17,11 @@
  *   reads the same in the table and in the file. Qualifiers and registry codes
  *   are never written (D83).
  * - Values are the API's own numbers, unrounded; nothing is computed here.
+ * - Formula injection (CWE-1236): every text cell -- the column names, built
+ *   from tenant-entered asset names and labels -- that starts with `=`, `+`,
+ *   `-`, `@`, a tab or a line break is prefixed with `'`, so a spreadsheet
+ *   shows it as text instead of evaluating it. Values are numbers and are
+ *   never prefixed (a negative value stays a number).
  * - No quality or coverage columns in v1 (Product Owner, 2026-10-10).
  * - `Timestamp local` is the bucket start in the site timezone as
  *   "YYYY-MM-DD HH:mm" (24-hour); `Timestamp UTC` is the same instant as
@@ -34,6 +39,16 @@ export const CSV_TIMESTAMP_LOCAL = "Timestamp local";
 export const CSV_TIMESTAMP_UTC = "Timestamp UTC";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** Characters that make a spreadsheet read a cell as a formula (OWASP CSV
+ *  injection guidance). */
+const FORMULA_START = /^[=+\-@\t\r\n]/;
+
+/** A text cell made inert for spreadsheets: a leading formula character is
+ *  escaped with `'`. Only for text; never apply it to numbers. */
+export function neutralizeSpreadsheetText(text: string): string {
+  return FORMULA_START.test(text) ? `'${text}` : text;
+}
 
 /** Column name: "<series name> (<unit>)", or the name alone without a unit. */
 export function csvColumnName(s: AnalyticsSeries, catalog?: AnalyticsCatalogResponse | null): string {
@@ -80,7 +95,7 @@ export function buildAnalyticsCsv(
   );
 
   const header = [CSV_TIMESTAMP_LOCAL, CSV_TIMESTAMP_UTC, ...series.map((s) => csvColumnName(s, catalog))];
-  const lines = [header.map(csvField).join(",")];
+  const lines = [header.map((h) => csvField(neutralizeSpreadsheetText(h))).join(",")];
   for (const t of rows) {
     const cells = [formatCsvLocalTimestamp(t, timeZone), formatCsvUtcTimestamp(t), ...values.map((v) => v?.get(t) ?? null)];
     lines.push(cells.map(csvField).join(","));
