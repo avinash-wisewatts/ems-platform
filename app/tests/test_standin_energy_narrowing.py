@@ -156,14 +156,16 @@ def test_wrapper_does_nothing_where_the_standin_rows_do_not_exist(t):
     assert _audits(t.cur, "NARROW_STANDIN_ENERGY_ASSIGNMENTS") == 0
 
 
-def test_manifest_registers_migration_295_last():
+def test_manifest_registers_migration_295():
     import csv
     from pathlib import Path
 
     manifest = Path(__file__).resolve().parents[2] / "postgres" / "restructure_manifest.csv"
     rows = [r for r in csv.DictReader(manifest.read_text(encoding="utf-8").splitlines()) if r["target_category"] == "migration"]
-    assert rows[-1]["source_file"] == "295_standin_energy_assignment_narrowing.sql"
-    assert rows[-1]["target_path"] == "postgres/migrations/295_standin_energy_assignment_narrowing.sql"
+    files = [r["source_file"] for r in rows]
+    row = rows[files.index("295_standin_energy_assignment_narrowing.sql")]
+    assert row["target_path"] == "postgres/migrations/295_standin_energy_assignment_narrowing.sql"
+    assert files.index("295_standin_energy_assignment_narrowing.sql") > files.index("294_bulk_assignment_history_restore.sql")
 
 
 # ---------------------------------------------------------------------------
