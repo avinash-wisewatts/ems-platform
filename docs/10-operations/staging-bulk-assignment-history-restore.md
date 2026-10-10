@@ -120,9 +120,30 @@ first hour counts only readings after it; earlier hours are not assigned);
 Banquet 2 AHU daily System Energy still has no Export on 10-06 to 10-08; the
 AirSense points start 2026-09-09 17:23:00.72; the Plumbing assets' history
 ends 2026-10-08 16:00 (gateway offline since 10-08 15:47, separate
-investigation). Known inconsistency left by decision: EN-AirCompressor-01 and
-Banquet 2 AHU keep their 2026-10-05 rows (e.g. EN-AirCompressor-01 Power
-System and Current from 10-05 21:15, its other points from August).
+investigation). The 15 assignments of the 2026-10-05 test Saves were restored
+separately on 2026-10-10 (below).
+
+## 2026-10-05 test assignments (restored 2026-10-10)
+
+Three audited Saves on 2026-10-05 (21:02:56 EN-AirCompressor-01, 11 points;
+21:04:25 Banquet 2 AHU Power and Power Factor -- the same Save closed Energy
+Export, the deliberate gap; 21:05:25 AirSense temperature and humidity)
+were not part of the bulk audits, so their points kept their 10-05 start.
+With Product Owner approval they were restored with the deployed migration
+294 core (`admin.restore_bulk_assignment_history_core`, one Save per call,
+expected 1 audit / n rows), each after an immediate dry run matched the
+approved starts:
+
+| Package | Restored | New start (IST) | Audit record | Executed (IST) |
+|---|---|---|---|---|
+| A: EN-AirCompressor-01 | 11 | Power System 2026-08-25 16:31:58; others 2026-08-24 20:55:58 | `cf1bfec7-1eb7-4f81-936f-dd746663b1eb` | 2026-10-10 10:42 |
+| B: Banquet 2 AHU Power, Power Factor | 2 | 2026-08-28 12:37:25 | `929fc4c0-5cff-4138-a306-bcc56a0170b1` | 2026-10-10 10:42 |
+| C: AirSense temperature, humidity | 2 | 2026-09-09 17:23:00.722 (after the Banquet 1 AHU boundary 17:22:53) | `1a6f4018-8527-4023-ab10-ce051d8784b1` | 2026-10-10 10:42 |
+
+Verified after each: the re-run dry run reports `SKIPPED_START_CHANGED`;
+audit before/after consistent; Banquet 2 AHU daily System Energy still has
+no Export on 10-06 to 10-08; every AirSense point starts 09-09 17:23:00.722;
+the 108 stand-in rows unchanged; staging healthy.
 
 ## Deadline
 
