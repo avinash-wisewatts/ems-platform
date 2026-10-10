@@ -708,7 +708,7 @@ SECURITY DEFINER, ems_app-only, never Grafana-keyed.
 | F4 | Filter panel (Assets, Data points, Resolution, Phase type, Comparison placeholder) and the date/time range | Merged to staging (PR #100, `ffe3dcc`); assignment periods in the selector added by PR #105 (migration 288) |
 | F5 | Chart card: multi-series chart, drag-to-zoom, range slider, Collapse / Expand | Merged to staging (PR #101, `6b9a805`) |
 | F6 | Statistics table, Data quality section (seven groups), per-period Data quality lines in the chart tooltip; ADR-022 Amendment 7 presentation decisions | Merged to staging (PR #112, `6ab676b`) and deployed (Deploy to Staging run 37879050881, 2026-10-09); its Statistics semantics come from PR #113 (series `summary` over completed periods, `1632c64`, deployed the same day); see "Frontend implementation notes (F6)" |
-| F7 | CSV export (wide format, local + UTC timestamps, full applied range) and the toolbar's **Export CSV** | Implemented (PR pending review); not deployed. Frontend only; see "CSV" |
+| F7 | CSV export (wide format, local + UTC timestamps, full applied range) and the toolbar's **Export CSV** | Merged to staging (PR #123, squash `837d87d`) and deployed (Deploy to Staging run 38041980073, 2026-10-10). Frontend only; see "CSV" |
 | F8 | Verification of the finished page against staging data through the SSH tunnel | Partly done (2026-10-09): 6 scenarios verified, the rest pending or unverifiable on staging; see "Staging verification (F8)" |
 
 ### Frontend implementation notes (F6)
@@ -949,8 +949,14 @@ Not released to production. Staging (verified 2026-10-09 read-only:
 containers healthy, `/health` 200) has the Analytics backend, PR #113 (series
 `summary` over completed periods, `1632c64`) and the page through F6 (PR #112,
 `6ab676b`). Still open on the frontend: the rest of F8 (scenarios pending,
-deferred or unverifiable above). F7 (CSV export) is implemented on a pull
-request and not yet merged or deployed. Backend dependencies
+deferred or unverifiable above). F7 (CSV export, PR #123, squash `837d87d`)
+was deployed to staging on 2026-10-10 (Deploy to Staging run 38041980073:
+every job succeeded, including post-deployment verification; no migration
+applied, ledger still ends at 295). Read-only check afterwards: both
+containers on image `837d87d`, healthy, `/health` 200, and the deployed web
+bundle contains the Export CSV control. The download was verified in the
+browser by the Product Owner against staging data through the SSH tunnel
+before the merge. Backend dependencies
 still open: B4 (the daily persisted tier, required before the first
 `point_telemetry_15m` chunks age out of retention).
 
