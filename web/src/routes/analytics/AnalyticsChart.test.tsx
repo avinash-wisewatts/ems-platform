@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { AnalyticsSeries } from "../../api/types";
 import { AnalyticsChart } from "./AnalyticsChart";
@@ -8,6 +8,9 @@ import { INITIAL_DRAFT } from "./analyticsQuery";
 import { catalogFixture, seriesResponseFixture } from "./analyticsTestFixtures";
 import type { AppliedQuery } from "./useAnalyticsState";
 import { SITES_ONE, renderWithProviders, stubFetch } from "../../test-utils";
+import { downloadCsv } from "../../export/downloadCsv";
+
+vi.mock("../../export/downloadCsv", () => ({ downloadCsv: vi.fn() }));
 
 const Q = 15 * 60_000;
 const FROM = "2026-10-04T18:30:00.000Z";
@@ -90,10 +93,57 @@ describe("AnalyticsChart -- the chart card (F5)", () => {
     expect(screen.getByTestId("analytics-chart-body")).toBeVisible();
   });
 
-  it("the toolbar has Collapse / Expand only (Export CSV is the CSV step)", () => {
+  it("the toolbar has Export CSV and Collapse / Expand only (D27)", () => {
     render(<AnalyticsChart applied={appliedQuery([okSeries("a1", [1])], ["a1"])} catalog={catalogFixture()} timeZone="Asia/Kolkata" width={800} />);
     const header = screen.getByTestId("analytics-chart").querySelector(".analytics-chart__toolbar")!;
-    expect(within(header as HTMLElement).getAllByRole("button").map((b) => b.textContent)).toEqual(["Collapse"]);
+    expect(within(header as HTMLElement).getAllByRole("button").map((b) => b.textContent)).toEqual(["Export CSV", "Collapse"]);
+  });
+});
+
+describe("AnalyticsChart -- Export CSV (F7)", () => {
+  afterEach(() => vi.mocked(downloadCsv).mockClear());
+
+  it("downloads the wide CSV of the applied result, named with the site and the local dates", async () => {
+    const applied = appliedQuery(
+      [okSeries("a1", [1, null]), okSeries("a2", [], { status: "NO_DATA", status_reasons: ["NO_DATA_IN_RANGE"] })],
+      ["a1", "a2"],
+    );
+    render(
+      <AnalyticsChart applied={applied} catalog={catalogFixture()} timeZone="Asia/Kolkata" siteName="Radisson Blu" width={800} />,
+    );
+    const button = screen.getByTestId("analytics-chart-export-csv");
+    expect(button).toBeEnabled();
+    await userEvent.click(button);
+    expect(downloadCsv).toHaveBeenCalledTimes(1);
+    const [filename, csv] = vi.mocked(downloadCsv).mock.calls[0]!;
+    expect(filename).toBe("Radisson_Blu_analytics_05-Oct-2026_to_05-Oct-2026.csv");
+    expect(csv).toBe(
+      "Timestamp local,Timestamp UTC,Energy-Asset a1 (kWh),Energy-Asset a2 (kWh)\r\n" +
+        "2026-10-05 00:00,2026-10-04T18:30:00Z,1,\r\n" +
+        "2026-10-05 00:15,2026-10-04T18:45:00Z,,\r\n",
+    );
+  });
+
+  it("always the full applied range, never the zoomed window (D28)", async () => {
+    const { container } = render(
+      <AnalyticsChart applied={appliedQuery([okSeries("a1", [1, 2, 3, 4])], ["a1"])} catalog={catalogFixture()} timeZone="Asia/Kolkata" siteName="Coimbatore" width={800} />,
+    );
+    // The X axis spans the whole applied day (plot x 64..784), so the four
+    // 15-minute buckets sit in its first ~30 px: drag across two of them.
+    const wrapper = container.querySelector(".recharts-wrapper")!;
+    fireEvent.mouseDown(wrapper, { clientX: 72, clientY: 100, pageX: 72, pageY: 100 });
+    fireEvent.mouseMove(wrapper, { clientX: 80, clientY: 100, pageX: 80, pageY: 100 });
+    fireEvent.mouseUp(wrapper, { clientX: 80, clientY: 100, pageX: 80, pageY: 100 });
+    expect(screen.getByTestId("chart-show-all")).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("analytics-chart-export-csv"));
+    const csv = vi.mocked(downloadCsv).mock.calls[0]![1];
+    expect(csv.trimEnd().split("\r\n").slice(1).map((r) => r.split(",")[2])).toEqual(["1", "2", "3", "4"]);
+  });
+
+  it("disabled when nothing could be requested", () => {
+    const applied = { ...appliedQuery([], ["a1"]), response: null };
+    render(<AnalyticsChart applied={applied} catalog={catalogFixture()} timeZone="Asia/Kolkata" siteName="Coimbatore" width={800} />);
+    expect(screen.getByTestId("analytics-chart-export-csv")).toBeDisabled();
   });
 });
 

@@ -110,6 +110,7 @@ export function AnalyticsPage() {
           analytics={analytics}
           catalog={catalogState.catalog}
           timeZone={selectedSite.timezone}
+          siteName={selectedSite.site_name}
         />
       ) : null}
     </section>
@@ -120,10 +121,12 @@ function AnalyticsWorkspace({
   analytics,
   catalog,
   timeZone,
+  siteName,
 }: {
   analytics: UseAnalyticsState;
   catalog: AnalyticsCatalogResponse;
   timeZone: string | null | undefined;
+  siteName: string;
 }) {
   const narrow = useIsNarrow();
   // Visible by default and on every visit (D33, D34); on narrow screens a
@@ -150,7 +153,7 @@ function AnalyticsWorkspace({
           {filtersOpen ? "Hide Filters" : "Show Filters"}
         </button>
       </div>
-      <AnalyticsResultArea analytics={analytics} catalog={catalog} timeZone={timeZone} />
+      <AnalyticsResultArea analytics={analytics} catalog={catalog} timeZone={timeZone} siteName={siteName} />
       {filtersOpen && narrow ? <div className="analytics-drawer-backdrop" aria-hidden="true" onClick={hideFilters} /> : null}
       {filtersOpen ? (
         <AnalyticsFilterPanel analytics={analytics} catalog={catalog} timeZone={timeZone} drawer={narrow} onHide={hideFilters} />
@@ -174,10 +177,12 @@ function AnalyticsResultArea({
   analytics,
   catalog,
   timeZone,
+  siteName,
 }: {
   analytics: UseAnalyticsState;
   catalog: AnalyticsCatalogResponse;
   timeZone: string | null | undefined;
+  siteName: string;
 }) {
   const { applied, loading } = analytics.state;
   return (
@@ -200,6 +205,7 @@ function AnalyticsResultArea({
             applied={applied}
             catalog={catalog}
             timeZone={timeZone}
+            siteName={siteName}
           />
           <AnalyticsStatistics response={applied.response} catalog={catalog} timeZone={timeZone} />
           {/* Keyed like the chart: each Update starts with the default expansion (DQ9). */}

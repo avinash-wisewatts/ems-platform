@@ -337,11 +337,48 @@ message is shown only when it has useful content; otherwise it is absent.
 
 - Always the full applied range, independent of zoom (D28).
 - Wide format: one row per timestamp; columns `Timestamp local`, `Timestamp
-  UTC`, then one column per rendered series, e.g. `Chiller 1 · Active Power
-  (kW)`. Missing observations are blank, not zero; a selected series with no
-  data stays as a blank column (D29, D30, D77).
+  UTC`, then one column per series in request (chart) order. Missing
+  observations are blank, not zero; a selected series with no data stays as a
+  blank column (D29, D30, D77).
 - Filename with the normalized site name, e.g.
   `Radisson_Blu_analytics_27-Sep-2026_to_30-Sep-2026.csv` (D31).
+- No quality or coverage columns in v1 (Product Owner, 2026-10-10); Data
+  quality stays on the page.
+- Implementation (F7, `web/src/routes/analytics/analyticsCsvModel.ts`):
+  - Rows: one per bucket start the applied response returns, ascending, so
+    future and gap buckets in the range are rows with blank values.
+  - `Timestamp local` is the bucket start in the site timezone as
+    `YYYY-MM-DD HH:mm` (24-hour); `Timestamp UTC` is the same instant as
+    `YYYY-MM-DDTHH:mm:ssZ`, which also tells apart the repeated local hour
+    at a DST fall-back.
+  - Column names follow the Statistics / Data quality series names (naming
+    convention 2026-10-09) with the unit in brackets: `Power-Chiller 1 (kW)`,
+    `Reactive Power-Q2-Chiller 1 (kvar)`, `Energy-E1-AHU 2 (kWh)`; Power
+    Factor has no unit. This replaces the earlier example `Chiller 1 · Active
+    Power (kW)`, which predates that convention. Qualifiers and registry
+    codes are never written (D83).
+  - Every series in the response has a column: charted (OK) series carry
+    their values; NO_DATA, NOT_AVAILABLE, RESOLUTION_UNAVAILABLE and
+    DATA_UNAVAILABLE series are all-blank columns (D77). Combinations the
+    catalogue cannot serve were never requested and have no column (Data
+    quality lists them).
+  - Values are the API's own numbers, unrounded. RFC 4180 quoting, CRLF line
+    endings, UTF-8, generated client-side (`export/downloadCsv.ts`).
+  - Formula injection (CWE-1236): a text cell (the column names, built from
+    tenant-entered asset names and labels) that starts with `=`, `+`, `-`,
+    `@`, a tab or a line break is prefixed with `'`, so a spreadsheet shows it
+    as text. Numeric values are never prefixed (negative values stay
+    numbers).
+  - Filename dates are the local dates of the range's first and last
+    instants; the site name keeps letters and digits, every other run of
+    characters becomes one `_`.
+  - Example (1 day, 15 minutes, IST):
+
+    ```
+    Timestamp local,Timestamp UTC,Energy-Chiller 1 (kWh),Power-Chiller 1 (kW),Energy-AHU 2 (kWh)
+    2026-10-05 00:00,2026-10-04T18:30:00Z,12.4,49.6,
+    2026-10-05 00:15,2026-10-04T18:45:00Z,,51.2,
+    ```
 
 ## Business rules
 
@@ -671,7 +708,7 @@ SECURITY DEFINER, ems_app-only, never Grafana-keyed.
 | F4 | Filter panel (Assets, Data points, Resolution, Phase type, Comparison placeholder) and the date/time range | Merged to staging (PR #100, `ffe3dcc`); assignment periods in the selector added by PR #105 (migration 288) |
 | F5 | Chart card: multi-series chart, drag-to-zoom, range slider, Collapse / Expand | Merged to staging (PR #101, `6b9a805`) |
 | F6 | Statistics table, Data quality section (seven groups), per-period Data quality lines in the chart tooltip; ADR-022 Amendment 7 presentation decisions | Merged to staging (PR #112, `6ab676b`) and deployed (Deploy to Staging run 37879050881, 2026-10-09); its Statistics semantics come from PR #113 (series `summary` over completed periods, `1632c64`, deployed the same day); see "Frontend implementation notes (F6)" |
-| F7 | CSV export (wide format, local + UTC timestamps, full applied range) and the toolbar's **Export CSV** | Planned |
+| F7 | CSV export (wide format, local + UTC timestamps, full applied range) and the toolbar's **Export CSV** | Implemented (PR pending review); not deployed. Frontend only; see "CSV" |
 | F8 | Verification of the finished page against staging data through the SSH tunnel | Partly done (2026-10-09): 6 scenarios verified, the rest pending or unverifiable on staging; see "Staging verification (F8)" |
 
 ### Frontend implementation notes (F6)
@@ -850,8 +887,7 @@ bottom, D72); the time-of-day refinement's granularity (any minute, D60).
    source identifier, never shown), so the System series keeps the readable
    label "Line to Line Voltage" rather than an invented code or Voltage's
    `V`. Revisit only if the Product Owner defines a code.
-2. **CSV quality context.** Whether the wide CSV carries any coverage or
-   quality information (EMS-REQ-137, ADR-014).
+2. *(Answered 2026-10-10: no quality or coverage columns in v1; see "CSV".)*
 3. **Smaller open items:** "Export Energy" in the Power list (D67) versus
    "Energy Export" (D73); whether D73's platform-wide "Energy" replaces the
    customer term "Consumption" outside Analytics; phase labels for other
@@ -895,6 +931,16 @@ bottom, D72); the time-of-day refinement's granularity (any minute, D60).
   dates, and the page flow:
   hidden before Update, unchanged by draft edits, kept while loading and after
   a failure, replaced on the next Update, absent after a failed first Update).
+- F7 (frontend): `analyticsCsvModel.test.ts` (column order and names with
+  units, per-phase codes and no qualifiers, quoting, one row per bucket with
+  site-local and UTC timestamps, blank never 0, unrounded values, Energy bars
+  and measurement lines on shared rows, all-blank columns for series not
+  charted, header only when nothing was requested, no quality columns, DST
+  fall-back, filenames, formula-injection prefixes for every leading
+  `=`/`+`/`-`/`@`/tab/CR/LF including the catalogue-name fallback, negative
+  values left numeric; mutation-checked: removing the guard fails 8 tests); `AnalyticsChart.test.tsx` (toolbar Export CSV and
+  Collapse only, the downloaded file name and content, the full applied range
+  after a drag-to-zoom, disabled when nothing could be requested).
 
 ## Release status
 
@@ -902,8 +948,9 @@ Not released to production. Staging (verified 2026-10-09 read-only:
 `admin.schema_migrations` lists 275–291 as applied; image `6ab676b`, both
 containers healthy, `/health` 200) has the Analytics backend, PR #113 (series
 `summary` over completed periods, `1632c64`) and the page through F6 (PR #112,
-`6ab676b`). Still open on the frontend: F7 (CSV export) and the rest of F8
-(scenarios pending, deferred or unverifiable above). Backend dependencies
+`6ab676b`). Still open on the frontend: the rest of F8 (scenarios pending,
+deferred or unverifiable above). F7 (CSV export) is implemented on a pull
+request and not yet merged or deployed. Backend dependencies
 still open: B4 (the daily persisted tier, required before the first
 `point_telemetry_15m` chunks age out of retention).
 
