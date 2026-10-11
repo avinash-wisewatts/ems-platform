@@ -349,7 +349,8 @@ BEGIN
         ('dev_h', gen_random_uuid()), ('dev_k1', gen_random_uuid()), ('dev_k2', gen_random_uuid()),
         ('dev_k3', gen_random_uuid()), ('dev_l1', gen_random_uuid()), ('dev_l2', gen_random_uuid()),
         ('dev_iso', gen_random_uuid()), ('dev_1m', gen_random_uuid()), ('dev_15m', gen_random_uuid()),
-        ('dev_day', gen_random_uuid()), ('dev_env', gen_random_uuid());
+        ('dev_day', gen_random_uuid()), ('dev_env', gen_random_uuid()),
+        ('dev_u15', gen_random_uuid()), ('dev_uday', gen_random_uuid()), ('dev_uenv', gen_random_uuid());
     -- site-scoped, long-effective capture policy so resolve_site_capture_bucket
     -- deterministically returns 60s for the IST site regardless of run time.
     INSERT INTO config.telemetry_capture_policies
@@ -774,6 +775,253 @@ BEGIN
 END;
 $t$;
 \echo 'PASS: S  demand reconcile: bounded 4-arg refresh_demand_analytics path; inspected window = [cp - reconcile_window, cp); watermark intact (full NO_DATA->VALID re-finalisation covered by the 210 fixture)'
+-- ======================================================================
+-- U. Migration 297 (plan T1.1 / CI-3): reconcile windows are aligned to the
+--    tier grain. Unaligned checkpoints -- as on staging, where the 15-min
+--    checkpoint moves in 5-minute steps and the daily checkpoints sit mid
+--    local day -- must NOT produce edge deficits (previously: 2 coarse hours
+--    / 2 days / 1 day "repaired" on every run). Genuinely missing 15-min,
+--    daily and environment-daily rows inside the window must still be
+--    detected and repaired, and the following run must be HEALTHY.
+--    Red on the migration-213 bodies (U1/U3/U5 fail), green after 297.
+-- ======================================================================
+CREATE FUNCTION pg_temp.seed1m_u(p_dev uuid, p_bucket timestamptz)
+RETURNS void LANGUAGE sql AS $f$
+    INSERT INTO analytics.energy_consumption_1min
+      (bucket_start, organization_id, site_id, device_id, previous_bucket_start,
+       elapsed_minutes, source_sample_count, import_register_wh, previous_import_register_wh,
+       import_consumption_wh, import_consumption_kwh, import_quality_code, import_is_valid,
+       import_reset_detected, import_rollover_detected, export_register_wh, previous_export_register_wh,
+       export_consumption_wh, export_consumption_kwh, export_quality_code, export_is_valid,
+       export_reset_detected, export_rollover_detected, gap_detected, quality_rule_id,
+       gap_threshold_minutes, quality_rule_scope, quality_rule_scope_key, calculated_at)
+    VALUES
+      (p_bucket, (SELECT u FROM r213 WHERE k='org'), (SELECT u FROM r213 WHERE k='ist'), p_dev,
+       p_bucket - INTERVAL '1 minute', 1, 1, 1100, 1000,
+       100, 0.1, 'GOOD', TRUE, FALSE, FALSE, 0, 0, 0, 0, 'GOOD', TRUE, FALSE, FALSE,
+       FALSE, NULL, 1.5, 'TEST', 'TEST', p_bucket + INTERVAL '2 min');
+$f$;
+
+-- U1 / U2 : 15-min tier
+DO $t$
+DECLARE
+    v_dev  uuid        := (SELECT u FROM r213 WHERE k='dev_u15');
+    v_org0 timestamptz := TIMESTAMPTZ '2000-01-01 00:00:00+00';
+    -- unaligned checkpoint: hh:55, two days ago (a 5-minute step, as in production)
+    v_cp   timestamptz := date_bin('1 hour', now(), TIMESTAMPTZ '2000-01-01 00:00:00+00')
+                          - INTERVAL '2 days' + INTERVAL '55 minutes';
+    v_rw   interval    := INTERVAL '1 day';
+    v_cfg  jsonb       := '{"reconcile_window":"1 day","coarse":"1 hour","n_max":6}';
+    v_we   timestamptz;
+    v_gap  timestamptz;
+    v_out text; v_rep bigint; v_mm int; v_lws timestamptz; v_lwe timestamptz; v_sic bigint;
+BEGIN
+    v_we := date_bin('1 hour', v_cp, v_org0);
+
+    -- complete native minutes from before the leading edge to after the checkpoint,
+    -- and children produced by the production refresh (consistent with the parent)
+    PERFORM pg_temp.seed1m_u(v_dev, t)
+      FROM generate_series(v_cp - v_rw - INTERVAL '1 hour', v_cp + INTERVAL '1 hour', INTERVAL '1 minute') t;
+    PERFORM analytics.refresh_energy_consumption_15min(v_cp - v_rw - INTERVAL '2 hours', v_cp + INTERVAL '2 hours');
+    UPDATE telemetry.pipeline_state SET last_received_at = v_cp, last_status = 'SUCCESS'
+     WHERE pipeline_name = 'energy_consumption_15min';
+
+    -- U0 fixture sanity: over an ALIGNED window the data has no deficit at all
+    IF EXISTS (SELECT 1 FROM analytics.reconcile_energy_deficits(
+                   'energy_consumption_15min', v_we - v_rw, v_we, INTERVAL '1 hour', 10)) THEN
+        RAISE EXCEPTION 'U0 FAILED: fixture is not complete (aligned detector window is not clean)';
+    END IF;
+
+    -- U1: unaligned checkpoint, complete data -> HEALTHY, nothing rewritten, aligned bounds logged
+    CALL analytics.reconcile_energy_consumption_15min(0, v_cfg);
+    SELECT outcome, rows_repaired, coarse_mismatch, window_start, window_end
+      INTO v_out, v_rep, v_mm, v_lws, v_lwe
+      FROM analytics.pipeline_reconciliation_log
+     WHERE tier = 'energy_consumption_15min' ORDER BY ran_at DESC LIMIT 1;
+    IF v_out <> 'HEALTHY' OR v_rep <> 0 THEN
+        RAISE EXCEPTION 'U1 FAILED (window-edge false positive): outcome %, rows_repaired %, coarse_mismatch % for unaligned checkpoint %',
+            v_out, v_rep, v_mm, v_cp;
+    END IF;
+    IF v_lwe IS DISTINCT FROM v_we OR v_lws IS DISTINCT FROM v_we - v_rw THEN
+        RAISE EXCEPTION 'U1 FAILED: logged window [%, %) is not the coarse-aligned [%, %)', v_lws, v_lwe, v_we - v_rw, v_we;
+    END IF;
+
+    -- U2: a genuinely missing interior 15-min child -> REPAIRED (1 coarse hour), restored, next run HEALTHY
+    v_gap := date_bin('15 minutes', v_cp - INTERVAL '6 hours', v_org0);
+    DELETE FROM analytics.energy_consumption_15min WHERE device_id = v_dev AND bucket_start = v_gap;
+    CALL analytics.reconcile_energy_consumption_15min(0, v_cfg);
+    SELECT outcome, coarse_mismatch INTO v_out, v_mm
+      FROM analytics.pipeline_reconciliation_log
+     WHERE tier = 'energy_consumption_15min' ORDER BY ran_at DESC LIMIT 1;
+    IF v_out <> 'REPAIRED' OR v_mm <> 1 THEN
+        RAISE EXCEPTION 'U2 FAILED: interior missing 15-min child gave outcome % / coarse_mismatch % (expected REPAIRED / 1)', v_out, v_mm;
+    END IF;
+    SELECT source_interval_count INTO v_sic FROM analytics.energy_consumption_15min
+     WHERE device_id = v_dev AND bucket_start = v_gap;
+    IF v_sic IS DISTINCT FROM 15 THEN
+        RAISE EXCEPTION 'U2 FAILED: deleted 15-min child not restored correctly (source_interval_count %, expected 15)', v_sic;
+    END IF;
+    CALL analytics.reconcile_energy_consumption_15min(0, v_cfg);
+    SELECT outcome, rows_repaired INTO v_out, v_rep
+      FROM analytics.pipeline_reconciliation_log
+     WHERE tier = 'energy_consumption_15min' ORDER BY ran_at DESC LIMIT 1;
+    IF v_out <> 'HEALTHY' OR v_rep <> 0 THEN
+        RAISE EXCEPTION 'U2 FAILED: run after the repair was % / % (expected HEALTHY / 0)', v_out, v_rep;
+    END IF;
+    IF (SELECT last_received_at FROM telemetry.pipeline_state WHERE pipeline_name = 'energy_consumption_15min')
+       IS DISTINCT FROM v_cp THEN
+        RAISE EXCEPTION 'U2 FAILED: reconciliation moved the forward checkpoint';
+    END IF;
+END;
+$t$;
+\echo 'PASS: U1/U2  15min reconcile: unaligned checkpoint -> HEALTHY with coarse-aligned logged window; interior missing child repaired, then HEALTHY; checkpoint intact'
+
+-- U3 / U4 : daily tier, IST site, checkpoint mid local day
+DO $t$
+DECLARE
+    v_dev   uuid        := (SELECT u FROM r213 WHERE k='dev_uday');
+    v_org0  timestamptz := TIMESTAMPTZ '2000-01-01 00:00:00+00';
+    v_cp    timestamptz := date_trunc('day', now(), 'UTC') - INTERVAL '1 day' + INTERVAL '5 hours 40 minutes'; -- 05:40 UTC = 11:10 IST, session-TZ independent
+    v_cfg   jsonb       := '{"reconcile_window":"5 days","n_max":6}';
+    v_first timestamptz := ((((date_trunc('day', now()) - INTERVAL '7 days') AT TIME ZONE 'Asia/Kolkata')::date)::timestamp
+                            AT TIME ZONE 'Asia/Kolkata');
+    v_cpday_end timestamptz;
+    v_gap   timestamptz;
+    v_out text; v_rep bigint; v_mm int; v_si bigint; v_expect bigint;
+BEGIN
+    v_cpday_end := (((v_cp AT TIME ZONE 'Asia/Kolkata')::date + 1)::timestamp AT TIME ZONE 'Asia/Kolkata');
+
+    -- every 15-min parent up to the checkpoint; daily children via the production refresh
+    PERFORM pg_temp.seed15('ist', v_dev, b, 1, b + INTERVAL '1 min')
+      FROM generate_series(v_first, v_cp - INTERVAL '15 minutes', INTERVAL '15 minutes') b;
+    PERFORM analytics.refresh_energy_consumption_daily(v_first, v_cpday_end);
+    -- the checkpoint's local day keeps growing after its daily row was written (in-progress day)
+    PERFORM pg_temp.seed15('ist', v_dev, b, 1, clock_timestamp())
+      FROM generate_series(date_bin('15 minutes', v_cp, v_org0) + INTERVAL '15 minutes',
+                           v_cpday_end - INTERVAL '15 minutes', INTERVAL '15 minutes') b;
+    UPDATE telemetry.pipeline_state SET last_received_at = v_cp, last_status = 'SUCCESS'
+     WHERE pipeline_name = 'energy_consumption_daily';
+
+    -- U3: no partial leading day, no in-progress trailing day -> HEALTHY
+    CALL analytics.reconcile_energy_consumption_daily(0, v_cfg);
+    SELECT outcome, rows_repaired, coarse_mismatch INTO v_out, v_rep, v_mm
+      FROM analytics.pipeline_reconciliation_log
+     WHERE tier = 'energy_consumption_daily' ORDER BY ran_at DESC LIMIT 1;
+    IF v_out <> 'HEALTHY' OR v_rep <> 0 THEN
+        RAISE EXCEPTION 'U3 FAILED (window-edge false positive): daily outcome %, rows_repaired %, days flagged % for checkpoint %',
+            v_out, v_rep, v_mm, v_cp;
+    END IF;
+
+    -- U4: a genuinely missing interior local day -> REPAIRED (1 day), restored with SUM, next run HEALTHY
+    v_gap := ((((v_cp - INTERVAL '3 days') AT TIME ZONE 'Asia/Kolkata')::date)::timestamp AT TIME ZONE 'Asia/Kolkata');
+    SELECT count(*) INTO v_expect FROM analytics.energy_consumption_15min
+     WHERE device_id = v_dev AND bucket_start >= v_gap AND bucket_start < v_gap + INTERVAL '1 day';
+    DELETE FROM analytics.energy_consumption_daily WHERE device_id = v_dev AND bucket_start = v_gap;
+    CALL analytics.reconcile_energy_consumption_daily(0, v_cfg);
+    SELECT outcome, coarse_mismatch INTO v_out, v_mm
+      FROM analytics.pipeline_reconciliation_log
+     WHERE tier = 'energy_consumption_daily' ORDER BY ran_at DESC LIMIT 1;
+    IF v_out <> 'REPAIRED' OR v_mm <> 1 THEN
+        RAISE EXCEPTION 'U4 FAILED: interior missing daily row gave outcome % / days % (expected REPAIRED / 1)', v_out, v_mm;
+    END IF;
+    SELECT source_interval_count INTO v_si FROM analytics.energy_consumption_daily
+     WHERE device_id = v_dev AND bucket_start = v_gap;
+    IF v_si IS DISTINCT FROM v_expect THEN
+        RAISE EXCEPTION 'U4 FAILED: restored daily source_interval_count % (expected SUM %)', v_si, v_expect;
+    END IF;
+    CALL analytics.reconcile_energy_consumption_daily(0, v_cfg);
+    SELECT outcome INTO v_out FROM analytics.pipeline_reconciliation_log
+     WHERE tier = 'energy_consumption_daily' ORDER BY ran_at DESC LIMIT 1;
+    IF v_out <> 'HEALTHY' THEN
+        RAISE EXCEPTION 'U4 FAILED: run after the repair was % (expected HEALTHY)', v_out;
+    END IF;
+END;
+$t$;
+\echo 'PASS: U3/U4  daily reconcile (IST): checkpoint mid local day -> HEALTHY; interior missing day repaired (SUM), then HEALTHY'
+
+-- U5 / U6 : environment daily, America/New_York site (DST zone), checkpoint 00:00 UTC (mid local day)
+DO $t$
+DECLARE
+    v_dev   uuid        := (SELECT u FROM r213 WHERE k='dev_uenv');
+    v_ny    uuid        := (SELECT u FROM r213 WHERE k='ny');
+    v_org   uuid        := (SELECT u FROM r213 WHERE k='org');
+    v_cp    timestamptz := date_trunc('day', now(), 'UTC') - INTERVAL '1 day';  -- 00:00 UTC, session-TZ independent
+    v_cfg   jsonb       := '{"reconcile_window":"5 days","n_max":8}';
+    v_first timestamptz := ((((date_trunc('day', now()) - INTERVAL '7 days') AT TIME ZONE 'America/New_York')::date)::timestamp
+                            AT TIME ZONE 'America/New_York');
+    v_cpday_end timestamptz;
+    v_gap   timestamptz;
+    v_out text; v_rep bigint; v_mm int; v_cnt bigint; v_expect bigint;
+BEGIN
+    v_cpday_end := (((v_cp AT TIME ZONE 'America/New_York')::date + 1)::timestamp AT TIME ZONE 'America/New_York');
+
+    INSERT INTO telemetry.environment_measurements
+        (bucket_start, source_timestamp, received_at, organization_id, site_id, device_id,
+         measurement_interval_seconds, quality_code, is_estimated, temperature_c)
+    SELECT b, b, now(), v_org, v_ny, v_dev, 60, 0, FALSE, 20
+      FROM generate_series(v_first, v_cp - INTERVAL '1 hour', INTERVAL '1 hour') b;
+    PERFORM telemetry.refresh_environment_daily(v_first, v_cpday_end);
+    -- the checkpoint's local day keeps receiving rows after its daily row was written
+    INSERT INTO telemetry.environment_measurements
+        (bucket_start, source_timestamp, received_at, organization_id, site_id, device_id,
+         measurement_interval_seconds, quality_code, is_estimated, temperature_c)
+    SELECT b, b, now(), v_org, v_ny, v_dev, 60, 0, FALSE, 21
+      FROM generate_series(v_cp + INTERVAL '30 minutes', v_cpday_end - INTERVAL '30 minutes', INTERVAL '1 hour') b;
+    UPDATE telemetry.pipeline_state SET last_received_at = v_cp, last_status = 'SUCCESS'
+     WHERE pipeline_name = 'environment_daily';
+
+    -- U5: complete days only -> HEALTHY
+    CALL telemetry.reconcile_environment_daily(0, v_cfg);
+    SELECT outcome, rows_repaired, coarse_mismatch INTO v_out, v_rep, v_mm
+      FROM analytics.pipeline_reconciliation_log
+     WHERE tier = 'environment_daily' ORDER BY ran_at DESC LIMIT 1;
+    IF v_out <> 'HEALTHY' OR v_rep <> 0 THEN
+        RAISE EXCEPTION 'U5 FAILED (window-edge false positive): environment_daily outcome %, rows_repaired %, days flagged % for checkpoint %',
+            v_out, v_rep, v_mm, v_cp;
+    END IF;
+
+    -- U6: a genuinely missing interior local day -> REPAIRED, restored, next run HEALTHY
+    v_gap := ((((v_cp - INTERVAL '3 days') AT TIME ZONE 'America/New_York')::date)::timestamp AT TIME ZONE 'America/New_York');
+    SELECT count(*) INTO v_expect FROM telemetry.environment_measurements
+     WHERE device_id = v_dev
+       AND bucket_start >= v_gap
+       AND bucket_start < ((((v_gap AT TIME ZONE 'America/New_York')::date + 1)::timestamp) AT TIME ZONE 'America/New_York');
+    DELETE FROM telemetry.environment_daily WHERE device_id = v_dev AND bucket_start = v_gap;
+    CALL telemetry.reconcile_environment_daily(0, v_cfg);
+    SELECT outcome, coarse_mismatch INTO v_out, v_mm
+      FROM analytics.pipeline_reconciliation_log
+     WHERE tier = 'environment_daily' ORDER BY ran_at DESC LIMIT 1;
+    IF v_out <> 'REPAIRED' OR v_mm <> 1 THEN
+        RAISE EXCEPTION 'U6 FAILED: interior missing environment_daily row gave outcome % / days % (expected REPAIRED / 1)', v_out, v_mm;
+    END IF;
+    SELECT sample_count INTO v_cnt FROM telemetry.environment_daily WHERE device_id = v_dev AND bucket_start = v_gap;
+    IF v_cnt IS DISTINCT FROM v_expect THEN
+        RAISE EXCEPTION 'U6 FAILED: restored environment_daily sample_count % (expected %)', v_cnt, v_expect;
+    END IF;
+    CALL telemetry.reconcile_environment_daily(0, v_cfg);
+    SELECT outcome INTO v_out FROM analytics.pipeline_reconciliation_log
+     WHERE tier = 'environment_daily' ORDER BY ran_at DESC LIMIT 1;
+    IF v_out <> 'HEALTHY' THEN
+        RAISE EXCEPTION 'U6 FAILED: run after the repair was % (expected HEALTHY)', v_out;
+    END IF;
+END;
+$t$;
+\echo 'PASS: U5/U6  environment_daily reconcile (America/New_York): checkpoint mid local day -> HEALTHY; interior missing day repaired, then HEALTHY'
+
+-- U7: structural contract for the migration-297 alignment
+DO $t$
+BEGIN
+    IF position('v_cp := date_bin(v_coarse, v_cp' IN pg_get_functiondef('analytics.reconcile_energy_consumption_15min(integer,jsonb)'::regprocedure)) = 0 THEN
+        RAISE EXCEPTION 'U7 FAILED: reconcile_energy_consumption_15min does not floor the checkpoint to the coarse grain';
+    END IF;
+    IF position('d0.local_end_utc   <= v_cp' IN pg_get_functiondef('analytics.reconcile_energy_consumption_daily(integer,jsonb)'::regprocedure)) = 0
+       OR position('d0.local_end_utc   <= v_cp' IN pg_get_functiondef('telemetry.reconcile_environment_daily(integer,jsonb)'::regprocedure)) = 0 THEN
+        RAISE EXCEPTION 'U7 FAILED: a daily reconcile procedure does not restrict to complete local days';
+    END IF;
+END;
+$t$;
+\echo 'PASS: U7  migration-297 alignment present in all three reconcile procedures'
+
 ROLLBACK;
 
 SELECT 'analytical reconciliation main assertions passed.' AS result;
