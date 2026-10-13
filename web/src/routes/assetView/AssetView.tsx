@@ -33,7 +33,7 @@
  * peak_power_kw/DemandOverview.tsx's findPeak, which Site Demand's own
  * "Peak Power" presentation uses instead; the two screens' Demand
  * presentations are not the same by design). An always-shown
- * InfoDisclosure beside "Last Completed Demand (kW)" explains the figure.
+ * InfoDisclosure beside "Demand (kW)" explains the figure.
  *
  * Power Trend / Demand charts: each owns its own local time-range preset
  * (Today/Yesterday/1 Week/1 Month, calendar-aligned in the site's
@@ -268,9 +268,9 @@ function DemandTile({
   return (
     <article className="kpi-card kpi-card--primary" data-testid="asset-demand-tile">
       <h2>
-        Last Completed Demand (kW)
+        Demand (kW)
         <InfoDisclosure
-          label="Last Completed Demand"
+          label="Demand"
           explanation="Calculated demand for the most recent completed interval, with its time and data quality. A value is shown only when the interval's data is complete."
           testId="asset-demand-last-completed"
         />
@@ -291,9 +291,16 @@ function DemandTile({
           <div className="demand-peak" data-testid="asset-demand-max">
             <span className="demand-peak__label">Max Demand</span>
             <span className="demand-peak__value">
-              {maxDemand
-                ? `${maxDemand.kw.toFixed(1)} kW (${formatTime12hInTimeZone(maxDemand.at, siteTimezone)})`
-                : "Not recorded for today yet."}
+              {maxDemand ? (
+                <>
+                  {`${maxDemand.kw.toFixed(1)} kW `}
+                  <span className="demand-peak__time" data-testid="asset-demand-max-time">
+                    ({formatTime12hInTimeZone(maxDemand.at, siteTimezone)})
+                  </span>
+                </>
+              ) : (
+                "Not recorded for today yet."
+              )}
             </span>
           </div>
         </>

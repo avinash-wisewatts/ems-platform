@@ -9,7 +9,7 @@
  *                     T1.3a (revised run 11): no provisional or in-progress
  *                     value is shown (D-011), and only a VALID interval's
  *                     value is presented as demand. Presented together with
- *                     Peak Power under one "Last Completed Demand (kW)"
+ *                     Peak Power under one "Demand (kW)"
  *                     heading (components/DemandLastCompletedAndPeak.tsx).
  *   Comparison     -- OMITTED. No historical-comparison or contract-demand
  *                     basis has been approved for Demand (unlike Energy's
@@ -28,7 +28,8 @@
  *                     the selected site's own configured timezone.
  *   Status         -- the last completed interval's quality_status,
  *                     translated to a customer label
- *                     (components/demandInterval.ts). NOT a StatusBadge:
+ *                     (components/demandInterval.ts); no label for a
+ *                     complete (VALID) interval. NOT a StatusBadge:
  *                     StatusBadge represents comparison direction, and
  *                     there is no comparison here.
  *   Evidence/Data Quality -- the last completed interval's
@@ -216,7 +217,7 @@ export function DemandOverview() {
               peak_power_kw (findPeak) -- see its own doc comment for why
               that's deliberately not demand_kw. */}
           <section className="demand-current-value" data-testid="demand-current-value">
-            <h2>Last Completed Demand (kW)</h2>
+            <h2>Demand (kW)</h2>
             <DemandLastCompletedAndPeak
               lastCompleted={lastCompleted}
               peakPower={peak}
@@ -237,17 +238,21 @@ export function DemandOverview() {
 
           {/* Status of the last completed interval -- customer label, not
               StatusBadge (no comparison here). MVP-5: quality_status is
-              translated, never rendered raw. */}
+              translated, never rendered raw. A complete (VALID) interval
+              needs no label: only incomplete / unavailable data is called
+              out. */}
           <section className="demand-status" data-testid="demand-status">
             <h2>Status</h2>
-            <p>
-              {completedIntervalStatusLabel(lastCompletedStatus)}
-              <InfoDisclosure
-                label={completedIntervalStatusLabel(lastCompletedStatus)}
-                explanation={completedIntervalStatusExplanation(lastCompletedStatus)}
-                testId="demand-status"
-              />
-            </p>
+            {lastCompletedStatus !== "VALID" ? (
+              <p>
+                {completedIntervalStatusLabel(lastCompletedStatus)}
+                <InfoDisclosure
+                  label={completedIntervalStatusLabel(lastCompletedStatus)}
+                  explanation={completedIntervalStatusExplanation(lastCompletedStatus)}
+                  testId="demand-status"
+                />
+              </p>
+            ) : null}
           </section>
 
           {/* MVP-4 -- device freshness: a separate question ("is the meter

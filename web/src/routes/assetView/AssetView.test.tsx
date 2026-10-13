@@ -737,7 +737,7 @@ describe("AssetView", () => {
     });
   });
 
-  describe("Demand tile -- Last Completed Demand / Max Demand (T1.3a)", () => {
+  describe("Demand tile -- Demand (last completed interval) / Max Demand (T1.3a)", () => {
     it("shows the last completed interval and Max Demand (demand_kw-based), never 'Peak Power'/peak_power_kw", async () => {
       stubAssetViewFetch({
         demandCurrent: currentDemandWithLastCompleted(demandInterval({ demand_kw: 63.4 })),
@@ -760,13 +760,15 @@ describe("AssetView", () => {
       await selectAsset();
 
       const tile = await screen.findByTestId("asset-demand-tile");
-      await waitFor(() => expect(tile).toHaveTextContent("Last Completed Demand (kW)"));
+      await waitFor(() => expect(within(tile).getByRole("heading", { name: /^Demand \(kW\)/ })).toBeTruthy());
+      expect(tile).not.toHaveTextContent("Last Completed Demand");
       expect(screen.getByTestId("asset-demand-last-completed-value")).toHaveTextContent("63.4");
       // 11:00-11:15 UTC is 16:30-16:45 in the site's Asia/Kolkata timezone.
       expect(screen.getByTestId("asset-demand-last-completed-interval")).toHaveTextContent(
         "Last completed 15-min interval 16:30–16:45, 17 Sep",
       );
-      expect(screen.getByTestId("asset-demand-last-completed-status")).toHaveTextContent("Complete data");
+      expect(screen.queryByTestId("asset-demand-last-completed-status")).toBeNull();
+      expect(tile).not.toHaveTextContent("Complete data");
       expect(within(tile).getByText("Max Demand")).toBeTruthy();
       expect(within(tile).queryByText("Peak Power")).toBeNull();
       expect(screen.getByTestId("asset-demand-max")).toHaveTextContent("88.2 kW");
@@ -832,6 +834,11 @@ describe("AssetView", () => {
       await selectAsset();
 
       await waitFor(() => expect(screen.getByTestId("asset-demand-max")).toHaveTextContent("112.0 kW (06:00PM)"));
+      // The time is secondary to the value: its own smaller, muted span.
+      const time = screen.getByTestId("asset-demand-max-time");
+      expect(time).toHaveTextContent("(06:00PM)");
+      expect(time).toHaveClass("demand-peak__time");
+      expect(time).not.toHaveTextContent("112.0");
     });
 
     it("has no separate status line or 'Latest 15-min interval' caption", async () => {
@@ -846,7 +853,7 @@ describe("AssetView", () => {
       expect(within(tile).queryByText(/Latest 15-min interval/)).toBeNull();
     });
 
-    it("shows an always-present info icon beside 'Last Completed Demand (kW)' that reveals what the figure means on hover", async () => {
+    it("shows an always-present info icon beside 'Demand (kW)' that reveals what the figure means on hover", async () => {
       stubAssetViewFetch({ demandCurrent: currentDemandWithLastCompleted(demandInterval()) });
       renderWithProviders(<AssetView />, { sites: () => Promise.resolve(SITES_ONE) });
       await selectAsset();
