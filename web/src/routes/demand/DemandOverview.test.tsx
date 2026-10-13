@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import { DemandOverview, findPeak, toChartPoints } from "./DemandOverview";
 import { renderWithProviders, stubFetch, SITES_ONE } from "../../test-utils";
 import type { DemandIntervalPoint } from "../../api/types";
@@ -140,7 +140,9 @@ describe("DemandOverview (Slice B)", () => {
     // 2026-09-02T00:00:00Z is 05:30 the same day in Asia/Kolkata.
     expect(screen.getByTestId("demand-peak")).toHaveTextContent("05:30, 02 Sep");
     expect(screen.getByTestId("chart-frame")).toBeTruthy();
-    expect(screen.getByTestId("demand-status")).toHaveTextContent("Complete data");
+    // Status section kept, but no redundant "Complete data" label.
+    expect(within(screen.getByTestId("demand-status")).getByRole("heading", { name: "Status" })).toBeTruthy();
+    expect(screen.getByTestId("demand-status")).not.toHaveTextContent("Complete data");
     expect(screen.getByTestId("demand-coverage")).toHaveTextContent("Coverage of the last completed interval: 100%");
     // Never a StatusBadge here -- no comparison exists for Demand.
     expect(screen.queryByTestId("status-badge")).toBeNull();
@@ -236,8 +238,9 @@ describe("DemandOverview (Slice B)", () => {
     renderWithProviders(<DemandOverview />, { sites: () => Promise.resolve(SITES_ONE) });
 
     await waitFor(() => expect(screen.getByTestId("demand-freshness")).toHaveTextContent("Outdated"));
-    // The Status paragraph is a distinct signal, not merged with freshness.
-    expect(screen.getByTestId("demand-status")).toHaveTextContent("Complete data");
+    // The Status section is a distinct signal, not merged with freshness.
+    expect(screen.getByTestId("demand-status")).toHaveTextContent("Status");
+    expect(screen.getByTestId("demand-status")).not.toHaveTextContent("Outdated");
   });
 
   it("MVP-4: a freshness fetch failure is non-blocking -- Last Completed/Peak/Trend/Status still render", async () => {
@@ -246,13 +249,24 @@ describe("DemandOverview (Slice B)", () => {
     renderWithProviders(<DemandOverview />, { sites: () => Promise.resolve(SITES_ONE) });
 
     await waitFor(() => expect(screen.getByTestId("demand-last-completed-value")).toHaveTextContent("52.4"));
-    expect(screen.getByTestId("demand-status")).toHaveTextContent("Complete data");
+    expect(screen.getByTestId("demand-status")).toHaveTextContent("Status");
     expect(screen.queryByTestId("freshness-indicator")).toBeNull();
   });
 
   describe("MVP-5: Demand Status customer labels (last completed interval)", () => {
+    it("VALID -> no label: the Status section stays, without 'Complete data' or an info icon", async () => {
+      stubDemand(lastCompletedInterval({ quality_status: "VALID" }));
+      renderWithProviders(<DemandOverview />, { sites: () => Promise.resolve(SITES_ONE) });
+
+      await waitFor(() => expect(screen.getByTestId("demand-last-completed-value")).toHaveTextContent("52.4"));
+      const status = screen.getByTestId("demand-status");
+      expect(within(status).getByRole("heading", { name: "Status" })).toBeTruthy();
+      expect(status).not.toHaveTextContent("Complete data");
+      expect(status).not.toHaveTextContent("VALID");
+      expect(screen.queryByTestId("demand-status-info")).toBeNull();
+    });
+
     it.each([
-      ["VALID", "Complete data"],
       ["INCOMPLETE", "Incomplete data"],
       ["NO_DATA", "Data unavailable"],
       ["INVALID_SOURCE", "Data unavailable"],

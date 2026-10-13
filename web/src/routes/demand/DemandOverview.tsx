@@ -28,7 +28,8 @@
  *                     the selected site's own configured timezone.
  *   Status         -- the last completed interval's quality_status,
  *                     translated to a customer label
- *                     (components/demandInterval.ts). NOT a StatusBadge:
+ *                     (components/demandInterval.ts); no label for a
+ *                     complete (VALID) interval. NOT a StatusBadge:
  *                     StatusBadge represents comparison direction, and
  *                     there is no comparison here.
  *   Evidence/Data Quality -- the last completed interval's
@@ -237,17 +238,21 @@ export function DemandOverview() {
 
           {/* Status of the last completed interval -- customer label, not
               StatusBadge (no comparison here). MVP-5: quality_status is
-              translated, never rendered raw. */}
+              translated, never rendered raw. A complete (VALID) interval
+              needs no label: only incomplete / unavailable data is called
+              out. */}
           <section className="demand-status" data-testid="demand-status">
             <h2>Status</h2>
-            <p>
-              {completedIntervalStatusLabel(lastCompletedStatus)}
-              <InfoDisclosure
-                label={completedIntervalStatusLabel(lastCompletedStatus)}
-                explanation={completedIntervalStatusExplanation(lastCompletedStatus)}
-                testId="demand-status"
-              />
-            </p>
+            {lastCompletedStatus !== "VALID" ? (
+              <p>
+                {completedIntervalStatusLabel(lastCompletedStatus)}
+                <InfoDisclosure
+                  label={completedIntervalStatusLabel(lastCompletedStatus)}
+                  explanation={completedIntervalStatusExplanation(lastCompletedStatus)}
+                  testId="demand-status"
+                />
+              </p>
+            ) : null}
           </section>
 
           {/* MVP-4 -- device freshness: a separate question ("is the meter
