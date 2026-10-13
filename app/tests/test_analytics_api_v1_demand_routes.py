@@ -17,6 +17,8 @@ postgres/migrations/233_analytics_api_demand.sql).
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 
 from src.auth.models import AuthenticatedPortalUser
@@ -26,6 +28,15 @@ from src.auth.service import AuthenticationResult
 
 SITE_ID = "22222222-2222-4222-8222-222222222222"
 OTHER_SITE_ID = "33333333-3333-4333-8333-333333333333"
+
+# The fixtures' live interval is [11:15, 11:30) UTC on 2026-09-08; the
+# T1.3a stale-demand guard only reports it as current while "now" is
+# inside it (guard cases: test_current_demand_stale_guard.py).
+NOW_IN_LIVE_INTERVAL = datetime(2026, 9, 8, 11, 20, tzinfo=timezone.utc)
+
+
+async def no_last_completed(portal_user_id, scope_id, now):
+    return None
 
 
 def _login_global_admin(portal_client, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -231,6 +242,10 @@ def test_current_demand_no_row_yet_has_data_false(portal_client, monkeypatch) ->
 
     monkeypatch.setattr("src.routers.analytics_api.portal_user_can_access_site", yes)
     monkeypatch.setattr("src.routers.analytics_api.fetch_site_current_demand", fetch)
+    monkeypatch.setattr(
+        "src.routers.analytics_api.fetch_site_last_completed_demand_interval", no_last_completed
+    )
+    monkeypatch.setattr("src.routers.analytics_api.demand_now", lambda: NOW_IN_LIVE_INTERVAL)
 
     response = portal_client.get(f"/api/v1/sites/{SITE_ID}/demand/current")
     assert response.status_code == 200
@@ -257,6 +272,10 @@ def test_current_demand_returns_the_live_reading(portal_client, monkeypatch) -> 
 
     monkeypatch.setattr("src.routers.analytics_api.portal_user_can_access_site", yes)
     monkeypatch.setattr("src.routers.analytics_api.fetch_site_current_demand", fetch)
+    monkeypatch.setattr(
+        "src.routers.analytics_api.fetch_site_last_completed_demand_interval", no_last_completed
+    )
+    monkeypatch.setattr("src.routers.analytics_api.demand_now", lambda: NOW_IN_LIVE_INTERVAL)
 
     response = portal_client.get(f"/api/v1/sites/{SITE_ID}/demand/current")
     assert response.status_code == 200

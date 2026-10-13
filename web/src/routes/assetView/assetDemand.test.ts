@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildDemandChartPoints, findMaxDemand } from "./assetDemand";
-import type { AssetCurrentDemandResponse, DemandIntervalPoint } from "../../api/types";
+import type { DemandIntervalPoint } from "../../api/types";
 
 function demandInterval(overrides: Partial<DemandIntervalPoint> = {}): DemandIntervalPoint {
   return {
@@ -10,20 +10,6 @@ function demandInterval(overrides: Partial<DemandIntervalPoint> = {}): DemandInt
     peak_power_kw: null,
     quality_status: "VALID",
     coverage_percent: 100,
-    ...overrides,
-  };
-}
-
-function currentDemand(overrides: Partial<AssetCurrentDemandResponse> = {}): AssetCurrentDemandResponse {
-  return {
-    asset_id: "a1",
-    has_data: true,
-    interval_start: "2026-09-18T09:45:00Z",
-    interval_end: "2026-09-18T10:00:00Z",
-    current_demand_kw: 42,
-    current_demand_kva: null,
-    quality_status: "PROVISIONAL",
-    coverage_percent: 80,
     ...overrides,
   };
 }
@@ -63,51 +49,47 @@ describe("findMaxDemand", () => {
   });
 });
 
+describe("findMaxDemand (T1.3a: reliable demand only)", () => {
+  it("ignores INCOMPLETE and unavailable intervals, even when their calculated value is higher", () => {
+    const series = [
+      demandInterval({ interval_start: "2026-09-18T09:00:00Z", demand_kw: 40 }),
+      demandInterval({ interval_start: "2026-09-18T09:15:00Z", demand_kw: 95, quality_status: "INCOMPLETE" }),
+      demandInterval({ interval_start: "2026-09-18T09:30:00Z", demand_kw: 99, quality_status: "SOURCE_BOUNDARY" }),
+    ];
+    expect(findMaxDemand(series)).toEqual({ kw: 40, at: "2026-09-18T09:00:00Z" });
+  });
+
+  it("returns null when no interval is VALID", () => {
+    expect(findMaxDemand([demandInterval({ quality_status: "INCOMPLETE" })])).toBeNull();
+  });
+});
+
 describe("buildDemandChartPoints", () => {
-  const range = { from: "2026-09-18T00:00:00Z", to: "2026-09-18T10:00:00Z" };
-
-  it("appends the live current-interval point after the finalized series, closing the finalization-lag gap", () => {
-    const series = [demandInterval({ interval_start: "2026-09-18T09:00:00Z", demand_kw: 50 })];
-    const current = currentDemand({ interval_start: "2026-09-18T09:45:00Z", current_demand_kw: 42 });
-
-    const points = buildDemandChartPoints(series, current, range);
-
-    expect(points).toEqual([
+  it("charts completed intervals only, with no provisional point for the interval in progress", () => {
+    const series = [
+      demandInterval({ interval_start: "2026-09-18T09:00:00Z", demand_kw: 50 }),
+      demandInterval({ interval_start: "2026-09-18T09:15:00Z", demand_kw: 52.5 }),
+    ];
+    expect(buildDemandChartPoints(series)).toEqual([
       { t: Date.parse("2026-09-18T09:00:00Z"), value: 50 },
-      { t: Date.parse("2026-09-18T09:45:00Z"), value: 42 },
+      { t: Date.parse("2026-09-18T09:15:00Z"), value: 52.5 },
     ]);
   });
 
-  it("does not append the current point when it falls outside the requested window (e.g. a closed 'Yesterday' range)", () => {
-    const yesterdayRange = { from: "2026-09-17T00:00:00Z", to: "2026-09-18T00:00:00Z" };
-    const series = [demandInterval({ interval_start: "2026-09-17T09:00:00Z", demand_kw: 50 })];
-    const current = currentDemand({ interval_start: "2026-09-18T09:45:00Z" });
-
-    const points = buildDemandChartPoints(series, current, yesterdayRange);
-
-    expect(points).toEqual([{ t: Date.parse("2026-09-17T09:00:00Z"), value: 50 }]);
-  });
-
-  it("does not duplicate the current interval when it has already been finalized into the series", () => {
-    const series = [demandInterval({ interval_start: "2026-09-18T09:45:00Z", demand_kw: 41.5 })];
-    const current = currentDemand({ interval_start: "2026-09-18T09:45:00Z", current_demand_kw: 42 });
-
-    const points = buildDemandChartPoints(series, current, range);
-
-    expect(points).toEqual([{ t: Date.parse("2026-09-18T09:45:00Z"), value: 41.5 }]);
-  });
-
-  it("does not append when the current demand has no data", () => {
-    const series = [demandInterval()];
-    const current = currentDemand({ has_data: false, current_demand_kw: null, interval_start: null });
-
-    expect(buildDemandChartPoints(series, current, range)).toHaveLength(1);
-  });
-
-  it("returns just the current point when the series is empty but the current interval is in range", () => {
-    const current = currentDemand({ interval_start: "2026-09-18T09:45:00Z", current_demand_kw: 42 });
-    expect(buildDemandChartPoints([], current, range)).toEqual([
-      { t: Date.parse("2026-09-18T09:45:00Z"), value: 42 },
+  it("charts a non-VALID interval as a gap, never as its calculated value", () => {
+    const series = [
+      demandInterval({ interval_start: "2026-09-18T09:00:00Z", demand_kw: 50 }),
+      demandInterval({ interval_start: "2026-09-18T09:15:00Z", demand_kw: 31.7, quality_status: "INCOMPLETE" }),
+      demandInterval({ interval_start: "2026-09-18T09:30:00Z", demand_kw: null, quality_status: "NO_DATA" }),
+    ];
+    expect(buildDemandChartPoints(series)).toEqual([
+      { t: Date.parse("2026-09-18T09:00:00Z"), value: 50 },
+      { t: Date.parse("2026-09-18T09:15:00Z"), value: null },
+      { t: Date.parse("2026-09-18T09:30:00Z"), value: null },
     ]);
+  });
+
+  it("returns no points for an empty series", () => {
+    expect(buildDemandChartPoints([])).toEqual([]);
   });
 });

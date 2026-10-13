@@ -309,18 +309,29 @@ export type DemandSeriesResponse = {
 };
 
 // ---- GET /api/v1/sites/{site_id}/demand/current (Slice B) ------------------
-// Reads analytics.demand_state only -- the live/current-interval table,
-// distinct from the finalized historical series above.
+// Reads analytics.demand_state -- the live/current-interval table -- under
+// the T1.3a stale-demand guard: has_data is true (current_status CURRENT)
+// only while interval_start <= evaluated_at < interval_end; otherwise every
+// current field is null. last_completed_interval is the latest finalized
+// analytics.demand_intervals row (any status), reported either way.
+
+/** Why there is, or is not, a current value: CURRENT; STALE (the latest
+ *  demand_state row is for an interval that has ended); NO_VALUE (current
+ *  interval, nothing calculable); MISSING (no demand_state row). */
+export type CurrentDemandStatus = "CURRENT" | "STALE" | "NO_VALUE" | "MISSING";
 
 export type CurrentDemandResponse = {
   site_id: string;
   has_data: boolean;
+  current_status: CurrentDemandStatus;
+  evaluated_at: string;
   interval_start: string | null;
   interval_end: string | null;
   current_demand_kw: number | null;
   current_demand_kva: number | null;
   quality_status: string | null;
   coverage_percent: number | null;
+  last_completed_interval: DemandIntervalPoint | null;
 };
 
 // ---- GET /api/v1/sites/{site_id}/assets/{asset_id}/demand (Asset View,
@@ -346,12 +357,15 @@ export type AssetDemandSeriesResponse = {
 export type AssetCurrentDemandResponse = {
   asset_id: string;
   has_data: boolean;
+  current_status: CurrentDemandStatus;
+  evaluated_at: string;
   interval_start: string | null;
   interval_end: string | null;
   current_demand_kw: number | null;
   current_demand_kva: number | null;
   quality_status: string | null;
   coverage_percent: number | null;
+  last_completed_interval: DemandIntervalPoint | null;
 };
 
 // ---- GET /api/v1/sites/{site_id}/assets/{asset_id}/power-trend (Asset

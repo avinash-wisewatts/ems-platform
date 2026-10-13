@@ -106,13 +106,16 @@ function energyResponse(
   };
 }
 
+/** A completed (analytics.demand_intervals) interval: [16:30, 16:45) IST on
+ *  17 Sep. Completed rows are never PROVISIONAL (the finalizer stores it as
+ *  INCOMPLETE), so the realistic default is VALID. */
 function demandInterval(overrides: Partial<DemandIntervalPoint> = {}): DemandIntervalPoint {
   return {
     interval_start: "2026-09-17T11:00:00Z",
     interval_end: "2026-09-17T11:15:00Z",
     demand_kw: 50,
     peak_power_kw: 50,
-    quality_status: "PROVISIONAL",
+    quality_status: "VALID",
     coverage_percent: 100,
     ...overrides,
   };
@@ -126,12 +129,39 @@ function emptyCurrentDemand(assetId = ASSET_ID): AssetCurrentDemandResponse {
   return {
     asset_id: assetId,
     has_data: false,
+    current_status: "MISSING",
+    evaluated_at: new Date().toISOString(),
     interval_start: null,
     interval_end: null,
     current_demand_kw: null,
     current_demand_kva: null,
     quality_status: null,
     coverage_percent: null,
+    last_completed_interval: null,
+  };
+}
+
+/** A response with a last completed interval and no current value. */
+function currentDemandWithLastCompleted(lastCompleted: DemandIntervalPoint): AssetCurrentDemandResponse {
+  return { ...emptyCurrentDemand(), current_status: "STALE", last_completed_interval: lastCompleted };
+}
+
+/** A response that also carries a provisional value whose interval contains
+ *  the real clock (started 5 min ago, ends in 10 min) -- what the guarded
+ *  API returns mid-interval. T1.3a (run 11): the screen must never show it. */
+function liveCurrentDemand(overrides: Partial<AssetCurrentDemandResponse> = {}): AssetCurrentDemandResponse {
+  const now = Date.now();
+  return {
+    ...emptyCurrentDemand(),
+    has_data: true,
+    current_status: "CURRENT",
+    interval_start: new Date(now - 5 * 60_000).toISOString(),
+    interval_end: new Date(now + 10 * 60_000).toISOString(),
+    current_demand_kw: 10,
+    current_demand_kva: null,
+    quality_status: "PROVISIONAL",
+    coverage_percent: 100,
+    ...overrides,
   };
 }
 
@@ -707,19 +737,10 @@ describe("AssetView", () => {
     });
   });
 
-  describe("Demand tile -- Current Demand / Max Demand, no status line", () => {
-    it("shows Current Demand and Max Demand (demand_kw-based), never 'Peak Power'/peak_power_kw", async () => {
+  describe("Demand tile -- Last Completed Demand / Max Demand (T1.3a)", () => {
+    it("shows the last completed interval and Max Demand (demand_kw-based), never 'Peak Power'/peak_power_kw", async () => {
       stubAssetViewFetch({
-        demandCurrent: {
-          asset_id: ASSET_ID,
-          has_data: true,
-          interval_start: "2026-09-17T11:45:00Z",
-          interval_end: "2026-09-17T12:00:00Z",
-          current_demand_kw: 63.4,
-          current_demand_kva: 70.1,
-          quality_status: "PROVISIONAL",
-          coverage_percent: 100,
-        },
+        demandCurrent: currentDemandWithLastCompleted(demandInterval({ demand_kw: 63.4 })),
         demandSeries: {
           asset_id: ASSET_ID,
           from: "2026-09-16T12:00:00Z",
@@ -739,17 +760,65 @@ describe("AssetView", () => {
       await selectAsset();
 
       const tile = await screen.findByTestId("asset-demand-tile");
-      await waitFor(() => expect(tile).toHaveTextContent("Current Demand (kW)"));
-      expect(screen.getByTestId("asset-demand-current-value")).toHaveTextContent("63.4");
+      await waitFor(() => expect(tile).toHaveTextContent("Last Completed Demand (kW)"));
+      expect(screen.getByTestId("asset-demand-last-completed-value")).toHaveTextContent("63.4");
+      // 11:00-11:15 UTC is 16:30-16:45 in the site's Asia/Kolkata timezone.
+      expect(screen.getByTestId("asset-demand-last-completed-interval")).toHaveTextContent(
+        "Last completed 15-min interval 16:30–16:45, 17 Sep",
+      );
+      expect(screen.getByTestId("asset-demand-last-completed-status")).toHaveTextContent("Complete data");
       expect(within(tile).getByText("Max Demand")).toBeTruthy();
       expect(within(tile).queryByText("Peak Power")).toBeNull();
       expect(screen.getByTestId("asset-demand-max")).toHaveTextContent("88.2 kW");
       expect(screen.getByTestId("asset-demand-max")).not.toHaveTextContent("200");
     });
 
+    it("T1.3a: never shows the provisional current-interval value, even while its interval is in progress", async () => {
+      stubAssetViewFetch({
+        demandCurrent: liveCurrentDemand({
+          current_demand_kw: 77.7,
+          last_completed_interval: demandInterval({ demand_kw: 55.5 }),
+        }),
+      });
+      renderWithProviders(<AssetView />, { sites: () => Promise.resolve(SITES_ONE) });
+      await selectAsset();
+
+      await waitFor(() =>
+        expect(screen.getByTestId("asset-demand-last-completed-value")).toHaveTextContent("55.5"),
+      );
+      const tile = screen.getByTestId("asset-demand-tile");
+      expect(tile).not.toHaveTextContent("77.7");
+      expect(tile).not.toHaveTextContent(/current demand|provisional|calculating|in progress/i);
+    });
+
+    it("T1.3a: an INCOMPLETE last interval shows its time and status but no value, and is excluded from Max Demand", async () => {
+      const incomplete = demandInterval({ demand_kw: 99.9, quality_status: "INCOMPLETE", coverage_percent: 70 });
+      stubAssetViewFetch({
+        demandCurrent: currentDemandWithLastCompleted(incomplete),
+        demandSeries: {
+          asset_id: ASSET_ID,
+          from: "2026-09-16T12:00:00Z",
+          to: "2026-09-17T12:00:00Z",
+          no_data: false,
+          series: [demandInterval({ interval_start: "2026-09-17T10:30:00Z", demand_kw: 45 }), incomplete],
+        },
+      });
+      renderWithProviders(<AssetView />, { sites: () => Promise.resolve(SITES_ONE) });
+      await selectAsset();
+
+      await waitFor(() =>
+        expect(screen.getByTestId("asset-demand-last-completed-status")).toHaveTextContent(
+          "Incomplete data (70% coverage)",
+        ),
+      );
+      expect(screen.getByTestId("asset-demand-last-completed-value")).toHaveTextContent("—");
+      expect(screen.getByTestId("asset-demand-last-completed-interval")).toHaveTextContent("16:30–16:45, 17 Sep");
+      expect(screen.getByTestId("asset-demand-tile")).not.toHaveTextContent("99.9");
+      await waitFor(() => expect(screen.getByTestId("asset-demand-max")).toHaveTextContent("45.0 kW"));
+    });
+
     it("shows the Max Demand occurrence time in 12-hour site-timezone format (e.g. 06:00PM)", async () => {
       stubAssetViewFetch({
-        demandCurrent: { ...emptyCurrentDemand(), has_data: true, current_demand_kw: 10 },
         demandSeries: {
           asset_id: ASSET_ID,
           from: "2026-09-16T12:00:00Z",
@@ -765,37 +834,35 @@ describe("AssetView", () => {
       await waitFor(() => expect(screen.getByTestId("asset-demand-max")).toHaveTextContent("112.0 kW (06:00PM)"));
     });
 
-    it("removes the status line and the 'Latest 15-min interval' caption entirely", async () => {
-      stubAssetViewFetch({
-        demandCurrent: { ...emptyCurrentDemand(), has_data: true, current_demand_kw: 10, quality_status: "PROVISIONAL" },
-      });
+    it("has no separate status line or 'Latest 15-min interval' caption", async () => {
+      stubAssetViewFetch({ demandCurrent: currentDemandWithLastCompleted(demandInterval()) });
       renderWithProviders(<AssetView />, { sites: () => Promise.resolve(SITES_ONE) });
       await selectAsset();
 
       const tile = await screen.findByTestId("asset-demand-tile");
-      await waitFor(() => expect(tile).toHaveTextContent("10.0"));
+      await waitFor(() => expect(tile).toHaveTextContent("50.0"));
       expect(screen.queryByTestId("asset-demand-status")).toBeNull();
       expect(within(tile).queryByText("Calculating")).toBeNull();
       expect(within(tile).queryByText(/Latest 15-min interval/)).toBeNull();
     });
 
-    it("shows an always-present info icon beside 'Current Demand (kW)' that reveals what the figure means on hover", async () => {
-      stubAssetViewFetch({ demandCurrent: { ...emptyCurrentDemand(), has_data: true, current_demand_kw: 10 } });
+    it("shows an always-present info icon beside 'Last Completed Demand (kW)' that reveals what the figure means on hover", async () => {
+      stubAssetViewFetch({ demandCurrent: currentDemandWithLastCompleted(demandInterval()) });
       renderWithProviders(<AssetView />, { sites: () => Promise.resolve(SITES_ONE) });
       await selectAsset();
 
       const tile = await screen.findByTestId("asset-demand-tile");
-      await waitFor(() => expect(tile).toHaveTextContent("10.0"));
-      const icon = within(tile).getByTestId("asset-demand-current-info");
+      await waitFor(() => expect(tile).toHaveTextContent("50.0"));
+      const icon = within(tile).getByTestId("asset-demand-last-completed-info");
       expect(icon.closest("h2")).toBeTruthy();
 
       const user = userEvent.setup();
       await user.hover(icon);
-      expect(screen.getByText(/latest available calculated demand/i)).toBeTruthy();
+      expect(screen.getByText(/most recent completed interval/i)).toBeTruthy();
     });
 
     it("shows an honest 'not recorded' Max Demand when today's series has no data", async () => {
-      stubAssetViewFetch({ demandCurrent: { ...emptyCurrentDemand(), has_data: true, current_demand_kw: 10 } });
+      stubAssetViewFetch({ demandCurrent: currentDemandWithLastCompleted(demandInterval()) });
       renderWithProviders(<AssetView />, { sites: () => Promise.resolve(SITES_ONE) });
       await selectAsset();
 
@@ -804,16 +871,18 @@ describe("AssetView", () => {
       );
     });
 
-    it("shows an honest 'no current demand reading' state when the asset has no demand data yet", async () => {
+    it("says so when the asset has no completed demand interval", async () => {
       stubAssetViewFetch({ demandCurrent: emptyCurrentDemand() });
       renderWithProviders(<AssetView />, { sites: () => Promise.resolve(SITES_ONE) });
       await selectAsset();
 
       await waitFor(() =>
-        expect(screen.getByTestId("asset-demand-tile")).toHaveTextContent(
-          "No current demand reading yet for this asset.",
+        expect(screen.getByTestId("asset-demand-last-completed-none")).toHaveTextContent(
+          "No completed demand interval in the last 7 days.",
         ),
       );
+      expect(screen.queryByTestId("asset-demand-last-completed-value")).toBeNull();
+      expect(screen.getByTestId("asset-demand-max")).toBeTruthy();
     });
 
     it("shows a working error/retry state when the Asset Demand API fails", async () => {
@@ -857,48 +926,43 @@ describe("AssetView", () => {
 
     it("changing a chart's own range does not change the KPI tiles' fixed Today figures", async () => {
       const fetchMock = stubAssetViewFetch({
-        demandCurrent: { ...emptyCurrentDemand(), has_data: true, current_demand_kw: 63.4 },
+        demandCurrent: currentDemandWithLastCompleted(demandInterval({ demand_kw: 63.4 })),
       });
       renderWithProviders(<AssetView />, { sites: () => Promise.resolve(SITES_ONE) });
       await selectAsset();
-      await waitFor(() => expect(screen.getByTestId("asset-demand-current-value")).toHaveTextContent("63.4"));
+      await waitFor(() =>
+        expect(screen.getByTestId("asset-demand-last-completed-value")).toHaveTextContent("63.4"),
+      );
 
       const demandSelect = screen.getByTestId("asset-demand-chart-range") as HTMLSelectElement;
       const user = userEvent.setup();
       await user.selectOptions(demandSelect, "1 Month");
 
       // The chart refetches, but the KPI tile's own value is untouched.
-      expect(screen.getByTestId("asset-demand-current-value")).toHaveTextContent("63.4");
+      expect(screen.getByTestId("asset-demand-last-completed-value")).toHaveTextContent("63.4");
       const demandCurrentCalls = fetchMock.mock.calls.filter((c) => String(c[0]).includes("/demand/current"));
       expect(demandCurrentCalls).toHaveLength(1); // never refetched by the chart's own selector
     });
   });
 
-  describe("Demand chart -- closing the finalization-lag gap", () => {
-    it("appends the live current-interval point so the chart isn't dishonestly 'no data' while an interval is still finalizing", async () => {
+  describe("Demand chart -- completed intervals only (T1.3a)", () => {
+    it("does not plot the provisional interval in progress: with no completed interval the chart shows 'no data'", async () => {
       stubAssetViewFetch({
         demandSeries: emptyDemandSeries(), // no finalized intervals yet today
-        demandCurrent: {
-          asset_id: ASSET_ID,
-          has_data: true,
-          interval_start: new Date(Date.now() - 5 * 60_000).toISOString(), // within "today"
-          interval_end: new Date().toISOString(),
-          current_demand_kw: 42,
-          current_demand_kva: null,
-          quality_status: "PROVISIONAL",
-          coverage_percent: 50,
-        },
+        // In progress now (started 5 min ago), within "today".
+        demandCurrent: liveCurrentDemand({ current_demand_kw: 42, coverage_percent: 50 }),
       });
       renderWithProviders(<AssetView />, { sites: () => Promise.resolve(SITES_ONE) });
       await selectAsset();
 
-      const chart = await screen.findByTestId("asset-demand-chart");
-      await waitFor(() => expect(within(chart).queryByTestId("chart-frame")).toBeTruthy());
-      expect(chart).not.toHaveTextContent("No demand trend data for this period yet.");
+      await waitFor(() =>
+        expect(screen.getByTestId("asset-demand-chart")).toHaveTextContent("No demand trend data for this period yet."),
+      );
+      expect(within(screen.getByTestId("asset-demand-chart")).queryByTestId("chart-frame")).toBeNull();
     });
 
-    it("shows the honest 'no data' state when there is truly nothing to plot (no finalized series, no live reading)", async () => {
-      stubAssetViewFetch(); // emptyDemandSeries + emptyCurrentDemand (has_data: false)
+    it("shows the honest 'no data' state when there is truly nothing to plot", async () => {
+      stubAssetViewFetch(); // emptyDemandSeries + emptyCurrentDemand
       renderWithProviders(<AssetView />, { sites: () => Promise.resolve(SITES_ONE) });
       await selectAsset();
 
