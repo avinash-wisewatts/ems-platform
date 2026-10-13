@@ -233,6 +233,17 @@ so it stays visible until it is remediated as its own piece of work --
 likely by re-running the relevant `alter_job` calls from the three
 `postgres/jobs/*.sql` files against staging, under its own change control.
 
+**Update (migration 194, then migration 300):** migration 194 re-aligned the
+running jobs to the 1-minute canonical schedule. Migration 300 then moved
+normalization and both routing jobs to an intended **5-minute, fixed-schedule**
+cadence, phased on the UTC 5-minute grid (+2:40, +4:10, +4:15). The 15-minute
+overlap and 5-minute max_runtime are unchanged. The `postgres/jobs/*.sql`
+files still register a fresh database at 1 minute, and migration 300 sets the
+final schedule. `verify_jobs.sh` takes the expected interval per job (5 minutes
+for these three; the alert job stays at 1 minute), and
+`scripts/test/assert_job_schedule_canonical.sql` pins the new schedule and
+phases. See `docs/06-platform/telemetry/pipeline.md`, "Ingest cadence".
+
 ## Artifact / image strategy
 
 | Component | Strategy |

@@ -66,12 +66,12 @@ def test_migration_postcondition_requires_every_other_job_setting_unchanged():
     assert "% 900) <> 420" in code
 
 
-def test_manifest_registers_migration_298_last():
+def test_manifest_registers_migration_298():
     manifest = ROOT / "postgres" / "restructure_manifest.csv"
     rows = [r for r in csv.DictReader(manifest.read_text(encoding="utf-8").splitlines()) if r["target_category"] == "migration"]
-    assert rows[-1]["source_file"] == "298_demand_job_quarter_hour_schedule.sql"
-    assert rows[-1]["target_path"] == "postgres/migrations/298_demand_job_quarter_hour_schedule.sql"
     files = [r["source_file"] for r in rows]
+    row = rows[files.index("298_demand_job_quarter_hour_schedule.sql")]
+    assert row["target_path"] == "postgres/migrations/298_demand_job_quarter_hour_schedule.sql"
     assert files.index("298_demand_job_quarter_hour_schedule.sql") > files.index("297_reconcile_window_grain_alignment.sql")
 
 

@@ -47,6 +47,9 @@ check_single_job() {
     local display_name="$2"
     local proc_schema="${3:-telemetry}"
     local expect_overlap="${4:-true}"
+    # Expected schedule_interval. Migration 300: normalization and both
+    # routing jobs run every 5 minutes (5-minute batch pipeline).
+    local expected_interval="${5:-1 minute}"
 
     local job_count
     local scheduled_count
@@ -96,14 +99,14 @@ check_single_job() {
             FROM timescaledb_information.jobs
             WHERE proc_schema = '${proc_schema}'
               AND proc_name = '${proc_name}'
-              AND schedule_interval = INTERVAL '1 minute';
+              AND schedule_interval = INTERVAL '${expected_interval}';
         "
     )"
 
     if [[ "${schedule_count}" == "1" ]]; then
-        pass "${display_name} runs every 1 minute"
+        pass "${display_name} runs every ${expected_interval}"
     else
-        fail "${display_name} does not have the expected 1-minute schedule"
+        fail "${display_name} does not have the expected ${expected_interval} schedule"
     fi
 
     runtime_count="$(
@@ -213,15 +216,24 @@ print_section "Routing Job Registrations"
 
 check_single_job \
     "run_normalization_job" \
-    "Normalization job"
+    "Normalization job" \
+    "telemetry" \
+    "true" \
+    "5 minutes"
 
 check_single_job \
     "run_energy_routing_job" \
-    "Energy routing job"
+    "Energy routing job" \
+    "telemetry" \
+    "true" \
+    "5 minutes"
 
 check_single_job \
     "run_environment_routing_job" \
-    "Environment routing job"
+    "Environment routing job" \
+    "telemetry" \
+    "true" \
+    "5 minutes"
 
 
 # ----------------------------------------------------------------------------
