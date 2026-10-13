@@ -19,7 +19,7 @@ function completed(overrides: Partial<DemandIntervalPoint> = {}): DemandInterval
 const PEAK = { kw: 68.7, at: "2026-09-18T09:15:00Z" };
 
 describe("DemandLastCompletedAndPeak", () => {
-  it("shows a VALID last completed interval: value, site-local start-end and status", () => {
+  it("shows a VALID last completed interval: value and site-local start-end, with no status line", () => {
     render(
       <DemandLastCompletedAndPeak
         lastCompleted={completed()}
@@ -33,7 +33,23 @@ describe("DemandLastCompletedAndPeak", () => {
     expect(screen.getByTestId("demand-last-completed-interval")).toHaveTextContent(
       "Last completed 15-min interval 16:30–16:45, 08 Sep",
     );
-    expect(screen.getByTestId("demand-last-completed-status")).toHaveTextContent("Complete data");
+    // A complete interval needs no status text: the value itself says so.
+    expect(screen.queryByTestId("demand-last-completed-status")).toBeNull();
+    expect(document.body).not.toHaveTextContent("Complete data");
+  });
+
+  it("renders the interval caption as secondary text", () => {
+    render(
+      <DemandLastCompletedAndPeak
+        lastCompleted={completed()}
+        peakPower={PEAK}
+        siteTimezone="Asia/Kolkata"
+        testIdPrefix="demand"
+      />,
+    );
+    const caption = screen.getByTestId("demand-last-completed-interval");
+    expect(caption).toHaveClass("hint");
+    expect(caption).toHaveClass("demand-interval-caption");
   });
 
   it("never shows a current, provisional or in-progress value", () => {

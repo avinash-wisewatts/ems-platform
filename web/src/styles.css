@@ -465,10 +465,14 @@ button.status-pill { font-family: inherit; cursor: pointer; }
    visual weight, so this one rule backs every one of them. */
 .kpi-card__value, .value { margin: 0; font-size: 30px; font-weight: 700; color: var(--ww-navy); line-height: 1.1; }
 
-.demand-current-caption { margin: 6px 0 0; }
+/* Secondary to the Demand heading and value (the analytics-stats__time
+   size): which completed interval the value belongs to. */
+.demand-interval-caption { margin: 6px 0 0; font-size: 12px; }
 .demand-peak { margin-top: 14px; }
 .demand-peak__label { display: block; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: none; }
 .demand-peak__value { display: block; margin-top: 2px; font-size: 15px; font-weight: 600; color: var(--text); }
+/* The occurrence time beside a peak value: secondary to the value. */
+.demand-peak__time { font-size: 12px; font-weight: 500; color: var(--muted); }
 .kpi-card__unit { font-size: 15px; font-weight: 500; color: var(--muted); }
 
 .kpi-card__delta { margin: 10px 0 0; font-size: 13px; display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }

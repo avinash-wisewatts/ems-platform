@@ -125,12 +125,14 @@ describe("DemandOverview (Slice B)", () => {
     renderWithProviders(<DemandOverview />, { sites: () => Promise.resolve(SITES_ONE) });
 
     await waitFor(() => expect(screen.getByTestId("demand-last-completed-value")).toHaveTextContent("52.4"));
-    expect(screen.getByTestId("demand-current-value")).toHaveTextContent("Last Completed Demand (kW)");
+    expect(screen.getByRole("heading", { name: "Demand (kW)" })).toBeInTheDocument();
+    expect(screen.getByTestId("demand-current-value")).not.toHaveTextContent("Last Completed Demand");
     // 11:00-11:15 UTC is 16:30-16:45 IST: the interval's own site-local time.
     expect(screen.getByTestId("demand-last-completed-interval")).toHaveTextContent(
       "Last completed 15-min interval 16:30–16:45, 08 Sep",
     );
-    expect(screen.getByTestId("demand-last-completed-status")).toHaveTextContent("Complete data");
+    // No status line under a complete interval's value.
+    expect(screen.queryByTestId("demand-last-completed-status")).toBeNull();
     // Peak Power uses peak_power_kw (70.0, the second interval) -- never
     // demand_kw, and never labelled "Demand".
     expect(screen.getByTestId("demand-peak")).toHaveTextContent("Peak Power");

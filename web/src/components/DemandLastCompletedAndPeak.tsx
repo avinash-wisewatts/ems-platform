@@ -1,5 +1,5 @@
 /**
- * The shared Last Completed Demand / Peak Power presentation for the
+ * The shared Demand (last completed interval) / Peak Power presentation for the
  * Site-level Demand Overview page -- one implementation rather than
  * duplicating this markup (matching how findPeak etc. already have exactly
  * one home). Asset View's Demand tile uses LastCompletedDemand directly

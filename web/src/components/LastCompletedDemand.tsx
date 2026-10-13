@@ -5,6 +5,8 @@
  * provisional or in-progress value is shown (D-011), and only a VALID
  * interval's value is presented as demand (components/demandInterval.ts):
  * an INCOMPLETE or unavailable interval shows its status and no value.
+ * A VALID interval shows no status line: the value itself means the data
+ * was complete.
  * Calculated demand only -- instantaneous power is not shown here.
  */
 
@@ -26,8 +28,8 @@ export function LastCompletedDemand({
   lastCompleted: DemandIntervalPoint | null | undefined;
   siteTimezone: string | null;
   /** Test IDs are `${testIdPrefix}` (compact only), `${testIdPrefix}-value`,
-   *  `${testIdPrefix}-interval`, `${testIdPrefix}-status` and
-   *  `${testIdPrefix}-none`. */
+   *  `${testIdPrefix}-interval`, `${testIdPrefix}-status` (not for a VALID
+   *  interval) and `${testIdPrefix}-none`. */
   testIdPrefix: string;
   /** Class of the value line; screens use their own figure style. */
   valueClassName?: string;
@@ -69,13 +71,15 @@ export function LastCompletedDemand({
       <p className={valueClassName} data-testid={`${testIdPrefix}-value`}>
         {kw !== null ? kw.toFixed(1) : "—"}
       </p>
-      <p className="hint" data-testid={`${testIdPrefix}-interval`}>
+      <p className="hint demand-interval-caption" data-testid={`${testIdPrefix}-interval`}>
         Last completed {demandIntervalLengthLabel(lastCompleted.interval_start, lastCompleted.interval_end)} interval{" "}
         {interval}
       </p>
-      <p className="hint" data-testid={`${testIdPrefix}-status`}>
-        {status}
-      </p>
+      {lastCompleted.quality_status !== "VALID" ? (
+        <p className="hint" data-testid={`${testIdPrefix}-status`}>
+          {status}
+        </p>
+      ) : null}
     </>
   );
 }

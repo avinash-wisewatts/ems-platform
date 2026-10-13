@@ -9,7 +9,7 @@
  *                     T1.3a (revised run 11): no provisional or in-progress
  *                     value is shown (D-011), and only a VALID interval's
  *                     value is presented as demand. Presented together with
- *                     Peak Power under one "Last Completed Demand (kW)"
+ *                     Peak Power under one "Demand (kW)"
  *                     heading (components/DemandLastCompletedAndPeak.tsx).
  *   Comparison     -- OMITTED. No historical-comparison or contract-demand
  *                     basis has been approved for Demand (unlike Energy's
@@ -216,7 +216,7 @@ export function DemandOverview() {
               peak_power_kw (findPeak) -- see its own doc comment for why
               that's deliberately not demand_kw. */}
           <section className="demand-current-value" data-testid="demand-current-value">
-            <h2>Last Completed Demand (kW)</h2>
+            <h2>Demand (kW)</h2>
             <DemandLastCompletedAndPeak
               lastCompleted={lastCompleted}
               peakPower={peak}
