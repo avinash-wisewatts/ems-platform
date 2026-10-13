@@ -23,26 +23,26 @@
  * InfoDisclosure sits beside the "Energy (kWh)" heading itself, shown only
  * when the current window has a reset/gap interval.
  *
- * Demand tile: current_demand_kw (GET .../demand/current, analytics.
- * demand_state, continuously recalculated for the still-open interval) +
- * Max Demand = MAX(demand_kw) over TODAY's finalized 15-minute intervals
- * (assetDemand.ts#findMaxDemand -- demand_kw, deliberately NOT
+ * Demand tile: the last completed interval (GET .../demand/current ->
+ * last_completed_interval, analytics.demand_intervals) with its site-local
+ * start-end and data-quality status (components/LastCompletedDemand.tsx).
+ * T1.3a (revised run 11): no provisional or in-progress value is shown
+ * (D-011), and only a VALID interval's value is presented as demand +
+ * Max Demand = MAX(demand_kw) over TODAY's finalized VALID 15-minute
+ * intervals (assetDemand.ts#findMaxDemand -- demand_kw, deliberately NOT
  * peak_power_kw/DemandOverview.tsx's findPeak, which Site Demand's own
  * "Peak Power" presentation uses instead; the two screens' Demand
- * presentations are no longer the same by design). No quality_status line
- * -- an always-shown InfoDisclosure beside "Current Demand (kW)" explains
- * what the figure is instead.
+ * presentations are not the same by design). An always-shown
+ * InfoDisclosure beside "Last Completed Demand (kW)" explains the figure.
  *
  * Power Trend / Demand charts: each owns its own local time-range preset
  * (Today/Yesterday/1 Week/1 Month, calendar-aligned in the site's
  * timezone -- see ./timeRange.ts), independent of the KPI tiles and of
- * each other. The Demand chart additionally appends the live, still-open
- * interval (assetDemand.ts#buildDemandChartPoints) when it falls inside
- * the chart's own requested window -- GET .../demand only returns
- * FINALIZED intervals (analytics.demand_intervals), which lag "now" by up
- * to the interval length plus a ~10-minute processing grace (traced in
- * migration 013); this closes that gap using data already fetched for the
- * KPI tile, no backend change. Both charts pass the site's timezone and
+ * each other. The Demand chart shows completed intervals only
+ * (assetDemand.ts#buildDemandChartPoints; GET .../demand returns FINALIZED
+ * analytics.demand_intervals rows): no provisional point for the interval
+ * in progress is appended (T1.3a, D-011), and a non-VALID interval is a
+ * gap. Both charts pass the site's timezone and
  * unit through to ChartFrame's timeZone/axisUnitLabel props, and every
  * plotted/hovered value is rounded to 2 decimals by ChartFrame itself
  * (formatValue) -- not reimplemented per chart.
@@ -80,6 +80,7 @@ import { Loading } from "../../components/states/Loading";
 import { ErrorState } from "../../components/states/ErrorState";
 import { EmptyState } from "../../components/states/EmptyState";
 import { NoDataYet } from "../../components/states/NoDataYet";
+import { LastCompletedDemand } from "../../components/LastCompletedDemand";
 import { formatInTimeZone, formatTime12hInTimeZone } from "../../time/format";
 import {
   ASSET_TIME_RANGE_LABELS,
@@ -267,11 +268,11 @@ function DemandTile({
   return (
     <article className="kpi-card kpi-card--primary" data-testid="asset-demand-tile">
       <h2>
-        Current Demand (kW)
+        Last Completed Demand (kW)
         <InfoDisclosure
-          label="Current Demand"
-          explanation="This is the latest available calculated demand value for this asset."
-          testId="asset-demand-current"
+          label="Last Completed Demand"
+          explanation="Calculated demand for the most recent completed interval, with its time and data quality. A value is shown only when the interval's data is complete."
+          testId="asset-demand-last-completed"
         />
       </h2>
       {!hasAsset ? <p className="hint">Select an asset to view this.</p> : null}
@@ -280,23 +281,22 @@ function DemandTile({
         <ErrorState title="Demand data unavailable" error={error} onRetry={onRetry} />
       ) : null}
       {hasAsset && status === "ready" && current ? (
-        current.has_data ? (
-          <>
-            <p className="kpi-card__value" data-testid="asset-demand-current-value">
-              {current.current_demand_kw?.toFixed(1) ?? "—"}
-            </p>
-            <div className="demand-peak" data-testid="asset-demand-max">
-              <span className="demand-peak__label">Max Demand</span>
-              <span className="demand-peak__value">
-                {maxDemand
-                  ? `${maxDemand.kw.toFixed(1)} kW (${formatTime12hInTimeZone(maxDemand.at, siteTimezone)})`
-                  : "Not recorded for today yet."}
-              </span>
-            </div>
-          </>
-        ) : (
-          <NoDataYet message="No current demand reading yet for this asset." />
-        )
+        <>
+          <LastCompletedDemand
+            lastCompleted={current.last_completed_interval}
+            siteTimezone={siteTimezone}
+            testIdPrefix="asset-demand-last-completed"
+            valueClassName="kpi-card__value"
+          />
+          <div className="demand-peak" data-testid="asset-demand-max">
+            <span className="demand-peak__label">Max Demand</span>
+            <span className="demand-peak__value">
+              {maxDemand
+                ? `${maxDemand.kw.toFixed(1)} kW (${formatTime12hInTimeZone(maxDemand.at, siteTimezone)})`
+                : "Not recorded for today yet."}
+            </span>
+          </div>
+        </>
       ) : null}
     </article>
   );
@@ -860,16 +860,9 @@ export function AssetView() {
               />
             ) : demandChartSeries ? (
               (() => {
-                // Appends the still-open interval's live value (already
-                // fetched for the KPI tile) when it falls inside this
-                // chart's own requested window -- see assetDemand.ts
-                // #buildDemandChartPoints for why GET .../demand alone
-                // lags "now" by up to ~30 minutes.
-                const points = buildDemandChartPoints(
-                  demandChartSeries.series,
-                  demandCurrent,
-                  resolveAssetTimeRange(demandChartPreset, selectedSite.timezone),
-                );
+                // Completed intervals only (assetDemand.ts
+                // #buildDemandChartPoints).
+                const points = buildDemandChartPoints(demandChartSeries.series);
                 return points.length > 0 ? (
                   <ChartFrame
                     points={points}

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import { SiteOverview } from "./SiteOverview";
 import { renderWithProviders, stubFetch, SITES_ONE, SITES_TWO_ORGS } from "../test-utils";
-import type { EnergyTypicalReferenceResponse } from "../api/types";
+import type { DemandIntervalPoint, EnergyTypicalReferenceResponse } from "../api/types";
 
 const SITE_ID = SITES_ONE.sites[0]!.site_id;
 
@@ -131,27 +131,46 @@ function typicalReferenceResponse(
   };
 }
 
-function currentDemandResponse(hasData: boolean, kw = 60.5) {
+/** T1.3a (revised run 11): Site Overview shows only last_completed_interval.
+ *  hasData=true is a VALID last completed interval of `kw`
+ *  ([11:00, 11:15) UTC = 16:30-16:45 IST, 08 Sep), with a provisional
+ *  current value (99.1 kW) that must never be shown; hasData=false has
+ *  neither. */
+function currentDemandResponse(hasData: boolean, kw = 60.5, lastCompleted: Partial<DemandIntervalPoint> = {}) {
   return hasData
     ? {
         site_id: SITE_ID,
         has_data: true,
+        current_status: "CURRENT",
+        evaluated_at: "2026-09-08T11:20:00Z",
         interval_start: "2026-09-08T11:15:00Z",
         interval_end: "2026-09-08T11:30:00Z",
-        current_demand_kw: kw,
-        current_demand_kva: kw + 2,
-        quality_status: "VALID",
-        coverage_percent: 96,
+        current_demand_kw: 99.1,
+        current_demand_kva: 101.1,
+        quality_status: "PROVISIONAL",
+        coverage_percent: 33,
+        last_completed_interval: {
+          interval_start: "2026-09-08T11:00:00Z",
+          interval_end: "2026-09-08T11:15:00Z",
+          demand_kw: kw,
+          peak_power_kw: kw + 1,
+          quality_status: "VALID",
+          coverage_percent: 100,
+          ...lastCompleted,
+        },
       }
     : {
         site_id: SITE_ID,
         has_data: false,
+        current_status: "MISSING",
+        evaluated_at: "2026-09-08T11:20:00Z",
         interval_start: null,
         interval_end: null,
         current_demand_kw: null,
         current_demand_kva: null,
         quality_status: null,
         coverage_percent: null,
+        last_completed_interval: null,
       };
 }
 
@@ -246,6 +265,56 @@ describe("SiteOverview (MVP-3 -- Site Health & Attention)", () => {
     expect(screen.queryByTestId("status-badge")).toBeNull();
 
     await waitFor(() => expect(screen.getByTestId("site-overview-pq-value")).toHaveTextContent("PF 0.94"));
+  });
+
+  it("T1.3a: shows the last completed interval's site-local time and status, never the provisional current value", async () => {
+    stubFetch((url) => {
+      if (isEvidenceUrl(url)) return { jsonBody: evidenceResponse() };
+      if (isTypicalReferenceUrl(url)) return { jsonBody: typicalReferenceResponse({ typical_kwh: 100 }) };
+      if (isConsumptionUrl(url)) return { jsonBody: energyFor(url, 105) };
+      if (isDemandCurrentUrl(url)) return { jsonBody: currentDemandResponse(true, 58.2) };
+      if (isDemandSeriesUrl(url)) return { jsonBody: demandSeriesResponse() };
+      if (isPowerQualityUrl(url)) return { jsonBody: pqResponse() };
+      return { status: 404, jsonBody: { error: "not_found", detail: "unexpected" } };
+    });
+    renderWithProviders(<SiteOverview />, { sites: () => Promise.resolve(SITES_ONE) });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("site-overview-demand-last-completed-value")).toHaveTextContent("58.2 kW"),
+    );
+    // 11:00-11:15 UTC is 16:30-16:45 IST (SITES_ONE is Asia/Kolkata).
+    expect(screen.getByTestId("site-overview-demand-last-completed-interval")).toHaveTextContent(
+      "16:30–16:45, 08 Sep",
+    );
+    expect(screen.getByTestId("site-overview-demand-value")).toHaveTextContent("Last completed:");
+    expect(screen.getByTestId("site-overview-demand")).not.toHaveTextContent("99.1");
+    expect(screen.getByTestId("site-overview-demand")).not.toHaveTextContent(/current|provisional/i);
+  });
+
+  it("T1.3a: an INCOMPLETE last interval shows its status, not its value", async () => {
+    stubFetch((url) => {
+      if (isEvidenceUrl(url)) return { jsonBody: evidenceResponse() };
+      if (isTypicalReferenceUrl(url)) return { jsonBody: typicalReferenceResponse({ typical_kwh: 100 }) };
+      if (isConsumptionUrl(url)) return { jsonBody: energyFor(url, 105) };
+      if (isDemandCurrentUrl(url)) {
+        return { jsonBody: currentDemandResponse(true, 31.7, { quality_status: "INCOMPLETE", coverage_percent: 74 }) };
+      }
+      if (isDemandSeriesUrl(url)) return { jsonBody: demandSeriesResponse() };
+      if (isPowerQualityUrl(url)) return { jsonBody: pqResponse() };
+      return { status: 404, jsonBody: { error: "not_found", detail: "unexpected" } };
+    });
+    renderWithProviders(<SiteOverview />, { sites: () => Promise.resolve(SITES_ONE) });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("site-overview-demand-last-completed-status")).toHaveTextContent(
+        "Incomplete data (74% coverage)",
+      ),
+    );
+    expect(screen.queryByTestId("site-overview-demand-last-completed-value")).toBeNull();
+    expect(screen.getByTestId("site-overview-demand")).not.toHaveTextContent("31.7");
+    expect(screen.getByTestId("site-overview-demand-last-completed-interval")).toHaveTextContent(
+      "16:30–16:45, 08 Sep",
+    );
   });
 
   it("triggers Needs Attention with HIGH direction at +18% (above the 15% threshold), and Site Health reflects it", async () => {
@@ -462,6 +531,9 @@ describe("SiteOverview (MVP-3 -- Site Health & Attention)", () => {
 
     // Primary values are genuinely absent -- NoDataYet, not a fabricated value.
     await waitFor(() => expect(screen.getAllByTestId("state-no-data").length).toBeGreaterThanOrEqual(3));
+    expect(screen.getByTestId("site-overview-demand")).toHaveTextContent(
+      "No completed demand interval in the last 7 days.",
+    );
     expect(screen.queryByTestId("site-overview-energy-value")).toBeNull();
     expect(screen.queryByTestId("site-overview-demand-value")).toBeNull();
     expect(screen.queryByTestId("site-overview-pq-value")).toBeNull();

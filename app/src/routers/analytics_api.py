@@ -247,10 +247,12 @@ from src.analytics_api_service import (
     build_site_telemetry_freshness_response,
     build_sites_response,
     build_spaces_response,
+    demand_now,
     fetch_accessible_sites,
     fetch_asset_current_demand,
     fetch_asset_demand_series,
     fetch_asset_energy_intervals,
+    fetch_asset_last_completed_demand_interval,
     fetch_asset_live_state,
     fetch_asset_power_trend,
     fetch_site_assets,
@@ -263,6 +265,7 @@ from src.analytics_api_service import (
     fetch_alert_detail,
     fetch_site_alerts,
     fetch_site_energy_typical_reference,
+    fetch_site_last_completed_demand_interval,
     fetch_site_power_quality_series,
     fetch_site_spaces,
     fetch_site_telemetry_freshness,
@@ -854,24 +857,30 @@ async def get_asset_demand_series(
 @router.get(
     "/sites/{site_id}/assets/{asset_id}/demand/current",
     response_model=AssetCurrentDemandResponse,
-    summary="Asset's most recent live demand reading (Asset View)",
+    summary="Asset's current-interval demand, stale-guarded, plus last completed interval (Asset View)",
     operation_id="getAssetCurrentDemand",
     responses=_RESOURCE_RESPONSES,
 )
 async def get_asset_current_demand(
     request: Request, site_id: UUID, asset_id: UUID
 ) -> AssetCurrentDemandResponse:
-    """Reads analytics.demand_state only (scope_type='ASSET', migration
-    245) -- the live/current-interval table, distinct from the finalized
-    historical series above."""
+    """Reads analytics.demand_state (scope_type='ASSET', migration 245) --
+    the live/current-interval table -- under the T1.3a stale-demand guard,
+    plus the latest finalized interval from analytics.demand_intervals."""
 
     user = _require_portal_user(request)
 
     if not await portal_user_can_access_asset(user.portal_user_id, asset_id):
         raise _not_found("Asset")
 
+    now = demand_now()
     row = await fetch_asset_current_demand(user.portal_user_id, asset_id)
-    return build_asset_current_demand_response(asset_id=asset_id, row=row)
+    last_completed_row = await fetch_asset_last_completed_demand_interval(
+        user.portal_user_id, asset_id, now
+    )
+    return build_asset_current_demand_response(
+        asset_id=asset_id, row=row, last_completed_row=last_completed_row, now=now
+    )
 
 
 @router.get(
@@ -987,23 +996,30 @@ async def get_site_demand_series(
 @router.get(
     "/sites/{site_id}/demand/current",
     response_model=CurrentDemandResponse,
-    summary="Site's most recent live demand reading (Slice B)",
+    summary="Site's current-interval demand, stale-guarded, plus last completed interval (Slice B)",
     operation_id="getSiteCurrentDemand",
     responses=_RESOURCE_RESPONSES,
 )
 async def get_site_current_demand(
     request: Request, site_id: UUID
 ) -> CurrentDemandResponse:
-    """Reads analytics.demand_state only -- the live/current-interval
-    table, distinct from the finalized historical series above."""
+    """Reads analytics.demand_state -- the live/current-interval table --
+    under the T1.3a stale-demand guard, plus the latest finalized interval
+    from analytics.demand_intervals."""
 
     user = _require_portal_user(request)
 
     if not await portal_user_can_access_site(user.portal_user_id, site_id):
         raise _not_found("Site")
 
+    now = demand_now()
     row = await fetch_site_current_demand(user.portal_user_id, site_id)
-    return build_current_demand_response(site_id=site_id, row=row)
+    last_completed_row = await fetch_site_last_completed_demand_interval(
+        user.portal_user_id, site_id, now
+    )
+    return build_current_demand_response(
+        site_id=site_id, row=row, last_completed_row=last_completed_row, now=now
+    )
 
 
 @router.get(

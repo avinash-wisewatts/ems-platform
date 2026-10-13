@@ -96,6 +96,7 @@ import { FreshnessIndicator } from "../components/FreshnessIndicator";
 import { Loading } from "../components/states/Loading";
 import { ErrorState } from "../components/states/ErrorState";
 import { NoDataYet } from "../components/states/NoDataYet";
+import { LastCompletedDemand } from "../components/LastCompletedDemand";
 import { EmptyState } from "../components/states/EmptyState";
 
 type SectionStatus = "loading" | "ready" | "error";
@@ -425,15 +426,23 @@ export function SiteOverview() {
         {demand.unsupportedReason ? <NoDataYet message={demand.unsupportedReason} /> : null}
         {demand.status === "ready" && !demand.unsupportedReason && demand.current ? (
           <>
-            {demand.current.has_data ? (
+            {/* T1.3a (run 11): the last completed interval only, never a
+                provisional or in-progress value. */}
+            {demand.current.last_completed_interval ? (
               <p data-testid="site-overview-demand-value">
-                {demand.current.current_demand_kw?.toFixed(1) ?? "—"} kW
+                Last completed:{" "}
+                <LastCompletedDemand
+                  lastCompleted={demand.current.last_completed_interval}
+                  siteTimezone={selectedSite.timezone}
+                  testIdPrefix="site-overview-demand-last-completed"
+                  compact
+                />
                 {demandPeak ? (
                   <span data-testid="site-overview-demand-peak"> — peak {demandPeak.kw.toFixed(1)} kW</span>
                 ) : null}
               </p>
             ) : (
-              <NoDataYet />
+              <NoDataYet message="No completed demand interval in the last 7 days." />
             )}
             {/* MVP-4 fix: freshness renders independent of whether the
                 primary Demand value is present -- it must not disappear

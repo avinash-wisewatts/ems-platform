@@ -12,10 +12,10 @@ from __future__ import annotations
 
 import statistics
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 
 # ---------------------------------------------------------------------------
@@ -498,20 +498,40 @@ class DemandSeriesResponse(BaseModel):
     series: list[DemandIntervalPoint]
 
 
+CurrentDemandStatus = Literal["CURRENT", "STALE", "NO_VALUE", "MISSING"]
+
+
 class CurrentDemandResponse(BaseModel):
-    """The single most recent analytics.demand_state row for the site, if
-    any. has_data distinguishes "no demand_state row yet" from a genuine
-    reading -- there is no [from, to) window for a single current-state
-    read, so no_data would be misleading here."""
+    """The site's analytics.demand_state row, but only while its interval
+    is the interval actually in progress (T1.3a stale-demand guard).
+
+    demand_state is rewritten only when job 1078's finalization window
+    advances (~once per interval), so between writes its latest row can
+    belong to an interval that has already ended. That row must never be
+    presented as "current": has_data is true only when
+    interval_start <= evaluated_at < interval_end and a value exists
+    (current_status CURRENT). Otherwise every current field is null and
+    current_status says why -- STALE (latest row is for another interval),
+    NO_VALUE (current interval, but no calculated value) or MISSING (no
+    row at all).
+
+    last_completed_interval is the most recent finalized row from
+    analytics.demand_intervals (any quality_status, within the last
+    LAST_COMPLETED_DEMAND_LOOKBACK), so a screen without a current value
+    can still show the last completed interval with its own start/end and
+    status. It is reported whatever current_status is."""
 
     site_id: UUID
     has_data: bool
+    current_status: CurrentDemandStatus
+    evaluated_at: datetime
     interval_start: datetime | None = None
     interval_end: datetime | None = None
     current_demand_kw: float | None = None
     current_demand_kva: float | None = None
     quality_status: str | None = None
     coverage_percent: float | None = None
+    last_completed_interval: DemandIntervalPoint | None = None
 
 
 class AssetDemandSeriesResponse(BaseModel):
@@ -530,19 +550,21 @@ class AssetDemandSeriesResponse(BaseModel):
 
 
 class AssetCurrentDemandResponse(BaseModel):
-    """The single most recent analytics.demand_state row for the asset
-    (scope_type='ASSET', migration 245), if any. Same has_data distinction
-    as CurrentDemandResponse and the same reason: there is no [from, to)
-    window for a single current-state read."""
+    """The asset's analytics.demand_state row (scope_type='ASSET',
+    migration 245), under the same T1.3a stale-demand guard and with the
+    same last_completed_interval as CurrentDemandResponse."""
 
     asset_id: UUID
     has_data: bool
+    current_status: CurrentDemandStatus
+    evaluated_at: datetime
     interval_start: datetime | None = None
     interval_end: datetime | None = None
     current_demand_kw: float | None = None
     current_demand_kva: float | None = None
     quality_status: str | None = None
     coverage_percent: float | None = None
+    last_completed_interval: DemandIntervalPoint | None = None
 
 
 class AssetPowerTrendPoint(BaseModel):
@@ -1183,6 +1205,36 @@ async def fetch_site_current_demand(
     return rows[0] if rows else None
 
 
+# How far back the last completed demand interval is looked for. The read
+# goes through the existing tenant-scoped series functions (bounded by
+# interval_start), so the lookback also bounds its cost: at most 672 rows
+# for 15-minute intervals, scanned server-side, one row returned.
+LAST_COMPLETED_DEMAND_LOOKBACK = timedelta(days=7)
+
+
+def demand_now() -> datetime:
+    """The instant current demand is evaluated against. A function rather
+    than an inline datetime.now() so tests can pin it."""
+    return datetime.now(timezone.utc)
+
+
+async def fetch_site_last_completed_demand_interval(
+    portal_user_id: int, site_id: UUID, now: datetime
+) -> dict[str, Any] | None:
+    rows = await _read_rows(
+        """
+        SELECT interval_start, interval_end, demand_kw, peak_power_kw,
+               quality_status, coverage_percent
+        FROM analytics.get_portal_site_demand_series(%s, %s, %s, %s)
+        WHERE interval_end <= %s
+        ORDER BY interval_start DESC
+        LIMIT 1
+        """,
+        (portal_user_id, str(site_id), now - LAST_COMPLETED_DEMAND_LOOKBACK, now, now),
+    )
+    return rows[0] if rows else None
+
+
 async def fetch_asset_demand_series(
     *,
     portal_user_id: int,
@@ -1211,6 +1263,23 @@ async def fetch_asset_current_demand(
         FROM analytics.get_portal_asset_current_demand(%s, %s)
         """,
         (portal_user_id, str(asset_id)),
+    )
+    return rows[0] if rows else None
+
+
+async def fetch_asset_last_completed_demand_interval(
+    portal_user_id: int, asset_id: UUID, now: datetime
+) -> dict[str, Any] | None:
+    rows = await _read_rows(
+        """
+        SELECT interval_start, interval_end, demand_kw, peak_power_kw,
+               quality_status, coverage_percent
+        FROM analytics.get_portal_asset_demand_series(%s, %s, %s, %s)
+        WHERE interval_end <= %s
+        ORDER BY interval_start DESC
+        LIMIT 1
+        """,
+        (portal_user_id, str(asset_id), now - LAST_COMPLETED_DEMAND_LOOKBACK, now, now),
     )
     return rows[0] if rows else None
 
@@ -1617,32 +1686,84 @@ def build_demand_series_response(
     )
 
 
-def build_current_demand_response(
-    *, site_id: UUID, row: dict[str, Any] | None
-) -> CurrentDemandResponse:
+_INSTANT = TypeAdapter(datetime)
+
+
+def _optional_float(value: Any) -> float | None:
+    return float(value) if value is not None else None
+
+
+def _demand_interval_point(row: dict[str, Any] | None) -> DemandIntervalPoint | None:
     if row is None:
-        return CurrentDemandResponse(site_id=site_id, has_data=False)
-    return CurrentDemandResponse(
-        site_id=site_id,
-        has_data=True,
+        return None
+    return DemandIntervalPoint(
         interval_start=row["interval_start"],
         interval_end=row["interval_end"],
-        current_demand_kw=(
-            float(row["current_demand_kw"])
-            if row["current_demand_kw"] is not None
-            else None
-        ),
-        current_demand_kva=(
-            float(row["current_demand_kva"])
-            if row["current_demand_kva"] is not None
-            else None
-        ),
+        demand_kw=_optional_float(row["demand_kw"]),
+        peak_power_kw=_optional_float(row["peak_power_kw"]),
         quality_status=row["quality_status"],
-        coverage_percent=(
-            float(row["coverage_percent"])
-            if row["coverage_percent"] is not None
-            else None
-        ),
+        coverage_percent=_optional_float(row["coverage_percent"]),
+    )
+
+
+def _guarded_current_demand(
+    row: dict[str, Any] | None,
+    last_completed_row: dict[str, Any] | None,
+    now: datetime,
+) -> dict[str, Any]:
+    """The T1.3a stale-demand guard, shared by the site and asset reads.
+
+    A demand_state row is the current value only while its own interval
+    contains `now` (half-open, [interval_start, interval_end)). Interval
+    boundaries are the site-local wall-clock boundaries demand was
+    calculated on (analytics.resolve_demand_interval), stored as absolute
+    instants, so comparing instants is correct for any site timezone. A
+    timezone-naive `now` is rejected rather than guessed at.
+    """
+    if now.tzinfo is None:
+        raise ValueError("demand evaluation instant must be timezone-aware")
+
+    guarded: dict[str, Any] = {
+        "has_data": False,
+        "evaluated_at": now,
+        "last_completed_interval": _demand_interval_point(last_completed_row),
+    }
+    if row is None:
+        return {**guarded, "current_status": "MISSING"}
+
+    interval_start = _INSTANT.validate_python(row["interval_start"])
+    interval_end = _INSTANT.validate_python(row["interval_end"])
+    if not interval_start <= now < interval_end:
+        return {**guarded, "current_status": "STALE"}
+
+    current_kw = _optional_float(row["current_demand_kw"])
+    current_kva = _optional_float(row["current_demand_kva"])
+    if current_kw is None and current_kva is None:
+        return {**guarded, "current_status": "NO_VALUE"}
+
+    return {
+        **guarded,
+        "has_data": True,
+        "current_status": "CURRENT",
+        "interval_start": interval_start,
+        "interval_end": interval_end,
+        "current_demand_kw": current_kw,
+        "current_demand_kva": current_kva,
+        "quality_status": row["quality_status"],
+        "coverage_percent": _optional_float(row["coverage_percent"]),
+    }
+
+
+def build_current_demand_response(
+    *,
+    site_id: UUID,
+    row: dict[str, Any] | None,
+    last_completed_row: dict[str, Any] | None,
+    now: datetime,
+) -> CurrentDemandResponse:
+    return CurrentDemandResponse(
+        site_id=site_id,
+        **_guarded_current_demand(row, last_completed_row, now),
     )
 
 
@@ -1683,31 +1804,15 @@ def build_asset_demand_series_response(
 
 
 def build_asset_current_demand_response(
-    *, asset_id: UUID, row: dict[str, Any] | None
+    *,
+    asset_id: UUID,
+    row: dict[str, Any] | None,
+    last_completed_row: dict[str, Any] | None,
+    now: datetime,
 ) -> AssetCurrentDemandResponse:
-    if row is None:
-        return AssetCurrentDemandResponse(asset_id=asset_id, has_data=False)
     return AssetCurrentDemandResponse(
         asset_id=asset_id,
-        has_data=True,
-        interval_start=row["interval_start"],
-        interval_end=row["interval_end"],
-        current_demand_kw=(
-            float(row["current_demand_kw"])
-            if row["current_demand_kw"] is not None
-            else None
-        ),
-        current_demand_kva=(
-            float(row["current_demand_kva"])
-            if row["current_demand_kva"] is not None
-            else None
-        ),
-        quality_status=row["quality_status"],
-        coverage_percent=(
-            float(row["coverage_percent"])
-            if row["coverage_percent"] is not None
-            else None
-        ),
+        **_guarded_current_demand(row, last_completed_row, now),
     )
 
 

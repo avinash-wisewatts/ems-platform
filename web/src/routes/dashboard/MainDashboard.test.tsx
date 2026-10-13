@@ -5,7 +5,12 @@ import { MainDashboard } from "./MainDashboard";
 import { useTenant } from "../../tenant/TenantProvider";
 import { renderWithProviders, stubFetch, SITES_TWO_ORGS } from "../../test-utils";
 import { resolveEnergyUsageRequestRange } from "./energyUsage";
-import type { EnergyConsumptionPoint, EnergyConsumptionResponse, SiteEnergyAvailabilityResponse } from "../../api/types";
+import type {
+  CurrentDemandResponse,
+  EnergyConsumptionPoint,
+  EnergyConsumptionResponse,
+  SiteEnergyAvailabilityResponse,
+} from "../../api/types";
 
 // SITES_TWO_ORGS (test-utils.tsx): Alpha One / Alpha Two (Org A, timezone
 // Asia/Kolkata, UTC+5:30), Bravo One (Org B, timezone UTC). More than one
@@ -69,6 +74,7 @@ function stubDashboard(
   opts: {
     availability?: SiteEnergyAvailabilityResponse;
     energyUsage?: EnergyUsageStub | EnergyUsageStub[];
+    demandCurrent?: Partial<CurrentDemandResponse>;
   } = {},
 ) {
   const energyUsageStubs = opts.energyUsage ? ([] as EnergyUsageStub[]).concat(opts.energyUsage) : [];
@@ -91,12 +97,16 @@ function stubDashboard(
         jsonBody: {
           site_id: siteId,
           has_data: false,
+          current_status: "MISSING",
+          evaluated_at: FIXED_NOW.toISOString(),
           interval_start: null,
           interval_end: null,
           current_demand_kw: null,
           current_demand_kva: null,
           quality_status: null,
           coverage_percent: null,
+          last_completed_interval: null,
+          ...opts.demandCurrent,
         },
       };
     }
@@ -148,6 +158,88 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
 });
+
+describe("MainDashboard -- Demand KPI last completed interval (T1.3a)", () => {
+  // FIXED_NOW (09:00 UTC = 14:30 IST). The API's provisional value (61.2 kW,
+  // [09:00, 09:15) UTC, in progress) is in every fixture below and must
+  // never be shown.
+  const provisional = {
+    has_data: true,
+    current_status: "CURRENT" as const,
+    interval_start: "2026-09-19T09:00:00Z",
+    interval_end: "2026-09-19T09:15:00Z",
+    current_demand_kw: 61.2,
+    quality_status: "PROVISIONAL",
+  };
+
+  it("shows a VALID last completed interval's value and site-local time, never the provisional value", async () => {
+    stubDashboard(ALPHA_ONE.site_id, {
+      demandCurrent: {
+        ...provisional,
+        last_completed_interval: {
+          interval_start: "2026-09-19T08:30:00Z",
+          interval_end: "2026-09-19T08:45:00Z",
+          demand_kw: 57.4,
+          peak_power_kw: 60,
+          quality_status: "VALID",
+          coverage_percent: 100,
+        },
+      },
+    });
+    renderWithProviders(<DashboardHarness />, { sites: () => Promise.resolve(SITES_TWO_ORGS) });
+    await pickAlpha();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("dashboard-demand-last-completed-value")).toHaveTextContent("57.4 kW"),
+    );
+    // 08:30-08:45 UTC is 14:00-14:15 IST.
+    expect(screen.getByTestId("dashboard-demand-last-completed-interval")).toHaveTextContent("14:00–14:15, 19 Sep");
+    const kpi = screen.getByTestId("kpi-demand");
+    expect(kpi).toHaveTextContent("Last completed");
+    expect(kpi).not.toHaveTextContent("61.2");
+    expect(kpi).not.toHaveTextContent(/current|provisional/i);
+  });
+
+  it("shows an INCOMPLETE last completed interval as its status, not its value", async () => {
+    stubDashboard(ALPHA_ONE.site_id, {
+      demandCurrent: {
+        ...provisional,
+        last_completed_interval: {
+          interval_start: "2026-09-19T08:30:00Z",
+          interval_end: "2026-09-19T08:45:00Z",
+          demand_kw: 57.4,
+          peak_power_kw: 60,
+          quality_status: "INCOMPLETE",
+          coverage_percent: 80,
+        },
+      },
+    });
+    renderWithProviders(<DashboardHarness />, { sites: () => Promise.resolve(SITES_TWO_ORGS) });
+    await pickAlpha();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("dashboard-demand-last-completed-status")).toHaveTextContent(
+        "Incomplete data (80% coverage)",
+      ),
+    );
+    expect(screen.getByTestId("kpi-demand")).not.toHaveTextContent("57.4");
+    expect(screen.getByTestId("kpi-demand")).not.toHaveTextContent("61.2");
+  });
+
+  it("says so when there is no completed interval", async () => {
+    stubDashboard(ALPHA_ONE.site_id, { demandCurrent: provisional });
+    renderWithProviders(<DashboardHarness />, { sites: () => Promise.resolve(SITES_TWO_ORGS) });
+    await pickAlpha();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("dashboard-demand-last-completed-none")).toHaveTextContent(
+        "No completed interval in the last 7 days",
+      ),
+    );
+    expect(screen.getByTestId("kpi-demand")).not.toHaveTextContent("61.2");
+  });
+});
+
 
 describe("MainDashboard -- Energy Usage chart", () => {
   it("defaults to Today (site-local) at Hourly resolution -- never a rolling preset", async () => {

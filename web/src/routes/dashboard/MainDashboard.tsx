@@ -160,6 +160,8 @@ import { ChartFrame, type ChartPoint } from "../../components/ChartFrame";
 import { Loading } from "../../components/states/Loading";
 import { ErrorState } from "../../components/states/ErrorState";
 import { NoDataYet } from "../../components/states/NoDataYet";
+import { LastCompletedDemand } from "../../components/LastCompletedDemand";
+import { reliableDemandKw } from "../../components/demandInterval";
 import { EmptyState } from "../../components/states/EmptyState";
 
 type LoadStatus = "loading" | "ready" | "error";
@@ -281,8 +283,9 @@ function formatKw(value: number | null): string {
   return value.toFixed(1);
 }
 
+/** T1.3a: a non-VALID interval is a gap, never presented as reliable demand. */
 function toChartPoints(series: DemandSeriesResponse["series"]): ChartPoint[] {
-  return series.map((point) => ({ t: Date.parse(point.interval_start), value: point.demand_kw }));
+  return series.map((point) => ({ t: Date.parse(point.interval_start), value: reliableDemandKw(point) }));
 }
 
 function EnergyDelta({
@@ -850,12 +853,24 @@ export function MainDashboard() {
           {demand.status === "ready" ? (
             <dl className="kpi-card__stats">
               <div>
-                <dt>Current</dt>
-                {demand.current?.has_data ? (
-                  <dd>{formatKw(demand.current.current_demand_kw)} kW</dd>
-                ) : (
-                  <dd className="kpi-card__stat-unavailable">No data available</dd>
-                )}
+                {/* T1.3a (run 11): the last completed interval only,
+                    never a provisional or in-progress value. */}
+                <dt>Last completed</dt>
+                <dd
+                  className={
+                    demand.current?.last_completed_interval &&
+                    reliableDemandKw(demand.current.last_completed_interval) !== null
+                      ? undefined
+                      : "kpi-card__stat-unavailable"
+                  }
+                >
+                  <LastCompletedDemand
+                    lastCompleted={demand.current?.last_completed_interval}
+                    siteTimezone={selectedSite.timezone}
+                    testIdPrefix="dashboard-demand-last-completed"
+                    compact
+                  />
+                </dd>
               </div>
               <div>
                 <dt>Peak (Today)</dt>
