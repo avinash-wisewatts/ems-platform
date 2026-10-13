@@ -47,7 +47,7 @@
 --     and alert-materiality tiers keep their current latency.
 --
 -- CORRECTNESS (unchanged by cadence; see the PR and
--- scripts/test/assert_pipeline_five_minute_batch.sh)
+-- app/tests/test_pipeline_five_minute_batch_equivalence.py)
 --   * Normalization output is cadence-independent: deadline-gated selection
 --     from raw rows received by the deadline; every run rescans
 --     checkpoint - max(capture_interval + tolerance, overlap) (16 min today),

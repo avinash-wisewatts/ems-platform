@@ -283,7 +283,9 @@ timing.
 Freshness readers fed by normalization use their own threshold,
 `config.telemetry_availability_policy.normalized_receiving_threshold_seconds`
 (600 s, migration 299). They are the portal site freshness, the Grafana asset
-telemetry state and `analytics.v_device_telemetry_availability`. Raw-receipt
+telemetry state, `analytics.v_device_telemetry_availability` and the Grafana
+device list `analytics.v_grafana_devices` (device-diagnostics, organization and
+site overview dashboards). Raw-receipt
 connectivity, live tiles and gateway online status keep 300 s.
 
 Raw receipt state (job 1076), customer alert evaluation (job 1127, whose 3-minute

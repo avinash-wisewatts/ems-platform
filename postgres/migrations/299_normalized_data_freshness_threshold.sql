@@ -15,6 +15,10 @@
 --     * analytics.v_device_telemetry_availability       (admin telemetry
 --       validation, commissioning, v_grafana_active_alarms /
 --       v_grafana_asset_devices; migration 003)
+--   A fourth, analytics.v_grafana_devices (Grafana device-diagnostics,
+--   organization-overview and site-overview dashboards; baseline 001),
+--   computes the same state itself from normalized_points.created_at -- the
+--   normalization run's transaction start -- with a hard-coded 5 minutes.
 --   They share config.telemetry_availability_policy.receiving_threshold_
 --   seconds (300 s) with readers of RAW receipt and LIVE state, which do not
 --   depend on normalization. With normalization every 5 minutes (migration
@@ -23,7 +27,10 @@
 --   started at :x0:00; the next run is 5 minutes later), so at 300 s these
 --   three readers would report STALE / RECEIVING for roughly a third of every
 --   cycle while the device is healthy. Today (1-minute normalization) the
---   steady-state maximum is ~3 min 41 s.
+--   steady-state maximum is ~3 min 41 s. v_grafana_devices' newest created_at
+--   is ~300 s old when each batch starts, so at 5 minutes it would show
+--   RECEIVING for the seconds each batch takes to commit, and for a minute or
+--   more after a failed and retried normalization run.
 --
 -- WHAT
 --   1. config.telemetry_availability_policy gains
@@ -38,6 +45,12 @@
 --      v_device_telemetry_availability keeps its column list: its
 --      receiving_threshold_seconds column now reports the threshold the view
 --      applies (shown on the admin telemetry-validation page).
+--   3. analytics.v_grafana_devices reads the same column (DEFAULT policy;
+--      600 s if the row is missing, so the view never loses rows) instead of
+--      its hard-coded 5 minutes, and its constant receiving_threshold_seconds
+--      column (300) reports it. Its 15-minute stale and 1-hour silent rules,
+--      constant 900 / 3600 columns, column list, security_barrier and grants
+--      are unchanged.
 --      get_grafana_asset_telemetry_context's no-policy-row fallback becomes
 --      600 s (was 180 s), matching the new column default.
 --
@@ -58,7 +71,7 @@
 --   UPDATE config.telemetry_availability_policy
 --      SET normalized_receiving_threshold_seconds = receiving_threshold_seconds;
 --   restores today's behaviour without a schema change. Full reversal: re-run
---   the three definitions from migrations 237 / 019 / 003, then
+--   the four definitions from migrations 237 / 019 / 003 / 001, then
 --   ALTER TABLE config.telemetry_availability_policy
 --     DROP COLUMN normalized_receiving_threshold_seconds;
 -- ============================================================================
@@ -88,6 +101,13 @@ BEGIN
        OR to_regclass('analytics.v_device_telemetry_availability') IS NULL THEN
         RAISE EXCEPTION 'Migration 299: one of the three normalized-data freshness readers is missing';
     END IF;
+    -- v_grafana_devices: the reviewed starting point (baseline 001 body, as on
+    -- staging 2026-10-13: hard-coded 5 minutes and constant 300).
+    IF to_regclass('analytics.v_grafana_devices') IS NULL
+       OR position('''00:05:00''::interval' IN pg_get_viewdef('analytics.v_grafana_devices'::regclass)) = 0
+       OR position('300 AS receiving_threshold_seconds' IN pg_get_viewdef('analytics.v_grafana_devices'::regclass)) = 0 THEN
+        RAISE EXCEPTION 'Migration 299: analytics.v_grafana_devices is missing or not the reviewed definition';
+    END IF;
 END
 $pre$;
 
@@ -104,6 +124,13 @@ WHERE p.oid IN (
     'admin.get_portal_asset_live_state(bigint,uuid,timestamptz)'::regprocedure
 );
 
+CREATE TEMP TABLE m299_grafana_devices_before ON COMMIT DROP AS
+SELECT c.relowner, c.reloptions, c.relacl,
+       (SELECT array_agg(a.attname::text || ':' || format_type(a.atttypid, a.atttypmod) ORDER BY a.attnum)
+        FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped) AS columns
+FROM pg_class c
+WHERE c.oid = 'analytics.v_grafana_devices'::regclass;
+
 -- ----------------------------------------------------------------------------
 -- 1. The threshold
 -- ----------------------------------------------------------------------------
@@ -116,7 +143,7 @@ ALTER TABLE config.telemetry_availability_policy
            AND normalized_receiving_threshold_seconds < stale_threshold_seconds);
 
 COMMENT ON COLUMN config.telemetry_availability_policy.normalized_receiving_threshold_seconds IS
-'Freshness threshold for NORMALIZED telemetry (device_telemetry_state.latest_valid_received_timestamp): FRESH / VALIDATED while the newest valid normalized sample was received within this many seconds. Used by analytics.get_portal_site_telemetry_freshness, analytics.get_grafana_asset_telemetry_context and analytics.v_device_telemetry_availability. Must cover the normalization batch cadence (5 minutes, migration 300) plus capture finalization (~2 min 40 s). Raw-receipt and live-state readers keep receiving_threshold_seconds. Migration 299.';
+'Freshness threshold for NORMALIZED telemetry (device_telemetry_state.latest_valid_received_timestamp): FRESH / VALIDATED while the newest valid normalized sample was received within this many seconds. Used by analytics.get_portal_site_telemetry_freshness, analytics.get_grafana_asset_telemetry_context, analytics.v_device_telemetry_availability and analytics.v_grafana_devices. Must cover the normalization batch cadence (5 minutes, migration 300) plus capture finalization (~2 min 40 s). Raw-receipt and live-state readers keep receiving_threshold_seconds. Migration 299.';
 
 -- ----------------------------------------------------------------------------
 -- 2. analytics.get_portal_site_telemetry_freshness (migration 237 body; only
@@ -498,6 +525,139 @@ LEFT JOIN asset_association aa ON aa.device_id=d.id
 CROSS JOIN policy p;
 
 -- ----------------------------------------------------------------------------
+-- 5. analytics.v_grafana_devices (baseline 001 body; only the VALIDATED
+--    window and the receiving_threshold_seconds column change)
+-- ----------------------------------------------------------------------------
+CREATE OR REPLACE VIEW analytics.v_grafana_devices
+WITH (security_barrier = TRUE)
+AS
+WITH profile_mapping AS (
+    SELECT
+        profile_id,
+        count(*)::BIGINT AS mapped_point_count,
+        count(*) FILTER (WHERE is_required)::BIGINT
+            AS required_point_count
+    FROM config.profile_field_mapping
+    GROUP BY profile_id
+),
+telemetry_rollup AS (
+    SELECT
+        np.device_id,
+        max(np.event_time) AS latest_source_timestamp,
+        max(np.created_at) AS latest_received_timestamp,
+        max(np.event_time) FILTER (
+            WHERE coalesce(np.quality_code, 'GOOD')
+                    NOT IN (
+                        'INVALID',
+                        'REJECTED',
+                        'INVALID_NUMERIC'
+                    )
+              AND (
+                    np.numeric_value IS NOT NULL
+                    OR nullif(btrim(np.raw_value), '') IS NOT NULL
+              )
+        ) AS latest_valid_source_timestamp,
+        max(np.created_at) FILTER (
+            WHERE coalesce(np.quality_code, 'GOOD')
+                    NOT IN (
+                        'INVALID',
+                        'REJECTED',
+                        'INVALID_NUMERIC'
+                    )
+              AND (
+                    np.numeric_value IS NOT NULL
+                    OR nullif(btrim(np.raw_value), '') IS NOT NULL
+              )
+        ) AS latest_valid_received_timestamp
+    FROM telemetry.normalized_points np
+    GROUP BY np.device_id
+),
+policy AS (
+    -- Migration 299: normalized-data threshold (600 s); always one row.
+    SELECT coalesce(
+        (SELECT tap.normalized_receiving_threshold_seconds
+         FROM config.telemetry_availability_policy tap
+         WHERE tap.policy_key = 'DEFAULT'),
+        600
+    )::INTEGER AS normalized_receiving_threshold_seconds
+)
+SELECT
+    gom.grafana_org_id,
+    d.organization_id,
+    g.site_id,
+    s.code AS site_code,
+    s.name AS site_name,
+    g.id AS gateway_id,
+    g.name AS gateway_name,
+    d.id AS device_id,
+    d.name AS device_name,
+    d.external_id,
+    d.serial_number,
+    d.firmware_version,
+    d.protocol,
+    d.lifecycle_status,
+    dm.vendor,
+    dm.model AS device_model,
+    dc.name AS device_category,
+    dp.profile_code,
+    CASE
+        WHEN d.profile_id IS NULL THEN 'INVALID_PROFILE'
+        WHEN coalesce(pm.mapped_point_count, 0) = 0 THEN 'UNMAPPED'
+        ELSE 'VALIDATED'
+    END AS configuration_state,
+    CASE
+        WHEN tr.latest_received_timestamp IS NULL THEN 'NEVER_SEEN'
+        WHEN tr.latest_received_timestamp
+             < now() - interval '1 hour'
+        THEN 'SILENT'
+        WHEN d.profile_id IS NULL THEN 'INVALID_PROFILE'
+        WHEN coalesce(pm.mapped_point_count, 0) = 0 THEN 'UNMAPPED'
+        WHEN tr.latest_valid_source_timestamp IS NULL THEN 'RECEIVING'
+        WHEN tr.latest_valid_source_timestamp
+             < now() - interval '15 minutes'
+        THEN 'STALE'
+        WHEN tr.latest_valid_received_timestamp
+             >= now() - make_interval(secs => pol.normalized_receiving_threshold_seconds)
+        THEN 'VALIDATED'
+        ELSE 'RECEIVING'
+    END AS telemetry_state,
+    tr.latest_source_timestamp,
+    tr.latest_received_timestamp,
+    tr.latest_valid_source_timestamp,
+    tr.latest_valid_received_timestamp,
+    coalesce(pm.mapped_point_count, 0)::BIGINT
+        AS mapped_point_count,
+    coalesce(pm.required_point_count, 0)::BIGINT
+        AS required_point_count,
+    pol.normalized_receiving_threshold_seconds AS receiving_threshold_seconds,
+    900::INTEGER AS stale_threshold_seconds,
+    3600::INTEGER AS silent_threshold_seconds,
+    EXTRACT(
+        EPOCH FROM (
+            now() - tr.latest_received_timestamp
+        )
+    )::BIGINT AS data_age_seconds
+FROM metadata.grafana_organization_map gom
+JOIN metadata.devices d
+  ON d.organization_id = gom.organization_id
+LEFT JOIN metadata.gateways g
+  ON g.id = d.gateway_id
+LEFT JOIN metadata.sites s
+  ON s.id = g.site_id
+LEFT JOIN metadata.device_models dm
+  ON dm.id = d.device_model_id
+LEFT JOIN config.device_categories dc
+  ON dc.id = dm.device_category_id
+LEFT JOIN config.device_profiles dp
+  ON dp.id = d.profile_id
+LEFT JOIN profile_mapping pm
+  ON pm.profile_id = d.profile_id
+LEFT JOIN telemetry_rollup tr
+  ON tr.device_id = d.id
+CROSS JOIN policy pol
+WHERE gom.is_active = TRUE;
+
+-- ----------------------------------------------------------------------------
 -- Postconditions
 -- ----------------------------------------------------------------------------
 DO $post$
@@ -516,7 +676,7 @@ BEGIN
         RAISE EXCEPTION 'Migration 299: policy rows changed unexpectedly: %', v_bad;
     END IF;
 
-    -- The three normalized-data readers use the new column for the decision.
+    -- The four normalized-data readers use the new column for the decision.
     v_def := pg_get_functiondef('analytics.get_portal_site_telemetry_freshness(bigint,uuid,timestamptz)'::regprocedure);
     IF position('p.normalized_receiving_threshold_seconds' IN v_def) = 0
        OR position('p.receiving_threshold_seconds' IN v_def) > 0 THEN
@@ -530,6 +690,25 @@ BEGIN
     v_def := pg_get_viewdef('analytics.v_device_telemetry_availability'::regclass);
     IF position('normalized_receiving_threshold_seconds' IN v_def) = 0 THEN
         RAISE EXCEPTION 'Migration 299: v_device_telemetry_availability does not read the normalized threshold';
+    END IF;
+    v_def := pg_get_viewdef('analytics.v_grafana_devices'::regclass);
+    IF position('normalized_receiving_threshold_seconds' IN v_def) = 0
+       OR position('''00:05:00''::interval' IN v_def) > 0
+       OR position('''00:15:00''::interval' IN v_def) = 0
+       OR position('''01:00:00''::interval' IN v_def) = 0 THEN
+        RAISE EXCEPTION 'Migration 299: v_grafana_devices does not read the normalized threshold (or lost its stale / silent rules)';
+    END IF;
+    -- Same owner, options (security_barrier), grants and column list.
+    IF EXISTS (
+        SELECT 1
+        FROM m299_grafana_devices_before b, pg_class c
+        WHERE c.oid = 'analytics.v_grafana_devices'::regclass
+          AND (c.relowner, c.reloptions, c.relacl,
+               (SELECT array_agg(a.attname::text || ':' || format_type(a.atttypid, a.atttypmod) ORDER BY a.attnum)
+                FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped))
+              IS DISTINCT FROM (b.relowner, b.reloptions, b.relacl, b.columns)
+    ) THEN
+        RAISE EXCEPTION 'Migration 299: v_grafana_devices owner / options / grants / columns changed';
     END IF;
 
     -- Raw-receipt and live-state readers are byte-for-byte unchanged and still
@@ -558,6 +737,6 @@ BEGIN
         RAISE EXCEPTION 'Migration 299: get_portal_site_telemetry_freshness lost SECURITY DEFINER / STABLE / owner / search_path';
     END IF;
 
-    RAISE NOTICE 'Migration 299: normalized_receiving_threshold_seconds = 600 s; 3 normalized-data readers switched; raw/live readers unchanged (300 s)';
+    RAISE NOTICE 'Migration 299: normalized_receiving_threshold_seconds = 600 s; 4 normalized-data readers switched; raw/live readers unchanged (300 s)';
 END
 $post$;

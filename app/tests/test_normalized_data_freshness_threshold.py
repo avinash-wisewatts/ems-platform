@@ -2,9 +2,10 @@
 telemetry (config.telemetry_availability_policy.normalized_receiving_
 threshold_seconds, default 600 s).
 
-The three readers fed by normalization (portal site freshness, Grafana asset
-telemetry context, v_device_telemetry_availability) treat data aged up to
-600 s as fresh and older data as stale. Raw-receipt connectivity and live-tile
+The four readers fed by normalization (portal site freshness, Grafana asset
+telemetry context, v_device_telemetry_availability, and the Grafana device list
+v_grafana_devices) treat data aged up to 600 s as fresh and older data as
+stale. Raw-receipt connectivity and live-tile
 state keep the 300 s receiving_threshold_seconds.
 
 Runs against the disposable ems_test database (see conftest.py). Every
@@ -358,3 +359,116 @@ def test_live_tiles_keep_300_seconds(tx, age, expected):
         (ids["grafana_org"], ids["asset"], T0),
     )[0]
     assert state == expected
+
+
+# ---------------------------------------------------------------------------
+# analytics.v_grafana_devices (Grafana device list; R19-1)
+#
+# This view derives the state itself from normalized_points.created_at, which
+# is the normalization run's transaction start. Under migration 300 a batch
+# runs every 5 minutes at +2:40, so just before the next batch commits the
+# newest created_at is 300 s plus the commit time old. A failed run is
+# retried after retry_period (1 min) * 2^(n-1), +/- ~13 % jitter, capped at
+# the next 5-minute slot. Ages below are "seconds since the last successful
+# batch started" at the moment Grafana queries the view.
+# ---------------------------------------------------------------------------
+
+
+def _normalized_row(conn, ids, now, *, created_age, source_age=None, valid=True):
+    """One normalized sample written by a batch that started `created_age`
+    seconds before now; its event_time is ~100 s older (staging: 102.6 s)."""
+    source_age = created_age + 100 if source_age is None else source_age
+    point = _one(conn, "SELECT id FROM metadata.logical_points WHERE name = 'ACTIVE_POWER_TOTAL'")[0]
+    conn.execute(
+        """
+        INSERT INTO telemetry.normalized_points
+            (event_time, organization_id, site_id, gateway_id, device_id, logical_point_id,
+             device_uid, logical_point, raw_field_name, raw_value, numeric_value, quality_code,
+             mapping_source, created_at)
+        VALUES (%s, %s, %s, %s, %s, %s, 'm299', 'ACTIVE_POWER_TOTAL', 'P', %s, %s, %s, 'DEVICE_PROFILE', %s)
+        """,
+        (now - timedelta(seconds=source_age), ids["org"], ids["site"], ids["gw"], ids["dev"], point,
+         "1.0" if valid else None, 1.0 if valid else None, "GOOD" if valid else "INVALID",
+         now - timedelta(seconds=created_age)),
+    )
+
+
+def _grafana_devices(conn, ids):
+    return _one(
+        conn,
+        "SELECT telemetry_state, receiving_threshold_seconds, stale_threshold_seconds, silent_threshold_seconds "
+        "FROM analytics.v_grafana_devices WHERE device_id = %s",
+        (ids["dev"],),
+    )
+
+
+def test_grafana_devices_view_reads_the_normalized_threshold(tx):
+    v = _one(tx, "SELECT pg_get_viewdef('analytics.v_grafana_devices'::regclass)")[0]
+    assert "normalized_receiving_threshold_seconds" in v
+    assert "'00:05:00'::interval" not in v
+    # Stale (15 min) and silent (1 h) rules are unchanged.
+    assert "'00:15:00'::interval" in v and "'01:00:00'::interval" in v
+
+
+def test_grafana_devices_view_keeps_security_barrier_and_grafana_grant(tx):
+    opts = _one(tx, "SELECT reloptions FROM pg_class WHERE oid = 'analytics.v_grafana_devices'::regclass")[0]
+    assert "security_barrier=true" in (opts or [])
+    if _one(tx, "SELECT 1 FROM pg_roles WHERE rolname = 'grafana_reader'"):
+        assert _one(tx, "SELECT has_table_privilege('grafana_reader', 'analytics.v_grafana_devices', 'SELECT')")[0]
+
+
+@pytest.mark.parametrize(
+    "scenario,age",
+    [
+        ("batch just committed", 0),
+        ("mid-cycle", 150),
+        ("next batch due", 300),
+        ("next batch committing (300 s + 3 s)", 303),   # RECEIVING under the old 5-minute rule
+        ("next batch slow (300 s + 30 s)", 330),
+        ("one failed run, retried after 1 min (+13 % jitter)", 368),
+        ("two failed runs, second retry after 2 more min (+13 %)", 500),
+        ("three failed runs, retry capped at the next slot", 600),
+    ],
+)
+def test_grafana_devices_validated_through_batching_and_retries(tx, scenario, age):
+    ids = _fixture(tx)
+    now = _one(tx, "SELECT now()")[0]
+    _normalized_row(tx, ids, now, created_age=age)
+    assert _grafana_devices(tx, ids) == ("VALIDATED", 600, 900, 3600), scenario
+
+
+@pytest.mark.parametrize(
+    "scenario,age,expected",
+    [
+        ("just past the threshold", 601, "RECEIVING"),
+        ("a whole batch missed", 700, "RECEIVING"),
+        ("normalization stopped: source older than 15 min", 801, "STALE"),
+        ("no normalized data for an hour", 3601, "SILENT"),
+    ],
+)
+def test_grafana_devices_flags_missed_batches_and_outages(tx, scenario, age, expected):
+    ids = _fixture(tx)
+    now = _one(tx, "SELECT now()")[0]
+    _normalized_row(tx, ids, now, created_age=age)
+    assert _grafana_devices(tx, ids)[0] == expected, scenario
+
+
+def test_grafana_devices_threshold_is_configurable(tx):
+    ids = _fixture(tx)
+    tx.execute("UPDATE config.telemetry_availability_policy SET normalized_receiving_threshold_seconds = 450 "
+               "WHERE policy_key = 'DEFAULT'")
+    now = _one(tx, "SELECT now()")[0]
+    _normalized_row(tx, ids, now, created_age=450)
+    assert _grafana_devices(tx, ids) == ("VALIDATED", 450, 900, 3600)
+    tx.execute("DELETE FROM telemetry.normalized_points WHERE device_id = %s", (ids["dev"],))
+    _normalized_row(tx, ids, now, created_age=451)
+    assert _grafana_devices(tx, ids)[0] == "RECEIVING"
+
+
+def test_grafana_devices_never_seen_and_invalid_only(tx):
+    ids = _fixture(tx)
+    assert _grafana_devices(tx, ids)[0] == "NEVER_SEEN"
+    now = _one(tx, "SELECT now()")[0]
+    _normalized_row(tx, ids, now, created_age=10, valid=False)
+    # Received, but no valid reading yet.
+    assert _grafana_devices(tx, ids)[0] == "RECEIVING"
