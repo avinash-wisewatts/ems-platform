@@ -88,10 +88,10 @@ def test_installed_bodies_owner_and_search_path():
             assert config and config[0].startswith("search_path=pg_catalog"), name
 
 
-def test_manifest_registers_migration_297_last():
+def test_manifest_registers_migration_297():
     manifest = ROOT / "postgres" / "restructure_manifest.csv"
     rows = [r for r in csv.DictReader(manifest.read_text(encoding="utf-8").splitlines()) if r["target_category"] == "migration"]
-    assert rows[-1]["source_file"] == "297_reconcile_window_grain_alignment.sql"
-    assert rows[-1]["target_path"] == "postgres/migrations/297_reconcile_window_grain_alignment.sql"
     files = [r["source_file"] for r in rows]
+    row = rows[files.index("297_reconcile_window_grain_alignment.sql")]
+    assert row["target_path"] == "postgres/migrations/297_reconcile_window_grain_alignment.sql"
     assert files.index("297_reconcile_window_grain_alignment.sql") > files.index("295_standin_energy_assignment_narrowing.sql")

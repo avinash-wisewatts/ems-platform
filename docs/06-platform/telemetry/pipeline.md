@@ -238,6 +238,15 @@ frontier, distinct from a routing ingest-time watermark. Finalization is a
 `NO_DATA`/`INCOMPLETE` interval is repaired once late source data allows a
 better result.
 
+Since migration 298 the job runs every 15 minutes at UTC quarter-hour + 7
+minutes (:07, :22, :37, :52), not every minute. The checkpoint advances in
+15-minute steps whatever the cadence, so the schedule changes only when work
+happens: each slot comes after the job's grace (late-arrival tolerance + 5
+minutes = 5 min 30 s), finalizing the interval that just ended about 7
+minutes after its end; a missed or failed slot is caught up by the next run
+(up to `max_catchup_window`, 6 hours, per run). Every real-world UTC offset
+is a multiple of 15 minutes, so the slots line up with site-local intervals.
+
 ### environment_daily tier: watermark over site-local days (migration 211)
 
 `telemetry.run_environment_daily_job`'s parent availability is

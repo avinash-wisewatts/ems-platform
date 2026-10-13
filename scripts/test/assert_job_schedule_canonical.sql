@@ -143,7 +143,8 @@ BEGIN
             ('analytics', 'run_energy_consumption_15min_job',  INTERVAL '5 minutes', INTERVAL '5 minutes',  '2 hours'),
             ('analytics', 'run_energy_consumption_hourly_job', INTERVAL '15 minutes',INTERVAL '10 minutes', '2 days'),
             ('analytics', 'run_energy_consumption_daily_job',  INTERVAL '1 hour',    INTERVAL '10 minutes', '8 days'),
-            ('analytics', 'run_demand_calculation_job',        INTERVAL '1 minute',  INTERVAL '10 minutes', '3 hours'),
+            -- migration 298 (plan T1.3c-1): demand every 15 minutes, quarter-hour + 7 min
+            ('analytics', 'run_demand_calculation_job',        INTERVAL '15 minutes', INTERVAL '10 minutes', '3 hours'),
             ('telemetry', 'run_environment_daily_job',         INTERVAL '1 hour',    INTERVAL '10 minutes', '8 days')
         ) AS t(sch, prc, sched, mrt, lookback)
     LOOP
