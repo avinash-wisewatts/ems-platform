@@ -158,6 +158,10 @@ echo "[demand-watermark-refinalization] Running demand watermark + re-finalizati
 "${SCRIPT_DIR}/assert_demand_watermark_refinalization.sh"
 
 echo
+echo "[demand-job-quarter-hour-schedule] Running demand job 15-minute schedule (migration 298) assertions..."
+"${SCRIPT_DIR}/assert_demand_job_quarter_hour_schedule.sh"
+
+echo
 echo "[environment-daily-watermark] Running environment_daily watermark assertions..."
 "${SCRIPT_DIR}/assert_environment_daily_watermark.sh"
 
