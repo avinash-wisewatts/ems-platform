@@ -1,7 +1,7 @@
 # Deadlocks between normalization and raw-receipt-state jobs (migration 301)
 
-Status: STAGING VALIDATION PENDING (production unchanged) · Last reviewed: 2026-10-14
-Verification basis: Production (read-only), Repository, local test database
+Status: DEPLOYED TO STAGING, NOT ON PRODUCTION · Last reviewed: 2026-10-14
+Verification basis: Production (read-only), Staging (read-only), Repository, local test database
 
 ## Symptom
 
@@ -105,7 +105,59 @@ grant.
   statement text instead, and the md5 check proves that text is the
   procedure's.
 
-Staging and production results are recorded below when they exist.
+## Staging results (2026-10-14, read-only)
+
+PR #135 squash-merged as `b1c8b09` at 13:08 UTC. "Deploy to Staging" run
+38569347439 succeeded: all CI gates passed, the artifact was deployed and
+post-deployment verification passed.
+
+- **Migrations:** the runner printed `SKIP` for 298–300 (already applied) and
+  `APPLY` for 301 only. In the ledger, 301 was applied 2026-10-14 13:17:00 UTC
+  by `ems_admin` in 65 ms (sha256 `3568c0a8ba7f…`). The 299/300 rows still have
+  their 2026-10-14 11:36 UTC times.
+- **Gates:** the required Database Structure, Metadata Integrity and Energy
+  Routing gates passed, as did the advisory Job Verification. The advisory
+  Telemetry Pipeline check failed, but only because `energy_consumption_5min`
+  reports `NO_SOURCE_DATA`, a known staging commissioning gap that predates
+  this change.
+- **Bodies:**
+
+  | Procedure | md5 now | md5 with the added line removed |
+  |---|---|---|
+  | `load_normalized_points_incremental` | `f1b39ab20a2cd3a4059147d0bb1bef8e` | `cb1b3f00129bbc2c6c8e85b06905e540` |
+  | `load_device_raw_receipt_state_incremental` | `7e2112edee424957ea00289ce449a622` | `e9b3522a2e4189ad8d34eb885b875303` |
+
+  Both "now" values equal the 301 pins. Removing the one added line gives
+  exactly the previous md5, so the added line is the only difference. Owner
+  (`ems_admin`), `SECURITY INVOKER` and `proconfig` (none) are unchanged.
+- **Plans:** plain `EXPLAIN` was run on the installed upsert text, with the
+  temporary batch table replaced by a `generate_series` subquery. Before 301,
+  the job 1000 plan fed the Insert straight from a `HashAggregate`, and the
+  raw-receipt plan had no Sort. After 301, both plans put a
+  `Sort (Sort Key: device_id)` directly under the Insert; in job 1000 it sits
+  above the `HashAggregate`.
+- **Jobs**, from the 301 apply (13:17 UTC) to 14:01 UTC:
+
+  | Staging job | Function | Runs | New failures | Cumulative failures |
+  |---|---|---|---|---|
+  | 1000 `run_normalization_job` | every 5 min at +2:40, about 2.4 s | 9 | 0 | 106 (unchanged) |
+  | 1076 `run_raw_receipt_state_job` | every minute | about 44 | 0 | 81 (unchanged) |
+  | 1060 `policy_refresh_continuous_aggregate` | `ca_energy_1min` refresh; on production, 1060 is the raw-receipt job | 9 | 0 | 0 |
+
+  - No `job_errors` entry for these jobs in the last 24 h.
+  - Staging has never recorded a `40P01`.
+  - `timescaledb.enable_job_execution_logging` is off, so `job_history` holds
+    failures only, and it has none since 301 was applied.
+  - Run counts are derived from the schedule and from `job_stats` (last run
+    `Success`, failure counts unchanged).
+- **Limit of this evidence:** staging cannot reproduce the race. Job 1000
+  runs at second :40 for about 2.4 s, and 1076 starts at second :49, so the two
+  never overlap and staging never deadlocked. Staging shows that 301 applies
+  cleanly, installs the intended bodies and plans, and causes no regressions.
+  The lock-order fix itself is proven by the multi-session integration test
+  (above). On production, the proof is days with no `40P01`.
+
+Production results are recorded here when they exist.
 
 ## Checks after deploying (read-only)
 
