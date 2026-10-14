@@ -69,7 +69,8 @@ BEGIN
     -- ---- TEST B: finite runtime / retry / validator per job ----
     FOR v_expected IN
         SELECT * FROM (VALUES
-            ('analytics','run_energy_consumption_1min_job',   INTERVAL '1 minute',  INTERVAL '5 minutes',  '30 minutes'),
+            -- migration 300: 1-minute tier every 5 minutes (5-minute batch pipeline)
+            ('analytics','run_energy_consumption_1min_job',   INTERVAL '5 minutes', INTERVAL '5 minutes',  '30 minutes'),
             ('analytics','run_energy_consumption_5min_job',   INTERVAL '1 minute',  INTERVAL '5 minutes',  '30 minutes'),
             ('analytics','run_energy_consumption_15min_job',  INTERVAL '5 minutes', INTERVAL '5 minutes',  '2 hours'),
             ('analytics','run_energy_consumption_hourly_job', INTERVAL '15 minutes',INTERVAL '10 minutes', '2 days'),

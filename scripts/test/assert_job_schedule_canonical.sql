@@ -9,7 +9,9 @@
 -- docs/operations/CICD_PIPELINE.md and scripts/verify/verify_jobs.sh, and
 -- reasserted by postgres/migrations/194_fix_job_schedule_drift.sql:
 --
---   schedule_interval = 1 minute
+--   schedule_interval = 5 minutes, fixed_schedule, UTC 5-minute grid + phase
+--                       (migration 300: normalization +2:40, energy routing
+--                       +4:10, environment routing +4:15; was 1 minute)
 --   max_runtime       = 5 minutes
 --   max_retries       = 3
 --   retry_period      = 1 minute
@@ -43,6 +45,8 @@ BEGIN
         SELECT
             job_id,
             schedule_interval,
+            fixed_schedule,
+            initial_start,
             max_runtime,
             max_retries,
             retry_period,
@@ -60,8 +64,18 @@ BEGIN
             CONTINUE;
         END IF;
 
-        IF v_job.schedule_interval IS DISTINCT FROM INTERVAL '1 minute' THEN
-            v_failures := array_append(v_failures, format('%s schedule_interval is %s, expected 1 minute', v_proc_name, v_job.schedule_interval));
+        IF v_job.schedule_interval IS DISTINCT FROM INTERVAL '5 minutes' THEN
+            v_failures := array_append(v_failures, format('%s schedule_interval is %s, expected 5 minutes (migration 300)', v_proc_name, v_job.schedule_interval));
+        END IF;
+
+        IF NOT v_job.fixed_schedule
+           OR extract(epoch FROM v_job.initial_start)::bigint % 300
+              IS DISTINCT FROM (CASE v_proc_name
+                  WHEN 'run_normalization_job'       THEN 160
+                  WHEN 'run_energy_routing_job'      THEN 250
+                  WHEN 'run_environment_routing_job' THEN 255
+              END) THEN
+            v_failures := array_append(v_failures, format('%s is not on its fixed 5-minute phase (initial_start %s)', v_proc_name, v_job.initial_start));
         END IF;
 
         IF v_job.max_runtime IS DISTINCT FROM INTERVAL '5 minutes' THEN
@@ -138,7 +152,8 @@ DECLARE
 BEGIN
     FOR v_exp IN
         SELECT * FROM (VALUES
-            ('analytics', 'run_energy_consumption_1min_job',   INTERVAL '1 minute',  INTERVAL '5 minutes',  '30 minutes'),
+            -- migration 300: 1-minute tier every 5 minutes (5-minute batch pipeline)
+            ('analytics', 'run_energy_consumption_1min_job',   INTERVAL '5 minutes', INTERVAL '5 minutes',  '30 minutes'),
             ('analytics', 'run_energy_consumption_5min_job',   INTERVAL '1 minute',  INTERVAL '5 minutes',  '30 minutes'),
             ('analytics', 'run_energy_consumption_15min_job',  INTERVAL '5 minutes', INTERVAL '5 minutes',  '2 hours'),
             ('analytics', 'run_energy_consumption_hourly_job', INTERVAL '15 minutes',INTERVAL '10 minutes', '2 days'),

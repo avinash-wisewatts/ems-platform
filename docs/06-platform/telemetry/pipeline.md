@@ -1,6 +1,6 @@
 # Telemetry Pipeline: Physical Device → Grafana
 
-Status: CURRENT · Last reviewed: 2026-10-08
+Status: CURRENT · Last reviewed: 2026-10-13 (5-minute batch cadence, migrations 299–300, pending staging deployment)
 Verification basis: Staging (live, end-to-end trace across 22 real Meenaxy Pharma devices) + Repository + Production (2026-08-30: migrations 216–222 promoted, Job 1000 bounded-window catch-up observed live)
 
 This is the verified, currently-operating data path — not a design
@@ -246,6 +246,51 @@ minutes = 5 min 30 s), finalizing the interval that just ended about 7
 minutes after its end; a missed or failed slot is caught up by the next run
 (up to `max_catchup_window`, 6 hours, per run). Every real-world UTC offset
 is a multiple of 15 minutes, so the slots line up with site-local intervals.
+
+### Ingest cadence: 5-minute batches (migrations 299–300)
+
+Since migration 300, normalization, both routing jobs, the `ca_energy_1min`
+and `ca_energy_phase_power_1min` refreshes and the 1-minute consumption job run
+every 5 minutes on a fixed UTC grid, each phased after the stage it reads:
+
+| Stage | Phase after each 5-minute boundary |
+|---|---|
+| Normalization (`run_normalization_job`) | +2:40 |
+| Energy routing / environment routing | +4:10 / +4:15 |
+| `ca_energy_1min` / `ca_energy_phase_power_1min` refresh | +4:40 / +4:45 |
+| 1-minute consumption (`run_energy_consumption_1min_job`) | +5:00 |
+
+Results do not depend on cadence. Normalization finalizes a capture bucket
+only after its deadline (bucket start + capture interval + late-arrival
+tolerance) and selects the newest sample received by then; the first selection
+is final, and every run rescans the checkpoint minus the largest
+interval + tolerance. One 5-minute run therefore equals five 1-minute runs
+(`app/tests/test_pipeline_five_minute_batch_equivalence.py`).
+
+The +2:40 phase is fitted to the demand job. Its source frontier reaches a
+quarter-hour E only once the bucket starting at E (deadline E+2:00) is
+normalized and routed, and that has to happen before the E+7:00 slot.
+
+Newest data is about 2–4 minutes older on average and up to 5 minutes older at
+worst:
+- normalized data: 1:40–5:40 after the bucket ends;
+- energy and environment measurements: 3:10–7:10;
+- 1-minute consumption tier: 4:00–8:00.
+
+The 15-minute, hourly, daily, alert-materiality and demand tiers keep their
+timing.
+
+Freshness readers fed by normalization use their own threshold,
+`config.telemetry_availability_policy.normalized_receiving_threshold_seconds`
+(600 s, migration 299). They are the portal site freshness, the Grafana asset
+telemetry state, `analytics.v_device_telemetry_availability` and the Grafana
+device list `analytics.v_grafana_devices` (device-diagnostics, organization and
+site overview dashboards). Raw-receipt
+connectivity, live tiles and gateway online status keep 300 s.
+
+Raw receipt state (job 1076), customer alert evaluation (job 1127, whose 3-minute
+gap tolerance assumes a 1-minute cadence) and the 5-minute tier (job 1080,
+whose checkpoint gates the 15-minute tier) still run every minute.
 
 ### environment_daily tier: watermark over site-local days (migration 211)
 

@@ -328,8 +328,11 @@ def _stale_at(t, asset, as_of) -> bool | None:
 
 
 def test_stale_threshold_is_capture_plus_tolerance_plus_live_stages(tx):
-    """Staging configuration: 60 s capture; 60 s tolerance (three sites) ->
-    7 minutes; 900 s tolerance (default) -> 21 minutes."""
+    """Staging configuration since migration 300 (the four 1-minute-path
+    stages every 5 minutes; ca_energy_1min end_offset 1 minute -> stage
+    4 x 5 + 1 = 21 minutes; was 4 x 1 + 1 = 5): 60 s capture, 60 s tolerance
+    -> 23 minutes (was 7); 900 s tolerance (default) -> 37 minutes (was 21).
+    The function reads the live schedules, so the threshold follows them."""
 
     with tx.cursor() as cur:
         t = Tenant(cur)   # 60 s capture, 60 s tolerance
@@ -339,18 +342,18 @@ def test_stale_threshold_is_capture_plus_tolerance_plus_live_stages(tx):
         checkpoints(cur)
         stage = _stage(cur)
         last = T0 + timedelta(hours=1)
-        assert stage == timedelta(minutes=5)
-        seven = timedelta(seconds=120) + stage
-        assert seven == timedelta(minutes=7)
-        assert _stale_at(t, asset, last + seven - timedelta(seconds=1)) is False
-        assert _stale_at(t, asset, last + seven + timedelta(seconds=1)) is True
+        assert stage == timedelta(minutes=21)
+        twenty_three = timedelta(seconds=120) + stage
+        assert twenty_three == timedelta(minutes=23)
+        assert _stale_at(t, asset, last + twenty_three - timedelta(seconds=1)) is False
+        assert _stale_at(t, asset, last + twenty_three + timedelta(seconds=1)) is True
 
         cur.execute("UPDATE config.telemetry_capture_policies SET late_arrival_tolerance_seconds = 900 WHERE site_id = %s", (t.site,))
-        twenty_one = timedelta(seconds=960) + stage
-        assert twenty_one == timedelta(minutes=21)
+        thirty_seven = timedelta(seconds=960) + stage
+        assert thirty_seven == timedelta(minutes=37)
         assert _stale_at(t, asset, last + timedelta(minutes=10)) is False
-        assert _stale_at(t, asset, last + twenty_one - timedelta(seconds=1)) is False
-        assert _stale_at(t, asset, last + twenty_one + timedelta(seconds=1)) is True
+        assert _stale_at(t, asset, last + thirty_seven - timedelta(seconds=1)) is False
+        assert _stale_at(t, asset, last + thirty_seven + timedelta(seconds=1)) is True
 
 
 def test_stale_uses_the_policy_in_effect_at_last_data(tx):
@@ -384,8 +387,12 @@ def test_an_unscheduled_stage_still_contributes_its_schedule_interval(tx):
             "SELECT alter_job(job_id, scheduled => FALSE) FROM timescaledb_information.jobs "
             "WHERE proc_schema = 'telemetry' AND proc_name = 'run_energy_routing_job'")
         last = T0 + timedelta(hours=1)
-        assert _stale_at(t, asset, last + timedelta(minutes=7) - timedelta(seconds=1)) is False
-        assert _stale_at(t, asset, last + timedelta(minutes=7) + timedelta(seconds=1)) is True
+        # 60 s capture + 60 s tolerance + the live stages (23 minutes since
+        # migration 300); the paused routing job still counts.
+        threshold = timedelta(seconds=120) + _stage(cur)
+        assert threshold == timedelta(minutes=23)
+        assert _stale_at(t, asset, last + threshold - timedelta(seconds=1)) is False
+        assert _stale_at(t, asset, last + threshold + timedelta(seconds=1)) is True
 
 
 def test_unverified_capture_path_has_no_stale_verdict_and_no_data_is_not_stale(tx):
