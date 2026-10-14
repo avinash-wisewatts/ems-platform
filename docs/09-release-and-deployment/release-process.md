@@ -28,6 +28,14 @@ checksums byte-identical to the staging-validated values. See
 [../10-operations/incident-history.md](../10-operations/incident-history.md)
 for the full production-promotion and Job 1000 recovery record.
 
+## Current plan (migrations 266–301, proposed 2026-10-14)
+
+Production is at migration 265 (`9ca461e`). The proposed path to staging's
+301 is three `staging-milestone` releases (A `f06683d`, B `ba2cb4b`,
+C `b1c8b09`), all blocked first on the 1h backfill required by migration 266.
+See [production-release-plan-266-301.md](production-release-plan-266-301.md).
+Nothing in it is approved yet.
+
 ## Every phase requires its own explicit approval
 
 Per project instructions and the DDS implementation roadmap: no phase of
