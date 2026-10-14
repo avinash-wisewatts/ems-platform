@@ -102,7 +102,7 @@ Every migration below is applied and verified on staging [V].
 
 | Migration | Change | Production dependency or risk | Status |
 |---|---|---|---|
-| 266 | Activates the four `point_telemetry_1h` jobs (forward every 15 min, reconcile 22:30 UTC, compression, retention) | **G1.** The forward job's first run looks back only 2 days, so the 1h backfill must reach (activation − 2 days) first | **Blocked** |
+| 266 | Activates the four `point_telemetry_1h` jobs (forward every 15 min, reconcile 22:30 UTC, compression, retention) | **G1.** The forward job's first run looks back only 2 days, so the 1h backfill must reach (activation − 2 days) first. That first run refreshes about 50 hours in one call under a 10-minute `max_runtime`, and compression of chunks older than 30 days starts right after activation: both are IO-heavy (section 4) | **Blocked** |
 | 267 | Routing loaders bound `window_end` to `event_time ≥ now() − 1 day` | Asserts the loader bodies and `compress_after = 1 day` | Ready, precheck P4 |
 | 268 | Reconstruction columns and NOT VALID checks on compressed `analytics.energy_consumption_1min/5min`; `config.energy_reconstruction_scope` (disabled) | **ACCESS EXCLUSIVE lock on every chunk. No pending migration sets `lock_timeout`** [V] | Ready, dispatch window (B) |
 | 269 | Measured-vs-reconstructed views and refresh functions; switch stays OFF | Output unchanged | Ready |
@@ -124,8 +124,10 @@ Every migration below is applied and verified on staging [V].
 | 300 | Six ingest jobs to fixed 5-minute batches | Raises unless all six run every minute, 298 is in place and 299's threshold is ≥ 480. **Staging 24 h acceptance due 2026-10-15 ~11:53 UTC** | **Blocked (G3)** |
 | 301 | Deadlock fix: `device_telemetry_state` upserts ordered by `device_id` | md5 pins on the two loader bodies (identical on staging and production [P]). Only production can show the effect: no new 40P01 | Ready, ships last |
 
-Prepared reverse SQL exists only for 297, 298 and 299/300
-(`docs/10-operations/prepared/`) [V].
+Reverse steps are described in the headers of 298, 299 and 300 (and other
+migration headers); none is a tested script. 297's header points to
+`docs/10-operations/prepared/T1.1/297_rollback.sql`, which is **not
+committed** to `staging` [V] (it exists only as uncommitted local work).
 
 ## 4. Gates
 
@@ -134,15 +136,71 @@ Prepared reverse SQL exists only for 297, 298 and 299/300
 - [P] Production `analytics.point_telemetry_1h` is filled from 2026-09-04
   00:00 to 2026-09-24 06:00 UTC (1,248,796 rows, validated per hour). The
   backfill is **paused**.
-- [P] The operator runner's failure gate uses a job-failure baseline. That
-  baseline was 2832 and production is now at **2834**, after two deadlocks
-  on 2026-10-14 that were not caused by the backfill. Resuming needs an
-  explicit decision on the baseline (D1). This plan does not change it.
-- Required before dispatch: the 1h tier covers every hour from 2026-09-04 to
-  at least (dispatch − 2 days), with a top-up on the day of dispatch. The
-  runner cannot fill the last 48 hours before the latest closed 15m hour.
-- [E] For a dispatch on about 2026-10-20, about 580 hours remain. At observed
-  rates that is roughly 20–35 hours of runner time over 3–5 sessions.
+- The backfill runner is an operator tool installed on the production host,
+  outside this repository. It calls `analytics.backfill_point_telemetry_1h`
+  hour by hour and stops on health gates.
+- [P] One of those gates is a job-failure baseline: the sum of
+  `timescaledb_information.job_stats.total_failures` for every job except
+  1114. The runner records the current value at launch and stops the run if
+  it rises. The last accepted baseline was 2832 (2026-10-13). Production is
+  now at **2834** after two 40P01 deadlocks on 2026-10-14 (job 1060 at
+  04:57 IST, job 1000 at 05:22 IST), with no backfill running. This plan does
+  not change the baseline; the policy below needs a decision (D1).
+- [P] These deadlocks are the lock-order race that migration 301 fixes.
+  About eight were seen in the week to 2026-10-14. Until Release C they will
+  keep raising the count, so a fixed baseline blocks every future run, and
+  any run lasting several hours has a real chance of being stopped by one [E].
+
+**Proposed baseline policy (not approved).**
+
+1. Before each launch, run R4 from the fact refresh (section 5). Accept the
+   current count as the new baseline only if every job error since the last
+   accepted baseline is SQLSTATE 40P01 in job 1000 (`run_normalization_job`)
+   or job 1060 (`run_raw_receipt_state_job`), and no job's last run failed
+   (`failed_non1114 = 0`). Record the accepted value and time.
+2. Any other job, any other SQLSTATE, or a job still in a failed state: do
+   not launch; report.
+3. During a run the runner's gate stays strict: any increase stops the run.
+   Archiving the STOP file and resuming still need approval each time.
+4. The exception ends at Release C. After 301, any 40P01 is a regression to
+   investigate, not a known cause.
+
+**Timing rule for the activation frontier [V from migration 265 code].**
+
+- The forward job's first run (checkpoint NULL) starts at `now − 2 days` on
+  the hour and also re-derives a 2-hour overlap before it.
+- [P] The runner refuses windows ending within 48 hours of the latest closed
+  15m hour.
+- So the final top-up must finish no more than about 1.5 hours before the
+  first forward run, which is the next :07/:22/:37/:52 UTC slot after the
+  deploy. In practice: top up, then dispatch A immediately.
+- [E] The first run refreshes about 50 hours in one call against a 10-minute
+  `max_runtime`. [P] Production call times at baseline IO were 2.6–76 s per
+  hour, so the call may time out at baseline. It then rolls back and retries
+  (3 retries, 5 minutes apart) without losing data. In burst windows calls
+  took 0.3–1.8 s per hour. Dispatch A in a burst window.
+- [E] For a dispatch on about 2026-10-20, about 580 hours remain (from Sep 24
+  07:00 UTC). At observed rates that is roughly 25–45 hours of runner time
+  at baseline IO, much less in burst windows. Each day of delay adds 24
+  hours of backlog.
+
+**Why not activate 266 with the gap and let reconcile fill it [V from
+migration 265 code and 266's job settings].**
+
+- The reconcile job repairs at most 7 days per night, at 22:30 UTC (04:00
+  IST), with a 30-minute `max_runtime`. The whole run is one transaction: a
+  timeout rolls back every day it repaired.
+- [P] At baseline IO one backfill day took 25–59 minutes. A 7-day repair is
+  very unlikely to finish in 30 minutes, so the gap would probably never
+  shrink. Each attempt (up to 4 per night) holds the forward job's advisory
+  lock, so the 1h tier stops advancing meanwhile, and every timeout adds job
+  failures.
+- [V] On staging the nightly reconcile has never had to repair anything
+  (0 mismatches every night since 2026-09-25, 45–64 s per run), so large
+  repairs are untested anywhere.
+- It only looks back 35 days from the checkpoint. Gap hours older than that
+  are never examined: Sep 24 07:00 UTC leaves the window if activation is
+  later than about 2026-10-29.
 - [A] Gaps stay repairable while the 15m tier holds the source data
   (120-day retention, so until about early January 2027 for 2026-09-04).
 
@@ -161,8 +219,28 @@ The staging 24-hour acceptance for 299/300 must pass. It is due
 
 ## 5. Read-only production prechecks
 
-Each needs explicit authorization. Run them immediately before the release
-that depends on them.
+Each needs explicit authorization.
+
+**Fact refresh (once, before the Release A decision is acted on).**
+`scripts/diagnostics/prod_release_266_301_fact_refresh.sql` re-checks every
+[P] fact in this document in one read-only transaction that ends in
+ROLLBACK. It was validated read-only on staging (about 7 seconds).
+
+| Query | Refreshes |
+|---|---|
+| R1 | Ledger 131 rows, head 265; digest of applied rows. Expected digest, from staging's matching 131 rows: `86ddfe42b46b281cb77491133d839909` |
+| R2 | 1h frontier and row count |
+| R3 | The four 1h jobs (unscheduled, 265 settings) and their NULL checkpoint |
+| R4 | Failure counter as the runner computes it, and every job error since the 2832 baseline |
+| R5 | 267 preconditions (P4) |
+| R6 | 301 md5 pins (P8) |
+| R7 | Retention policies (90-day raw, 120-day 15m source) |
+| R8 | Oldest `energy_measurements` chunks up to the first with two or more devices (F1 deadline) |
+| R9 | Rows in compressed `environment_measurements` chunks (291 deadline) |
+| R10 | Parity bridge: 112 rows, 56 assets, no other `asset_points` rows |
+
+**Release prechecks.** Run them immediately before the release that depends
+on them.
 
 | Check | Confirms | Release |
 |---|---|---|
@@ -188,13 +266,20 @@ that depends on them.
 4. The workflow checks the operator allowlist, the SHA confirmation, the
    staging deploy run, ancestry and forward-only movement. It then pins the
    image digest, checks out the commit on the host, applies the pending
-   manifest rows and restarts `admin-portal` and `live-telemetry` only.
+   manifest rows and recreates `admin-portal` and `live-telemetry` only.
 5. `verify-production` must pass its three REQUIRED gates: Database
    Structure, Metadata Integrity and Energy Routing Metric-Identity. The
    pipeline and job suites are advisory.
 
 **No out-of-band path.** Do not apply migrations by hand, edit the manifest
 or patch the host. If the workflow refuses, stop and investigate.
+
+**A release can stop partway.** Each migration commits on its own. If one
+fails (for example a precondition), the earlier migrations of that release
+stay applied. `deploy_release.sh` (`set -e`) then stops before step 5, so the
+running containers keep the old image while the host checkout is already at
+the release commit [V]. That is why the md5 and
+job prechecks run before dispatch, not after.
 
 ### Stop conditions
 
@@ -213,7 +298,7 @@ Stop and report, without retrying, if any of these happen:
 | Release | Required evidence |
 |---|---|
 | All | Run succeeded; REQUIRED gates passed; ledger shows exactly the release's migrations as `applied` with checksums equal to staging; no new job failures |
-| A | 1h forward job runs every 15 min and the checkpoint advances; first nightly reconcile succeeds; routing jobs 1001/1012 show lower runtime; observe ≥ 48 h before B |
+| A | First 1h forward run succeeds (checkpoint no longer NULL) and later runs advance it; no 1h hour missing between Sep 4 and the checkpoint; first nightly reconcile succeeds; routing jobs 1001/1012 show lower runtime; observe ≥ 48 h before B |
 | B | Parity comparison passes D3; Grafana Energy panels load; no lock waits from 268 left behind; Analytics API endpoints respond |
 | C | Six ingest jobs on the 5-minute phases; demand job at :07/:22/:37/:52; F1 forward job advancing through history; environment routing succeeds; no 40P01 over the following days |
 
@@ -222,7 +307,8 @@ Stop and report, without retrying, if any of these happen:
 - `rollback.yml` redeploys an earlier image only. It does **not** reverse
   migrations ([rollback.md](rollback.md)).
 - Database changes are forward-only. Reversal means a new forward migration
-  or, for 297, 298 and 299/300, the prepared SQL, each with its own approval.
+  or the reverse steps in a migration header (section 3), each with its own
+  approval.
 - An image rollback leaves the new database functions in place. 280 and
   282 drop `get_portal_analytics_energy_series` (6 arguments) and
   `get_portal_asset_energy_series` (6 arguments). The `9ca461e` app calls
@@ -251,7 +337,7 @@ None of these is assumed approved.
 
 | # | Decision | Options |
 |---|---|---|
-| D1 | How to meet G1 | (a) Resume the 1h backfill, with a decision on the failure baseline (recommended). (b) Activate 266 with a gap and let the nightly reconcile fill up to 7 days per run, uncontrolled, at baseline IO. (c) Accept a permanent 1h gap |
+| D1 | How to meet G1 | (a) Resume the 1h backfill under the proposed baseline policy, then top up and dispatch A in one burst window (recommended). (b) Activate 266 with the gap and rely on the nightly reconcile (section 4: likely never completes at baseline IO). (c) Activate 266 and leave a permanent 1h gap from Sep 24 07:00 UTC to activation − 2 days |
 | D2 | F1 deadline and fallback | Keep 2026-10-27 or set it from the 2026-11-03 evidence; approve the C1/C2 split if 300 is not ready |
 | D3 | Release B parity pass criterion | Proposed: zero mismatches against the baseline |
 | D4 | 299/300 on production | Accept the 600 s freshness rule and 5-minute ingest batches |
