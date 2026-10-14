@@ -96,13 +96,12 @@ def test_migration_changes_only_schedules():
         assert re.search(rf"\('{label}',\s*{phase}\)", code), label
 
 
-def test_manifest_registers_migration_300_last_after_299():
+def test_manifest_registers_migration_300_after_299():
     with MANIFEST.open(newline="", encoding="utf-8") as fh:
         rows = [r for r in csv.DictReader(fh) if r["target_category"] == "migration"]
     files = [r["source_file"] for r in rows]
     assert files.count(MIGRATION.name) == 1
-    assert rows[-1]["source_file"] == MIGRATION.name
-    assert rows[-1]["target_path"] == f"postgres/migrations/{MIGRATION.name}"
+    assert rows[files.index(MIGRATION.name)]["target_path"] == f"postgres/migrations/{MIGRATION.name}"
     # 300's precondition requires 299's column: 299 must be applied first.
     assert files.index("299_normalized_data_freshness_threshold.sql") < files.index(MIGRATION.name)
     assert files.index("298_demand_job_quarter_hour_schedule.sql") < files.index("299_normalized_data_freshness_threshold.sql")
