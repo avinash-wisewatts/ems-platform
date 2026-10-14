@@ -130,6 +130,10 @@ echo "[normalization-bounded-catchup-window] Running normalization bounded catch
 "${SCRIPT_DIR}/assert_normalization_bounded_catchup_window.sh"
 
 echo
+echo "[device-telemetry-state-upsert-lock-order] Running device_telemetry_state upsert lock order (migration 301) assertions..."
+"${SCRIPT_DIR}/assert_device_telemetry_state_upsert_lock_order.sh"
+
+echo
 echo "[energy-environment-routing-bounded-catchup-window] Running energy/environment routing bounded catch-up window assertions..."
 "${SCRIPT_DIR}/assert_energy_environment_routing_bounded_catchup_window.sh"
 

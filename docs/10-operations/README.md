@@ -11,6 +11,7 @@ Consolidated from platform manual chapters 19, 21, 23, 24, 25 (archived).
 | [backups-and-recovery.md](backups-and-recovery.md) | Backup/recovery posture — mostly unestablished, documented honestly. |
 | [troubleshooting.md](troubleshooting.md) | Symptom → likely cause → diagnostic steps → what NOT to do, built from real incidents. |
 | [incident-history.md](incident-history.md) | The detailed record of real incidents: root cause, fix, and verification evidence. |
+| [deadlock-normalization-raw-receipt-state.md](deadlock-normalization-raw-receipt-state.md) | Job 1000 vs raw-receipt-state job `40P01` deadlocks on `device_telemetry_state`: cause, migration 301 fix, checks, rollback. |
 
 ## Design principle
 
