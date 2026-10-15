@@ -419,6 +419,46 @@ def test_pre_migration_300_one_minute_schedule_keeps_the_282_value(tx):
         assert _allowance(cur) == _legacy(cur) == timedelta(minutes=5)
 
 
+@pytest.mark.parametrize(
+    "phases",
+    [
+        # Production at migration 265 (2026-10-14 job listing): normalization
+        # every minute at :24; the other phases are not recorded, so several
+        # combinations are covered -- with a drifting refresh they cannot matter.
+        {"normalization": 24, "routing": 24.5, "tier": 30},
+        {"normalization": 24, "routing": 51, "tier": 2},
+        {"normalization": 24, "routing": 0, "tier": 24},
+    ],
+    ids=["routing-0.5s-after", "spread", "same-as-normalization"],
+)
+def test_production_one_minute_schedule_keeps_the_seven_minute_threshold(stale_asset, phases):
+    """Production before migration 300: normalization, routing and the
+    1-minute job on fixed 1-minute schedules; the ca_energy_1min refresh
+    policy registered without initial_start (ddl/121), i.e. drifting. The
+    helper returns the migration-282 sum (4 x 1 + 1 = 5 minutes) whatever the
+    phases, and the series function flags stale exactly as before: at
+    60 s + 60 s + 5 min = 7 minutes. A missing stage still gives NULL."""
+
+    t, asset, last, cur = stale_asset
+    for name, job in _jobs(cur).items():
+        if name == "refresh":
+            cur.execute("SELECT alter_job(%s, schedule_interval => INTERVAL '1 minute', fixed_schedule => FALSE)", (job,))
+        else:
+            cur.execute(
+                "SELECT alter_job(%s, schedule_interval => INTERVAL '1 minute', fixed_schedule => TRUE, "
+                "initial_start => TIMESTAMPTZ '2026-08-01 00:00:00+00' + make_interval(secs => %s))",
+                (job, phases[name]),
+            )
+    assert _allowance(cur) == _legacy(cur) == timedelta(minutes=5)
+    seven = timedelta(minutes=7)
+    assert _stale_at(t, asset, last + seven - timedelta(seconds=1)) is False
+    assert _stale_at(t, asset, last + seven) is False
+    assert _stale_at(t, asset, last + seven + timedelta(seconds=1)) is True
+    cur.execute("SELECT delete_job(%s)", (_jobs(cur)["tier"],))
+    assert _allowance(cur) is None
+    assert _stale_at(t, asset, last + timedelta(hours=1)) is None
+
+
 def test_five_minute_path_is_unphased_and_keeps_the_282_value(tx):
     with tx.cursor() as cur:
         assert _allowance(cur, 300) == _legacy(cur, 300)
