@@ -509,14 +509,25 @@ message is shown only when it has useful content; otherwise it is absent.
     windows (device-level bounds, exact while reconstruction is off).
     `stale` is a data-latency condition, not device connectivity: true when
     `as_of − last_data_at` exceeds capture interval + late-arrival tolerance
-    (the site's capture policy in effect at `last_data_at`) + the live
-    schedule interval of each forward stage on the site's Analytics path
-    (normalization, energy routing, the `ca_energy_1min` / `ca_energy_5min`
-    refresh and the 1- / 5-minute Energy job; an unscheduled stage still
-    counts) + that path's CAGG end offset, while `last_data_at` is inside the
-    requested range and a binding extends beyond `last_data_at` + threshold.
-    With staging's current configuration this is 7 minutes (60 s capture,
-    60 s tolerance) or 21 minutes (60 s, 900 s). The threshold is never
+    (the site's capture policy in effect at `last_data_at`) + the pipeline
+    allowance of the site's Analytics path (normalization, energy routing,
+    the `ca_energy_1min` / `ca_energy_5min` refresh and the 1- / 5-minute
+    Energy job, read live from their jobs; an unscheduled stage still counts),
+    while `last_data_at` is inside the requested range and a binding extends
+    beyond `last_data_at` + threshold. **Since migration 302 (T3.10 / D-020)
+    the allowance is schedule-aware** (`analytics.energy_stale_pipeline_allowance`):
+    when the four stages are phased (one fixed-schedule job each, equal
+    interval C, CAGG end offset within the normalization → refresh wait) it is
+    C + the chained phase waits (a wait under 10 s counts one more C) + 60 s;
+    otherwise the migration-282 sum of the stage intervals + the CAGG end
+    offset. Staging under the 5-minute batch pipeline (migration 300):
+    8 min 20 s, so the threshold is **10 min 20 s** (60 s capture, 60 s
+    tolerance; was 23 minutes) or 24 min 20 s (60 s, 900 s; was 37). The
+    measured healthy peak age is 9:03; a missed batch, or a routing / refresh
+    retry that lands after the 1-minute tier's slot, peaks at 14:03 and shows
+    "No recent data" until the next publication (user decision, plan run 22).
+    Before migration 300 (1-minute stages, refresh not fixed) the value is
+    the 282 sum, unchanged (7 / 21 minutes). The threshold is never
     returned. Only the ≤ 60 s and 300 s capture paths are verified; for any
     other capture interval (900 s) `stale` is null.
 13. **Labels** [PO, D73]. Energy Import is labelled "Energy" (consumed /
@@ -700,6 +711,7 @@ SECURITY DEFINER, ems_app-only, never Grafana-keyed.
 | 283 | Read latency, Option 1: the fresh 15-minute tail is read through `analytics.energy_semantic_rollup_15min_range` (the rollup view bounded to a whole-bucket UTC range before grouping, so chunk exclusion applies); results unchanged | Deployed to staging 2026-09-29 (`e6754de`, PR #91). Read-only validation: helper↔view parity on live data 0 differing rows; value and Data Quality snapshot 282→283 identical (140,132 rows, 36 columns); tail read pruned to the current chunk |
 | 284 | Read latency, Option 2: the per-bucket Data Quality subqueries of 282 (NOT_ASSIGNED, the device-first INITIAL count, assigned expected intervals) are replaced by set-based, request-level computation (computed once per request and joined to the bucket grid); 7-argument API, Energy values, Data Quality semantics, 283's tail pruning, views, tiers, jobs and storage unchanged | Deployed to staging 2026-09-29 (`17b1843`, PR #92, deploy run 36541126955). Read-only validation: value and Data Quality snapshot 283→284 identical (140,132 rows, 36 columns); helper↔view parity still 0 differing rows; latency improved only about 10–25%, all resolutions remain above the 500 ms target |
 | 285 | Read latency: `analytics.energy_direction_status` `RESET search_path`, so its IMMUTABLE `CASE` is inlined into the series read (was one function call per 15-minute row per direction); body, grants and the series function unchanged | Deployed to staging 2026-09-29 (`6b09475`, PR #93, deploy run 36551005201; checksum `926d7ae4…`). Read-only validation: 284→285 snapshot identical (140,132 rows, 36 columns); helper inlined (0 helper executions per 15m request, against 42,958); latency improved only about 0–10% (median) |
+| 302 | Analytics stale flag schedule-aware (plan T3.10 / D-020): new `analytics.energy_stale_pipeline_allowance`; the series function changes only in its stale-allowance block (md5 swap-back to 284). Threshold 10 min 20 s on staging (was 23 min under migration 300); unphased schedules keep the 282 sum | Implemented (PR pending review); not deployed |
 | B3 | Measurements (Power, Reactive Power, Current, Voltage, Line to Line Voltage, Power Factor, Frequency) and per-phase Energy: registry, catalogue phases and availability, series at 1m–1d (migration 292), Analytics UI naming and grouping | Implemented (PR pending review); not deployed. Staging coverage 2026-10-09: 46 of 54 ACTIVE assets report every B3 point; 8 Unit 2 assets (E2_EM1–EM8) have no telemetry; history starts at each assignment (mostly 2026-10-09 12:56:55 IST) |
 | B4 | `analytics.point_telemetry_1d` persisted tier (job-built from 15m, upsert-only, 35-day reconcile, backfill, 8-year retention, compression after 90 days; ADR-019 D1/D5) and the 1d read path | Planned — must be live before the first `point_telemetry_15m` chunks age out of 120-day retention |
 | F1 | Calendar quick ranges in the site timezone, application-wide (ADR-022 Amendment 5, D61/D62) | Merged to staging (PR #96, `a420a88`) |
@@ -908,6 +920,8 @@ bottom, D72); the time-of-day refinement's granularity (any minute, D60).
 - 283: `app/tests/test_energy_rollup_range.py` (5: helper security and inlinability, helper = view definition plus the bounded `WHERE`, series function = 282 with only the tail line changed, `bucket_start` pruning in the plan, helper rows equal the view's rows on all 43 columns for on-grid, off-grid, empty, infinite and no-data ranges, 1-minute and 5-minute native rows, and another organization's device). Existing Analytics suites pass unchanged in values. Full backend suite 1840 passed locally (2026-09-29). Staging (2026-09-29, after deployment of `e6754de`, read-only): helper↔view parity on live data for every bound device in both organizations — last 6 hours including the fresh tail, last 3 days, an off-grid range and an empty range — 0 differing rows in either direction; 282→283 snapshot (5 resolutions, 53 assets, fixed `as_of`) identical on all 140,132 rows and 36 columns; the tail read scans only the current `energy_consumption_1min` chunk via `(device_id, bucket_start)` (0.24 ms, against up to 1,565 ms per asset before).
 
 - 284: new `app/tests/test_energy_series_set_based_quality.py` (3: set-based structure and unchanged security; property test installing migration 283's exact function as a session-temporary reference and comparing it with 284 on every row and column — 12 seeded scenarios × 5 resolutions × 3 `as_of` values, across UTC / IST / Kathmandu / London sites, 60 / 300 / 900 s capture, tier checkpoints, binding windows starting and ending mid-bucket, device replacement with the new device's first reading inside the range, separate import/export windows, a sub-bucket window, a never-reporting device, missing / gap / rejected minutes and a later INITIAL — 0 differences, every data state exercised; a check that the device-first reading is still subtracted once per containing binding window). A mutation check confirmed the property test detects deliberate changes to the assigned-interval, INITIAL and NOT_ASSIGNED logic. `test_energy_rollup_range.py`: its byte-for-byte pin of the series function to 282 plus one line is retired (superseded by the 283→284 parity test); it still checks the tail is read through the 283 helper. Full backend suite 1843 passed locally (2026-09-29). Staging (2026-09-29, after deployment of `17b1843`, read-only): function md5 `3f43cdae…`, security unchanged (SECURITY DEFINER, STABLE, owner `ems_admin`, pinned `search_path`, `ems_app`-only EXECUTE); 283 helper, view and `get_canonical_energy_read` fingerprints unchanged; reconstruction OFF; 283→284 snapshot (5 resolutions, 53 assets, fixed `as_of`) identical on all 140,132 rows and 36 columns; helper↔view parity on live data 0 differing rows in either direction.
+
+- 302: new `app/tests/test_analytics_stale_schedule_aware.py` (35: migration contract — LF, only the helper and the series function, body identical to 284 outside the stale block, md5 swap-back pins, manifest order; a timing model of the phased pipeline driven by the test database's job settings and calibrated to the 9:03 healthy peak measured on staging; verdicts for healthy batching across the whole cycle plus 60 s slack, a normalization retry (tolerated), a missed normalization / routing batch and routing / refresh / 1-minute-tier retries (14:03, flagged), stopped data; semantics kept for no data, out-of-range last data and an ended binding; helper branches: pre-300 1-minute schedule keeps the 282 value, 5-minute path, ordered / same-phase / race phases, end offset beyond the refresh wait, unequal intervals, an unfixed stage, a missing stage → null; helper security). `test_analytics_energy_series_data_quality.py` stale tests re-pinned to 10:20 / 24:20 and the helper. Mutation-checked: with the 284 body restored the missed-batch and stopped-data tests fail; without the 60 s margin the healthy and retry tests fail.
 
 - 285: new `app/tests/test_energy_direction_status_inlining.py` (5: helper attributes and grants, body byte-identical to 279; inlining shown by `EXPLAIN`; all 4,096 counter combinations including NULL; series parity against a non-inlinable reference over the 284 randomised scenarios and a GOOD / INVALID / RESET / GAPS / ROLLOVER scenario, mutation-checked). Full backend suite 1848 passed locally (2026-09-29).
 
