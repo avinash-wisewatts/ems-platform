@@ -288,6 +288,16 @@ device list `analytics.v_grafana_devices` (device-diagnostics, organization and
 site overview dashboards). Raw-receipt
 connectivity, live tiles and gateway online status keep 300 s.
 
+The Analytics `stale` flag ("No recent data") derives its pipeline allowance
+from these phases (migration 302, `analytics.energy_stale_pipeline_allowance`):
+cycle + chained phase waits + 60 s = 8 min 20 s, so 10 min 20 s after the last
+1-minute interval for a 60 s / 60 s site. The healthy age of the newest
+1-minute data peaks at 9:03 (measured); a missed batch, or a routing / refresh
+retry that lands after the 1-minute job's slot, peaks at 14:03 and is flagged
+until the next publication. See the
+[Analytics feature doc](../../07-features/analytics/README.md) and ADR-022
+Amendment 9.
+
 Raw receipt state (job 1076), customer alert evaluation (job 1127, whose 3-minute
 gap tolerance assumes a 1-minute cadence) and the 5-minute tier (job 1080,
 whose checkpoint gates the 15-minute tier) still run every minute.
