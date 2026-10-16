@@ -1,16 +1,25 @@
 # Production Release Plan: Migrations 266 → 301
 
-Status: PROPOSED, awaiting product-owner decisions · Prepared: 2026-10-14 · Owner: Engineering
+Status: PROPOSED, awaiting product-owner decisions · Prepared: 2026-10-14 · Updated: 2026-10-17 · Owner: Engineering
 Nothing in this plan has been executed. Every dispatch, precheck and operator
 step below needs its own explicit approval
 ([release-process.md](release-process.md#every-phase-requires-its-own-explicit-approval)).
 
-This plan promotes production from migration 265 to staging's migration 301
-in three normal `deploy-production.yml` runs with
+This plan promotes production from migration 265 towards staging's head
+in normal `deploy-production.yml` runs with
 `promotion_mode=staging-milestone` ([ci-cd.md](ci-cd.md#promotion-modes)).
 It continues the 223–290 staged promotion, whose Stages 1–3 (223–265) were
 deployed on 2026-10-08. Releases A, B and C replace that plan's Stages 4–6
 and keep the same commit boundaries.
+
+**Update 2026-10-17.** Migration 300 passed its staging 24-hour acceptance
+on 2026-10-15, but a read-only production assessment on 2026-10-16 found
+production **NOT READY** for 299–302 (section 4, G3b). Release C is therefore
+split into **C1** and **C2′**, which stop before 299. Migrations 299–302 and
+the routing fix 303 form a later **Release D**, gated separately. The
+assessment is recorded in the operations plan
+(`docs/10-operations/staging-optimization-implementation-plan.md` §10.17,
+a living document kept outside this branch).
 
 Evidence labels used in this document:
 
@@ -19,6 +28,8 @@ Evidence labels used in this document:
 - **[P]** production state from the last read-only production checks
   (2026-10-08 to 2026-10-14). Not re-checked for this document; the
   prechecks below re-check them.
+- **[M]** measured on production by a read-only session on 2026-10-16
+  (`default_transaction_read_only=on`, 30 s statement timeout).
 - **[E]** estimate. **[A]** assumption.
 
 ## 1. Starting point
@@ -30,6 +41,8 @@ Evidence labels used in this document:
 | Staging HEAD | `b1c8b09` (migration 301), `deploy-staging.yml` run `38569347439` | [V] |
 | Staging ledger | 173 rows, head 301, applied in manifest order, all 42 pending checksums equal to the repository files | [V] read-only query |
 | Pending manifest rows | 42 | [V] |
+| Staging HEAD on 2026-10-17 | `740cbaf` (migration 302), `deploy-staging.yml` run `38896720234`; ledger 174 | [V] |
+| TimescaleDB | Production **2.28.2** [M]; staging **2.29.2** [V 2026-10-16]. The chain was tested locally on 2.28.2, but staging evidence comes from a newer minor version | [M] / [V] |
 
 **Manifest order, not numeric order [V].** `scripts/apply_migrations.sh`
 applies every `postgres/restructure_manifest.csv` row that has no ledger
@@ -59,8 +72,22 @@ below) therefore gates every release.
 | **A** | `f06683d957b285754df2cebb1db5b737e2eb8d03` | `36022033311` success, 2026-09-24 | 266, 267 (2) | 133 |
 | **B** | `ba2cb4be254644c3ebd4a30b02b68f1d1ae4d601` | `37273913405` success, 2026-10-05 | 268, 269, 263, 270, 279, 275, 276, 277, 278, 280, 281, 282, 283, 284, 285, 286 (16) | 149 |
 | **C** | `b1c8b0956ddecbdcbfe7d474bfeb1b7eae8cb485` | `38569347439` success, 2026-10-14 | 253–262, 287, 288, 289, 290, 291, 292, 293, 294, 295, 297, 298, 299, 300, 301 (24) | 173 |
-| C1 (fallback) | `105c6c15e66785151b20ca4b605e797bc558973e` | `37738437514` success, 2026-10-08 | 253–262, 287–291 (15) | 164 |
-| C2 (after C1) | `b1c8b0956ddecbdcbfe7d474bfeb1b7eae8cb485` | as C | 292–295, 297–301 (9) | 173 |
+| **C1** | `105c6c15e66785151b20ca4b605e797bc558973e` | `37738437514` success, 2026-10-08 | 253–262, 287–291 (15) | 164 |
+| **C2′** | `d52b049b8acd2f741868f6ef10286e11767b07d4` | `38363172078` success, 2026-10-13 | 292, 293, 294, 295, 297, 298 (6) | 170 |
+| **D** (not ready) | a staging commit containing 303 (not yet merged) | — | 299, 300, 301, 302, 303 (5) | 175 |
+
+**Agreed split (2026-10-17).** Release C at `b1c8b09` is **not** used: it
+contains 300. Production goes A → B → C1 → C2′, which keeps the 290 / 291
+deadlines and stops before 299. Release D waits for gate G3b. C1 and C2′
+are milestones that staging deployed successfully [V]; `d52b049`'s staging
+deploy applied 298 alone and its 24-hour acceptance passed on 2026-10-14.
+
+**301 and 302 wait for D.** The runner applies every pending manifest row in
+manifest order and has no "stop at" option [V `scripts/apply_migrations.sh`],
+so no milestone can deliver 301 without 299 and 300. 301's md5 preconditions
+also rule out an equivalent earlier migration. 302 needs 300's phased
+schedule to change anything. The routing fix 303 will be appended after 302,
+so it cannot reach production before 299–302 either (decision D9).
 
 All [V]. Each milestone is a strict descendant of `9ca461e` and of the
 milestone before it, so the forward-only gate accepts them in this order.
@@ -75,9 +102,10 @@ milestone before it, so the forward-only gate accepts them in this order.
 
 **Why three releases.** A cannot be merged into anything: 266 is first.
 B and C are separate because their main risks differ (B: chunk locks and
-the Grafana Energy read switch; C: ingest cadence, the new F1 job and the
-deadlock fix). On the IO-limited production host, combining them would make
-a regression hard to attribute. **Migration 301 ships last in C**, in its
+the Grafana Energy read switch; C1 / C2′: the new F1 job, the bounded
+environment loader and the demand schedule; D: ingest cadence, routing and
+the deadlock fix). On the IO-limited production host, combining them would make
+a regression hard to attribute. **Migration 301 ships in D**, in its
 manifest position. No pending migration changes the two loader bodies that
 301 replaces, and nothing depends on 301 [V].
 
@@ -119,13 +147,30 @@ Every migration below is applied and verified on staging [V].
 | 292, 293 | B3 point series and plan fixes | Must ship together (292 alone timed out on staging) | Ready |
 | 294, 295 | Staging-only one-time history restores | No-op on production: 0 rows at both anchors [P]. **Never call these functions on production**: they hard-code staging UUIDs | Ready (inert) |
 | 297 | Reconcile windows aligned to the tier grain | md5 preconditions on the migration-213 bodies | Ready, precheck P6 |
-| 298 | Demand job every 15 min at :07/:22/:37/:52 UTC | Needs exactly one demand job; staging 24 h acceptance passed 2026-10-14 | Ready, precheck P7 |
-| 299 | `normalized_receiving_threshold_seconds` = 600 | Changes customer-visible freshness; prerequisite of 300 | Ready, decision D4 |
-| 300 | Six ingest jobs to fixed 5-minute batches | Raises unless all six run every minute, 298 is in place and 299's threshold is ≥ 480. **Staging 24 h acceptance due 2026-10-15 ~11:53 UTC** | **Blocked (G3)** |
-| 301 | Deadlock fix: `device_telemetry_state` upserts ordered by `device_id` | md5 pins on the two loader bodies (identical on staging and production [P]). Only production can show the effect: no new 40P01 | Ready, ships last |
+| 298 | Demand job every 15 min at :07/:22/:37/:52 UTC | Needs exactly one demand job (production job 1062 [M]); staging 24 h acceptance passed 2026-10-14. Safe without 300: demand finalizes only up to the newest routed `energy_measurements` bucket (migration 210 watermark), so routing lag delays intervals but does not make them incomplete [V] | Ready (C2′), precheck P7, decision D4a |
+| 299 | `normalized_receiving_threshold_seconds` = 600 | Changes customer-visible freshness; prerequisite of 300 | **Not ready (D)**, decision D4b |
+| 300 | Six ingest jobs to fixed 5-minute batches | Raises unless all six run every minute, 298 is in place and 299's threshold is ≥ 480. **Staging 24 h acceptance PASSED 2026-10-15** (6 targets, 0 failures, demand p99 end + 7:06.8). **Production NOT READY 2026-10-16** (G3b). Capture policy 5 makes it raise a WARNING (D8) | **Blocked (G3b)** |
+| 301 | Deadlock fix: `device_telemetry_state` upserts ordered by `device_id` | md5 pins on the two loader bodies (identical on staging and production [P]). Only production can show the effect: no new 40P01. Held behind 300 by manifest order | Ready, **held (D)** |
+| 302 | Schedule-aware Analytics stale flag (threshold 10 min 20 s under 300's phases; the migration-282 sum otherwise) | Needs 300 to change anything; on staging since 2026-10-16 (validated). With production routing lag it would flag persistently if 300 were active [E] | **Blocked (G3b)** |
+| 303 | Routing loaders: forward read bounded to uncompressed `normalized_points` chunks, plus an hourly late-data sweep (PR pending, not merged) | Removes the full compressed-chunk scan that every routing run does today. Must be validated on staging first | **Not ready (D)** |
 
 Reverse steps are described in the headers of 298, 299 and 300 (and other
-migration headers); none is a tested script. 297's header points to
+migration headers); none is a tested script. **300's header and NOTICEs
+name staging job IDs.** Production job IDs [M 2026-10-16] are:
+
+| Role | Production job | 300 target |
+|---|---|---|
+| Normalization (`telemetry.run_normalization_job`) | 1000 | yes |
+| Energy routing (`telemetry.run_energy_routing_job`) | 1001 | yes |
+| Environment routing (`telemetry.run_environment_routing_job`) | 1012 | yes |
+| `ca_energy_1min` refresh | 1044 | yes |
+| `ca_energy_phase_power_1min` refresh | 1083 | yes |
+| Consumption 1-minute (`analytics.run_energy_consumption_1min_job`) | 1063 | yes |
+| Demand (`analytics.run_demand_calculation_job`, 298) | 1062 | — |
+| Raw receipt state (301's other loader) | 1060 | — |
+
+Re-check them with a read-only lookup by `proc_name` / `hypertable_name`
+immediately before any rollback; never copy IDs from a migration header. 297's header points to
 `docs/10-operations/prepared/T1.1/297_rollback.sql`, which is **not
 committed** to `staging` [V] (it exists only as uncommitted local work).
 
@@ -147,7 +192,7 @@ committed** to `staging` [V] (it exists only as uncommitted local work).
   04:57 IST, job 1000 at 05:22 IST), with no backfill running. This plan does
   not change the baseline; the policy below needs a decision (D1).
 - [P] These deadlocks are the lock-order race that migration 301 fixes.
-  About eight were seen in the week to 2026-10-14. Until Release C they will
+  About eight were seen in the week to 2026-10-14. Until Release D they will
   keep raising the count, so a fixed baseline blocks every future run, and
   any run lasting several hours has a real chance of being stopped by one [E].
 
@@ -162,8 +207,8 @@ committed** to `staging` [V] (it exists only as uncommitted local work).
    not launch; report.
 3. During a run the runner's gate stays strict: any increase stops the run.
    Archiving the STOP file and resuming still need approval each time.
-4. The exception ends at Release C. After 301, any 40P01 is a regression to
-   investigate, not a known cause.
+4. The exception ends at Release D (301). After 301, any 40P01 is a
+   regression to investigate, not a known cause.
 
 **Timing rule for the activation frontier [V from migration 265 code].**
 
@@ -211,11 +256,46 @@ Before dispatch, capture a parity baseline of
 confirm bridge coverage. After deploy, compare against the same ranges. The
 pass criterion is decision D3.
 
-### G3: Migration 300 staging acceptance (Release C)
+### G3a: Migration 300 staging acceptance (Release D) — PASSED
 
-The staging 24-hour acceptance for 299/300 must pass. It is due
-2026-10-15 ~11:53 UTC. If it fails, or is not passed by about
-2026-10-26, use C1 then C2 so that 290 and 291 are not held back.
+[V] Passed 2026-10-15 12:16 UTC (24 h 24 min after deploy): six targets
++293 runs each, 0 failures, demand p99 end + 7:06.8, all reconcilers
+healthy. 302 was deployed to staging on 2026-10-16 and validated.
+
+### G3b: Production readiness for 299–303 (Release D) — NOT READY
+
+Read-only production assessment, 2026-10-16:
+
+| Evidence | Value |
+|---|---|
+| Normalization 1000, 1-minute batch (60 runs, 12:49–13:49 UTC) | [M] p50 11.0 s, p95 33.5 s, max 38.6 s; 3,144 rows per run |
+| Energy routing 1001 (7 runs) | [M] p50 546 s, max 592 s; starts every 8–10 minutes; lag 15–21 min |
+| Environment routing 1012 (6 runs) | [M] p50 504 s, max 576 s |
+| Demand 1062 (43 runs) | [M] p50 24 s, max 81 s; lag 24–35 min |
+| Routing `window_events` read after 267 | [M] hit the 30 s statement timeout 6 of 6 times (staging 0.12–0.21 s). It scans all 12 compressed chunks, 353 MB |
+| Five-minute normalization batch (15,720 rows) | [E] 32–103 s against a 90 s budget; **not measured** |
+| Host IO | [M] PSI io *some* 85–90 %, disk util ~87 % at ~20 MB/s at baseline |
+| Capture policy 5 (site `49500fb9-0ea9-4496-8eeb-55131c89d0c2`) | [M] 300 + 30 s, so 300 raises its WARNING (D8) |
+
+[E] With 300 active today, routing would miss its 30-second slot most
+cycles, batches would publish a cycle late, and 302 would show persistent
+"No recent data".
+
+Release D may be considered only when **all** of these pass, each with its
+own approval:
+
+1. Release A deployed; production routing durations measured (≥ 24 h,
+   read-only sampler P11).
+2. Migration 303 merged, deployed to staging and validated there (plans,
+   completeness, late data, catch-up, demand, rollback).
+3. The bounded routing read timed read-only on production (P12) and found
+   well within budget.
+4. The five-minute normalization batch validated by a safe method agreed
+   separately. No one-off production normalization test is approved.
+5. D4b, D8 and D9 decided.
+
+After D, routing p99 must stay comfortably under ~25 s before five-minute
+batching is (re)activated.
 
 ## 5. Read-only production prechecks
 
@@ -250,10 +330,17 @@ on them.
 | P4 | Routing loader bodies match migrations 215/228; `normalized_points` `compress_after` = 1 day | A |
 | P5 | Bridge coverage and parity baseline (G2) | B |
 | P6 | Migration-213 function md5s expected by 297 | C |
-| P7 | Exactly one job for each 298/300 target; all six 300 targets on 1-minute schedules; capture policies within 60 + 60 s | C |
-| P8 | Loader md5s expected by 301 | C |
-| P9 | Compressed `environment_measurements` row count (291) and oldest non-empty `energy_measurements` chunk (290) | C |
+| P7 | Exactly one job for each 298/300 target (IDs in section 3); all six 300 targets on 1-minute schedules; capture policies within 60 + 60 s. **Policy 5 (300 + 30 s) fails the last clause [M]**: D needs decision D8 | C2′ (298), D (300) |
+| P8 | Loader md5s expected by 301 | D |
+| P9 | Compressed `environment_measurements` row count (291) and oldest non-empty `energy_measurements` chunk (290) | C1 |
 | P10 | No backfill or STOP active; failure count unchanged since the last check; job 1053 (compression) not running or due | Every release |
+| P11 | Job-duration sampler: `timescaledb_information.job_stats` and `telemetry.pipeline_state` every 30 s for 1000, 1001, 1012, 1044, 1083, 1063, 1062 (catalog reads only) | After A, before and after D |
+| P12 | Bounded routing read: EXPLAIN plus one timed run of 303's forward read, which touches only uncompressed chunks (`scripts/diagnostics/prod_routing_bounded_read_timing.sql`, added with 303) | D |
+
+**Never run the unbounded routing read on production.** The routing
+`window_events` query filtered only on `platform_received_at` scans every
+compressed `normalized_points` chunk; on 2026-10-16 it hit the 30 s timeout
+six times and added about 3 minutes of IO load.
 
 ## 6. Deployment procedure (each release)
 
@@ -300,7 +387,9 @@ Stop and report, without retrying, if any of these happen:
 | All | Run succeeded; REQUIRED gates passed; ledger shows exactly the release's migrations as `applied` with checksums equal to staging; no new job failures |
 | A | First 1h forward run succeeds (checkpoint no longer NULL) and later runs advance it; no 1h hour missing between Sep 4 and the checkpoint; first nightly reconcile succeeds; routing jobs 1001/1012 show lower runtime; observe ≥ 48 h before B |
 | B | Parity comparison passes D3; Grafana Energy panels load; no lock waits from 268 left behind; Analytics API endpoints respond |
-| C | Six ingest jobs on the 5-minute phases; demand job at :07/:22/:37/:52; F1 forward job advancing through history; environment routing succeeds; no 40P01 over the following days |
+| C1 | F1 forward job advancing through history; environment routing succeeds (291) |
+| C2′ | Demand job 1062 at :07/:22/:37/:52; demand intervals finalized with the same VALID share as before |
+| D | Routing durations within budget (P11); no 40P01 over the following days; five-minute phases only once activation is approved (D9) |
 
 ## 7. Rollback limits
 
@@ -315,6 +404,29 @@ Stop and report, without retrying, if any of these happen:
   neither [V], so rolling back to it after B is compatible. For any other
   target image, check its calls against the functions changed since.
 - 268's columns and constraints stay after any rollback.
+- **298** (C2′): `alter_job(1062, schedule_interval => INTERVAL '1 minute')`,
+  keeping its current phase. Verify the ID first.
+- **300** (D): `alter_job` each of 1000, 1001, 1012, 1044, 1083, 1063 back to
+  `schedule_interval => INTERVAL '1 minute'` with the `fixed_schedule` and
+  `initial_start` recorded by precheck P7 immediately before D (300's NOTICEs
+  print the values it replaced). The ledger row stays; 302 then falls back to
+  the migration-282 formula automatically.
+- **302**: forward migration re-applying migration 284's
+  `get_portal_asset_energy_series`, then dropping
+  `analytics.energy_stale_pipeline_allowance(integer)`.
+- **303**: forward migration re-issuing the 267 / 291 loader bodies, dropping
+  the late-sweep jobs and their checkpoint rows (header of 303).
+- Every rollback above is a schedule or code change on production and needs
+  its own approval.
+
+**Release B stale-flag risk [E].** B brings migration 282's stale flag for
+`analytics.get_portal_asset_energy_series`. Its threshold is the sum of the
+pipeline stage intervals (about 7 minutes with 1-minute jobs). Production
+routing currently lags 15–23 minutes [M], so the flag would mark most
+production Analytics API series responses `stale = true`. Production has no
+Analytics UI (D6), so no customer screen shows it, but any API consumer would.
+It clears only once routing lag falls below the threshold (Release A's 267
+and then 303). Record it in B's release note.
 
 ## 8. Target dates (all [E])
 
@@ -322,7 +434,9 @@ Stop and report, without retrying, if any of these happen:
 |---|---|---|
 | A | about 2026-10-20 | G1 and D1 |
 | B | about 2026-10-22 | A + 48 h, G2, D3 |
-| C | about 2026-10-24, target no later than 2026-10-27 | B, G3, D2, D4, D5 |
+| C1 | about 2026-10-24, target no later than 2026-10-27 | B, D2, D5 |
+| C2′ | after C1 | C1, D4a |
+| D | not scheduled | G3b |
 
 The product-owner target for F1 (290) is 2026-10-27, with no retention
 changes. [P] Evidence from 2026-10-11 shows `energy_measurements` chunks
@@ -338,9 +452,12 @@ None of these is assumed approved.
 | # | Decision | Options |
 |---|---|---|
 | D1 | How to meet G1 | (a) Resume the 1h backfill under the proposed baseline policy, then top up and dispatch A in one burst window (recommended). (b) Activate 266 with the gap and rely on the nightly reconcile (section 4: likely never completes at baseline IO). (c) Activate 266 and leave a permanent 1h gap from Sep 24 07:00 UTC to activation − 2 days |
-| D2 | F1 deadline and fallback | Keep 2026-10-27 or set it from the 2026-11-03 evidence; approve the C1/C2 split if 300 is not ready |
+| D2 | F1 deadline and release split | Keep 2026-10-27 or set it from the 2026-11-03 evidence. C1 / C2′ split agreed 2026-10-17 |
 | D3 | Release B parity pass criterion | Proposed: zero mismatches against the baseline |
-| D4 | 299/300 on production | Accept the 600 s freshness rule and 5-minute ingest batches |
+| D4a | 298 on production (C2′) | Demand every 15 minutes at :07/:22/:37/:52 UTC |
+| D4b | 299/300 on production (D) | Accept the 600 s freshness rule and 5-minute ingest batches, after G3b |
 | D5 | Admin Portal assignment on production | Release C makes "Assign Data Points" Save live |
 | D6 | Analytics UI on production | Confirm production stays API-only until a separate frontend rollout |
-| D7 | Routing job runtime limits | After A, whether to restore jobs 1001/1012 `max_runtime` from 30 to 5 minutes (separate approval) |
+| D7 | Routing job runtime limits | After A and 303 are measured (P11), whether to restore jobs 1001/1012 `max_runtime` from 30 to 5 minutes (separate approval) |
+| D8 | Capture policy 5 under 300 | Accept 300's WARNING (that site's boundary bucket is finalized one batch later, about 5 minutes more latency) or change the policy first |
+| D9 | How 303 reaches production | (1) Release D, then an approved post-deploy step returning the six 300 jobs to 1-minute schedules; five-minute batching is activated later by separate approval. (2) Release D with 300 active, relying on staging evidence and P12. (3) Change the runner to stop partway through the manifest (changes CI/CD behaviour; not recommended) |
