@@ -27,6 +27,9 @@ COPY postgres/ddl /workspace/postgres/ddl
 COPY postgres/migrations /workspace/postgres/migrations
 COPY postgres/jobs /workspace/postgres/jobs
 COPY postgres/restructure_manifest.csv /workspace/postgres/restructure_manifest.csv
+# Migration 303 rollback script, executed (rolled back) by
+# app/tests/test_routing_forward_floor_late_sweep.py.
+COPY postgres/maintenance/303_routing_forward_floor_late_sweep_rollback.sql /workspace/postgres/maintenance/303_routing_forward_floor_late_sweep_rollback.sql
 COPY scripts/test /workspace/scripts/test
 # Phase 4 routing generator: spec, template, generator, and committed artifact
 # consumed by app/tests/test_routing_generator_contract.py.
