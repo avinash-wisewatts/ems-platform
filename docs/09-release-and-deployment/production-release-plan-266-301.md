@@ -1,6 +1,6 @@
 # Production Release Plan: Migrations 266 → 301
 
-Status: PROPOSED; D4a / D4b / D8 / D9 decided 2026-10-17, others open · Prepared: 2026-10-14 · Updated: 2026-10-17 · Owner: Engineering
+Status: PROPOSED; D4a / D4b / D8 / D9 decided 2026-10-17 (D8 condition confirmed), others open · Prepared: 2026-10-14 · Updated: 2026-10-17 · Owner: Engineering
 Nothing in this plan has been executed. Every dispatch, precheck and operator
 step below needs its own explicit approval
 ([release-process.md](release-process.md#every-phase-requires-its-own-explicit-approval)).
@@ -295,7 +295,7 @@ own approval:
    one-off production normalization test is approved, and no production job
    is to be delayed to create a batch.
 5. D8's condition met: the 300-second capture policy 5 confirmed
-   intentional and documented.
+   intentional by the product owner (2026-10-17, recorded in section 9).
 
 After D, routing p99 must stay comfortably under ~25 s before five-minute
 batching is (re)activated.
@@ -464,5 +464,5 @@ each release, precheck and schedule change still needs its own approval.
 | D5 | Admin Portal assignment on production | Release C makes "Assign Data Points" Save live |
 | D6 | Analytics UI on production | Confirm production stays API-only until a separate frontend rollout |
 | D7 | Routing job runtime limits | After A and 303 are measured (P11), whether to restore jobs 1001/1012 `max_runtime` from 30 to 5 minutes (separate approval) |
-| D8 | Capture policy 5 under 300 | **Decided 2026-10-17: accept 300's WARNING only if the 300-second capture policy for site `49500fb9-0ea9-4496-8eeb-55131c89d0c2` is confirmed intentional and documented** (site owner / configuration record). Otherwise the policy is reviewed before D. **Condition NOT met (2026-10-17):** [V staging onboarding audit] the site is "Vivekanandanagar Home" (`VIVEKANANDANAGAR_HOME`), organization "Avinash Home" (described as "Test org"); every staging onboarding request that set its capture interval (2026-08-02, 2026-08-06) asked for **60 s**. No record of a deliberate 300 s policy found in the repository or documentation. Production record not yet checked (`scripts/diagnostics/prod_d8_capture_policy_lookup.sql`, needs authorization). D8 stays open |
+| D8 | Capture policy 5 under 300 | **Decided and condition met 2026-10-17: accept 300's WARNING.** The product owner (owner of the "Avinash Home" organization, site "Vivekanandanagar Home" `49500fb9-0ea9-4496-8eeb-55131c89d0c2`) confirmed on 2026-10-17 that the site's 300-second capture policy (policy 5, 300 + 30 s) is **intentional**, although the staging onboarding requests of 2026-08-02 / 08-06 asked for 60 s. Effect under 300: that site's boundary bucket is finalized one batch later (about 5 minutes more latency). The production policy is not changed. The production lookup (`scripts/diagnostics/prod_d8_capture_policy_lookup.sql`) was not run and is no longer needed for D8 |
 | D9 | How 303 reaches production | **Decided 2026-10-17: option (1).** Release D (299–303); restoring the six 300 jobs to 1-minute schedules is a post-deploy step that needs its own explicit approval; five-minute batching is activated only after replica validation (G3b item 4), by separate approval. Rejected: (2) D with 300 active; (3) runner change |
