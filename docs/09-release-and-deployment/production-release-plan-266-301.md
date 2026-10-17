@@ -337,7 +337,7 @@ on them.
 | P8 | Loader md5s expected by 301 | D |
 | P9 | Compressed `environment_measurements` row count (291) and oldest non-empty `energy_measurements` chunk (290) | C1 |
 | P10 | No backfill or STOP active; failure count unchanged since the last check; job 1053 (compression) not running or due | Every release |
-| P11 | Job-duration sampler (`scripts/diagnostics/prod_job_duration_sampler.sql`): `timescaledb_information.job_stats` and `telemetry.pipeline_state` every 30 s for 24 h; jobs found by name (1000, 1001, 1012, 1044, 1083, 1063, 1062, 1060, 1053 on production); catalog reads only | Before A (baseline), after A, before and after D |
+| P11 | Job-duration sampler (`scripts/diagnostics/prod_job_duration_sampler.sql`): `timescaledb_information.job_stats` and `telemetry.pipeline_state` every 30 s for 24 h; jobs found by name (1000, 1001, 1012, 1044, 1083, 1063, 1062, 1060, 1053 on production); catalog reads only. Run with `scripts/diagnostics/run_readonly_job_sampler.sh <host> <dir>`: reconnects after a dropped SSH session with only the samples still due, never past the end time, never retries a segment that did not report read-only, STOP file to end early (staging-tested 2026-10-17 incl. a forced disconnect; no orphaned session) | Before A (baseline), after A, before and after D |
 | P12 | Bounded routing read: EXPLAIN plus one timed run of 303's forward read, which touches only uncompressed chunks (`scripts/diagnostics/prod_routing_bounded_read_timing.sql`, added with 303) | D |
 
 **Never run the unbounded routing read on production.** The routing
