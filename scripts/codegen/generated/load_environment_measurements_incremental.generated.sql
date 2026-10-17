@@ -2,7 +2,13 @@ CREATE OR REPLACE PROCEDURE telemetry.load_environment_measurements_incremental(
  LANGUAGE plpgsql
 AS $procedure$
 DECLARE
-    v_pipeline_name CONSTANT TEXT := 'environment_measurements';
+    -- Migration 303: ems.routing_scope (transaction-local; set only by
+    -- telemetry.run_routing_late_sweep_job) selects the late-data sweep.
+    v_scope CONSTANT TEXT := COALESCE(NULLIF(current_setting('ems.routing_scope', true), ''), 'forward');
+    v_pipeline_name CONSTANT TEXT := CASE WHEN v_scope = 'late_sweep' THEN 'environment_measurements_late_sweep' ELSE 'environment_measurements' END;
+    v_event_min TIMESTAMPTZ;
+    v_event_max TIMESTAMPTZ;
+    v_forward_checkpoint TIMESTAMPTZ;
     v_previous_checkpoint TIMESTAMPTZ;
     v_window_start TIMESTAMPTZ;
     v_window_end TIMESTAMPTZ;
@@ -21,6 +27,11 @@ BEGIN
     -- bound" -- byte-for-byte the pre-207 behaviour.
     IF p_max_window IS NOT NULL AND p_max_window <= INTERVAL '0 seconds' THEN
         RAISE EXCEPTION 'p_max_window must be positive when supplied; received %', p_max_window;
+    END IF;
+
+    -- Migration 303: reject an unknown scope.
+    IF v_scope NOT IN ('forward', 'late_sweep') THEN
+        RAISE EXCEPTION 'ems.routing_scope must be forward or late_sweep; received %', v_scope;
     END IF;
 
     SELECT pg_try_advisory_xact_lock(hashtextextended('telemetry.load_environment_measurements_incremental',0))
@@ -76,6 +87,30 @@ BEGIN
         v_window_end := LEAST(v_window_end, v_previous_checkpoint + p_max_window);
     END IF;
 
+    -- Migration 303: forward runs read only normalized_points chunks newer
+    -- than the newest compressed chunk (event_time >= its range_end), so
+    -- chunk exclusion skips every compressed chunk instead of scanning its
+    -- batch metadata on every run. Rows older than that floor (late data in
+    -- compressed chunks) are routed by the hourly late-data sweep, which reads
+    -- only event_time < floor and never passes the forward checkpoint.
+    SELECT max(c.range_end) INTO v_event_min
+    FROM timescaledb_information.chunks c
+    WHERE c.hypertable_schema='telemetry'
+      AND c.hypertable_name='normalized_points'
+      AND c.is_compressed;
+    v_event_min := COALESCE(v_event_min, '-infinity'::timestamptz);
+    v_event_max := 'infinity'::timestamptz;
+    IF v_scope = 'late_sweep' THEN
+        v_event_max := v_event_min;
+        v_event_min := '-infinity'::timestamptz;
+        SELECT last_received_at INTO v_forward_checkpoint
+        FROM telemetry.pipeline_state WHERE pipeline_name='environment_measurements';
+        v_window_end := LEAST(v_window_end, COALESCE(v_forward_checkpoint, '-infinity'::timestamptz));
+        IF v_previous_checkpoint IS NOT NULL THEN
+            v_window_end := GREATEST(v_window_end, v_previous_checkpoint);
+        END IF;
+    END IF;
+
     -- Route from newly received normalized rows. Late source timestamps are
     -- discovered by their new platform receipt timestamp, so the historical
     -- correction tolerance does not need to be rescanned every minute.
@@ -94,6 +129,8 @@ BEGIN
       JOIN config.device_profiles dp ON dp.id=d.profile_id
       WHERE np.platform_received_at > v_window_start
         AND np.platform_received_at <= v_window_end
+        AND np.event_time >= v_event_min
+        AND np.event_time < v_event_max
         AND dp.profile_code='ENVIRONMENT_SENSOR_AIRSENSE_V1'
         AND np.logical_point IN
         (

@@ -172,6 +172,61 @@ correction_deadline`), skips the UPDATE when there is none, and otherwise adds
 - **After deploying to staging**, the paused environment routing job must be
   re-enabled (`alter_job(<id>, scheduled => true)`) as a separate step.
 
+### Routing window read: forward floor plus hourly late-data sweep (migration 303)
+
+**Status: implemented, not merged or deployed** (staging deploy needs
+approval; production is gated by release plan G3b, Release D).
+
+Migration 267 bounded only the window-*end* lookup. The window read itself
+filtered on `platform_received_at` alone, and `normalized_points` is
+partitioned on `event_time` (7-day chunks, compressed 1 day after a chunk
+ends), so no chunk could be excluded: every routing run read the batch
+metadata of every compressed chunk. Measured 2026-10-16/17, same 5-minute
+window: staging 37,279 buffers / 148 ms (warm cache); production timed out
+at 30 s six times out of six (12 compressed chunks, 353 MB), with energy
+routing runs at p50 546 s.
+
+Migration 303 changes four fragments in each loader (no other line; md5
+postconditions prove it):
+
+- **Forward scope** (the existing routing jobs, unchanged): the read also
+  requires `event_time >= v_event_min`, where `v_event_min` is the newest
+  compressed chunk's `range_end` from `timescaledb_information.chunks`. Every
+  compressed chunk ends at or before it, so startup chunk exclusion drops them
+  all, also under a cached generic plan. Staging, same window: 543 buffers /
+  12 ms, open chunk only.
+- **Late-sweep scope:** new job `telemetry.run_routing_late_sweep_job`
+  (hourly, fixed, hh:31:30 UTC, max_runtime 10 min) sets the
+  transaction-local `ems.routing_scope = 'late_sweep'` and calls each loader in
+  its own transaction. In that scope a loader uses checkpoint
+  `<pipeline>_late_sweep`, reads only `event_time < floor`, and caps its window
+  end at the forward checkpoint (never moving backwards).
+- **Completeness:** the floor never decreases (chunks only become compressed
+  or are dropped oldest-first), and the sweep only revisits receipt ranges the
+  forward runs already passed, so every row skipped by a forward run is
+  routed by a later sweep. Exception: manually decompressing a
+  `normalized_points` chunk lowers the floor; do not do that without a manual
+  sweep over the affected receipts.
+- **Latency:** only rows arriving after their chunk was compressed (at least
+  a day late) wait for the sweep, up to about an hour more. Staging,
+  2026-10-16: no compressed batch has a receipt more than ~1.5 minutes after
+  its newest event.
+- **Unchanged:** window end (267), max_window, 1-minute overlap, upserts
+  (idempotent: energy updates only inside the correction deadline,
+  environment inserts with `ON CONFLICT DO NOTHING` and updates only
+  correctable buckets), advisory lock (shared by both scopes, so a sweep and a
+  forward run never overlap), EXCEPTION / rollback contract, demand watermark.
+- **Rollback:** `postgres/maintenance/303_routing_forward_floor_late_sweep_rollback.sql`
+  (guarded; restores the 267 / 291 bodies verbatim, removes the job, procedure
+  and checkpoint rows).
+- **Tests:** `app/tests/test_routing_forward_floor_late_sweep.py` (plans,
+  late rows in compressed and uncompressed chunks for both domains, sweep cap,
+  catch-up, idempotency, failure / retry, lock contention, demand-interval
+  completeness, the job procedure, the rollback script) and
+  `app/tests/test_routing_generator_contract.py`.
+- **Production precheck:** `scripts/diagnostics/prod_routing_bounded_read_timing.sql`
+  (read-only, guarded; never runs the unbounded read). Not run on production.
+
 ### Failure quarantine and recovery (jobs 1076/1068/1077)
 
 Three further jobs sit alongside the loaders above: `run_raw_receipt_state_job`
