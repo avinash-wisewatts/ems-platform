@@ -16,8 +16,10 @@
 --   V5 routing runtimes (job_stats, last run) and forward lag: compare with
 --      the pre-deploy baseline in the operations plan.
 --   V6 completeness, last 3 closed hours: every energy device-minute with
---      normalized data has an energy_measurements row (missing = 0), and every
---      AirSense device-5-minute bucket an environment_measurements row.
+--      normalized data has an energy_measurements row (missing = 0); every
+--      AirSense device-minute with routed points that the forward run has
+--      processed has an environment_measurements row in the capture bucket the
+--      loader assigns it (missing_minutes = 0; pending = not yet due).
 --   V7 demand: VALID share of finalized intervals over the last 24 h is not
 --      lower than over the 24 h before deploy.
 -- ============================================================================
@@ -84,24 +86,62 @@ WITH energy_src AS (
 energy_dst AS (
     SELECT DISTINCT device_id, bucket_start AS b FROM telemetry.energy_measurements
     WHERE bucket_start >= :'v6_from' AND bucket_start < :'v6_to'
+)
+SELECT 'energy' AS domain, count(*) AS source_buckets, count(*) FILTER (WHERE d.b IS NULL) AS missing
+FROM energy_src s LEFT JOIN energy_dst d USING (device_id, b);
+
+-- V6-ENV-BEGIN (tested by app/tests/test_routing_303_validation_env_completeness.py)
+-- environment_measurements.bucket_start is the site capture bucket
+-- (telemetry.resolve_site_capture_bucket: 1 min on a 60 s policy, 5 min on a
+-- 300 s one), not a fixed 5-minute grid, and a device need not report on a
+-- bucket boundary. So every source device-minute is mapped to the bucket the
+-- loader assigns its samples, and that bucket must be routed. Counted only:
+-- the points the loader routes; samples received at or before the forward
+-- checkpoint, in buckets closed before that run started (the loader's v_now);
+-- the rest is pending, not missing.
+\echo === V6 environment completeness per device-minute (missing_minutes must be 0)
+WITH env_fwd AS (
+    SELECT last_received_at, last_started_at - INTERVAL '1 second' AS run_at
+    FROM telemetry.pipeline_state WHERE pipeline_name = 'environment_measurements'
 ),
 env_src AS (
-    SELECT DISTINCT np.device_id, date_bin('5 minutes', np.event_time, TIMESTAMPTZ '2000-01-01') AS b
+    SELECT np.device_id, np.site_id, np.event_time, max(np.platform_received_at) AS received_at
     FROM telemetry.normalized_points np
     JOIN metadata.devices d ON d.id = np.device_id
     JOIN config.device_profiles dp ON dp.id = d.profile_id
     WHERE np.event_time >= :'v6_from' AND np.event_time < :'v6_to'
       AND dp.profile_code = 'ENVIRONMENT_SENSOR_AIRSENSE_V1'
+      AND np.logical_point IN ('ENV_TEMPERATURE', 'ENV_RELATIVE_HUMIDITY', 'ENV_ILLUMINANCE_LUX',
+                               'OCCUPANCY_ACTIVITY', 'OCCUPANCY_SECONDS_SINCE_LAST_PIR_EVENT',
+                               'PULSE_INPUT_1_RAW', 'EXTERNAL_SENSOR_INPUT_1_RAW', 'EXTERNAL_SENSOR_INPUT_2_RAW',
+                               'EXTERNAL_SENSOR_INPUT_3_RAW', 'EXTERNAL_SENSOR_INPUT_4_RAW',
+                               'DEVICE_BATTERY_VOLTAGE', 'BATTERY_VOLTAGE', 'DEVICE_STATUS_CODE')
+    GROUP BY 1, 2, 3
 ),
-env_dst AS (
-    SELECT DISTINCT device_id, bucket_start AS b FROM telemetry.environment_measurements
-    WHERE bucket_start >= :'v6_from' AND bucket_start < :'v6_to'
+env_minutes AS (
+    SELECT s.device_id, date_bin('1 minute', s.event_time, TIMESTAMPTZ '2000-01-01') AS minute, b.bucket_start,
+           bool_or(s.received_at <= f.last_received_at
+                   AND b.bucket_start + make_interval(secs => COALESCE(b.capture_interval_seconds, 1)) <= f.run_at) AS due
+    FROM env_src s
+    CROSS JOIN env_fwd f
+    CROSS JOIN LATERAL telemetry.resolve_site_capture_bucket(s.site_id, s.event_time) b
+    GROUP BY 1, 2, 3
+),
+env_checked AS (
+    SELECT m.*, EXISTS (SELECT 1 FROM telemetry.environment_measurements em
+                        WHERE em.device_id = m.device_id AND em.bucket_start = m.bucket_start
+                          AND em.bucket_start >= :'v6_from'::timestamptz - INTERVAL '1 hour'
+                          AND em.bucket_start < :'v6_to') AS routed
+    FROM env_minutes m
 )
-SELECT 'energy' AS domain, count(*) AS source_buckets, count(*) FILTER (WHERE d.b IS NULL) AS missing
-FROM energy_src s LEFT JOIN energy_dst d USING (device_id, b)
-UNION ALL
-SELECT 'environment', count(*), count(*) FILTER (WHERE d.b IS NULL)
-FROM env_src s LEFT JOIN env_dst d USING (device_id, b);
+SELECT 'environment' AS domain,
+       count(*) FILTER (WHERE due) AS source_minutes,
+       count(DISTINCT (device_id, bucket_start)) FILTER (WHERE due) AS source_buckets,
+       count(*) FILTER (WHERE due AND NOT routed) AS missing_minutes,
+       count(DISTINCT (device_id, bucket_start)) FILTER (WHERE due AND NOT routed) AS missing_buckets,
+       count(*) FILTER (WHERE NOT due) AS pending_minutes
+FROM env_checked;
+-- V6-ENV-END
 
 \echo === V7 demand VALID share (last 24 h vs the 24 h before)
 SELECT now() - INTERVAL '48 hours' AS v7_from \gset
