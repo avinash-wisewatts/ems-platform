@@ -285,6 +285,11 @@ def test_late_sweep_checkpoint_rows_exist(tx):
     names = {r[0] for r in tx.execute(
         "SELECT pipeline_name FROM telemetry.pipeline_state WHERE pipeline_name LIKE '%\\_late\\_sweep'").fetchall()}
     assert names == {"energy_measurements_late_sweep", "environment_measurements_late_sweep"}
+    # Seeded SUCCESS (verify_pipeline.sh requires every row to be SUCCESS); a
+    # sweep may since have run, so only the never-failed states are accepted.
+    statuses = {r[0] for r in tx.execute(
+        "SELECT last_status FROM telemetry.pipeline_state WHERE pipeline_name LIKE '%\\_late\\_sweep'").fetchall()}
+    assert statuses <= {"SUCCESS", "NO_SOURCE_DATA"}, statuses
 
 
 def test_existing_routing_jobs_are_untouched(tx):

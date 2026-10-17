@@ -1557,10 +1557,14 @@ GRANT EXECUTE ON PROCEDURE telemetry.run_routing_late_sweep_job(INTEGER, JSONB) 
 
 -- ----------------------------------------------------------------------------
 -- 5. Sweep checkpoints start at the forward checkpoints: every receipt before
---    them was routed by the pre-303 (unbounded) forward body.
+--    them was routed by the pre-303 (unbounded) forward body, i.e. the sweep's
+--    work up to that point is complete. Status SUCCESS records exactly that
+--    (and keeps scripts/verify/verify_pipeline.sh, which requires every row to
+--    be SUCCESS, green until the first hourly sweep); last_completed_at stays
+--    NULL until a sweep actually runs.
 -- ----------------------------------------------------------------------------
 INSERT INTO telemetry.pipeline_state (pipeline_name, last_received_at, last_status)
-SELECT ps.pipeline_name || '_late_sweep', ps.last_received_at, 'NEVER_RUN'
+SELECT ps.pipeline_name || '_late_sweep', ps.last_received_at, 'SUCCESS'
 FROM telemetry.pipeline_state AS ps
 WHERE ps.pipeline_name IN ('energy_measurements', 'environment_measurements')
 ON CONFLICT (pipeline_name) DO NOTHING;
