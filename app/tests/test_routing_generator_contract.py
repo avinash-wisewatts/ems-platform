@@ -36,6 +36,7 @@ MIG_227 = REPO / "postgres" / "migrations" / "227_parameter_routing_foundation.s
 MIG_228 = REPO / "postgres" / "migrations" / "228_device_specific_asset_space_point_binding.sql"
 MIG_267 = REPO / "postgres" / "migrations" / "267_routing_bounded_window_end.sql"
 MIG_291 = REPO / "postgres" / "migrations" / "291_environment_loader_bounded_update.sql"
+MIG_303 = REPO / "postgres" / "migrations" / "303_routing_forward_floor_late_sweep.sql"
 MANIFEST = REPO / "postgres" / "restructure_manifest.csv"
 
 # The Phase 2 amendment (migration 228) adds exactly one predicate to the
@@ -119,6 +120,133 @@ def _revert_291_tokens(tokens: list[str]) -> list[str]:
         o = _tokens(_strip_line_comments(old))
         i = _find_sublist(tokens, n)
         assert i != -1, f"migration-291 fragment missing from the generated body: {new[:50]!r}"
+        tokens = tokens[:i] + o + tokens[i + len(n):]
+    return tokens
+
+
+# Migration 303 bounds the forward window read to uncompressed normalized_points
+# chunks and adds the late-sweep scope. It changes exactly these four fragments;
+# reverting them must give back the migration-291 body exactly. (new, old)
+# pairs, applied in order.
+_MIG_303_FRAGMENTS = [
+    (
+        "    -- Migration 303: ems.routing_scope (transaction-local; set only by\n"
+        "    -- telemetry.run_routing_late_sweep_job) selects the late-data sweep.\n"
+        "    v_scope CONSTANT TEXT := COALESCE(NULLIF(current_setting('ems.routing_scope', true), ''), 'forward');\n"
+        "    v_pipeline_name CONSTANT TEXT := CASE WHEN v_scope = 'late_sweep' THEN 'environment_measurements_late_sweep' ELSE 'environment_measurements' END;\n"
+        "    v_event_min TIMESTAMPTZ;\n"
+        "    v_event_max TIMESTAMPTZ;\n"
+        "    v_forward_checkpoint TIMESTAMPTZ;\n",
+        "    v_pipeline_name CONSTANT TEXT := 'environment_measurements';\n",
+    ),
+    (
+        "    -- Migration 303: reject an unknown scope.\n"
+        "    IF v_scope NOT IN ('forward', 'late_sweep') THEN\n"
+        "        RAISE EXCEPTION 'ems.routing_scope must be forward or late_sweep; received %', v_scope;\n"
+        "    END IF;\n\n",
+        "",
+    ),
+    (
+        "    -- Migration 303: forward runs read only normalized_points chunks newer\n"
+        "    -- than the newest compressed chunk (event_time >= its range_end), so\n"
+        "    -- chunk exclusion skips every compressed chunk instead of scanning its\n"
+        "    -- batch metadata on every run. Rows older than that floor (late data in\n"
+        "    -- compressed chunks) are routed by the hourly late-data sweep, which reads\n"
+        "    -- only event_time < floor and never passes the forward checkpoint.\n"
+        "    SELECT max(c.range_end) INTO v_event_min\n"
+        "    FROM timescaledb_information.chunks c\n"
+        "    WHERE c.hypertable_schema='telemetry'\n"
+        "      AND c.hypertable_name='normalized_points'\n"
+        "      AND c.is_compressed;\n"
+        "    v_event_min := COALESCE(v_event_min, '-infinity'::timestamptz);\n"
+        "    v_event_max := 'infinity'::timestamptz;\n"
+        "    IF v_scope = 'late_sweep' THEN\n"
+        "        v_event_max := v_event_min;\n"
+        "        v_event_min := '-infinity'::timestamptz;\n"
+        "        SELECT last_received_at INTO v_forward_checkpoint\n"
+        "        FROM telemetry.pipeline_state WHERE pipeline_name='environment_measurements';\n"
+        "        v_window_end := LEAST(v_window_end, COALESCE(v_forward_checkpoint, '-infinity'::timestamptz));\n"
+        "        IF v_previous_checkpoint IS NOT NULL THEN\n"
+        "            v_window_end := GREATEST(v_window_end, v_previous_checkpoint);\n"
+        "        END IF;\n"
+        "    END IF;\n\n",
+        "",
+    ),
+    (
+        "        AND np.event_time >= v_event_min\n"
+        "        AND np.event_time < v_event_max\n",
+        "",
+    ),
+]
+
+
+# The same four fragments in the energy loader (2-space indent, its own
+# pipeline name and window_events indentation).
+_MIG_303_ENERGY_FRAGMENTS = [
+    (
+        "  -- Migration 303: ems.routing_scope (transaction-local; set only by\n"
+        "  -- telemetry.run_routing_late_sweep_job) selects the late-data sweep.\n"
+        "  v_scope CONSTANT TEXT := COALESCE(NULLIF(current_setting('ems.routing_scope', true), ''), 'forward');\n"
+        "  v_pipeline_name CONSTANT TEXT := CASE WHEN v_scope = 'late_sweep' THEN 'energy_measurements_late_sweep' ELSE 'energy_measurements' END;\n"
+        "  v_event_min TIMESTAMPTZ;\n"
+        "  v_event_max TIMESTAMPTZ;\n"
+        "  v_forward_checkpoint TIMESTAMPTZ;\n",
+        "  v_pipeline_name CONSTANT TEXT := 'energy_measurements';\n",
+    ),
+    (
+        "  -- Migration 303: reject an unknown scope.\n"
+        "  IF v_scope NOT IN ('forward', 'late_sweep') THEN\n"
+        "    RAISE EXCEPTION 'ems.routing_scope must be forward or late_sweep; received %', v_scope;\n"
+        "  END IF;\n\n",
+        "",
+    ),
+    (
+        "  -- Migration 303: forward runs read only normalized_points chunks newer\n"
+        "  -- than the newest compressed chunk (event_time >= its range_end), so\n"
+        "  -- chunk exclusion skips every compressed chunk instead of scanning its\n"
+        "  -- batch metadata on every run. Rows older than that floor (late data in\n"
+        "  -- compressed chunks) are routed by the hourly late-data sweep, which reads\n"
+        "  -- only event_time < floor and never passes the forward checkpoint.\n"
+        "  SELECT max(c.range_end) INTO v_event_min\n"
+        "  FROM timescaledb_information.chunks c\n"
+        "  WHERE c.hypertable_schema='telemetry'\n"
+        "    AND c.hypertable_name='normalized_points'\n"
+        "    AND c.is_compressed;\n"
+        "  v_event_min := COALESCE(v_event_min, '-infinity'::timestamptz);\n"
+        "  v_event_max := 'infinity'::timestamptz;\n"
+        "  IF v_scope = 'late_sweep' THEN\n"
+        "    v_event_max := v_event_min;\n"
+        "    v_event_min := '-infinity'::timestamptz;\n"
+        "    SELECT last_received_at INTO v_forward_checkpoint\n"
+        "    FROM telemetry.pipeline_state WHERE pipeline_name='energy_measurements';\n"
+        "    v_window_end := LEAST(v_window_end, COALESCE(v_forward_checkpoint, '-infinity'::timestamptz));\n"
+        "    IF v_previous_checkpoint IS NOT NULL THEN\n"
+        "      v_window_end := GREATEST(v_window_end, v_previous_checkpoint);\n"
+        "    END IF;\n"
+        "  END IF;\n\n",
+        "",
+    ),
+    (
+        "      AND np.event_time >= v_event_min\n"
+        "      AND np.event_time < v_event_max\n",
+        "",
+    ),
+]
+
+
+def _revert_303_text(sql: str) -> str:
+    for new, old in _MIG_303_FRAGMENTS:
+        assert sql.count(new) == 1, f"migration-303 fragment must appear exactly once: {new[:50]!r}"
+        sql = sql.replace(new, old)
+    return sql
+
+
+def _revert_303_tokens(tokens: list[str]) -> list[str]:
+    for new, old in _MIG_303_FRAGMENTS:
+        n = _tokens(_strip_line_comments(new))
+        o = _tokens(_strip_line_comments(old))
+        i = _find_sublist(tokens, n)
+        assert i != -1, f"migration-303 fragment missing from the generated body: {new[:50]!r}"
         tokens = tokens[:i] + o + tokens[i + len(n):]
     return tokens
 
@@ -216,7 +344,7 @@ def test_generated_body_is_migration_226_plus_only_the_228_predicate_267_window_
     b226, _ = _split_body_comment(body226)
     bgen, _ = _split_body_comment(gen_full)
     tb226 = _tokens(_strip_line_comments(b226))
-    tbgen = _revert_267_tokens(_revert_291_tokens(_tokens(_strip_line_comments(bgen))))
+    tbgen = _revert_267_tokens(_revert_291_tokens(_revert_303_tokens(_tokens(_strip_line_comments(bgen)))))
 
     i = _find_sublist(tbgen, _MIG_228_EXTRA_TOKENS)
     assert i != -1, (
@@ -396,18 +524,40 @@ def _embedded_body(path: Path) -> str:
     return mig[start:end]
 
 
-def test_migration_291_embedded_body_equals_generated_artifact():
-    # Migration 291 now owns the deployed body: it CREATE OR REPLACEs the
+def test_migration_303_embedded_body_equals_generated_artifact():
+    # Migration 303 now owns the deployed body: it CREATE OR REPLACEs the
     # loader with the current generated artifact, verbatim.
     art = ARTIFACT.read_text(encoding="utf-8").rstrip("\n")
-    assert _embedded_body(MIG_291) == art
+    assert _embedded_body(MIG_303) == art
+
+
+def test_migration_291_embedded_body_is_the_artifact_before_the_303_floor():
+    # Migration 291's embedded body is the pre-303 artifact: identical to the
+    # current generated artifact except for the four migration-303 fragments.
+    art = ARTIFACT.read_text(encoding="utf-8").rstrip("\n")
+    assert _embedded_body(MIG_291) == _revert_303_text(art)
+
+
+def test_migration_303_energy_body_is_the_267_body_plus_only_the_303_fragments():
+    def energy(path):
+        mig = path.read_text(encoding="utf-8")
+        start = mig.index("CREATE OR REPLACE PROCEDURE telemetry.load_energy_measurements_incremental")
+        return mig[start:mig.index("$procedure$;", start) + len("$procedure$;")]
+
+    new = energy(MIG_303)
+    reverted = new
+    for frag_new, frag_old in _MIG_303_ENERGY_FRAGMENTS:
+        assert reverted.count(frag_new) == 1, frag_new[:60]
+        reverted = reverted.replace(frag_new, frag_old)
+    assert reverted == energy(MIG_267)
+    assert "EXECUTE " not in new and "format(" not in new
 
 
 def test_migration_267_embedded_body_is_the_artifact_before_the_291_bound():
     # Migration 267's embedded body is the pre-291 artifact: identical to the
     # current generated artifact except for the four migration-291 fragments.
     art = ARTIFACT.read_text(encoding="utf-8").rstrip("\n")
-    assert _embedded_body(MIG_267) == _revert_291_text(art)
+    assert _embedded_body(MIG_267) == _revert_291_text(_revert_303_text(art))
 
 
 def test_migration_228_embedded_body_is_the_artifact_before_the_267_window_end():
@@ -415,7 +565,7 @@ def test_migration_228_embedded_body_is_the_artifact_before_the_267_window_end()
     # current generated artifact except for the migration-291 fragments and the
     # migration-267 window-end block.
     art = ARTIFACT.read_text(encoding="utf-8").rstrip("\n")
-    assert _embedded_body(MIG_228) == _revert_267_text(_revert_291_text(art))
+    assert _embedded_body(MIG_228) == _revert_267_text(_revert_291_text(_revert_303_text(art)))
 
 
 def test_migration_291_bound_is_derived_only_from_correctable_candidates():
@@ -448,6 +598,15 @@ def test_manifest_registers_migration_291():
     assert files.index("291_environment_loader_bounded_update.sql") > files.index("290_energy_register_delta_15min.sql")
 
 
+def test_manifest_registers_migration_303_last():
+    import csv
+
+    rows = list(csv.DictReader(MANIFEST.read_text(encoding="utf-8").splitlines()))
+    files = [r["source_file"] for r in rows if r["target_category"] == "migration"]
+    assert files[-1] == "303_routing_forward_floor_late_sweep.sql"
+    assert files.index("303_routing_forward_floor_late_sweep.sql") > files.index("302_analytics_stale_schedule_aware.sql")
+
+
 def test_migration_227_embedded_body_is_the_228_body_minus_the_device_predicate():
     # Migration 227's embedded body is the pre-amendment artifact: identical to
     # the current generated artifact except for the migration-228 device
@@ -458,7 +617,7 @@ def test_migration_227_embedded_body_is_the_228_body_minus_the_device_predicate(
     body227, _ = _split_body_comment(mig[start:end])
     bgen, _ = _split_body_comment(ARTIFACT.read_text(encoding="utf-8"))
     t227 = _tokens(_strip_line_comments(body227))
-    tgen = _revert_267_tokens(_revert_291_tokens(_tokens(_strip_line_comments(bgen))))
+    tgen = _revert_267_tokens(_revert_291_tokens(_revert_303_tokens(_tokens(_strip_line_comments(bgen)))))
     i = _find_sublist(tgen, _MIG_228_EXTRA_TOKENS)
     assert i != -1
     assert tgen[:i] + tgen[i + len(_MIG_228_EXTRA_TOKENS):] == t227
