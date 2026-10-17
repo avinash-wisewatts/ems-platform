@@ -82,7 +82,7 @@ bounded +6h at ~2,840 rows/s; steady-state 1-minute cycles now complete in
 ### Routing window end: bounded to recent `event_time` (migration 267)
 
 **Status: deployed to staging (2026-09-24, PR #78); production receives it in
-release Stage 4 of the 223–290 promotion.**
+Release A of the [266–301 release plan](../../09-release-and-deployment/production-release-plan-266-301.md).**
 
 The two routing loaders take `window_end` as
 `max(platform_received_at)` over `telemetry.normalized_points`. Until
@@ -132,8 +132,9 @@ Both need separate decisions.
 
 ### Environment routing UPDATE: bounded to correctable buckets (migration 291)
 
-**Status: implemented, not yet deployed** (staging deploy pending approval;
-production follows the 223–290 promotion).
+**Status: deployed to staging 2026-10-08 (`105c6c1`, `deploy-staging.yml` run
+`37738437514`); production receives it in Release C of the
+[266–301 release plan](../../09-release-and-deployment/production-release-plan-266-301.md).**
 
 The environment loader refreshes already-routed rows with
 `UPDATE telemetry.environment_measurements … FROM tmp_environment_candidates`.

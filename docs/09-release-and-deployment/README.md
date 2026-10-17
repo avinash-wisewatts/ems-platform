@@ -12,4 +12,5 @@ platform manual chapters 17–18 (archived) and `docs/operations/CICD_PIPELINE.m
 | [ci-cd.md](ci-cd.md) | The build-once/promote-the-same-artifact pipeline. |
 | [release-process.md](release-process.md) | The staging → production promotion procedure and authorization model. |
 | [deployment-process.md](deployment-process.md) | What `deploy_release.sh` actually does, service by service. |
+| [production-release-plan-266-301.md](production-release-plan-266-301.md) | Proposed production releases A/B/C for migrations 266–301: gates, prechecks, stop conditions, open product-owner decisions. |
 | [rollback.md](rollback.md) | Application rollback (implemented) vs. database rollback (deliberately not implemented). |
