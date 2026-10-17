@@ -1,6 +1,6 @@
 # Production Release Plan: Migrations 266 → 301
 
-Status: PROPOSED, awaiting product-owner decisions · Prepared: 2026-10-14 · Updated: 2026-10-17 · Owner: Engineering
+Status: PROPOSED; D4a / D4b / D8 / D9 decided 2026-10-17, others open · Prepared: 2026-10-14 · Updated: 2026-10-17 · Owner: Engineering
 Nothing in this plan has been executed. Every dispatch, precheck and operator
 step below needs its own explicit approval
 ([release-process.md](release-process.md#every-phase-requires-its-own-explicit-approval)).
@@ -290,9 +290,12 @@ own approval:
    completeness, late data, catch-up, demand, rollback).
 3. The bounded routing read timed read-only on production (P12) and found
    well within budget.
-4. The five-minute normalization batch validated by a safe method agreed
-   separately. No one-off production normalization test is approved.
-5. D4b, D8 and D9 decided.
+4. The five-minute normalization batch validated on a production-snapshot
+   replica (D9; proposed setup in the operations plan, not yet approved). No
+   one-off production normalization test is approved, and no production job
+   is to be delayed to create a batch.
+5. D8's condition met: the 300-second capture policy 5 confirmed
+   intentional and documented.
 
 After D, routing p99 must stay comfortably under ~25 s before five-minute
 batching is (re)activated.
@@ -334,7 +337,7 @@ on them.
 | P8 | Loader md5s expected by 301 | D |
 | P9 | Compressed `environment_measurements` row count (291) and oldest non-empty `energy_measurements` chunk (290) | C1 |
 | P10 | No backfill or STOP active; failure count unchanged since the last check; job 1053 (compression) not running or due | Every release |
-| P11 | Job-duration sampler: `timescaledb_information.job_stats` and `telemetry.pipeline_state` every 30 s for 1000, 1001, 1012, 1044, 1083, 1063, 1062 (catalog reads only) | After A, before and after D |
+| P11 | Job-duration sampler (`scripts/diagnostics/prod_job_duration_sampler.sql`): `timescaledb_information.job_stats` and `telemetry.pipeline_state` every 30 s for 24 h; jobs found by name (1000, 1001, 1012, 1044, 1083, 1063, 1062, 1060, 1053 on production); catalog reads only | Before A (baseline), after A, before and after D |
 | P12 | Bounded routing read: EXPLAIN plus one timed run of 303's forward read, which touches only uncompressed chunks (`scripts/diagnostics/prod_routing_bounded_read_timing.sql`, added with 303) | D |
 
 **Never run the unbounded routing read on production.** The routing
@@ -445,19 +448,21 @@ and becomes multi-device about 2026-11-08. Migration 291's failure point is
 about early-to-mid November [E] (about 43,600 compressed rows on 2026-10-08,
 growing about 10,000 per week). Re-measure both with P9.
 
-## 9. Product-owner decisions (unresolved)
+## 9. Product-owner decisions
 
-None of these is assumed approved.
+D4a, D4b, D8 and D9 were decided by the product owner on 2026-10-17. None of
+the others is assumed approved. A decision is not an approval to execute:
+each release, precheck and schedule change still needs its own approval.
 
 | # | Decision | Options |
 |---|---|---|
 | D1 | How to meet G1 | (a) Resume the 1h backfill under the proposed baseline policy, then top up and dispatch A in one burst window (recommended). (b) Activate 266 with the gap and rely on the nightly reconcile (section 4: likely never completes at baseline IO). (c) Activate 266 and leave a permanent 1h gap from Sep 24 07:00 UTC to activation − 2 days |
 | D2 | F1 deadline and release split | Keep 2026-10-27 or set it from the 2026-11-03 evidence. C1 / C2′ split agreed 2026-10-17 |
 | D3 | Release B parity pass criterion | Proposed: zero mismatches against the baseline |
-| D4a | 298 on production (C2′) | Demand every 15 minutes at :07/:22/:37/:52 UTC |
-| D4b | 299/300 on production (D) | Accept the 600 s freshness rule and 5-minute ingest batches, after G3b |
+| D4a | 298 on production (C2′) | **Decided 2026-10-17: retain the 15-minute demand schedule (:07/:22/:37/:52 UTC) in C2′.** |
+| D4b | 299/300 on production (D) | **Decided 2026-10-17: deferred pending G3b.** 299's 600 s freshness rule and 300's 5-minute batches are not activated before the gates pass |
 | D5 | Admin Portal assignment on production | Release C makes "Assign Data Points" Save live |
 | D6 | Analytics UI on production | Confirm production stays API-only until a separate frontend rollout |
 | D7 | Routing job runtime limits | After A and 303 are measured (P11), whether to restore jobs 1001/1012 `max_runtime` from 30 to 5 minutes (separate approval) |
-| D8 | Capture policy 5 under 300 | Accept 300's WARNING (that site's boundary bucket is finalized one batch later, about 5 minutes more latency) or change the policy first |
-| D9 | How 303 reaches production | (1) Release D, then an approved post-deploy step returning the six 300 jobs to 1-minute schedules; five-minute batching is activated later by separate approval. (2) Release D with 300 active, relying on staging evidence and P12. (3) Change the runner to stop partway through the manifest (changes CI/CD behaviour; not recommended) |
+| D8 | Capture policy 5 under 300 | **Decided 2026-10-17: accept 300's WARNING only if the 300-second capture policy for site `49500fb9-0ea9-4496-8eeb-55131c89d0c2` is confirmed intentional and documented** (site owner / configuration record). Otherwise the policy is reviewed before D. Open item: identify the site and its documentation |
+| D9 | How 303 reaches production | **Decided 2026-10-17: option (1).** Release D (299–303); restoring the six 300 jobs to 1-minute schedules is a post-deploy step that needs its own explicit approval; five-minute batching is activated only after replica validation (G3b item 4), by separate approval. Rejected: (2) D with 300 active; (3) runner change |
