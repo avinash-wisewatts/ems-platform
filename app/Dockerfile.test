@@ -30,6 +30,10 @@ COPY postgres/restructure_manifest.csv /workspace/postgres/restructure_manifest.
 # Migration 303 rollback script, executed (rolled back) by
 # app/tests/test_routing_forward_floor_late_sweep.py.
 COPY postgres/maintenance/303_routing_forward_floor_late_sweep_rollback.sql /workspace/postgres/maintenance/303_routing_forward_floor_late_sweep_rollback.sql
+# Migration 303 post-deploy validation, whose V6 window and energy /
+# environment blocks are executed (rolled back) by
+# app/tests/test_routing_303_validation_{energy,env}_completeness.py.
+COPY scripts/diagnostics/routing_303_post_deploy_validation.sql /workspace/scripts/diagnostics/routing_303_post_deploy_validation.sql
 COPY scripts/test /workspace/scripts/test
 # Phase 4 routing generator: spec, template, generator, and committed artifact
 # consumed by app/tests/test_routing_generator_contract.py.
