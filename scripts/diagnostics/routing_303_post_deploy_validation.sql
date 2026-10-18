@@ -15,11 +15,11 @@
 --      behind its forward checkpoint, and within ~1 h 10 min of it.
 --   V5 routing runtimes (job_stats, last run) and forward lag: compare with
 --      the pre-deploy baseline in the operations plan.
---   V6 completeness, last 3 closed hours: every energy device-minute with
---      normalized data has an energy_measurements row (missing = 0); every
---      AirSense device-minute with routed points that the forward run has
---      processed has an environment_measurements row in the capture bucket the
---      loader assigns it (missing_minutes = 0; pending = not yet due).
+--   V6 completeness, last 3 closed UTC hours: every Eniscope device-minute
+--      with a GOOD ENERGY_IMPORT_TOTAL and every AirSense device-minute with
+--      routed points that the forward run has processed has a routed row in
+--      the capture bucket the loader assigns it (missing_minutes = 0 in both
+--      legs; pending = not yet due).
 --   V7 demand: VALID share of finalized intervals over the last 24 h is not
 --      lower than over the 24 h before deploy.
 -- ============================================================================
@@ -72,23 +72,56 @@ LEFT JOIN telemetry.pipeline_state ps
 WHERE j.proc_name IN ('run_energy_routing_job', 'run_environment_routing_job', 'run_routing_late_sweep_job')
 ORDER BY j.job_id;
 
-\echo === V6 completeness, last 3 closed hours (missing must be 0)
-SELECT date_trunc('hour', now()) - INTERVAL '3 hours' AS v6_from, date_trunc('hour', now()) AS v6_to \gset
-WITH energy_src AS (
-    SELECT DISTINCT np.device_id, date_bin('1 minute', np.event_time, TIMESTAMPTZ '2000-01-01') AS b
+\echo === V6 completeness, last 3 closed UTC hours (missing_minutes must be 0)
+-- UTC hour boundaries: date_trunc in the session time zone (staging:
+-- Asia/Kolkata) ends the window on a half hour, possibly minutes before the
+-- run, inside data the forward run has not reached yet (2026-10-18 05:32 UTC).
+SELECT date_trunc('hour', now(), 'UTC') - INTERVAL '3 hours' AS v6_from, date_trunc('hour', now(), 'UTC') AS v6_to \gset
+
+-- V6-ENERGY-BEGIN (tested by app/tests/test_routing_303_validation_energy_completeness.py)
+-- Same rules as the environment leg below: the energy loader puts each sample
+-- in telemetry.resolve_site_capture_bucket(site_id, event_time) and routes
+-- only samples received at or before its checkpoint, in buckets closed before
+-- the run started; anything else is pending, not missing. Source unchanged: a
+-- GOOD ENERGY_IMPORT_TOTAL from an Eniscope meter.
+WITH energy_fwd AS (
+    SELECT last_received_at, last_started_at - INTERVAL '1 second' AS run_at
+    FROM telemetry.pipeline_state WHERE pipeline_name = 'energy_measurements'
+),
+energy_src AS (
+    SELECT np.device_id, np.site_id, np.event_time, max(np.platform_received_at) AS received_at
     FROM telemetry.normalized_points np
     JOIN metadata.devices d ON d.id = np.device_id
     JOIN config.device_profiles dp ON dp.id = d.profile_id
     WHERE np.event_time >= :'v6_from' AND np.event_time < :'v6_to'
       AND dp.profile_code = 'ENERGY_METER_ENISCOPE_V1'
       AND np.logical_point = 'ENERGY_IMPORT_TOTAL' AND np.quality_code = 'GOOD'
+    GROUP BY 1, 2, 3
 ),
-energy_dst AS (
-    SELECT DISTINCT device_id, bucket_start AS b FROM telemetry.energy_measurements
-    WHERE bucket_start >= :'v6_from' AND bucket_start < :'v6_to'
+energy_minutes AS (
+    SELECT s.device_id, date_bin('1 minute', s.event_time, TIMESTAMPTZ '2000-01-01') AS minute, b.bucket_start,
+           bool_or(s.received_at <= f.last_received_at
+                   AND b.bucket_start + make_interval(secs => COALESCE(b.capture_interval_seconds, 1)) <= f.run_at) AS due
+    FROM energy_src s
+    CROSS JOIN energy_fwd f
+    CROSS JOIN LATERAL telemetry.resolve_site_capture_bucket(s.site_id, s.event_time) b
+    GROUP BY 1, 2, 3
+),
+energy_checked AS (
+    SELECT m.*, EXISTS (SELECT 1 FROM telemetry.energy_measurements em
+                        WHERE em.device_id = m.device_id AND em.bucket_start = m.bucket_start
+                          AND em.bucket_start >= :'v6_from'::timestamptz - INTERVAL '1 hour'
+                          AND em.bucket_start < :'v6_to') AS routed
+    FROM energy_minutes m
 )
-SELECT 'energy' AS domain, count(*) AS source_buckets, count(*) FILTER (WHERE d.b IS NULL) AS missing
-FROM energy_src s LEFT JOIN energy_dst d USING (device_id, b);
+SELECT 'energy' AS domain,
+       count(*) FILTER (WHERE due) AS source_minutes,
+       count(DISTINCT (device_id, bucket_start)) FILTER (WHERE due) AS source_buckets,
+       count(*) FILTER (WHERE due AND NOT routed) AS missing_minutes,
+       count(DISTINCT (device_id, bucket_start)) FILTER (WHERE due AND NOT routed) AS missing_buckets,
+       count(*) FILTER (WHERE NOT due) AS pending_minutes
+FROM energy_checked;
+-- V6-ENERGY-END
 
 -- V6-ENV-BEGIN (tested by app/tests/test_routing_303_validation_env_completeness.py)
 -- environment_measurements.bucket_start is the site capture bucket
