@@ -631,12 +631,13 @@ def test_migration_305_energy_body_is_the_303_body_plus_only_the_305_fragments()
     assert "EXECUTE " not in new and "format(" not in new
 
 
-def test_manifest_registers_migration_305_last():
+def test_manifest_registers_migration_305_after_303():
+    # Relaxed from "305 last" when migration 306 was registered after it.
     import csv
 
     rows = list(csv.DictReader(MANIFEST.read_text(encoding="utf-8").splitlines()))
     files = [r["source_file"] for r in rows if r["target_category"] == "migration"]
-    assert files[-1] == "305_routing_recovery_queue.sql"
+    assert "305_routing_recovery_queue.sql" in files
     assert files.index("305_routing_recovery_queue.sql") > files.index("303_routing_forward_floor_late_sweep.sql")
 
 

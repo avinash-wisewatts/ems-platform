@@ -32,6 +32,9 @@ COPY postgres/restructure_manifest.csv /workspace/postgres/restructure_manifest.
 COPY postgres/maintenance/303_routing_forward_floor_late_sweep_rollback.sql /workspace/postgres/maintenance/303_routing_forward_floor_late_sweep_rollback.sql
 # Migration 305 rollback script, run first by the 303 rollback tests.
 COPY postgres/maintenance/305_routing_recovery_queue_rollback.sql /workspace/postgres/maintenance/305_routing_recovery_queue_rollback.sql
+# Migration 306 rollback script, executed (rolled back) by
+# app/tests/test_demand_reconcile_wide_cadence.py and run first by the 303 rollback tests.
+COPY postgres/maintenance/306_demand_reconcile_wide_cadence_rollback.sql /workspace/postgres/maintenance/306_demand_reconcile_wide_cadence_rollback.sql
 COPY scripts/test /workspace/scripts/test
 # Phase 4 routing generator: spec, template, generator, and committed artifact
 # consumed by app/tests/test_routing_generator_contract.py.

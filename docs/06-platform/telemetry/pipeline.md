@@ -273,7 +273,8 @@ not changed, during the migration-243 work.
 
 ### Recovered rows reach the measurement tables (migration 305)
 
-**Status: implemented locally, not merged or deployed.**
+**Status: merged (`38f2b1c`) and deployed to staging 2026-10-19; not on
+production.**
 
 `telemetry.recover_failed_raw_messages` (job 1077) re-inserts a recovered
 message's `normalized_points` with the message's **original**
@@ -312,14 +313,57 @@ reconciler compares tiers derived from the same tables (plan CI-1 / T1.4).
 - **Tiers above:** `ca_energy_1min` refreshes 2 days back, and recoveries are
   at most 48 h old (raw retention). Reconciler 1116 then repairs the 1-minute
   tier, followed by 1118 / 1119 / 1120. Demand reconciler 1121's
-  `reconcile_window` is now **48 hours** (was 6), so re-supplied demand
-  intervals are re-finalized (non-VALID only). Dew point (1125, overlap 1 h)
-  does not re-derive older recovered environment rows.
+  `reconcile_window` became **48 hours** (was 6), so re-supplied demand
+  intervals are re-finalized (non-VALID only); migration 306 replaces the
+  hourly 48-hour window with 6 hours plus a 58-hour pass every 6 hours (below).
+  Dew point (1125, overlap 1 h) does not re-derive older recovered
+  environment rows.
 - **Rollback:** `postgres/maintenance/305_routing_recovery_queue_rollback.sql`
   (guarded; restores the 220 / 303 bodies and 1121's 6-hour window, drops the
   queue; reports pending entries).
 - **Tests:** `app/tests/test_routing_recovery_queue.py`, plus the updated 303,
   generator-contract and bounded-update suites.
+
+### Demand reconciler: hourly 6 hours + a 58-hour pass every 6 hours (migration 306)
+
+**Status: PR open, not merged or deployed.**
+
+`analytics.reconcile_demand_intervals` (job 1121 on staging, hourly at :59
+UTC, schedule unchanged) re-finalizes `[checkpoint − window, checkpoint)`.
+At 48 hours every run cost ~2 minutes of one CPU (staging 2026-10-19: 6 h runs
+15.5 s avg over 330 runs, 48 h runs ~120 s), and in 14 days neither window
+repaired a row: the wide window exists for recovered messages (305), which
+are rare.
+
+- **Cadence:** config `reconcile_window` 6 hours, `wide_window` 58 hours,
+  `wide_every` 6 hours. A run uses the wide window unless a successful
+  (HEALTHY / REPAIRED) demand run with at least that window is in
+  `analytics.pipeline_reconciliation_log` from the last `wide_every` (30-minute
+  tolerance). A SKIPPED_LOCKED / NO_CHECKPOINT run (no window logged) or a
+  FAILED wide run is therefore retried by the next hourly run; the first run
+  after deployment is wide. Without the wide keys the procedure behaves as
+  before 306.
+- **Why 58 hours:** recovery refuses messages older than the raw retention
+  (48 h); routing by the 1142 recovery scope takes up to 43 minutes (+1 h per
+  skip), the next wide pass up to 6 hours, and the checkpoint lags ~15–30
+  minutes: the oldest recoverable interval is ~56 h 13 min before the
+  checkpoint at the latest wide pass that must see it. (The hourly 48-hour
+  window of 305 missed the oldest ~1–1.5 h of that range.)
+- **Validation:** `config.assert_demand_reconciliation_job_config` is the
+  job's `check_config` and is also called by the procedure when a wide key is
+  present. It delegates the other keys to the shared
+  `config.assert_reconciliation_job_config` (unchanged; it still rejects the
+  wide keys for the other nine reconcilers) and raises 22023 for: only one wide
+  key, a non-string or unparsable interval, `wide_every` under 1 hour,
+  `wide_window` not longer than `reconcile_window` or `wide_every`.
+- **Cost (staging, read-only measurement 2026-10-19):** the 58-hour
+  finalisation work took 147 s (12,528 `calculate_demand_window` calls, 54
+  ASSET scopes); with 20 hourly 6-hour runs that is ~900 s/day instead of
+  ~2,850 s/day. Production is not measured.
+- **Rollback:** `postgres/maintenance/306_demand_reconcile_wide_cadence_rollback.sql`
+  (guarded; restores the 213 body and the 305 config, drops the demand
+  validator).
+- **Tests:** `app/tests/test_demand_reconcile_wide_cadence.py`.
 
 ### Analytics tier: parent → child watermark cascade (migration 209)
 

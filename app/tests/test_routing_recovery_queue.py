@@ -174,8 +174,10 @@ def test_status_rows_demand_window_and_unchanged_sweep_schedule(tx):
     names = {r[0] for r in tx.execute(
         r"SELECT pipeline_name FROM telemetry.pipeline_state WHERE pipeline_name LIKE '%\_recovery'").fetchall()}
     assert names == {"energy_measurements_recovery", "environment_measurements_recovery"}
+    # Migration 306 replaced the hourly 48-hour window with 6 hours + a 58-hour
+    # wide pass every 6 hours (test_demand_reconcile_wide_cadence.py).
     cfg = tx.execute("SELECT config FROM timescaledb_information.jobs WHERE proc_name = 'reconcile_demand_intervals'").fetchall()
-    assert cfg == [({"lookback": "3 hours", "reconcile_window": "48 hours"},)]
+    assert cfg == [({"lookback": "3 hours", "reconcile_window": "6 hours", "wide_window": "58 hours", "wide_every": "6 hours"},)]
     row = _one(tx, """
         SELECT schedule_interval, fixed_schedule, max_runtime, max_retries, config,
                extract(epoch FROM initial_start)::bigint % 3600
@@ -184,7 +186,10 @@ def test_status_rows_demand_window_and_unchanged_sweep_schedule(tx):
                    {"overlap": "15 minutes", "max_window": "1 day"}, 31 * 60 + 30)
 
 
-def test_demand_reconciler_reads_the_last_48_hours(tx):
+def test_demand_reconciler_reads_at_least_the_last_48_hours(tx):
+    # Since migration 306 the 48-hour recovery reach comes from the wide pass
+    # (58 hours); with no wide pass logged the next run is wide.
+    tx.execute("DELETE FROM analytics.pipeline_reconciliation_log WHERE tier = 'demand_intervals'")
     cp = _state(tx, "demand_intervals")[0]
     if cp is None:
         cp = _now(tx) - timedelta(minutes=30)
@@ -193,7 +198,7 @@ def test_demand_reconciler_reads_the_last_48_hours(tx):
     tx.execute("CALL analytics.reconcile_demand_intervals(0, %s::jsonb)", (psycopg.types.json.Jsonb(cfg),))
     ws, we = _one(tx, "SELECT window_start, window_end FROM analytics.pipeline_reconciliation_log "
                       "WHERE tier = 'demand_intervals' ORDER BY ran_at DESC LIMIT 1")
-    assert (we, we - ws) == (cp, timedelta(hours=48))
+    assert (we, we - ws) == (cp, timedelta(hours=58))
 
 
 # ---------------------------------------------------------------------------
