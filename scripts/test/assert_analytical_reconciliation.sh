@@ -243,7 +243,8 @@ BEGIN
           ('analytics','reconcile_energy_consumption_15min', INTERVAL '6 hours', INTERVAL '10 minutes', INTERVAL '30 minutes','8 days','6'),
           ('analytics','reconcile_energy_consumption_hourly',INTERVAL '12 hours',INTERVAL '10 minutes', INTERVAL '30 minutes','10 days','6'),
           ('analytics','reconcile_energy_consumption_daily', INTERVAL '24 hours',INTERVAL '10 minutes', INTERVAL '30 minutes','21 days','6'),
-          ('analytics','reconcile_demand_intervals',         INTERVAL '1 hour',  INTERVAL '10 minutes', INTERVAL '15 minutes','6 hours',NULL),
+          -- migration 305: demand window 6 h -> 48 h (recovered energy up to raw retention)
+          ('analytics','reconcile_demand_intervals',         INTERVAL '1 hour',  INTERVAL '10 minutes', INTERVAL '15 minutes','48 hours',NULL),
           ('telemetry','reconcile_environment_daily',        INTERVAL '24 hours',INTERVAL '10 minutes', INTERVAL '30 minutes','35 days','8')
         ) AS t(sch, prc, sched, mrt, rp, rw, nmax)
     LOOP

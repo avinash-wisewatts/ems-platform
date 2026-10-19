@@ -7,8 +7,11 @@
 --
 -- Expected
 --   V1 ledger: 303 applied exactly once.
---   V2 loader md5s: energy ee8c1867c0426587cda0d40467be57a2,
---      environment be09c0efb5cc8f5f819f2bb30b8d5370.
+--   V2 loader md5s: the migration-303 bodies (energy
+--      ee8c1867c0426587cda0d40467be57a2, environment
+--      be09c0efb5cc8f5f819f2bb30b8d5370) or, once migration 305 is applied, the
+--      305 bodies (energy 9b035f4a55edbf99ec2a5db4bb173d09, environment
+--      d2d906d4da78eeba3740b2b0d082a237); body = UNEXPECTED is a failure.
 --   V3 one run_routing_late_sweep_job: 1 hour, fixed, phase 31:30 UTC,
 --      max_runtime 10 min; last run Success; no failures.
 --   V4 checkpoints: both *_late_sweep rows SUCCESS / NO_SOURCE_DATA, each at or
@@ -34,7 +37,13 @@ SELECT migration_id, checksum_sha256, application_mode
 FROM admin.schema_migrations WHERE migration_id LIKE '30%' ORDER BY migration_id;
 
 \echo === V2 loader bodies
-SELECT p.proname, md5(replace(p.prosrc, E'\r', '')) AS md5
+SELECT p.proname, md5(replace(p.prosrc, E'\r', '')) AS md5,
+       CASE md5(replace(p.prosrc, E'\r', ''))
+           WHEN 'ee8c1867c0426587cda0d40467be57a2' THEN '303'
+           WHEN 'be09c0efb5cc8f5f819f2bb30b8d5370' THEN '303'
+           WHEN '9b035f4a55edbf99ec2a5db4bb173d09' THEN '305'
+           WHEN 'd2d906d4da78eeba3740b2b0d082a237' THEN '305'
+           ELSE 'UNEXPECTED' END AS body
 FROM pg_proc p
 WHERE p.oid IN ('telemetry.load_energy_measurements_incremental(interval,interval)'::regprocedure,
                 'telemetry.load_environment_measurements_incremental(interval,interval)'::regprocedure)

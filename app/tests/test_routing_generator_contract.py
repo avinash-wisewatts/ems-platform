@@ -37,6 +37,7 @@ MIG_228 = REPO / "postgres" / "migrations" / "228_device_specific_asset_space_po
 MIG_267 = REPO / "postgres" / "migrations" / "267_routing_bounded_window_end.sql"
 MIG_291 = REPO / "postgres" / "migrations" / "291_environment_loader_bounded_update.sql"
 MIG_303 = REPO / "postgres" / "migrations" / "303_routing_forward_floor_late_sweep.sql"
+MIG_305 = REPO / "postgres" / "migrations" / "305_routing_recovery_queue.sql"
 MANIFEST = REPO / "postgres" / "restructure_manifest.csv"
 
 # The Phase 2 amendment (migration 228) adds exactly one predicate to the
@@ -251,6 +252,83 @@ def _revert_303_tokens(tokens: list[str]) -> list[str]:
     return tokens
 
 
+
+# Migration 305 adds the recovery scope (telemetry.routing_recovery_queue) on
+# top of 303: five fragments per loader; reverting them must give back the
+# migration-303 body exactly. The environment arm repeats the 12-space
+# prefilter list (@@PREFILTER@@ below = gen._in_list(prefilter, 12)).
+_MIG_305_FRAGMENTS_TEMPLATE = [
+    (
+        "    -- Migration 305: ems.routing_scope = 'recovery' (set only by the late-sweep\n    -- job) routes the pairs queued in telemetry.routing_recovery_queue.\n    v_pipeline_name CONSTANT TEXT := CASE v_scope WHEN 'late_sweep' THEN 'environment_measurements_late_sweep' WHEN 'recovery' THEN 'environment_measurements_recovery' ELSE 'environment_measurements' END;\n    v_queue_ids BIGINT[] := '{}';\n",
+        "    v_pipeline_name CONSTANT TEXT := CASE WHEN v_scope = 'late_sweep' THEN 'environment_measurements_late_sweep' ELSE 'environment_measurements' END;\n",
+    ),
+    (
+        "    IF v_scope NOT IN ('forward', 'late_sweep', 'recovery') THEN\n        RAISE EXCEPTION 'ems.routing_scope must be forward, late_sweep or recovery; received %', v_scope;\n",
+        "    IF v_scope NOT IN ('forward', 'late_sweep') THEN\n        RAISE EXCEPTION 'ems.routing_scope must be forward or late_sweep; received %', v_scope;\n",
+    ),
+    (
+        "    -- Migration 305: the recovery scope routes the (device_id, event_time)\n    -- pairs telemetry.recover_failed_raw_messages queued when it re-inserted\n    -- normalized_points rows under their original platform_received_at, which\n    -- is below every receipt window. The batch is fixed here (one run at a\n    -- time: the advisory lock above), read below instead of the receipt window\n    -- and marked routed in this transaction; a failed run leaves it pending.\n    IF v_scope = 'recovery' THEN\n        v_queue_ids := ARRAY(\n            SELECT q.id FROM telemetry.routing_recovery_queue q\n            WHERE q.environment_routed_at IS NULL\n            ORDER BY q.id\n            LIMIT 10000\n        );\n    END IF;\n\n    -- Route from newly received normalized rows. Late source timestamps are\n",
+        '    -- Route from newly received normalized rows. Late source timestamps are\n',
+    ),
+    (
+        "        AND np.event_time < v_event_max\n        AND v_scope <> 'recovery'\n",
+        '        AND np.event_time < v_event_max\n',
+    ),
+    (
+        "      GROUP BY np.device_id,np.event_time\n      UNION ALL\n      -- Migration 305: recovery scope -- the queued pairs, whatever their\n      -- receipt time or chunk.\n      SELECT np.device_id,np.event_time,MAX(np.platform_received_at) AS platform_received_at\n      FROM telemetry.routing_recovery_queue q\n      JOIN telemetry.normalized_points np ON np.device_id=q.device_id AND np.event_time=q.event_time\n      JOIN metadata.devices d ON d.id=np.device_id\n      JOIN config.device_profiles dp ON dp.id=d.profile_id\n      WHERE v_scope = 'recovery'\n        AND q.id = ANY(v_queue_ids)\n        AND dp.profile_code='ENVIRONMENT_SENSOR_AIRSENSE_V1'\n        AND np.logical_point IN\n        (\n@@PREFILTER@@\n        )\n      GROUP BY np.device_id,np.event_time\n    ),\n",
+        '      GROUP BY np.device_id,np.event_time\n    ),\n',
+    ),
+    (
+        "    GET DIAGNOSTICS v_inserted = ROW_COUNT;\n    -- Migration 305: the fixed queue batch is routed by this transaction.\n    IF v_scope = 'recovery' THEN\n        UPDATE telemetry.routing_recovery_queue SET environment_routed_at=clock_timestamp()\n        WHERE id = ANY(v_queue_ids);\n    END IF;\n",
+        '    GET DIAGNOSTICS v_inserted = ROW_COUNT;\n',
+    ),
+]
+
+_MIG_305_ENERGY_FRAGMENTS = [
+    (
+        "  -- Migration 305: ems.routing_scope = 'recovery' (set only by the late-sweep\n  -- job) routes the pairs queued in telemetry.routing_recovery_queue.\n  v_pipeline_name CONSTANT TEXT := CASE v_scope WHEN 'late_sweep' THEN 'energy_measurements_late_sweep' WHEN 'recovery' THEN 'energy_measurements_recovery' ELSE 'energy_measurements' END;\n  v_queue_ids BIGINT[] := '{}';\n",
+        "  v_pipeline_name CONSTANT TEXT := CASE WHEN v_scope = 'late_sweep' THEN 'energy_measurements_late_sweep' ELSE 'energy_measurements' END;\n",
+    ),
+    (
+        "  IF v_scope NOT IN ('forward', 'late_sweep', 'recovery') THEN\n    RAISE EXCEPTION 'ems.routing_scope must be forward, late_sweep or recovery; received %', v_scope;\n",
+        "  IF v_scope NOT IN ('forward', 'late_sweep') THEN\n    RAISE EXCEPTION 'ems.routing_scope must be forward or late_sweep; received %', v_scope;\n",
+    ),
+    (
+        "  -- Migration 305: the recovery scope routes the (device_id, event_time)\n  -- pairs telemetry.recover_failed_raw_messages queued when it re-inserted\n  -- normalized_points rows under their original platform_received_at, which\n  -- is below every receipt window. The batch is fixed here (one run at a\n  -- time: the advisory lock above), read below instead of the receipt window\n  -- and marked routed in this transaction; a failed run leaves it pending.\n  IF v_scope = 'recovery' THEN\n    v_queue_ids := ARRAY(\n      SELECT q.id FROM telemetry.routing_recovery_queue q\n      WHERE q.energy_routed_at IS NULL\n      ORDER BY q.id\n      LIMIT 10000\n    );\n  END IF;\n\n  -- Late-arriving source timestamps still have a new platform receipt time.\n",
+        '  -- Late-arriving source timestamps still have a new platform receipt time.\n',
+    ),
+    (
+        "      AND np.event_time < v_event_max\n      AND v_scope <> 'recovery'\n    GROUP BY np.device_id,np.event_time\n    UNION ALL\n    -- Migration 305: recovery scope -- the queued pairs, whatever their\n    -- receipt time or chunk.\n    SELECT np.device_id,np.event_time,MAX(np.platform_received_at) AS platform_received_at\n    FROM telemetry.routing_recovery_queue q\n    JOIN telemetry.normalized_points np ON np.device_id=q.device_id AND np.event_time=q.event_time\n    WHERE v_scope = 'recovery'\n      AND q.id = ANY(v_queue_ids)\n    GROUP BY np.device_id,np.event_time\n",
+        '      AND np.event_time < v_event_max\n    GROUP BY np.device_id,np.event_time\n',
+    ),
+    (
+        "  GET DIAGNOSTICS v_affected_rows=ROW_COUNT;\n  -- Migration 305: the fixed queue batch is routed by this transaction.\n  IF v_scope = 'recovery' THEN\n    UPDATE telemetry.routing_recovery_queue SET energy_routed_at=clock_timestamp()\n    WHERE id = ANY(v_queue_ids);\n  END IF;\n",
+        '  GET DIAGNOSTICS v_affected_rows=ROW_COUNT;\n',
+    ),
+]
+
+
+def _mig_305_fragments() -> list[tuple[str, str]]:
+    pre = gen._in_list(_spec()["prefilter_logical_points"], 12)
+    return [(n.replace('@@PREFILTER@@', pre), o) for n, o in _MIG_305_FRAGMENTS_TEMPLATE]
+
+
+def _revert_305_text(sql: str) -> str:
+    for new, old in _mig_305_fragments():
+        assert sql.count(new) == 1, f"migration-305 fragment must appear exactly once: {new[:50]!r}"
+        sql = sql.replace(new, old)
+    return sql
+
+
+def _revert_305_tokens(tokens: list[str]) -> list[str]:
+    for new, old in _mig_305_fragments():
+        n = _tokens(_strip_line_comments(new))
+        o = _tokens(_strip_line_comments(old))
+        i = _find_sublist(tokens, n)
+        assert i != -1, f"migration-305 fragment missing from the generated body: {new[:50]!r}"
+        tokens = tokens[:i] + o + tokens[i + len(n):]
+    return tokens
+
 def _find_sublist(hay: list[str], needle: list[str]) -> int:
     for i in range(len(hay) - len(needle) + 1):
         if hay[i:i + len(needle)] == needle:
@@ -344,7 +422,7 @@ def test_generated_body_is_migration_226_plus_only_the_228_predicate_267_window_
     b226, _ = _split_body_comment(body226)
     bgen, _ = _split_body_comment(gen_full)
     tb226 = _tokens(_strip_line_comments(b226))
-    tbgen = _revert_267_tokens(_revert_291_tokens(_revert_303_tokens(_tokens(_strip_line_comments(bgen)))))
+    tbgen = _revert_267_tokens(_revert_291_tokens(_revert_303_tokens(_revert_305_tokens(_tokens(_strip_line_comments(bgen))))))
 
     i = _find_sublist(tbgen, _MIG_228_EXTRA_TOKENS)
     assert i != -1, (
@@ -524,18 +602,49 @@ def _embedded_body(path: Path) -> str:
     return mig[start:end]
 
 
-def test_migration_303_embedded_body_equals_generated_artifact():
-    # Migration 303 now owns the deployed body: it CREATE OR REPLACEs the
+def test_migration_305_embedded_body_equals_generated_artifact():
+    # Migration 305 now owns the deployed body: it CREATE OR REPLACEs the
     # loader with the current generated artifact, verbatim.
     art = ARTIFACT.read_text(encoding="utf-8").rstrip("\n")
-    assert _embedded_body(MIG_303) == art
+    assert _embedded_body(MIG_305) == art
+
+
+def test_migration_303_embedded_body_is_the_artifact_before_the_305_queue():
+    # Migration 303's embedded body is the pre-305 artifact: identical to the
+    # current generated artifact except for the migration-305 fragments.
+    art = ARTIFACT.read_text(encoding="utf-8").rstrip("\n")
+    assert _embedded_body(MIG_303) == _revert_305_text(art)
+
+
+def test_migration_305_energy_body_is_the_303_body_plus_only_the_305_fragments():
+    def energy(path):
+        mig = path.read_text(encoding="utf-8")
+        start = mig.index("CREATE OR REPLACE PROCEDURE telemetry.load_energy_measurements_incremental")
+        return mig[start:mig.index("$procedure$;", start) + len("$procedure$;")]
+
+    new = energy(MIG_305)
+    reverted = new
+    for frag_new, frag_old in _MIG_305_ENERGY_FRAGMENTS:
+        assert reverted.count(frag_new) == 1, frag_new[:60]
+        reverted = reverted.replace(frag_new, frag_old)
+    assert reverted == energy(MIG_303)
+    assert "EXECUTE " not in new and "format(" not in new
+
+
+def test_manifest_registers_migration_305_last():
+    import csv
+
+    rows = list(csv.DictReader(MANIFEST.read_text(encoding="utf-8").splitlines()))
+    files = [r["source_file"] for r in rows if r["target_category"] == "migration"]
+    assert files[-1] == "305_routing_recovery_queue.sql"
+    assert files.index("305_routing_recovery_queue.sql") > files.index("303_routing_forward_floor_late_sweep.sql")
 
 
 def test_migration_291_embedded_body_is_the_artifact_before_the_303_floor():
     # Migration 291's embedded body is the pre-303 artifact: identical to the
     # current generated artifact except for the four migration-303 fragments.
     art = ARTIFACT.read_text(encoding="utf-8").rstrip("\n")
-    assert _embedded_body(MIG_291) == _revert_303_text(art)
+    assert _embedded_body(MIG_291) == _revert_303_text(_revert_305_text(art))
 
 
 def test_migration_303_energy_body_is_the_267_body_plus_only_the_303_fragments():
@@ -557,7 +666,7 @@ def test_migration_267_embedded_body_is_the_artifact_before_the_291_bound():
     # Migration 267's embedded body is the pre-291 artifact: identical to the
     # current generated artifact except for the four migration-291 fragments.
     art = ARTIFACT.read_text(encoding="utf-8").rstrip("\n")
-    assert _embedded_body(MIG_267) == _revert_291_text(_revert_303_text(art))
+    assert _embedded_body(MIG_267) == _revert_291_text(_revert_303_text(_revert_305_text(art)))
 
 
 def test_migration_228_embedded_body_is_the_artifact_before_the_267_window_end():
@@ -565,7 +674,7 @@ def test_migration_228_embedded_body_is_the_artifact_before_the_267_window_end()
     # current generated artifact except for the migration-291 fragments and the
     # migration-267 window-end block.
     art = ARTIFACT.read_text(encoding="utf-8").rstrip("\n")
-    assert _embedded_body(MIG_228) == _revert_267_text(_revert_291_text(_revert_303_text(art)))
+    assert _embedded_body(MIG_228) == _revert_267_text(_revert_291_text(_revert_303_text(_revert_305_text(art))))
 
 
 def test_migration_291_bound_is_derived_only_from_correctable_candidates():
@@ -617,7 +726,7 @@ def test_migration_227_embedded_body_is_the_228_body_minus_the_device_predicate(
     body227, _ = _split_body_comment(mig[start:end])
     bgen, _ = _split_body_comment(ARTIFACT.read_text(encoding="utf-8"))
     t227 = _tokens(_strip_line_comments(body227))
-    tgen = _revert_267_tokens(_revert_291_tokens(_revert_303_tokens(_tokens(_strip_line_comments(bgen)))))
+    tgen = _revert_267_tokens(_revert_291_tokens(_revert_303_tokens(_revert_305_tokens(_tokens(_strip_line_comments(bgen))))))
     i = _find_sublist(tgen, _MIG_228_EXTRA_TOKENS)
     assert i != -1
     assert tgen[:i] + tgen[i + len(_MIG_228_EXTRA_TOKENS):] == t227

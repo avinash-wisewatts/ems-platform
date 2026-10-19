@@ -34,9 +34,12 @@ CONNINFO = (
 MIGRATION_ID = "303_routing_forward_floor_late_sweep"
 ENERGY = "telemetry.load_energy_measurements_incremental"
 ENV = "telemetry.load_environment_measurements_incremental"
+# Migration 305 (recovery scope) builds on the 303 bodies; reverting its
+# fragments gives back the 303 bodies (305's postconditions and
+# test_routing_generator_contract.py). The 303 fragments are checked below.
 BODY_MD5 = {
-    ENERGY: "ee8c1867c0426587cda0d40467be57a2",
-    ENV: "be09c0efb5cc8f5f819f2bb30b8d5370",
+    ENERGY: "9b035f4a55edbf99ec2a5db4bb173d09",
+    ENV: "d2d906d4da78eeba3740b2b0d082a237",
 }
 PIPELINE = {ENERGY: "energy_measurements", ENV: "environment_measurements"}
 PIPELINE_JOBS = (
@@ -475,7 +478,7 @@ def test_failed_sweep_leaves_both_checkpoints_unchanged(tx):
     _set_ckpt(tx, "environment_measurements_late_sweep", received - timedelta(minutes=5))
     before = (_state(tx, "environment_measurements")[0], _state(tx, "environment_measurements_late_sweep")[0])
 
-    with pytest.raises(psycopg.errors.RaiseException, match="ems.routing_scope must be forward or late_sweep"):
+    with pytest.raises(psycopg.errors.RaiseException, match="ems.routing_scope must be forward, late_sweep or recovery"):
         with tx.transaction():
             tx.execute("SELECT set_config('ems.routing_scope', 'bogus', true)")
             tx.execute("DROP TABLE IF EXISTS tmp_environment_candidates")
@@ -566,7 +569,8 @@ def test_energy_forward_routing_keeps_every_minute_of_a_closed_demand_interval(t
 
 def test_job_procedure_sweeps_both_loaders_and_does_not_leak_its_scope():
     names = ("energy_measurements_late_sweep", "environment_measurements_late_sweep",
-             "energy_measurements", "environment_measurements")
+             "energy_measurements", "environment_measurements",
+             "energy_measurements_recovery", "environment_measurements_recovery")
     with psycopg.connect(CONNINFO, autocommit=True) as c:
         saved = c.execute(
             "SELECT pipeline_name, last_received_at, last_status, last_started_at, last_completed_at, "
@@ -600,15 +604,29 @@ ROLLBACK_SQL = (
     __import__("pathlib").Path(__file__).resolve().parents[2]
     / "postgres" / "maintenance" / "303_routing_forward_floor_late_sweep_rollback.sql"
 )
+# Migration 305 builds on 303: its rollback runs first, restoring the 303
+# bodies the 303 rollback requires.
+ROLLBACK_305_SQL = ROLLBACK_SQL.with_name("305_routing_recovery_queue_rollback.sql")
 
 
-def _rollback_body():
-    text = ROLLBACK_SQL.read_text(encoding="utf-8")
+def _script_body(path):
+    text = path.read_text(encoding="utf-8")
     assert text.count("\nBEGIN;\n") == 1 and text.rstrip().endswith("COMMIT;")
     return text.split("\nBEGIN;\n", 1)[1].rsplit("COMMIT;", 1)[0]
 
 
-def test_rollback_script_restores_the_pre_303_state_and_routing_still_works(tx):
+def _rollback_body():
+    return _script_body(ROLLBACK_SQL)
+
+
+@pytest.fixture
+def tx_pre_305(tx):
+    tx.execute(_script_body(ROLLBACK_305_SQL))
+    return tx
+
+
+def test_rollback_script_restores_the_pre_303_state_and_routing_still_works(tx_pre_305):
+    tx = tx_pre_305
     tx.execute(_rollback_body())
     md5 = dict(tx.execute(
         "SELECT proname, md5(replace(prosrc, E'\r', '')) FROM pg_proc "
@@ -634,7 +652,8 @@ def test_rollback_script_restores_the_pre_303_state_and_routing_still_works(tx):
     assert _routed(tx, ids, _bucket(tx, ids, late_event)) == 1
 
 
-def test_rollback_script_refuses_when_the_loaders_are_not_the_303_bodies(tx):
+def test_rollback_script_refuses_when_the_loaders_are_not_the_303_bodies(tx_pre_305):
+    tx = tx_pre_305
     tx.execute(_rollback_body())  # first run succeeds; the loaders are now the 267 / 291 bodies
     with pytest.raises(psycopg.errors.RaiseException, match="not the migration-303 bodies"):
         tx.execute(_rollback_body())
