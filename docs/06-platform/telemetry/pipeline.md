@@ -283,6 +283,16 @@ materialization watermark (`analytics.cagg_available_through()`); for
 checkpoint + max_catchup_window)`; the checkpoint advances only on success.
 A child can never outrun its parent, so a backlog drains naturally.
 
+**Migration 304 (plan T3.5 step 1):** the 15-minute tier is rolled up from the
+1-minute tier (buckets under a ≤ 60 s capture policy) and the 5-minute tier
+(buckets under a 300 s policy only). `_15min` therefore waits for `cp_5min`
+only while an enabled 300 s policy — site or platform default — overlaps the
+window the run refreshes (`analytics.energy_5min_capture_policy_overlaps`);
+otherwise its parent is `cp_1min` alone. Mixed fleets keep the
+`LEAST(cp_1min, cp_5min)` bound for every window that overlaps a 300 s policy.
+A 300 s policy added with a back-dated `effective_from` is, as before, repaired
+by reconcilers 1117 / 1118, not by the forward jobs.
+
 ### Demand tier: watermark + status-guarded re-finalization (migration 210)
 
 `analytics.run_demand_calculation_job` follows the same model, with
@@ -355,7 +365,8 @@ Amendment 9.
 
 Raw receipt state (job 1076), customer alert evaluation (job 1127, whose 3-minute
 gap tolerance assumes a 1-minute cadence) and the 5-minute tier (job 1080,
-whose checkpoint gates the 15-minute tier) still run every minute.
+whose checkpoint gates the 15-minute tier only while a 300 s capture policy
+applies, migration 304) still run every minute.
 
 ### environment_daily tier: watermark over site-local days (migration 211)
 
