@@ -174,8 +174,8 @@ correction_deadline`), skips the UPDATE when there is none, and otherwise adds
 
 ### Routing window read: forward floor plus hourly late-data sweep (migration 303)
 
-**Status: implemented, not merged or deployed** (staging deploy needs
-approval; production is gated by release plan G3b, Release D).
+**Status: deployed to staging 2026-10-17 (+24 h validation passed); not on
+production** (gated by release plan G3b, Release D).
 
 Migration 267 bounded only the window-*end* lookup. The window read itself
 filtered on `platform_received_at` alone, and `normalized_points` is
@@ -270,6 +270,56 @@ mutable (reassignable to a later replay on `ON CONFLICT`), so that lookup
 can under-report real failures. It is instead keyed on the row's stable
 identity, `(device_id, event_time, logical_point_id)`. This was re-verified,
 not changed, during the migration-243 work.
+
+### Recovered rows reach the measurement tables (migration 305)
+
+**Status: implemented locally, not merged or deployed.**
+
+`telemetry.recover_failed_raw_messages` (job 1077) re-inserts a recovered
+message's `normalized_points` with the message's **original**
+`platform_received_at`. Recovery runs at least 20 minutes after receipt
+(job 1068's grace), usually hours later, and days later for
+`DEFERRED_UNCOMMISSIONED` messages replayed when a device is commissioned. So
+the row is below the forward window and below the 303 late-sweep window.
+Before 305 it was never routed, and no reconciler noticed, because every
+reconciler compares tiers derived from the same tables (plan CI-1 / T1.4).
+
+- **Queue:** the recovery insert is a data-modifying CTE whose `RETURNING
+  (device_id, event_time)` (the rows it added or superseded) goes into
+  `telemetry.routing_recovery_queue` in the same per-candidate transaction. A
+  rolled-back candidate queues nothing; a committed one cannot be lost.
+- **Recovery scope:** with `ems.routing_scope = 'recovery'` a loader fixes a
+  batch of pending queue ids (oldest first, at most 10,000) under its
+  advisory lock. It reads those pairs instead of the receipt window, from any
+  chunk, compressed or not. It then runs the unchanged bucket / rank / upsert
+  code and stamps `energy_routed_at` / `environment_routed_at` in the same
+  transaction. A failed or lock-skipped run stamps nothing, so the entries
+  stay pending. Status rows: `<pipeline>_recovery`.
+- **Schedule:** `telemetry.run_routing_late_sweep_job` (hh:31:30 UTC,
+  unchanged) runs the recovery scope for both loaders after the sweeps. It
+  then deletes entries both loaders routed more than 7 days ago. A recovered
+  row is routed within about an hour of job 1077's run (:48:49).
+- **Unchanged for forward / sweep runs:** the window read gains only
+  parameter-only guards (`v_scope <> 'recovery'` on the receipt arm, a
+  `v_scope = 'recovery'` queue arm). The receipt arm keeps startup chunk
+  exclusion under a generic plan, and the queue arm never executes outside the
+  recovery scope.
+- **Idempotent:** keyed upserts. Energy updates only a newer sample inside
+  the correction deadline; environment inserts with `DO NOTHING` and updates
+  only inside the deadline. A missing bucket is inserted even after its
+  deadline, and an existing row is never overwritten by an older or
+  out-of-deadline recovered sample.
+- **Tiers above:** `ca_energy_1min` refreshes 2 days back, and recoveries are
+  at most 48 h old (raw retention). Reconciler 1116 then repairs the 1-minute
+  tier, followed by 1118 / 1119 / 1120. Demand reconciler 1121's
+  `reconcile_window` is now **48 hours** (was 6), so re-supplied demand
+  intervals are re-finalized (non-VALID only). Dew point (1125, overlap 1 h)
+  does not re-derive older recovered environment rows.
+- **Rollback:** `postgres/maintenance/305_routing_recovery_queue_rollback.sql`
+  (guarded; restores the 220 / 303 bodies and 1121's 6-hour window, drops the
+  queue; reports pending entries).
+- **Tests:** `app/tests/test_routing_recovery_queue.py`, plus the updated 303,
+  generator-contract and bounded-update suites.
 
 ### Analytics tier: parent → child watermark cascade (migration 209)
 

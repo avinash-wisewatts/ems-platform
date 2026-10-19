@@ -35,10 +35,10 @@ LOADER = "telemetry.load_environment_measurements_incremental"
 LOADER_SIG = f"{LOADER}(interval,interval)"
 MIGRATION_ID = "291_environment_loader_bounded_update"
 BODY_MD5_291 = "d0708b46eb9ab81a6b2cc37ee0d85ef5"
-# Migration 303 later replaced the deployed body; it keeps the 291 bound
-# unchanged (test_routing_generator_contract.py proves reverting its four
+# Migrations 303 and 305 later replaced the deployed body; both keep the 291
+# bound unchanged (test_routing_generator_contract.py proves reverting their
 # fragments gives back the 291 body).
-BODY_MD5_DEPLOYED = "be09c0efb5cc8f5f819f2bb30b8d5370"
+BODY_MD5_DEPLOYED = "d2d906d4da78eeba3740b2b0d082a237"
 PIPELINE_JOBS = ("run_normalization_job", "run_energy_routing_job", "run_environment_routing_job")
 HISTORY_ROWS = 4000
 DECOMPRESSION_CAP = 100
