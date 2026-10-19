@@ -598,12 +598,12 @@ def test_manifest_registers_migration_291():
     assert files.index("291_environment_loader_bounded_update.sql") > files.index("290_energy_register_delta_15min.sql")
 
 
-def test_manifest_registers_migration_303_last():
+def test_manifest_registers_migration_303():
     import csv
 
     rows = list(csv.DictReader(MANIFEST.read_text(encoding="utf-8").splitlines()))
     files = [r["source_file"] for r in rows if r["target_category"] == "migration"]
-    assert files[-1] == "303_routing_forward_floor_late_sweep.sql"
+    assert "303_routing_forward_floor_late_sweep.sql" in files
     assert files.index("303_routing_forward_floor_late_sweep.sql") > files.index("302_analytics_stale_schedule_aware.sql")
 
 

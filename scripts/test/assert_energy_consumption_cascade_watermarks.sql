@@ -39,7 +39,8 @@
 --   G/H failure -> checkpoint unchanged (single-transaction model); I identical
 --   re-run is idempotent (checkpoint + rows); J self-overlap guard intact
 --   (structural; behavioural proof in assert_analytics_job_self_overlap.sh);
---   K 1min->15min cannot exceed LEAST(cp_1min,cp_5min); L 5min empty-by-design
+--   K 1min->15min cannot exceed LEAST(cp_1min,cp_5min) while a 300 s policy
+--   overlaps the window, else cp_1min (migration 304); L 5min empty-by-design
 --   does not block 15min and still advances its own checkpoint; M 15min->hourly
 --   bound; N 15min->daily bound; O CAGG watermark (not now()) is the 1min/5min
 --   bound; P tenant isolation preserved by refresh_energy_consumption_15min;
@@ -241,7 +242,12 @@ BEGIN
     -- (empty-by-design / not-yet-run) falls back to cp_1min and does NOT
     -- block 15min.
     -- ===================================================================
-    -- (a) both parents set: 15min bounded to the LESSER.
+    -- (a) both parents set and a 300 s capture policy overlapping the window
+    --     (migration 304: only then does the 5-minute tier hold rows for it):
+    --     15min bounded to the LESSER.
+    UPDATE config.telemetry_capture_policies SET is_enabled = FALSE WHERE site_id IS NULL;
+    INSERT INTO config.telemetry_capture_policies (site_id, capture_interval_seconds, effective_from, is_enabled)
+    VALUES (NULL, 300, v_base - INTERVAL '1 day', TRUE);
     UPDATE telemetry.pipeline_state SET last_received_at = v_base + INTERVAL '3 hours'  WHERE pipeline_name='energy_consumption_1min';
     UPDATE telemetry.pipeline_state SET last_received_at = v_base + INTERVAL '1 hour'   WHERE pipeline_name='energy_consumption_5min';
     UPDATE telemetry.pipeline_state SET last_received_at = v_base                       WHERE pipeline_name='energy_consumption_15min';
@@ -250,7 +256,22 @@ BEGIN
     IF v_res > (v_base + INTERVAL '1 hour') THEN
         RAISE EXCEPTION 'TEST K FAILED: 15min checkpoint % exceeded LEAST(cp_1min, cp_5min) = % + 1h', v_res, v_base;
     END IF;
-    RAISE NOTICE 'TEST K passed: 15min bounded by LEAST(cp_1min, cp_5min) (checkpoint %).', v_res;
+    RAISE NOTICE 'TEST K passed: with a 300 s policy, 15min bounded by LEAST(cp_1min, cp_5min) (checkpoint %).', v_res;
+    DELETE FROM config.telemetry_capture_policies WHERE site_id IS NULL AND capture_interval_seconds = 300 AND effective_from = v_base - INTERVAL '1 day';
+    UPDATE config.telemetry_capture_policies SET is_enabled = TRUE WHERE site_id IS NULL;
+
+    -- (a') no 300 s policy overlapping the window: the 5-minute tier holds no
+    --      row for it, so a lagging cp_5min no longer bounds 15min (migration 304).
+    IF analytics.energy_5min_capture_policy_overlaps(v_base - INTERVAL '30 minutes', v_base + INTERVAL '3 hours') THEN
+        RAISE EXCEPTION 'TEST K precondition: an enabled 300 s capture policy overlaps the test window';
+    END IF;
+    UPDATE telemetry.pipeline_state SET last_received_at = v_base WHERE pipeline_name='energy_consumption_15min';
+    CALL analytics.run_energy_consumption_15min_job(999209, v_cfg15);
+    SELECT last_received_at INTO v_res FROM telemetry.pipeline_state WHERE pipeline_name='energy_consumption_15min';
+    IF v_res IS DISTINCT FROM (v_base + INTERVAL '3 hours') THEN
+        RAISE EXCEPTION 'TEST K FAILED: without a 300 s policy the 15min checkpoint should reach cp_1min % + 3h, got %', v_base, v_res;
+    END IF;
+    RAISE NOTICE 'TEST K passed: without a 300 s policy, 15min bounded by cp_1min only (checkpoint %).', v_res;
 
     -- (b) 5min NULL (empty-by-design): 15min falls back to cp_1min, still advances.
     UPDATE telemetry.pipeline_state SET last_received_at = NULL                        WHERE pipeline_name='energy_consumption_5min';
