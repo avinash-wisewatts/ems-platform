@@ -1,6 +1,7 @@
 # Design item: canonical Energy read scans the device's whole native history
 
-Status: PROPOSED (design only; no fix, no migration) · Opened: 2026-10-20 · Owner: Engineering
+Status: **DEFERRED 2026-10-20** — A2 deployment NO-GO; does not block any
+release (see "Decision 2026-10-20") · Opened: 2026-10-20 · Owner: Engineering
 Verification basis: production read-only diagnosis 2026-10-20 [M]; staging
 plan-only `EXPLAIN` 2026-10-20 [M]; migrations 269 and 270 [V]
 
@@ -325,7 +326,76 @@ data, 7-day chunks, median of 7 warm calls):
     `#variable_conflict use_column`, 2-day padding.
   - Compressed-chunk behaviour is not measured locally.
 
-## Recommendation (not approved)
+## A2 on staging: bounded `EXPLAIN ANALYZE` (2026-10-20) [M staging]
+
+Read-only; nothing installed. Statements inlined the A2 view bodies.
+- Scope: 3 assets × 5 tiers × (live 270, inlined 270, A2) × 2 passes = 90
+  statements, compressed chunks 2026-09-20 18:30 → 09-24 18:30 UTC.
+  Statement timeout 15 s, lock timeout 1 s; load and lock checked between
+  assets. Peak load 0.46, 0 lock waiters, 0 errors, 0 sessions left.
+- 11 of 12 asset/tier pairs: chunks 9 → 2, shared buffers about 10× lower,
+  5–12× faster (1d: 192 → 28 ms). 1h/1d excluded 7 chunks at startup.
+- Exception: an org with 36 devices was equal or about 8% slower at
+  5m/15m (629/520 vs 606/482 ms). The reporting view joins
+  `metadata.devices d ON d.id = r.device_id`; a device filter on
+  `r.device_id` does not reach `d.id`, and the planner re-ran the rollup
+  once per device. The draft below filters both sides; that fix is
+  verified locally only, not re-measured on staging.
+
+## Production catalog check (2026-10-20) [M production, read-only]
+
+- PostgreSQL 16.15, TimescaleDB **2.28.2** in schema `public` (staging and
+  local: 2.29.2). `public.time_bucket(interval, timestamptz)` resolves and
+  is IMMUTABLE.
+- Rollup and reporting view definitions identical on production, staging
+  and local. `pg_get_viewdef` renders the `date_bin` origin in the session
+  time zone (`Asia/Kolkata` everywhere), so fingerprints must be taken
+  under `SET TIME ZONE 'UTC'`.
+- Grants differ (production `ems_readonly`, staging `ems_investigator`):
+  a migration must compare grants before/after, not hard-code them.
+
+## A2a/A2b drafts (2026-10-20, local, uncommitted)
+
+- Worktree `ems-a2-draft-migrations`, branch
+  `feature/energy-read-chunk-skip-a2` from `origin/staging` `e844e2a`, no
+  upstream. Not committed, not pushed. Draft numbers 307/308 are
+  placeholders and are not reserved.
+- 307 (A2a): both rollups group by `public.time_bucket`; pinned 269
+  fingerprints, bucket-equivalence precondition, postconditions over the
+  13 dependent views. 308 (A2b): `get_canonical_energy_read` reads bounded,
+  per-direction MATERIALIZED CTEs. Both set `lock_timeout` 5 s,
+  `statement_timeout` 60 s. Rollback scripts for both.
+- Tests [M local]: new file 45/45 (parity on all 5 tiers, persisted 15-min
+  refresh without `calculated_at` churn, chunk pruning, 36-device case,
+  rollback round trip, lock timeout). With 307/308 applied, 113 of 115
+  existing tests pass. The two that fail are deliberately unchanged:
+  - `test_canonical_energy_read_selective_device_reads.py::test_live_body_has_one_device_filter_per_direction_and_tier`
+    (pins 270's body shape);
+  - `test_energy_rollup_range.py::test_helper_is_the_view_definition_plus_only_the_bounded_where`
+    (283's drift guard: its helper must stay a copy of the 15-min view).
+- Missed dependency: migration 283's
+  `analytics.energy_semantic_rollup_15min_range` copies the 15-min rollup
+  rather than referencing it. On staging (same asset and range) it read 2
+  chunks with compressed-segment pruning, 39 ms and about 400 buffers,
+  against 9 chunks and 2,032 ms for the view.
+
+## Decision 2026-10-20
+
+- **A2 deployment: NO-GO.** 307/308 are not committed or released as
+  drafted. The drafts, tests and spike scripts are kept locally.
+- **Deferred; does not block other releases.** The existing release
+  sequence (B2, C1, C2′, D) proceeds without A2.
+- **Future option A2′:** build 308's bounded sources on range helpers (283's
+  15-min helper, a new 5-min helper, an all-device variant for the refresh)
+  and drop 307: no view change and no ACCESS EXCLUSIVE lock on the rollups.
+  Not prototyped.
+- Before any A2 variant reaches production: it needs 283 (Release B2);
+  chunk skipping must be confirmed on TimescaleDB 2.28.2 (read-only plan
+  check); the 36-device case must be re-measured on staging; and the two
+  tests above need an explicit decision (CLAUDE.md §12). Each needs its
+  own approval.
+
+## Recommendation (superseded 2026-10-20 by the decision above)
 
 1. Prefer **A**, starting with **A1** for `1d` and `1h` on top of 270. It
    removes most of the cost, keeps D3 exact, and leaves the semantic views

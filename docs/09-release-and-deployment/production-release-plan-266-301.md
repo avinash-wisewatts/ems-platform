@@ -487,8 +487,11 @@ Follow-ups:
     | Environment timestamp NULL | `energy=110 s environment=unknown` |
     | `normalized_points` missing | both `unknown` |
     | All three rows missing | both `unknown` |
-- Timing: diagnosed 2026-10-20 (above); the unbounded 1d native scan is an
-  open design follow-up.
+- Timing: diagnosed 2026-10-20 (above); the unbounded 1d native scan is a
+  design follow-up
+  ([energy-read-unbounded-history-scan.md](../06-platform/telemetry/energy-read-unbounded-history-scan.md)).
+  Decided 2026-10-20: its A2 fix is **deferred, deployment NO-GO**, and it
+  does not block B2, C1, C2′ or D.
 - Postcheck `INFO routing lag` blank line: fixed 2026-10-20 (above), not
   run on production.
 
