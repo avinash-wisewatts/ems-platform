@@ -1,7 +1,7 @@
 # Production Release Plan: Migrations 266 → 301
 
-Status: PROPOSED; D4a / D4b / D8 / D9 decided 2026-10-17 (D8 condition confirmed), others open · Prepared: 2026-10-14 · Updated: 2026-10-17 · Owner: Engineering
-Nothing in this plan has been executed. Every dispatch, precheck and operator
+Status: **Release A deployed 2026-10-17 and accepted 2026-10-18** (section 6, "Release A acceptance"; 48-hour window closed 2026-10-19); **Release B1 (268, 269) deployed and accepted 2026-10-19** (section 2, "B1 execution record"); B2, C1, C2′ and D PROPOSED; D1 / D4a / D4b / D8 / D9 decided 2026-10-17 (D8 condition confirmed), D3 decided 2026-10-19 for B1, others open · Prepared: 2026-10-14 · Updated: 2026-10-20 · Owner: Engineering
+Only Releases A and B1 have been executed. Every other dispatch, precheck and operator
 step below needs its own explicit approval
 ([release-process.md](release-process.md#every-phase-requires-its-own-explicit-approval)).
 
@@ -37,7 +37,7 @@ Evidence labels used in this document:
 | Item | Value | Basis |
 |---|---|---|
 | Last production release | `9ca461e` (Stage 3, migrations 264–265), run `37746225677`, 2026-10-08 | [V] newest `deploy-production.yml` run |
-| Production ledger | 131 rows, head 265 | [P] |
+| Production ledger | 131 rows, head 265 (before A); **133 rows, head 267** after Release A, 2026-10-17; **135 rows** (268, 269 added) after Release B1, 2026-10-19 | [P] / [M] |
 | Staging HEAD | `b1c8b09` (migration 301), `deploy-staging.yml` run `38569347439` | [V] |
 | Staging ledger | 173 rows, head 301, applied in manifest order, all 42 pending checksums equal to the repository files | [V] read-only query |
 | Pending manifest rows | 42 | [V] |
@@ -69,8 +69,8 @@ below) therefore gates every release.
 
 | Release | Milestone (full SHA) | `deploy-staging.yml` | Migrations, in apply order | Ledger after |
 |---|---|---|---|---|
-| **A** | `f06683d957b285754df2cebb1db5b737e2eb8d03` | `36022033311` success, 2026-09-24 | 266, 267 (2) | 133 |
-| **B** | `ba2cb4be254644c3ebd4a30b02b68f1d1ae4d601` | `37273913405` success, 2026-10-05 | 268, 269, 263, 270, 279, 275, 276, 277, 278, 280, 281, 282, 283, 284, 285, 286 (16) | 149 |
+| **A** (deployed 2026-10-17, accepted 2026-10-18) | `f06683d957b285754df2cebb1db5b737e2eb8d03` | `36022033311` success, 2026-09-24 | 266, 267 (2) | 133 |
+| **B** (split: B1 = 268, 269 deployed 2026-10-19 from `546a718`; B2 = the rest, proposed) | `ba2cb4be254644c3ebd4a30b02b68f1d1ae4d601` | `37273913405` success, 2026-10-05 | 268, 269, 263, 270, 279, 275, 276, 277, 278, 280, 281, 282, 283, 284, 285, 286 (16) | 149 |
 | **C** | `b1c8b0956ddecbdcbfe7d474bfeb1b7eae8cb485` | `38569347439` success, 2026-10-14 | 253–262, 287, 288, 289, 290, 291, 292, 293, 294, 295, 297, 298, 299, 300, 301 (24) | 173 |
 | **C1** | `105c6c15e66785151b20ca4b605e797bc558973e` | `37738437514` success, 2026-10-08 | 253–262, 287–291 (15) | 164 |
 | **C2′** | `d52b049b8acd2f741868f6ef10286e11767b07d4` | `38363172078` success, 2026-10-13 | 292, 293, 294, 295, 297, 298 (6) | 170 |
@@ -124,6 +124,397 @@ therefore gets the Analytics API but not the Analytics UI. This is by
 design until a production frontend rollout is separately authorized
 ([PHASE8_FRONTEND_DEPLOYMENT.md](../operations/PHASE8_FRONTEND_DEPLOYMENT.md#production-promotion--later-same-immutable-artifact)).
 
+### Split of Release B (audit 2026-10-19; B1 approved and deployed 2026-10-19, B2 proposed)
+
+[V 2026-10-19] After Release A, **every** later manifest commit's pending set
+starts with 268, then 269, then 263. Because `apply_migrations.sh` applies all
+pending rows in manifest order, no migration can reach production before 268
+and 269, and none after 269 can reach it before 263 (G2). The commits that
+add the next rows, with their pending sets on production:
+
+| Commit | Pending on production | `deploy-staging.yml` |
+|---|---|---|
+| `c54e646a62ff7afc3f9141339e68ff58e5513bb1` | 268 | `36131058307` success |
+| **`546a718dce6bcc005bcf32cff87947be3e9cb0fe`** | **268, 269** | **`36142660006` success** |
+| `dfdb379` | 268, 269, 263 | failure (never promote) |
+| `09e644b` | 268, 269, 263, 270 | `36171137551` success |
+| `ba2cb4b` | 268 … 286 (16) | `37273913405` success |
+
+Proposal: split B into **B1 = `546a718` (268, 269)** and **B2 = `ba2cb4b`
+(263, 270, 279, 275–278, 280–286)**. B1 takes all of B's chunk-lock risk
+without the Grafana read switch; B2 then carries only the G2 parity risk.
+
+- Checksums [V]: the 42 pending files at `origin/staging` equal staging's
+  ledger (268 `f8572080…`, 269 `313d39f4…`).
+- App content [V]: `f06683d..546a718` changes only migrations, tests and docs,
+  so the image behaves like Release A's.
+- Lookup [V 2026-10-19 14:30 UTC, corrected]: the workflow's
+  "Require a successful deploy-staging.yml run" step filters server-side
+  with `gh run list --commit <sha>`, so the 100-run limit applies to runs of
+  that one SHA, not to all staging runs. The earlier "50th of the latest
+  100, expiry risk" reading was wrong. Running the step's exact query
+  returns `36142660006` (success, 2026-09-25 13:42 UTC).
+- Image [A]: the existence of `ghcr.io/<repo>-app:546a718…` was not verified
+  (the token lacks `read:packages`). The workflow checks it and fails before
+  any change if it is missing.
+
+**B1 lock profile.** [V] 268 adds constant-default columns (catalog-only, no
+rewrite) and NOT VALID checks to `energy_consumption_1min/5min`. 269 adds
+counters to `energy_consumption_15min/hourly/daily`, a NOT VALID check on
+1min/5min, and `CREATE OR REPLACE` of 10 Energy views and 5 functions. Each
+migration takes ACCESS EXCLUSIVE on the hypertables, their chunks and the
+views, in its own transaction. Staging execution was 1,135 ms and 628 ms.
+Production ran Release A's migrations 1.1–1.3 times slower than staging,
+250–252 and 265 1.8–3.1 times slower, and 264 20 times slower (5.4 s);
+expect seconds to tens of seconds. [M] Production has
+12 chunks for each of 1min, 15min, hourly and daily (5min has none) and
+no default `lock_timeout` or `statement_timeout`, and the runner sets neither.
+**The risk is lock queueing:** a long reader of these tables or views makes
+the ALTER wait, and every later query queues behind it. Plan:
+
+1. Dispatch window: away from the compression policies (16:34–16:36 UTC),
+   retention (04:34 UTC) and reconcile 1131 (22:30 UTC). The migrations
+   start about 2 minutes after dispatch (Release A: dispatch 12:02:47,
+   apply 12:05:04).
+2. Pre-dispatch (read-only): P1, P2 (pending exactly 268, 269), P10, plus no
+   active or idle-in-transaction session older than 60 s on the Energy
+   tables or views.
+3. During apply (read-only): sample `pg_stat_activity` / `pg_locks` every
+   5 s for sessions waiting on the migration backend.
+4. Abort rule (needs approval as part of B1): if the migration waits more
+   than 60 s while other sessions queue behind it, cancel the migration
+   backend (`pg_cancel_backend`). Its transaction rolls back and the
+   workflow stops. If 269 is cancelled, 268 stays applied. The containers
+   keep the old image (section 6, "A release can stop partway").
+
+**B1 verification.** Ledger 135 rows with the staging checksums; REQUIRED
+gates; 268/269 postconditions (built into the migrations); the
+`config.energy_reconstruction_scope` GLOBAL row disabled; jobs 1063, 1064,
+1097, 1100, 1103 and 1062 keep succeeding; failure total unchanged; and a
+read-only before/after comparison of closed-day Energy totals for the
+PRIMARY_METER assets. [V] 269's golden tests prove its output is unchanged.
+
+**B1 recovery.** Forward only. Everything in 268 is inert (switch off; no
+writer). If a 269 read regresses, a forward migration re-creates the pre-269
+definitions from `app/tests/fixtures/energy_269_baseline.sql`. No image
+rollback is needed: the app image behaves like Release A's.
+
+#### B1 readiness evidence (2026-10-19, read-only)
+
+| Prerequisite | Evidence | Status |
+|---|---|---|
+| Ledgers | Production 133 rows, head 267; digest of `migration_id:checksum` over all rows `7e872b46…` = staging's same 133 rows [M] | Met |
+| Pending set (P2, local) | Manifest at `546a718` minus the production ledger = exactly 268, 269 [V] | Met |
+| Checksums | Repository at `546a718` = staging ledger: 268 `f8572080a4467f61…27e4a`, 269 `313d39f4951d11ad…31ed4` [V] | Met |
+| Preconditions | 268 and 269 contain postconditions only (no environment preconditions) [V]; their objects are absent on production (precheck PRE line) | Met |
+| Staging proof | `deploy-staging.yml` `36142660006` success (all CI gates, deploy, post-deploy verification). The workflow's own `--commit` lookup finds it [V 2026-10-19 14:30 UTC] | Met (no window expiry) |
+| Image | `ghcr.io/avinash-wisewatts/ems-platform-app:546a718…` pushed 2026-09-25, digest `sha256:bbcbe139…` [V run log]; no image-cleanup workflow or script in the repository [V]; Release A's older image resolved on 2026-10-17. Not re-verified 2026-10-19: the package is private (anonymous pull 403) and the local `gh` token lacks `read:packages`; the production host's registry login was deliberately not used. The workflow's "Verify the SHA-derived image exists in GHCR" step checks it before any change | Expected; re-checked by the workflow |
+| Forward-only | Last promoted release = `f06683d` (run `39030992116`); `546a718` is ahead [V]. An aborted B1 leaves `f06683d` as the reference, so the same SHA can be dispatched again; the runner then skips any migration already recorded with a matching checksum [V workflow + runner] | Met |
+| Release A | Accepted; 48-hour observation closed 2026-10-19 14:20 UTC, all criteria PASS (1128/1129 12:05 runs Success, 1130 201/201 runs, 50/50 hours at 3,144 rows, 0 deficits, failure total 2840, 0 locks) [M] | Met |
+| Precheck dry run | `prod_b1_precheck.sql` (sha256 `2cd0066fc220544e…`) on production 2026-10-19 14:34:52 UTC: every line PASS [M]. Not the binding run (step 2) | Met |
+| Capture asset set | 56 PRIMARY_METER assets in active Grafana organizations [M 14:28 UTC] | Met |
+
+**Dispatch window [M 2026-10-19].** All scheduled jobs run under 3 s; the
+1-minute jobs (1062, 1063, 1064, 1044, routing) cannot be avoided and are
+sub-second. Avoid :05–:09 past each hour (1103 :05:54, 1105 :08:28, 1057 at
+07:09 / 19:09), 12:00–12:06, 16:34–16:51 (compression), 21:30, 22:30–22:32
+(1131) and 04:34–04:42 (retention and compression). Migrations start about
+2 min 15 s after dispatch. Recommended: dispatch at **HH:12 UTC** in 13:00–15:59
+or 17:00–21:00 UTC, so the apply lands at about HH:14–HH:16. No Grafana
+session was connected during the 2026-10-19 samples (only the app pool and
+Telegraf).
+
+**Procedure (each step needs the approval listed under "B1 approvals").**
+
+1. Read-only, about 30 minutes before dispatch:
+   `prod_b1_precheck.sql` (every line PASS); then
+   `energy_parity_capture.sql` with `label=b1_pre1`, then again with
+   `label=b1_pre2`: range `2026-09-23 18:30+00` → `2026-09-27 18:30+00`
+   (site-local days Sep 24–27 IST, older than the 21-day daily
+   `reconcile_window`), `resolutions=1d`, `max_assets=56`, `timeout=300s`.
+   `energy_parity_compare.py b1_pre1 b1_pre2 --criterion full
+   --expect-assets 56` must PASS (repeatability). Both captures must
+   **finish before dispatch**: they read the tables B1 locks.
+2. Re-run `prod_b1_precheck.sql` within 2 minutes of dispatch.
+3. Dispatch `deploy-production.yml`: `release_git_sha` =
+   `confirm_release_git_sha` = `546a718dce6bcc005bcf32cff87947be3e9cb0fe`,
+   `promotion_mode=staging-milestone`.
+4. Start `prod_b1_lockwatch.sql` (read-only, 5 s samples, stops by itself
+   after 180 samples = 15 min) as soon as the workflow reaches the deploy
+   job. Afterwards confirm no `ems_b1_lockwatch` session is left connected.
+5. Abort rule: only if a sample shows `ABORT_CANDIDATE` (the migration
+   backend has waited on one lock for 60 s or more **and** at least one
+   session is queued behind it), run `prod_b1_guarded_cancel.sql -v
+   pid=<mig_pid>` once. `LONG_WAIT` (60 s, nothing queued) is reported, not
+   acted on. If the script prints no `CANCEL` line, `signalled` is false, or
+   `AFTER15S` shows the backend still present: stop, report and wait. Never
+   `pg_terminate_backend`.
+6. After the workflow ends: `prod_b1_postcheck.sql` (every line PASS); then
+   `energy_parity_capture.sql` with `label=b1_post`, same variables;
+   `energy_parity_compare.py b1_pre2 b1_post --criterion full
+   --expect-assets 56` must PASS (D3). Its
+   timing lines are the canonical-read before/after comparison
+   (cold-cache effect: compare with `b1_pre2`, not `b1_pre1`).
+7. Next scheduled check after 1 hour, then the usual daily checks.
+
+**Guarded cancel (the only action in the procedure):**
+`scripts/diagnostics/prod_b1_guarded_cancel.sql`. It re-checks the whole
+abort rule when it runs and calls `pg_cancel_backend` only if `:pid` is still
+the migration backend (client backend, `ems_admin`, application `psql`, in
+a transaction), still waiting on a lock, has waited 60 s or more, and has at
+least one session queued behind it. Then it waits 15 s and reports whether
+the backend is gone. It never calls `pg_terminate_backend`.
+
+[V 2026-10-19 14:34–14:36 UTC, throwaway local postgres:16, read-only
+session settings] At 3 s waiting: `WAITING`, guard refused. At 64 s with
+nothing queued: `LONG_WAIT`, guard refused. At 83 s with one session queued:
+`ABORT_CANDIDATE`, guard printed `CANCEL|147|true|84|1|84` and
+`AFTER15S|147|false`; the fake migration's psql got "canceling statement due
+to user request" and exited 3; the queued session completed.
+[M 2026-10-19 14:28 UTC] On production the only `ems_admin` client sessions
+are diagnostics; the app is `ems_app`, Telegraf `telegraf_writer`, and
+TimescaleDB jobs are background workers, so they count as queued but can
+never match the migration-backend filter. Any ad-hoc psql during the window
+must set its own `application_name`.
+
+Earlier simulation [V local, 2026-10-19]: the
+waiting `LOCK … ACCESS EXCLUSIVE` statement fails with "canceling statement
+due to user request". psql (`ON_ERROR_STOP`) exits non-zero, and the open
+transaction (migration plus its ledger insert) rolls back. The queued
+reader then completed. A non-matching pid returns 0 rows and cancels
+nothing. On production, `apply_migrations.sh` and `deploy_release.sh` (both
+`set -Eeuo pipefail`) then stop before `compose up`. The deploy job fails,
+`verify-production` is skipped (`needs: deploy-production`), and the
+containers keep Release A's image while the host checkout is at `546a718`
+(section 6). If 269 is cancelled, 268 stays applied (134 rows); a later
+dispatch of the same SHA applies 269 only.
+
+**Tooling status [V 2026-10-19].**
+
+- `prod_b1_precheck.sql`: ran on the local dev database (syntax and logic;
+  local IDs differ, so its FAIL lines there are expected).
+- `prod_b1_postcheck.sql`: ran read-only on staging, where 268/269 are
+  applied. Every 268/269 postcondition and the switch check PASS; the ledger,
+  failure-total and paused-job lines FAIL there as expected (staging
+  differs).
+- `prod_b1_lockwatch.sql`: local simulation (reader holding ACCESS SHARE,
+  migration waiting for ACCESS EXCLUSIVE, a job queued behind it). It
+  identified the migration pid, its blocker and the one queued session, and
+  flagged `ABORT_CANDIDATE` at 63 s, not before. Since 2026-10-19 14:40 UTC
+  it requires a queued session for `ABORT_CANDIDATE` (`LONG_WAIT`
+  otherwise) and stops after 180 samples: an unbounded `\watch` stopped by
+  killing its client left an idle backend connected in the local test.
+- `energy_parity_compare.py --expect-assets N`: INVALID unless both
+  captures cover exactly N assets with one line per resolution (local
+  synthetic tests: PASS 0, value mismatch 1, missing asset 2, full-column
+  mismatch 1).
+- `energy_parity_capture.sql` + `energy_parity_compare.py`: locally,
+  read-only, repeatable, timeout and bad-range runs fail closed (INVALID),
+  and six negative comparator cases are detected. Staging minimal probe
+  (1 asset, `1d`, 4 days, run twice): identical full fingerprint, 4 rows,
+  1.7 s cold / 0.34 s warm. **Not yet run on staging for all assets or
+  for P5's resolutions** (needs approval).
+
+#### B1 execution record (2026-10-19) — DEPLOYED
+
+Approvals given by the user 2026-10-19: D3 = exact equality, zero
+tolerance, `1d` only, exactly 56 assets; dispatch 17:12 UTC; read-only
+steps; deployment; guarded cancel at most once on `ABORT_CANDIDATE`.
+
+| Step | Evidence [M] | Result |
+|---|---|---|
+| Precheck (T−20 min) | 16:52:41 UTC, 12/12 PASS | PASS |
+| Baseline captures | `b1_pre1` 16:52:50 (56 calls, 0 errors, 17.5 s), `b1_pre2` 16:53:20 (56, 0, 11.9 s); compare `--criterion full --expect-assets 56` PASS. Baseline: 48 assets × 4 days, 6 × 3, 2 × 0; 52 with import > 0; 25,193.8 kWh | PASS |
+| Final gates | 17:10:10 precheck 12/12 PASS; lookup → `36142660006` success | PASS |
+| Dispatch | First attempt at 17:12 blocked by the agent's permission classifier (nothing created). After explicit user permission: fresh precheck 17:22:35 PASS + lookup PASS, dispatched **17:22:38 UTC**, run `39293585987` | — |
+| Workflow | Validate 17:22:48–17:22:58; deploy 17:23:01–17:24:16; verification 17:24:19–17:26:00; all success. Image `…:546a718…@sha256:bbcbe139…`. APPLY exactly 268, 269; 133 SKIP. REQUIRED gates PASSED. Advisory FAILs: energy-routing pipeline "2 stages not SUCCESS" (at 17:28:37 only the known `derived_space_dew_point_1min` NEVER_RUN remained → second one transient, not identified), alert job unregistered, 1 disabled policy (1053) — all pre-existing in kind | PASS |
+| Lock watch | 180 samples 17:22:53–17:37:48 (stopped itself at `c=180`): 166 IDLE, 14 RUNNING, max lock wait 0 s, queued 0 throughout; no `WAITING`/`LONG_WAIT`/`ABORT_CANDIDATE` | Guarded cancel **not used** |
+| Ledger | 135 rows; 268 applied 2,642 ms, 269 applied 1,036 ms, staging checksums; earlier 133 digest unchanged | PASS |
+| Postcheck | 17:25:02 all PASS (columns, NOT VALID checks, switch OFF, counters, 7/7 security_barrier, failure total 2840, 0 errors, 8/8 paused, 0 lock waiters). Job 1062's line printed blank (it was mid-run, NULL fields); checked separately: Success 3.2 s | PASS |
+| Post-deploy refresh jobs | 1097 (15 min) 17:26:41 Success, 1100 (hourly) 17:28:17 Success, 1063/1064/1062 Success; 1103 (daily) 18:05:54 Success 0.37 s. 18:07 UTC check: failure total 2840, 0 failing, 0 job errors, 8/8 paused, 0 lock waiters, lag energy 110 s / environment 170 s, 0 leftover `ems_b1_*` sessions, admin-portal + live-telemetry healthy on the `546a718` image | PASS |
+| D3 parity | `b1_post` 17:28:46 (56 calls, 0 errors, 20.8 s); read function REPLACED (`0cbac573…` → `57470d84…`); `b1_pre2` → `b1_post` `--criterion full --expect-assets 56` **PASS**, 56/56 identical | PASS |
+| Canonical-read timing (`1d`) | `b1_pre2` p50 198 / p95 404 / max 458 ms; `b1_post` p50 258 / p95 1,102 / max 1,522 ms. `b1_post` was the first call set after the function replacement; it resembles the cold `b1_pre1` (p50 256 / p95 714 / max 1,037 ms). One post capture cannot separate cold cache from a plan regression | Informational; see warm repeat |
+| Warm repeat (approved 2026-10-19) | `b1_warm` 19:06:43 UTC, read-only, same 56 assets / range / `1d`: 56 calls, 0 errors, 17.1 s; read function `57470d84…` (unchanged since deploy). D3 `b1_pre2` → `b1_warm` `--criterion full --expect-assets 56` **PASS**, 56/56 identical. Timing p50 271 / p95 465 / max 1,376 ms | PASS (parity); timing below |
+
+**Timing after the warm repeat [M] (diagnostic only; D3 unchanged).**
+
+| Capture | First 3 calls (ms) | p50 / p95 / max, calls 3–56 (ms) |
+|---|---|---|
+| `b1_pre1` (cold, pre-269) | 831, 1,037, 987 | 252 / 503 / 987 |
+| `b1_pre2` (warm, pre-269) | 359, 150, 136 | 198 / 404 / 458 |
+| `b1_post` (first after 269) | 1,522, 1,407, 1,257 | 253 / 667 / 1,257 |
+| `b1_warm` (post-269, +1 h 38 min) | 1,376, 1,172, 760 | 267 / 404 / 760 |
+
+- The p95 of 1,102 ms did not persist. Once the first three calls are
+  excluded, `b1_warm`'s p95 equals the baseline (404 ms).
+- The median stayed about 35% higher across all assets: 4-row assets
+  198 → 272 ms (n=48), 3-row assets 219 → 278 ms (n=6).
+- The slow first three calls are the same three assets every time
+  (`05264ec8`, `061e78ef`, `1128ade6`). They were also slow in the cold
+  `b1_pre1`, and fast only in `b1_pre2`, which ran 30 s later. So they
+  are not a session-start cost; see the read-path diagnosis below.
+
+**Read-path diagnosis (approved 2026-10-20, read-only) [M].**
+
+Run on production 05:46–05:48 UTC.
+- Sample: four assets (`3e5c227c` median, `6d03dc97` slowest,
+  `d15a45e4` 3-row, `05264ec8` slow-first), 1d, same range as D3.
+- Statement timeout 15 s. Load guard: 1-min load ≤ 1.0 and ≥ 300 MB
+  available, never tripped (peak 0.72, ≥ 650 MB). No leftover sessions.
+- Pre-269 vs post-269 is a same-moment A/B: both 1d view chains, inlined
+  as CTEs with the same shape.
+  - Old chain from `app/tests/fixtures/energy_269_baseline.sql`. Only
+    migrations 032–035 defined these views before 269, so this is
+    production's pre-B1 definition.
+  - New chain from migration 269.
+  - Also measured: the real view and `get_canonical_energy_read`.
+  - Equivalence: for every asset, the new inline query returns exactly
+    the real view's rows (full-row md5), and old and new agree on every
+    value column.
+
+| Measure | Pre-269 chain | Post-269 chain | Real view (post-269) |
+|---|---|---|---|
+| Planning, first statement of a fresh session | 62–148 ms | 66–109 ms | 71–99 ms |
+| Planning, warm | 6–10 ms | 7–11 ms | 6–10 ms |
+| Execution, 2nd run (TIMING OFF), median of 4 | 204 ms (158–226) | 264 ms (242–295) | 268 ms (216–282) |
+| Execution, 1st run in session | 252–412 ms | 245–446 ms | 266–317 ms |
+
+- Function calls: first call in a fresh session 295–370 ms; warm
+  180–222 ms (`05264ec8`: 305–323 ms).
+- First touch of `05264ec8`: 3,273 shared-buffer reads, 424 ms against
+  about 250 ms warm.
+- Findings:
+  - **Planning is not the cause.** Cold-session planning is under
+    150 ms, both chains are similar, and warm planning is under 12 ms.
+  - **269 adds about 60 ms of CPU per 1d call (about +30%) in the
+    15-minute rollup.** For `05264ec8`, comparing self time old → new:
+
+    | Stage | Old | New |
+    |---|---|---|
+    | Native scan | 68 ms | 81 ms |
+    | Sort (wider rows) | 84 ms | 108 ms |
+    | 15-min aggregate (extra `FILTER` / `NOT interior` aggregates) | 62 ms | 102 ms |
+
+    For `3e5c227c`, the old plan aggregated partially in parallel workers.
+    The new plan aggregates serially after `Gather`.
+  - **Pre-existing, larger factor: the 1d read aggregates the device's
+    whole retained native history.** This is the same before and after
+    269.
+    - Chunk scans are bounded only by `device_id`. All 22 chunks of the
+      two native hypertables are read; the 1-min table holds 12 chunks,
+      2026-07-30 → 10-22.
+    - The date range applies only after the 15-min rollup, at the join to
+      `metadata.sites`. For `05264ec8`, 5,923 of 6,257 buckets are
+      discarded and 334 kept; about 92,600 native rows are aggregated for
+      a 4-day read.
+    - Read cost therefore grows with history length, not with the
+      requested range. 269's per-row cost is applied to all of it.
+  - **The 1.2–1.5 s first calls in the captures were not reproduced.**
+    Cold-buffer reads explain about +170 ms. The remainder at 17:28 and
+    19:06 is unexplained [I]. Likely causes are colder cache plus
+    concurrent refresh jobs on the 2-vCPU host; not verified.
+- Recommendations (none approved, no action taken):
+  1. Accept 269's +60 ms per call. Its cause is understood, and 1d reads
+     stay around 0.3 s.
+  2. Treat the unbounded 1d native scan as a design follow-up. Options:
+     - bound `bucket_start` in the 1d branch of `get_canonical_energy_read`
+       (a site-timezone-padded range);
+     - read the persisted `analytics.energy_consumption_daily` tier, which
+       269 extended with the counters.
+
+     Either is a migration with its own parity proof. The same
+     view-chain pattern likely affects the other aggregate tiers; check
+     with plan-only EXPLAIN locally or on staging first.
+  3. No further production diagnostics needed for B1.
+
+Follow-ups:
+
+- **Postcheck NULL lines: fixed locally 2026-10-19, not run on
+  production.**
+  - Cause: while a job runs, TimescaleDB's `job_stats` has
+    `last_run_duration` NULL. The concatenated line, including its
+    PASS/FAIL suffix, became NULL.
+  - Effect on the gate: it only looks for `FAIL`, so it passed silently.
+    A previous **Failed** run on a mid-run job would also have printed
+    blank and passed. A job or `point_telemetry_1h` row missing from the
+    catalog printed no line at all.
+  - Fix in `prod_b1_postcheck.sql`:
+    - The energy-job line is now driven by the 6 expected job ids,
+      left-joined to `job_stats`.
+    - All fields are coalesced. A missing job prints `none … FAIL`.
+    - A running job prints `<status of previous run> (previous run;
+      running since HH:MM:SS) PASS/FAIL`.
+    - The 1h checkpoint line is NULL-safe the same way.
+    - A full pass prints exactly 26 PASS lines. The runbook gate now
+      requires exactly 26; the B1 run printed 25, so the blank line would
+      have been caught.
+    - The `INFO routing lag` line (ungated) prints `unknown` for a
+      missing `pipeline_state` row or NULL timestamp instead of a blank
+      line (2026-10-20).
+    - Pinned sha256 prefix: `6244577e4711dabe`. History: `5ea5e2bbe8cc0a6a`
+      at the B1 run, then `dc193de898b34222` after the health-line fix on
+      2026-10-19.
+  - Local test: dev DB, HEALTH section, in a transaction that was rolled
+    back (catalog verified unchanged).
+
+    | Scenario | Original | Fixed |
+    |---|---|---|
+    | 1062 mid-run, previous Success | line missing | `PASS` line |
+    | 1062 mid-run, previous Failed | line missing (gate passes) | `FAIL` line |
+    | Duration NULL, not running | line missing | `(- s) PASS` |
+    | Jobs absent from the catalog | no lines | `FAIL` lines |
+  - Gate fail-closed check (rerun 2026-10-20 on `6244577e…`, local,
+    `b1_psql` stubbed). Only a 26-PASS, rc 0, FAIL-free output passes
+    (gate rc 0). Every other case returns gate rc 1:
+    - the B1-run output (25 PASS, blank line);
+    - a missing line (25);
+    - an extra line (27);
+    - a FAIL line;
+    - empty output (rc 0 and 255);
+    - an SQL error (rc 3);
+    - 26 PASS with rc 1;
+    - a tampered script (pin mismatch, psql not run).
+
+    The full script on the local 269-schema test DB runs with rc 0, 0
+    errors, all 26 gated lines present and 0 blank result lines. On a
+    pre-268 DB it exits 3.
+  - INFO line, local dev DB, rolled back (rows verified unchanged):
+
+    | Scenario | Output |
+    |---|---|
+    | Known timestamps | `energy=110 s environment=170 s` |
+    | Energy row missing | `energy=unknown environment=170 s` |
+    | Environment timestamp NULL | `energy=110 s environment=unknown` |
+    | `normalized_points` missing | both `unknown` |
+    | All three rows missing | both `unknown` |
+- Timing: diagnosed 2026-10-20 (above); the unbounded 1d native scan is an
+  open design follow-up.
+- Postcheck `INFO routing lag` blank line: fixed 2026-10-20 (above), not
+  run on production.
+
+#### B1 approvals required (given 2026-10-19, see execution record)
+
+1. The read-only production steps 1, 2, 4 and 6: precheck, three parity
+   captures (56 canonical-read calls each), lock watch, postcheck.
+2. The dispatch of `546a718…` at a named time (step 3).
+3. The guarded cancel under the abort rule (step 5), at most once.
+   `pg_terminate_backend` is not covered.
+
+**B1 risks as assessed before dispatch** (outcome 2026-10-19: the
+workflow verified the image; lock wait 0 s; D3 decided and PASS; 269
+timing measured in the execution record and the read-path diagnosis).
+
+- 269 replaces `get_canonical_energy_read` and 10 Energy views. On staging
+  this exact body served for only about 2.5 hours (Sep 25, before 263
+  replaced the function); the local test database does not show plan
+  regressions. The b1_pre2 / b1_post timing lines measure it on production
+  for the daily resolution only.
+- Image existence is not re-verified today (the workflow checks it).
+- The production lock-hold time is estimated (staging 1.1 s / 0.6 s; earlier
+  production migrations ran 1.1–20 times slower).
+- D3 is proposed (exact equality, `--criterion full --expect-assets 56`) but
+  not decided.
+
 ## 3. Migration readiness
 
 Every migration below is applied and verified on staging [V].
@@ -176,11 +567,24 @@ committed** to `staging` [V] (it exists only as uncommitted local work).
 
 ## 4. Gates
 
-### G1: 1h backfill frontier (blocks Release A and therefore everything)
+### G1: 1h backfill frontier (blocks Release A and therefore everything) — MET 2026-10-17
 
-- [P] Production `analytics.point_telemetry_1h` is filled from 2026-09-04
-  00:00 to 2026-09-24 06:00 UTC (1,248,796 rows, validated per hour). The
-  backfill is **paused**.
+[M] Met: Release A's first forward run (2026-10-17 12:07 UTC) refreshed
+[Oct 15 10:00, Oct 17 12:00) UTC, overlapping the backfill frontier, so no
+top-up was needed and no 1h hour is missing. D1 was decided as option (a)
+with baseline 2840. The points below are the pre-deploy record.
+
+- [P 2026-10-17 11:48 UTC] Production `analytics.point_telemetry_1h` is
+  filled without gaps from 2026-09-04 00:00 to 2026-10-15 10:00 UTC (995
+  hourly checkpoints, validated per hour; 28 outage hours Sep 20-22 hold
+  0 rows). That is as far as the runner's 48-hour rule allows. No runner
+  or STOP is active.
+- [V] Gap left by the first forward run (window [H − 50 h, H) for UTC hour
+  H): none if it starts by 2026-10-17 13:52 UTC; otherwise
+  [2026-10-15 11:00, H − 50 h). A top-up launched at closed-15m hour Hc
+  reaches Hc − 48 h, so the first forward run must start no later than
+  Hc + 2 h (its :52 slot). Prefer a :07 slot: all three retries then stay in
+  the same hour.
 - The backfill runner is an operator tool installed on the production host,
   outside this repository. It calls `analytics.backfill_point_telemetry_1h`
   hour by hour and stops on health gates.
@@ -224,10 +628,10 @@ committed** to `staging` [V] (it exists only as uncommitted local work).
   hour, so the call may time out at baseline. It then rolls back and retries
   (3 retries, 5 minutes apart) without losing data. In burst windows calls
   took 0.3–1.8 s per hour. Dispatch A in a burst window.
-- [E] For a dispatch on about 2026-10-20, about 580 hours remain (from Sep 24
-  07:00 UTC). At observed rates that is roughly 25–45 hours of runner time
-  at baseline IO, much less in burst windows. Each day of delay adds 24
-  hours of backlog.
+- [P] The final top-up is [2026-10-15 11:00, Hc − 48 h): 21 h for a first
+  forward run at 2026-10-18 10:07 UTC, 69 h at 2026-10-20 10:07 UTC. Each
+  hour of delay adds one hour. Burst-window runs on 2026-10-17 took about
+  12 s per hour.
 
 **Why not activate 266 with the gap and let reconcile fill it [V from
 migration 265 code and 266's job settings].**
@@ -255,6 +659,30 @@ Before dispatch, capture a parity baseline of
 `analytics.get_canonical_energy_read` for the 56 PRIMARY_METER assets and
 confirm bridge coverage. After deploy, compare against the same ranges. The
 pass criterion is decision D3.
+
+**Readiness status 2026-10-18: BLOCKED. Do not dispatch until every item
+below is resolved, each with its own approval.** Update 2026-10-20: A + 48 h
+and D3 are resolved; B1 (268, 269) is deployed, so the lock item below
+applied to B1 and is done (lock wait 0 s). B2 still needs the staging
+validation and the P5 ranges and resolutions.
+
+- A + 48 h: the observation window ends 2026-10-19 12:05 UTC (section 6,
+  "Release A acceptance"). Closed 2026-10-19 14:20 UTC, all PASS.
+- G2 / P5 tooling exists since 2026-10-19
+  (`energy_parity_capture.sql`, `energy_parity_compare.py`; tested locally
+  and with a 1-asset staging probe). Still needed: a staging validation for
+  all 56 assets at P5's resolutions (needs approval: read load), and the P5
+  ranges and resolutions themselves (proposed: the B1 range at `1d`, `1h`
+  and `15m`, plus one closed day at `native`).
+- D3 (pass criterion) is still open. Decided 2026-10-19 (section 9).
+- 268 takes an ACCESS EXCLUSIVE lock on every `energy_consumption_1min/5min`
+  chunk with no `lock_timeout` (section 3). Dispatch when the energy jobs that
+  touch those tables are idle, and watch for lock waits (P10 plus
+  `pg_locks`).
+- [M 2026-10-18] The energy reconcilers 1114–1118 are paused. B does not
+  need them, but the parity baseline and the post-deploy comparison must be
+  taken in the same state, or a reconciler repair between the two could show
+  up as a false parity mismatch.
 
 ### G3a: Migration 300 staging acceptance (Release D) — PASSED
 
@@ -284,8 +712,9 @@ cycles, batches would publish a cycle late, and 302 would show persistent
 Release D may be considered only when **all** of these pass, each with its
 own approval:
 
-1. Release A deployed; production routing durations measured (≥ 24 h,
-   read-only sampler P11).
+1. Release A deployed (**done 2026-10-17**); production routing durations
+   measured (≥ 24 h, read-only sampler P11; **not yet run**. A 10-minute
+   spot sample on 2026-10-18 is in section 6, "Release A acceptance").
 2. Migration 303 merged, deployed to staging and validated there (plans,
    completeness, late data, catch-up, demand, rollback).
 3. The bounded routing read timed read-only on production (P12) and found
@@ -331,7 +760,7 @@ on them.
 | P2 | `scripts/apply_migrations.sh --status` lists exactly that release's migrations as pending, in manifest order (call the script directly, not a test wrapper) | Every release |
 | P3 | 1h jobs still unscheduled with their 265 configuration; 1h frontier meets G1 | A |
 | P4 | Routing loader bodies match migrations 215/228; `normalized_points` `compress_after` = 1 day | A |
-| P5 | Bridge coverage and parity baseline (G2) | B |
+| P5 | Bridge coverage and parity baseline (G2). Tooling: `scripts/diagnostics/energy_parity_capture.sql` + `energy_parity_compare.py` (2026-10-19; tested locally and with a 1-asset staging probe; full staging validation pending approval) | B (B1 uses the same tooling for its before/after check) |
 | P6 | Migration-213 function md5s expected by 297 | C |
 | P7 | Exactly one job for each 298/300 target (IDs in section 3); all six 300 targets on 1-minute schedules; capture policies within 60 + 60 s. **Policy 5 (300 + 30 s) fails the last clause [M]**: D needs decision D8 | C2′ (298), D (300) |
 | P8 | Loader md5s expected by 301 | D |
@@ -394,6 +823,29 @@ Stop and report, without retrying, if any of these happen:
 | C2′ | Demand job 1062 at :07/:22/:37/:52; demand intervals finalized with the same VALID share as before |
 | D | Routing durations within budget (P11); no 40P01 over the following days; five-minute phases only once activation is approved (D9) |
 
+### Release A acceptance (2026-10-18)
+
+All [M], from read-only production sessions
+(`default_transaction_read_only=on`) on 2026-10-17 and 2026-10-18.
+
+| Criterion | Evidence | Result |
+|---|---|---|
+| Run, gates, ledger | `deploy-production.yml` run `39030992116`, dispatched 2026-10-17 12:02:47 UTC. 266 applied 12:05:04 UTC (sha256 `7f8b3863…`), 267 12:05:05 UTC (`7ac3a331…`), both equal to the repository files; ledger 133 rows. REQUIRED gates passed. Advisory failures all pre-existing and fewer than on 2026-10-08 | PASS |
+| First forward run | Job 1130, 2026-10-17 12:07 UTC, SUCCESS in 1 min 58 s, 148,140 rows; checkpoint NULL → 12:00 UTC | PASS |
+| Forward runs advance | 1130: 70 of 70 runs successful by 2026-10-18 05:22 UTC (every :07/:22/:37/:52 slot, none skipped); checkpoint 2026-10-18 05:00 UTC | PASS |
+| No 1h hour missing | Rows in every hour from 2026-09-04 00:00 UTC to the checkpoint, except Sep 21 00:00 – Sep 22 03:00 UTC (source outage, 0 rows in the 15m source too). Oct 14 00:00 → Oct 18 04:00 UTC: 101 of 101 hours, 3,144 rows per hour | PASS |
+| Late data | Hour 2026-10-17 11:00 UTC was 3,144 samples short (one per series) after the first run; the 13:07 UTC run re-derived it. Deficit detector over Oct 17 00:00 → checkpoint: 0 rows | PASS (self-healed) |
+| First nightly reconcile | Job 1131, 2026-10-17 22:30:00 UTC, SUCCESS in 56 s (limit 30 min). Log run `5a61c4d8…`: outcome HEALTHY, window Sep 12 22:00 → Oct 17 22:00 UTC, 0 mismatching days, 0 rows repaired, 0 errors. The forward lock was held 22:30:00–22:30:56, between the 22:22 and 22:37 forward slots | PASS |
+| New 1h jobs | 1128 (retention 1 year, daily) ran 2026-10-17 12:05 UTC; 1129 (compress after 30 days, every 12 h) ran 12:05 UTC and 2026-10-18 00:05 UTC; all succeeded | PASS |
+| No new job failures | Failure total (all jobs except 1114) 2840 before and after; no job errors since 2026-10-17 12:00 UTC; no job currently failing | PASS |
+| Routing 1001 / 1012 runtime | Spot sample 2026-10-18 05:36–05:45 UTC: 1001 0.33–1.7 s, 1012 0.34–0.91 s per run, starting every minute (2026-10-16: p50 546 s and 504 s, starting every 8–10 min). Energy routing lag about 115 s (297–487 s before deploy). Not the 24-hour P11 measurement | PASS (spot sample) |
+| Host | 0 locks, blocked sessions and long transactions; disk 57 %; about 700 MB available memory; containers healthy | PASS |
+| Paused jobs | 1053 and 1114–1120 still paused and unscheduled; not changed by A | Unchanged |
+| Later checks | 2026-10-18 12:19 and 18:21 UTC: 1128 run 2 and 1129 runs 2–3 succeeded; 1130 121 of 121 runs; checkpoint 18:00 UTC; Oct 14 00:00 → Oct 18 17:00 UTC 114 of 114 hours, 3,144 rows per hour; 0 deficits; failure total 2840; 1001 / 1012 0.31–0.65 s per run | PASS |
+| Disk | 54 GB (56 %) on 2026-10-17 → 57 GB (59 %) on 2026-10-18 18:21 UTC; database 26.3 GB, of which `normalized_points` is 10.5 GB (still filling to its 90-day retention) and `raw_messages` 2.4 GB (3 uncompressed daily chunks, bounded by 48 h retention; compression job 1053 paused) | Deferred: disk is reviewed separately, not part of A's acceptance |
+| Second nightly reconcile | Job 1131, 2026-10-18 22:30:00 UTC, SUCCESS in 70 s. Log run `e846a813…`: HEALTHY, window Sep 13 22:00 → Oct 18 22:00 UTC, 0 mismatching days, 0 repairs, 0 errors. Lock held 22:30:00–22:31:10, between forward slots; 1130 141 of 141 runs by 23:07 UTC (no slot skipped) | PASS |
+| Observe ≥ 48 h before B | Window ended 2026-10-19 12:05 UTC; final checks 14:20 UTC: 1128/1129 12:05 runs Success, 1130 201/201 runs, 50/50 hours at 3,144 rows, 0 deficits, failure total 2840, 0 errors, 0 locks | PASS (2026-10-19) |
+
 ## 7. Rollback limits
 
 - `rollback.yml` redeploys an earlier image only. It does **not** reverse
@@ -429,14 +881,17 @@ routing currently lags 15–23 minutes [M], so the flag would mark most
 production Analytics API series responses `stale = true`. Production has no
 Analytics UI (D6), so no customer screen shows it, but any API consumer would.
 It clears only once routing lag falls below the threshold (Release A's 267
-and then 303). Record it in B's release note.
+and then 303). Record it in B's release note. [M 2026-10-18, spot samples
+only] After Release A, energy routing lag is about 1–2 minutes and 1001/1012
+take under 2 s per run, so the flag would probably not be persistent. Confirm
+with P11 and check after B.
 
 ## 8. Target dates (all [E])
 
 | Release | Earliest | Depends on |
 |---|---|---|
-| A | about 2026-10-20 | G1 and D1 |
-| B | about 2026-10-22 | A + 48 h, G2, D3 |
+| A | **Deployed 2026-10-17** (run 39030992116; 266 12:05:04 UTC, 267 12:05:05 UTC; first 1h forward run 12:07 UTC SUCCESS, checkpoint 12:00 UTC, no 1h gap, no top-up needed). **Accepted 2026-10-18** (section 6, "Release A acceptance"); 48-hour observation ends 2026-10-19 12:05 UTC | G1 met; D1 decided 2026-10-17 (option a, baseline 2840) |
+| B | B1: **deployed 2026-10-19** (run 39293585987). B2: about 2026-10-22 | B1: A + 48 h, D3 (both met). B2: G2 |
 | C1 | about 2026-10-24, target no later than 2026-10-27 | B, D2, D5 |
 | C2′ | after C1 | C1, D4a |
 | D | not scheduled | G3b |
@@ -450,15 +905,16 @@ growing about 10,000 per week). Re-measure both with P9.
 
 ## 9. Product-owner decisions
 
-D4a, D4b, D8 and D9 were decided by the product owner on 2026-10-17. None of
+D1, D4a, D4b, D8 and D9 were decided by the product owner on 2026-10-17, and
+D3 (for B1) on 2026-10-19. None of
 the others is assumed approved. A decision is not an approval to execute:
 each release, precheck and schedule change still needs its own approval.
 
 | # | Decision | Options |
 |---|---|---|
-| D1 | How to meet G1 | (a) Resume the 1h backfill under the proposed baseline policy, then top up and dispatch A in one burst window (recommended). (b) Activate 266 with the gap and rely on the nightly reconcile (section 4: likely never completes at baseline IO). (c) Activate 266 and leave a permanent 1h gap from Sep 24 07:00 UTC to activation − 2 days |
+| D1 | How to meet G1 | **Decided 2026-10-17: option (a), failure baseline 2840; G1 met at Release A.** (a) Resume the 1h backfill under the proposed baseline policy, then top up and dispatch A in one burst window (recommended). (b) Activate 266 with the gap and rely on the nightly reconcile (section 4: likely never completes at baseline IO). (c) Activate 266 and leave a permanent 1h gap from Sep 24 07:00 UTC to activation − 2 days |
 | D2 | F1 deadline and release split | Keep 2026-10-27 or set it from the 2026-11-03 evidence. C1 / C2′ split agreed 2026-10-17 |
-| D3 | Release B parity pass criterion | Proposed: zero mismatches against the baseline |
+| D3 | Release B parity pass criterion | **Decided 2026-10-19 for B1: exact equality, zero tolerance, `1d` only, exactly 56 assets** (B1 result: PASS 56/56). B2's resolutions follow P5 and are not yet set. Rule as proposed: exact equality, no tolerance. `energy_parity_compare.py BEFORE AFTER --criterion full --expect-assets 56` exits 0: same range and resolutions; both captures complete (CAPTURE_END) with 0 PARITY_ERROR; exactly 56 assets × each resolution in both; for every pair identical row count, import and export kWh totals (exact numeric text), `values_md5` and `full_md5` (every returned column of `get_canonical_energy_read`, whose column list 269 cannot change). Gate before dispatch: b1_pre1 vs b1_pre2 PASS (repeatability). Timing is informational. Any FAIL or INVALID = investigate before B2; it does not by itself trigger a B1 rollback (B1 recovery is forward-only) |
 | D4a | 298 on production (C2′) | **Decided 2026-10-17: retain the 15-minute demand schedule (:07/:22/:37/:52 UTC) in C2′.** |
 | D4b | 299/300 on production (D) | **Decided 2026-10-17: deferred pending G3b.** 299's 600 s freshness rule and 300's 5-minute batches are not activated before the gates pass |
 | D5 | Admin Portal assignment on production | Release C makes "Assign Data Points" Save live |
