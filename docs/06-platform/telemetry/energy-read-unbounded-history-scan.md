@@ -164,6 +164,84 @@ for the portal (ADR-022 Option B).
 | Parity criterion | D3 unchanged | D3 unchanged | New criterion and product decision |
 | Size | One function migration | View-layer redesign | Function migration plus tenancy review |
 
+## A1 prototype results (2026-10-20, local test DB, synthetic data)
+
+**These are local measurements on synthetic data, not production
+evidence.**
+- Local test DB at migration head 306; its live function is migration 270's
+  body (md5 `667f9cc2…`). Production still runs 269's body.
+- Chunks are uncompressed. Production's older chunks are compressed, so its
+  scan cost may be higher.
+- Local hardware; plan-cache mode left at the default.
+- Spike code: worktree branch `spike/a1-canonical-read-date-bound`,
+  `scripts/spike/a1/`. Not committed, not a migration.
+
+**Prototype.** `zz_a1.get_canonical_energy_read` is generated from 270's
+body.
+- Only the 1h and 1d branches change. Each direction's read of
+  `v_energy_reporting_hourly` / `_daily` becomes that view's own body
+  (migration 269).
+- That body reads `v_energy_reporting_15min` restricted to the direction's
+  devices and to `bucket_start` in [`v_effective_from` − 2 days,
+  `p_to` + 2 days).
+- The native, 5m and 15m branches are byte-identical to 270.
+
+**Golden parity [M local]: exact, 30 of 30 tests passed.**
+- The live outputs are captured first, then the prototype is installed and
+  compared with exact tuple equality.
+- 1,563 case comparisons, 29,620 rows; 504 results are empty by design.
+- Time zones: IST, London and New York (spring and fall DST), Lord Howe
+  (30-minute DST, both directions), Kiritimati (+14), Pago Pago (−11).
+- Session time zones UTC and America/New_York.
+- Ranges: full history; middle 2 days; local-midnight aligned; partial days
+  with non-aligned bounds; across DST; empty gap day; one hour; before the
+  data; after the data.
+- Policies native, coarser and strict.
+- Data shapes:
+  - GAP / RESET / IMPLAUSIBLE_DELTA rows and NULL sample counts;
+  - unbound devices with longer history;
+  - import and export on different devices;
+  - a mid-hour switch to a 5-minute device;
+  - missing bindings and a wrong Grafana org;
+  - late data: a hole filled after the first read, an ADR-020
+    reconstructed gap, and rows 10–20 days before the window. The live
+    output changed and A1 still matched.
+- Negative control: with padding 0, the partial-day and one-hour cases
+  fail, while a midnight-aligned range still matches. So the cases do
+  detect a bound that is too small.
+
+**Plan and timing [M local].** 4-day IST read; 4 devices of 1-minute
+data; median of 7 warm calls. Rows are summed over the import and export
+statements.
+
+| History | Tier | Live (270) | A1 | Native rows aggregated, live → A1 | Rows removed by the `date_bin` filter (A1) | 15-min groups, live → A1 | Chunks scanned |
+|---|---|---|---|---|---|---|---|
+| 30 d | 1d | 71 ms | 53 ms | 86,400 → 23,040 | 63,360 | 2,880 → 768 | 5 of 5 |
+| 30 d | 1h | 84 ms | 48 ms | 86,400 → 23,040 | 63,360 | 2,880 → 768 | 5 of 5 |
+| 90 d | 1d | 210 ms | 75 ms | 259,200 → 23,040 | 236,160 | 8,640 → 768 | 14 of 14 |
+| 90 d | 1h | 236 ms | 88 ms | 259,200 → 23,040 | 236,160 | 8,640 → 768 | 14 of 14 |
+| 90 d | 15m (reference, unchanged) | 49 ms | — | 11,520 | 247,680 | 384 | 14 of 14 |
+
+- **Improved:** the aggregation no longer depends on history length. A1
+  aggregates the requested range plus the padding (8 days for a 4-day
+  request). From 30 to 90 days of history, the live function's time
+  triples; A1's grows from 53 to 75 ms. At 90 days, 1d is 64% faster and
+  1h 63% faster.
+- **Still unbounded:** every chunk is still read. As for the 15m tier
+  today, the bound reaches the chunk scans only as a row filter on
+  `date_bin('15 min', bucket_start, …)`: no chunk exclusion and no index
+  range. Rows read and then discarded grow linearly with history. This
+  is what A2 targets.
+
+**Prototype limitations:**
+- 2-day padding doubles the rows aggregated. About 26 h would be enough.
+- The prototype copies the hourly and daily view logic. A migration needs a
+  test that fails if the views change and the copies do not.
+- It uses `#variable_conflict use_column` because the inlined bare column
+  names collide with the `RETURNS TABLE` variables. A migration should
+  qualify the columns instead.
+- Not yet checked on staging or production data.
+
 ## Recommendation (not approved)
 
 1. Prefer **A**, starting with **A1** for `1d` and `1h` on top of 270. It
@@ -180,7 +258,8 @@ for the portal (ADR-022 Option B).
 ## Next steps (each needs its own approval)
 
 1. Implement A1 locally behind golden tests: no migration number until the
-   approach is accepted.
+   approach is accepted. **Done 2026-10-20 (local prototype; results
+   above).**
 2. Run plan-only checks on staging for A1/A2. Run bounded
    `EXPLAIN (ANALYZE, BUFFERS)` samples only with approval (staging host
    memory limits; see the 2026-10-09 incident).
