@@ -242,6 +242,89 @@ statements.
   qualify the columns instead.
 - Not yet checked on staging or production data.
 
+## A1 on staging: plan-only evidence (2026-10-20) [M staging, plans only]
+
+**These are estimates from plan-only `EXPLAIN`.** Nothing was executed or
+installed, and no `ANALYZE` was run; the figures are planner estimates,
+not measured rows or timings.
+
+- Staging's live function is byte-identical to migration 270 (md5
+  `667f9cc2…`).
+- The 1d and 1h import statements were taken verbatim from the 270 body and
+  from the A1 prototype, with the PL/pgSQL variables replaced by literals.
+- Sample: one bound IST device (`40a6da01`), range
+  2026-10-14 18:30 → 10-18 18:30 UTC.
+- The statements ran in a read-only transaction that was rolled back; no
+  session was left.
+
+| Plan | Chunks in the plan | Estimated native rows | How the bound reaches the chunks |
+|---|---|---|---|
+| Live 270, 1d and 1h | all 9: 7 compressed (`ColumnarScan`), 2 uncompressed | 39,783 | not at all |
+| A1, 1d and 1h | all 9 | 6,423 | row filter `date_bin(…) >= …` on every chunk |
+
+- **No chunk pruning on staging.** On compressed chunks the `date_bin`
+  filter runs after decompression, so the device's segments in every chunk
+  are still decompressed. A1 reduces the aggregation, not the scan or
+  decompression.
+- **A1's 6,423 is a default selectivity guess** for an expression filter.
+  The expected count for 8 days of 1-minute data is about 11,500.
+- **STABLE bounds:** the computed bound `timestamptz − interval` is STABLE,
+  so it can exclude chunks only at executor startup, not at plan time.
+
+## A2 prototype results (2026-10-20, local test DB, synthetic data, uncompressed chunks)
+
+**These are local measurements on synthetic data, not staging or
+production evidence.** All chunks were uncompressed.
+- Spike code: worktree branch `spike/a2-canonical-read-chunk-skip`,
+  `scripts/spike/a2/`. Not committed, not a migration.
+
+**Prototype.**
+- `zz_a2.v_energy_semantic_rollup_5min` / `_15min` group by
+  `time_bucket(w, bucket_start)` instead of
+  `date_bin(w, bucket_start, '2000-01-01 05:30+05:30')`. For `w` = 5 and 15
+  minutes the buckets are identical: `time_bucket`'s default origin,
+  2000-01-03, is a whole number of buckets from 2000-01-01 UTC. Checked
+  over a year at 37 s steps.
+- `zz_a2.v_energy_reporting_5min` / `_15min` / `_hourly` / `_daily` are
+  269's bodies pointed at those rollups (security barrier kept).
+- `zz_a2.get_canonical_energy_read` is 270's body reading `zz_a2`, with
+  1h/1d over a bounded 15-minute source as in A1.
+- The native view and native tier are unchanged.
+- TimescaleDB uses comparisons on `time_bucket(w, col)` for chunk
+  exclusion. The `timestamptz` comparison operators are leakproof, so the
+  predicates pass the security-barrier views.
+
+**Golden parity [M local]: exact, 30 of 30 tests passed.**
+- Every tier, with the same coverage as A1.
+- 3,876 comparisons; 1,922,029 rows; 1,356 empty by design.
+- Negative controls:
+  - a `time_bucket` origin shifted by 5 minutes fails on 15m;
+  - padding 0 fails on 1d.
+
+**Plan and timing [M local]** (4-day IST read, 4 devices of 1-minute
+data, 7-day chunks, median of 7 warm calls):
+
+| History | Tier | Live (270) | A2 | Chunks scanned, live → A2 | Shared buffers, live → A2 |
+|---|---|---|---|---|---|
+| 30 d | 1d / 1h | 75 / 86 ms | 54 / 53 ms | 5 → 2 (startup exclusion) | 2,558 → 1,108 |
+| 30 d | 15m / 5m | 39 / 51 ms | 36 / 50 ms | 5 → 2 (plan-time exclusion) | 2,556 → 1,106 |
+| 90 d | 1d / 1h | 221 / 245 ms | 59 / 58 ms | 14 → 2 | 7,628 → 1,112 |
+| 90 d | 15m / 5m | 58 / 68 ms | 34 / 46 ms | 14 → 2 | 7,626 → 1,110 |
+| 90 d | native | 64 ms | 68 ms | 2 → 2 (270's bound) | 370 → 370 |
+
+- **Improved:** the cost no longer depends on history. Only the chunks
+  overlapping the (padded) range are read, at 30 and 90 days alike. The
+  live function's 1d/1h time triples.
+- **Remaining:**
+  - Inside the surviving chunks the bound is still a row filter on
+    `time_bucket(bucket_start)`, not a `bucket_start` index condition.
+    Work is bounded by chunk size (7 days), not by the requested range.
+  - A migration would change the two rollup views' grouping expression;
+    see the dependency review.
+  - The A1 caveats also apply: copied 1h/1d view logic,
+    `#variable_conflict use_column`, 2-day padding.
+  - Compressed-chunk behaviour is not measured locally.
+
 ## Recommendation (not approved)
 
 1. Prefer **A**, starting with **A1** for `1d` and `1h` on top of 270. It
