@@ -1,6 +1,6 @@
 # Production Release Plan: Migrations 266 → 301
 
-Status: **Release A deployed 2026-10-17 and accepted 2026-10-18** (section 6, "Release A acceptance"; 48-hour window closed 2026-10-19); **Release B1 (268, 269) deployed and accepted 2026-10-19** (section 2, "B1 execution record"); B2, C1, C2′ and D PROPOSED; D1 / D4a / D4b / D8 / D9 decided 2026-10-17 (D8 condition confirmed), D3 decided 2026-10-19 for B1, others open · Prepared: 2026-10-14 · Updated: 2026-10-20 · Owner: Engineering
+Status: **Release A deployed 2026-10-17 and accepted 2026-10-18** (section 6, "Release A acceptance"; 48-hour window closed 2026-10-19); **Release B1 (268, 269) deployed and accepted 2026-10-19** (section 2, "B1 execution record"); **Release B2 (14 migrations, 263–286) deployed 2026-10-20, D3 PASS** (section 2, "B2 execution record"); C1, C2′ and D PROPOSED; D1 / D4a / D4b / D8 / D9 decided 2026-10-17 (D8 condition confirmed), D3 decided 2026-10-19 for B1 and 2026-10-20 for B2, others open · Prepared: 2026-10-14 · Updated: 2026-10-20 · Owner: Engineering
 Only Releases A and B1 have been executed. Every other dispatch, precheck and operator
 step below needs its own explicit approval
 ([release-process.md](release-process.md#every-phase-requires-its-own-explicit-approval)).
@@ -495,6 +495,145 @@ Follow-ups:
 - Postcheck `INFO routing lag` blank line: fixed 2026-10-20 (above), not
   run on production.
 
+#### B2 preparation (2026-10-20, local; nothing run on production)
+
+State [M 2026-10-20, read-only ledger reads]: production 135 rows, head 269;
+staging 178 rows, head 306 = `origin/staging` `e844e2a`. Every ledger
+checksum on both equals the repository. Manifest at `ba2cb4b` minus the
+production ledger = exactly 263, 270, 279, 275, 276, 277, 278, 280, 281,
+282, 283, 284, 285, 286 (ledger after: 149). All 14 files are unchanged from
+`ba2cb4b` to `origin/staging`; staging's checksums equal them.
+`deploy-staging.yml` `37273913405` succeeded for `ba2cb4b`; `546a718` →
+`ba2cb4b` → `origin/staging` is a forward chain.
+
+**Migration 283's precondition depends on the session time zone [V].** It
+pins `md5(pg_get_viewdef('analytics.v_energy_semantic_rollup_15min'))` =
+`7a79ad57…`, which `pg_get_viewdef` produces only in an `Asia/Kolkata`
+session (the `date_bin` origin is rendered in the session time zone; UTC
+gives `394451e7…`). The runner sets no time zone, so production's
+`ems_admin`/`ems` default must still be `Asia/Kolkata` at dispatch. The
+precheck checks both.
+
+Tooling (`scripts/diagnostics/`; local tests in `scripts/diagnostics/b2_tests/`, see `lib.sh`):
+
+- `prod_b2_precheck.sql`: 26 checks. Ledger 135 rows with digest
+  `f7273fa8…`; pending set exactly the 14 in manifest order (`ba2cb4b`'s 149
+  manifest rows are embedded); no ledger row outside that manifest; canonical
+  read = 269 body (`57470d84…`); runner time zone and 283's view pin; 27
+  objects and roles B2's preconditions need; nothing B2 creates exists yet;
+  bridge 112 rows / 56 assets = the capture set; P10 (2840, no errors since
+  2026-10-17 12:00 UTC, 1053 and 1114–1120 paused); six Energy jobs; no
+  long, idle-in-transaction or `metadata.sites` lock holders.
+- `prod_b2_postcheck.sql`: 45 checks. Ledger 149 rows; each of the 14 with its
+  staging checksum, applied in manifest order after the B1 rows; B1 rows
+  unchanged (`f7273fa8…`); all 149 = staging's digest (`a6d33cb0…`); ten
+  function definitions and their PUBLIC / `ems_app` / `grafana_reader`
+  execute privileges; the two dropped functions absent; 280's availability
+  comment; 275's trigger enabled; bridge unchanged; health as B1 (2840, no
+  errors, Energy jobs, lock waiters, paused jobs, 1h checkpoint).
+- `prod_b2_gate.py`: fail-closed gate. PASS only with psql exit 0, exactly
+  the expected keys once each, all PASS, one `now` line, `INFO` lines, and
+  the `END` line last; anything else (blank, ERROR / WARNING, truncation,
+  duplicate, unknown key) fails.
+
+Local validation [V 2026-10-20, disposable test container]:
+
+- A database built from `546a718` (canonical deploy + runner, 135 migrations)
+  equals production's B1 state: ledger digest `f7273fa8…`, canonical read
+  `57470d84…`, 283's view pin `7a79ad57…` (Asia/Kolkata). The runner at
+  `ba2cb4b` then listed exactly the 14 as pending and applied them (14 APPLY,
+  135 SKIP, 283's precondition passed), ledger digest `a6d33cb0…`.
+- On those databases every precheck and postcheck line passes except the
+  seven that read production-only state (database name, the 56-asset bridge,
+  baseline 2840, production job IDs, 1h checkpoint).
+- 22 mutation cases on copies of those databases fail exactly the intended
+  checks (ledger checksum, extra / missing / foreign ledger row, UTC default
+  time zone, a B2 object or trigger already present, canonical body changed,
+  `metadata.sites` lock holder, ledger order, PUBLIC grant, revoked Grafana
+  grant, disabled trigger, re-created dropped function, comment, missing
+  function).
+- 39 gate cases (both kinds) behave as specified.
+- Staging, read-only: the postcheck's seven function pins for functions no
+  later migration replaces match staging exactly; the three that 288 / 302
+  replace match those migrations' own md5 pins of the B2 definitions.
+
+**Precheck run 1, 2026-10-20 13:49:45 UTC [M production, read-only]: gate
+FAIL, stopped.** 25 of 26 PASS (ledger 135 / `f7273fa8…`, pending exactly the
+14, runner time zone Asia/Kolkata and 283's view pin `7a79ad57…`, canonical
+269 body, bridge 112 / 56 = capture set, failure total 2840, 0 errors, 1053
+and 1114–1120 unscheduled 8/8, no lock holders). `JOBS.1063` failed: the
+1-minute job was mid-run and `job_stats.last_run_status` is NULL during a run
+(TimescaleDB resets `last_finish` to -infinity at start). No captures ran.
+
+**Fix (local, 2026-10-20; precheck `42a6b831…`, postcheck `fb0e81b5…`, gate
+unchanged `d69387a6…`).** Job lines read `_timescaledb_internal.bgw_job_stat`:
+Scheduled needs the latest completed run 'Success'; Running needs the previous
+completed run to have succeeded (`last_run_success`, 0 consecutive failures, a
+successful finish other than -infinity) and the failure total still 2840;
+Paused, missing job or stats row and NULL evidence fail. `P10.failures` /
+`HEALTH.failures` count a job as failing from `last_run_success`, so a running
+job whose previous run failed is no longer missed. The postcheck had the same
+defect (a running job printed `none … FAIL`), shown by the tests. Tests: 28
+job-state cases (14 per script, running and not running, previous failure,
+changed failure count, NULL status, never succeeded, missing stats row or job,
+paused, SQL error), the 22 earlier mutation cases and 39 gate cases all pass;
+the fixed postcheck runs read-only on staging.
+
+**D3 for B2: decided 2026-10-20.** Exact equality, zero tolerance,
+`energy_parity_compare.py --criterion full --expect-assets 56`, 0
+`PARITY_ERROR`, for two captures per stage: range `2026-09-23 18:30+00` →
+`2026-09-27 18:30+00` (the B1 range) at `1d,1h,15m`, and the closed day
+`2026-09-26 18:30+00` → `2026-09-27 18:30+00` (IST Sep 27) at `native`.
+Repeatability gate: pre1 vs pre2 PASS for both before dispatch; then pre2
+vs post PASS for both. Reconcilers 1114–1120 stay paused from the first
+capture to the last. The read function changes (269 → 270): the comparator
+reports `REPLACED`, which is expected. Timing is informational.
+
+**Proposed staging validation (not run; needs approval).** Read-only, at
+`origin/staging` (already past B2, so it validates tooling, repeatability,
+timing and errors at full scale, not B2's before/after): two range captures
+and two native captures with the D3 parameters for staging's 54 assets
+(2 × 162 + 2 × 54 = 432 canonical-read calls), one session at a time,
+`statement_timeout` 300 s per capture, `lock_timeout` 2 s; a guard before
+each capture (load1 < 1.5, MemAvailable > 400 MB, no lock waiter) and stop
+on any guard failure, timeout or `PARITY_ERROR`; then compare each pair
+locally with `--expect-assets 54`.
+
+**Staging validation, 2026-10-20 13:22–13:46 UTC [M staging, read-only].**
+
+| Capture | Guard before (load1 / MB available / lock waiters) | Result |
+|---|---|---|
+| `b2s_pre1_range` | 0.60 / 759 / 0 | 162 calls, 0 errors, 39.1 s; 54 assets with rows |
+| `b2s_pre1_native` | 1.00 / 771 / 0 | 54 calls, 0 errors, 1.7 s |
+| `b2s_pre2_range` | 1.00 / 775 / 0 | 162 calls, 0 errors, 32.8 s |
+| `b2s_pre2_native` | **1.51** / 781 / 0 at 13:24 | **not run: guard failed (load1 ≥ 1.5); workload stopped** |
+| `b2s_pre2_native` (approved re-run, 13:46 UTC) | 0.70 / 768 / 0 | 54 calls, 0 errors, 1.5 s |
+
+- `b2s_pre1_range` vs `b2s_pre2_range`, `--criterion full --expect-assets 54`:
+  **PASS**, 162 pairs, read function unchanged (`667f9cc2…`, 270).
+- Timing (informational, per call): 1d p50 232–353 ms (max 2.1 s, first
+  capture); 1h p50 240 ms (max 0.9 s); 15m p50 85 ms; native p50 28 ms.
+- `b2s_pre1_native` vs `b2s_pre2_native`, same criterion: **PASS**, 54 pairs.
+- **Staging validation PASSED** (432 calls, 0 errors, both pairs exact). No
+  session left after either run.
+
+#### B2 execution record (2026-10-20, production)
+
+| Step | Result |
+|---|---|
+| Precheck run 2 (fixed script `42a6b831…`), 16:11:57 UTC | 26/26 PASS, gate exit 0 |
+| Baseline captures, guard before each (load1 / MB / waiters) | `b2_pre1` range 0.16/740/0, 168 calls, 0 errors, 32.9 s; native 0.77/714/0, 56 calls, 1.6 s; `b2_pre2` range 0.89/718/0, 168 calls, 30.9 s; native 1.29/717/0, 56 calls, 1.4 s |
+| pre1 vs pre2 (`--criterion full --expect-assets 56`) | range **PASS** 168 pairs; native **PASS** 56 pairs; read function unchanged (`57470d84…`) |
+| Dispatch-time precheck, 17:09:37 UTC | 26/26 PASS, gate exit 0; staging proof lookup = `37273913405` |
+| Dispatch | **17:12:01 UTC**, `deploy-production.yml` staging-milestone `ba2cb4b…`, run `39463974731` (validate 17:12:08–17:12:17, deploy 17:12:20–17:13:47, verification 17:13:49–17:15:21): success. 14 APPLY in manifest order, 135 SKIP; REQUIRED gates PASS. Advisory FAILs identical to B1's run `39293585987` (2 pipeline stages, alert job not registered, 1 disabled job) |
+| Lock watch | Migration backend sampled 17:14:18–17:15:08: RUNNING only, 0 s lock wait, 0 blockers, 0 queued. No `ABORT_CANDIDATE`; guarded cancel not used |
+| Postcheck, 17:16:08 UTC | 45/45 PASS, gate exit 0: ledger 149, digest `a6d33cb0…` (= staging), earlier 135 unchanged, ten function pins, trigger enabled, failures 2840, paused 8/8, 1h checkpoint 17:00 SUCCESS; routing lag energy 57 s |
+| Post captures | range guard 1.14/657/0, 168 calls, 0 errors, 48.4 s; native 1.01/673/0, 56 calls, 1.9 s; read function `667f9cc2…` (270) |
+| pre2 vs post | range **PASS** 168 pairs; native **PASS** 56 pairs; read function REPLACED (expected). Timing informational: range p50 179 → 254 ms, max 845 ms → 2.15 s |
+| After | 1053 and 1114–1120 unscheduled; failure total 2840 |
+
+**B2 deployed 2026-10-20; D3 PASS.** Production ledger 149, head 286.
+
 #### B1 approvals required (given 2026-10-19, see execution record)
 
 1. The read-only production steps 1, 2, 4 and 6: precheck, three parity
@@ -917,7 +1056,7 @@ each release, precheck and schedule change still needs its own approval.
 |---|---|---|
 | D1 | How to meet G1 | **Decided 2026-10-17: option (a), failure baseline 2840; G1 met at Release A.** (a) Resume the 1h backfill under the proposed baseline policy, then top up and dispatch A in one burst window (recommended). (b) Activate 266 with the gap and rely on the nightly reconcile (section 4: likely never completes at baseline IO). (c) Activate 266 and leave a permanent 1h gap from Sep 24 07:00 UTC to activation − 2 days |
 | D2 | F1 deadline and release split | Keep 2026-10-27 or set it from the 2026-11-03 evidence. C1 / C2′ split agreed 2026-10-17 |
-| D3 | Release B parity pass criterion | **Decided 2026-10-19 for B1: exact equality, zero tolerance, `1d` only, exactly 56 assets** (B1 result: PASS 56/56). B2's resolutions follow P5 and are not yet set. Rule as proposed: exact equality, no tolerance. `energy_parity_compare.py BEFORE AFTER --criterion full --expect-assets 56` exits 0: same range and resolutions; both captures complete (CAPTURE_END) with 0 PARITY_ERROR; exactly 56 assets × each resolution in both; for every pair identical row count, import and export kWh totals (exact numeric text), `values_md5` and `full_md5` (every returned column of `get_canonical_energy_read`, whose column list 269 cannot change). Gate before dispatch: b1_pre1 vs b1_pre2 PASS (repeatability). Timing is informational. Any FAIL or INVALID = investigate before B2; it does not by itself trigger a B1 rollback (B1 recovery is forward-only) |
+| D3 | Release B parity pass criterion | **Decided 2026-10-20 for B2:** exact equality, zero tolerance, `--criterion full --expect-assets 56`, 0 `PARITY_ERROR`; `1d,1h,15m` over the B1 range plus `native` for 2026-09-26 18:30 → 09-27 18:30 UTC; pre1 = pre2 before dispatch, pre2 = post after; 1114–1120 paused throughout; 269 → 270 replacement expected; timing informational (section 2, "B2 preparation"). **Decided 2026-10-19 for B1: exact equality, zero tolerance, `1d` only, exactly 56 assets** (B1 result: PASS 56/56). B2's resolutions follow P5 and are not yet set. Rule as proposed: exact equality, no tolerance. `energy_parity_compare.py BEFORE AFTER --criterion full --expect-assets 56` exits 0: same range and resolutions; both captures complete (CAPTURE_END) with 0 PARITY_ERROR; exactly 56 assets × each resolution in both; for every pair identical row count, import and export kWh totals (exact numeric text), `values_md5` and `full_md5` (every returned column of `get_canonical_energy_read`, whose column list 269 cannot change). Gate before dispatch: b1_pre1 vs b1_pre2 PASS (repeatability). Timing is informational. Any FAIL or INVALID = investigate before B2; it does not by itself trigger a B1 rollback (B1 recovery is forward-only) |
 | D4a | 298 on production (C2′) | **Decided 2026-10-17: retain the 15-minute demand schedule (:07/:22/:37/:52 UTC) in C2′.** |
 | D4b | 299/300 on production (D) | **Decided 2026-10-17: deferred pending G3b.** 299's 600 s freshness rule and 300's 5-minute batches are not activated before the gates pass |
 | D5 | Admin Portal assignment on production | Release C makes "Assign Data Points" Save live |
