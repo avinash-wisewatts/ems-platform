@@ -243,8 +243,9 @@ BEGIN
           ('analytics','reconcile_energy_consumption_15min', INTERVAL '6 hours', INTERVAL '10 minutes', INTERVAL '30 minutes','8 days','6'),
           ('analytics','reconcile_energy_consumption_hourly',INTERVAL '12 hours',INTERVAL '10 minutes', INTERVAL '30 minutes','10 days','6'),
           ('analytics','reconcile_energy_consumption_daily', INTERVAL '24 hours',INTERVAL '10 minutes', INTERVAL '30 minutes','21 days','6'),
-          -- migration 305: demand window 6 h -> 48 h (recovered energy up to raw retention)
-          ('analytics','reconcile_demand_intervals',         INTERVAL '1 hour',  INTERVAL '10 minutes', INTERVAL '15 minutes','48 hours',NULL),
+          -- migration 305: demand window 6 h -> 48 h (recovered energy up to raw retention);
+          -- migration 306: hourly 6 h + a 58 h wide pass every 6 h (wide keys checked below)
+          ('analytics','reconcile_demand_intervals',         INTERVAL '1 hour',  INTERVAL '10 minutes', INTERVAL '15 minutes','6 hours',NULL),
           ('telemetry','reconcile_environment_daily',        INTERVAL '24 hours',INTERVAL '10 minutes', INTERVAL '30 minutes','35 days','8')
         ) AS t(sch, prc, sched, mrt, rp, rw, nmax)
     LOOP
@@ -262,8 +263,16 @@ BEGIN
         IF NOT j.scheduled THEN v_fail := v_fail || format('%s not scheduled', v.prc); END IF;
         IF j.rw IS DISTINCT FROM v.rw THEN v_fail := v_fail || format('%s config.reconcile_window %s<>%s', v.prc, j.rw, v.rw); END IF;
         IF j.nmax IS DISTINCT FROM v.nmax THEN v_fail := v_fail || format('%s config.n_max %s<>%s', v.prc, j.nmax, v.nmax); END IF;
-        IF j.check_schema IS DISTINCT FROM 'config' OR j.check_name IS DISTINCT FROM 'assert_reconciliation_job_config' THEN
+        -- migration 306: the demand reconciler has its own validator (wide_window / wide_every)
+        IF j.check_schema IS DISTINCT FROM 'config' OR j.check_name IS DISTINCT FROM
+           (CASE v.prc WHEN 'reconcile_demand_intervals' THEN 'assert_demand_reconciliation_job_config'
+                       ELSE 'assert_reconciliation_job_config' END) THEN
             v_fail := v_fail || format('%s check_config %s.%s', v.prc, j.check_schema, j.check_name);
+        END IF;
+        IF v.prc = 'reconcile_demand_intervals'
+           AND (SELECT config FROM timescaledb_information.jobs WHERE proc_schema=v.sch AND proc_name=v.prc)
+               - 'lookback' - 'reconcile_window' IS DISTINCT FROM '{"wide_window": "58 hours", "wide_every": "6 hours"}'::jsonb THEN
+            v_fail := v_fail || format('%s wide keys not 58 hours / 6 hours', v.prc);
         END IF;
     END LOOP;
     IF array_length(v_fail,1) > 0 THEN RAISE EXCEPTION 'E FAILED: %', array_to_string(v_fail,'; '); END IF;

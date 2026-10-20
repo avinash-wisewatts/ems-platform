@@ -605,8 +605,10 @@ ROLLBACK_SQL = (
     / "postgres" / "maintenance" / "303_routing_forward_floor_late_sweep_rollback.sql"
 )
 # Migration 305 builds on 303: its rollback runs first, restoring the 303
-# bodies the 303 rollback requires.
+# bodies the 303 rollback requires. Migration 306 (demand reconciler cadence)
+# is rolled back before 305, newest first.
 ROLLBACK_305_SQL = ROLLBACK_SQL.with_name("305_routing_recovery_queue_rollback.sql")
+ROLLBACK_306_SQL = ROLLBACK_SQL.with_name("306_demand_reconcile_wide_cadence_rollback.sql")
 
 
 def _script_body(path):
@@ -621,6 +623,7 @@ def _rollback_body():
 
 @pytest.fixture
 def tx_pre_305(tx):
+    tx.execute(_script_body(ROLLBACK_306_SQL))
     tx.execute(_script_body(ROLLBACK_305_SQL))
     return tx
 
