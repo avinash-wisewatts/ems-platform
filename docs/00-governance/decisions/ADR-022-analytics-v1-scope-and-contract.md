@@ -293,6 +293,8 @@ pipeline change. Product Owner decisions it implements: site-local time axis
    offset, while `last_data_at` is inside the range and a binding extends
    beyond it. The threshold is never returned. For capture intervals other
    than ≤ 60 s and 300 s (900 s) the path is unverified and `stale` is null.
+   *(The stage term is schedule-aware since migration 302 — see
+   [Amendment 9](#amendment-9-2026-10-15-schedule-aware-stale-allowance-migration-302).)*
 6. **Resolution floors and Auto.** Retention floors are site-aware (for 1h,
    the 15-minute floor where local hours are not UTC hours), returned as
    `resolutions[].available_from` in the catalogue. Auto is floor-aware: when its window-based choice starts before that resolution's retention floor, the next coarser resolution that can serve it is used (1d as the last resort); an explicit resolution is never changed.
@@ -477,3 +479,42 @@ its mapped pair). Line to Line Voltage System keeps its readable label (no
 authoritative code). **Open (Product Owner):** confirm the pair order from
 Eniscope documentation (not held in the repository).
 
+## Amendment 9 (2026-10-15): schedule-aware stale allowance (migration 302)
+
+**Context.** Migration 300 (decision D-018, staging optimization plan) moved
+the four forward stages of the 1-minute Analytics path to a phased 5-minute
+batch (normalization +2:40, routing +4:10, `ca_energy_1min` refresh +4:40,
+1-minute tier +0:00 on the UTC 5-minute grid). Amendment 4's stage term —
+the sum of the stage schedule intervals plus the CAGG end offset — became
+21 minutes, so `stale` appeared 23 minutes after data stopped although the
+stages run in sequence inside one 5-minute cycle.
+
+**Decision (user, plan D-020 and run 22).** Make the term schedule-aware,
+targeting about 9–10 minutes for the 60 s / 60 s policy, validated against the
+measured healthy latency. A routing or refresh retry (which lands after the
+1-minute tier's slot) and a missed batch both delay the newest data by one
+cycle and cannot be told apart at this read; the user chose to **detect the
+missed batch**, accepting that such a retry shows "No recent data" for up to
+about 3 min 40 s.
+
+**Rule.** Item 5 of Amendment 4 is unchanged except the stage term, now
+`analytics.energy_stale_pipeline_allowance(native_seconds)`:
+
+- *Phased path* — each stage is exactly one job on a fixed schedule, all with
+  the same interval C, and the CAGG end offset is no longer than the
+  normalization → refresh wait: **C + the chained phase waits + 60 s**, where
+  a wait is `(phase_next − phase_prev) mod C` and a wait under 10 s is a race
+  that counts one more C. Normalization finalizes every bucket whose deadline
+  has passed, so the healthy age stays below capture + tolerance + C + waits;
+  the 60 s covers execution time and scheduler jitter.
+- *Otherwise* — the Amendment 4 sum (unchanged; e.g. the 1-minute production
+  schedule before migration 300, where the refresh is not fixed, and the
+  5-minute path, whose 1-minute job runs every minute).
+- NULL when a stage is missing (`stale` null), as before.
+
+**Values.** Staging since migration 300: allowance 8 min 20 s, threshold
+10 min 20 s for 60 s capture + 60 s tolerance (was 23 minutes) and
+24 min 20 s with the 900 s default tolerance (was 37). Measured on staging
+(2026-10-14 11:55 – 2026-10-15 12:15 UTC, 591 cycles): healthy peak age p50
+9:00, p99 9:03, max 9:03 (77 s headroom); a normalization retry adds
+nothing; a missed batch peaks at 14:03.

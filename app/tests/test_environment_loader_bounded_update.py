@@ -35,6 +35,10 @@ LOADER = "telemetry.load_environment_measurements_incremental"
 LOADER_SIG = f"{LOADER}(interval,interval)"
 MIGRATION_ID = "291_environment_loader_bounded_update"
 BODY_MD5_291 = "d0708b46eb9ab81a6b2cc37ee0d85ef5"
+# Migrations 303 and 305 later replaced the deployed body; both keep the 291
+# bound unchanged (test_routing_generator_contract.py proves reverting their
+# fragments gives back the 291 body).
+BODY_MD5_DEPLOYED = "d2d906d4da78eeba3740b2b0d082a237"
 PIPELINE_JOBS = ("run_normalization_job", "run_energy_routing_job", "run_environment_routing_job")
 HISTORY_ROWS = 4000
 DECOMPRESSION_CAP = 100
@@ -193,13 +197,13 @@ def _correctable_bucket(conn):
 # ---------------------------------------------------------------------------
 
 
-def test_deployed_loader_is_the_migration_291_body(tx):
+def test_deployed_loader_keeps_the_migration_291_bound(tx):
     md5, src = _one(
         tx,
         "SELECT md5(replace(prosrc, E'\\r', '')), prosrc FROM pg_proc WHERE oid = %s::regprocedure",
         (LOADER_SIG,),
     )
-    assert md5 == BODY_MD5_291
+    assert md5 == BODY_MD5_DEPLOYED
     assert _one(tx, "SELECT count(*) FROM admin.schema_migrations WHERE migration_id = %s", (MIGRATION_ID,))[0] == 1
     src = src.replace("\r", "")
     assert src.count("SELECT min(bucket_start) INTO v_update_floor") == 1

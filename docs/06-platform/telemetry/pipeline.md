@@ -173,6 +173,61 @@ correction_deadline`), skips the UPDATE when there is none, and otherwise adds
 - **After deploying to staging**, the paused environment routing job must be
   re-enabled (`alter_job(<id>, scheduled => true)`) as a separate step.
 
+### Routing window read: forward floor plus hourly late-data sweep (migration 303)
+
+**Status: deployed to staging 2026-10-17 (+24 h validation passed); not on
+production** (gated by release plan G3b, Release D).
+
+Migration 267 bounded only the window-*end* lookup. The window read itself
+filtered on `platform_received_at` alone, and `normalized_points` is
+partitioned on `event_time` (7-day chunks, compressed 1 day after a chunk
+ends), so no chunk could be excluded: every routing run read the batch
+metadata of every compressed chunk. Measured 2026-10-16/17, same 5-minute
+window: staging 37,279 buffers / 148 ms (warm cache); production timed out
+at 30 s six times out of six (12 compressed chunks, 353 MB), with energy
+routing runs at p50 546 s.
+
+Migration 303 changes four fragments in each loader (no other line; md5
+postconditions prove it):
+
+- **Forward scope** (the existing routing jobs, unchanged): the read also
+  requires `event_time >= v_event_min`, where `v_event_min` is the newest
+  compressed chunk's `range_end` from `timescaledb_information.chunks`. Every
+  compressed chunk ends at or before it, so startup chunk exclusion drops them
+  all, also under a cached generic plan. Staging, same window: 543 buffers /
+  12 ms, open chunk only.
+- **Late-sweep scope:** new job `telemetry.run_routing_late_sweep_job`
+  (hourly, fixed, hh:31:30 UTC, max_runtime 10 min) sets the
+  transaction-local `ems.routing_scope = 'late_sweep'` and calls each loader in
+  its own transaction. In that scope a loader uses checkpoint
+  `<pipeline>_late_sweep`, reads only `event_time < floor`, and caps its window
+  end at the forward checkpoint (never moving backwards).
+- **Completeness:** the floor never decreases (chunks only become compressed
+  or are dropped oldest-first), and the sweep only revisits receipt ranges the
+  forward runs already passed, so every row skipped by a forward run is
+  routed by a later sweep. Exception: manually decompressing a
+  `normalized_points` chunk lowers the floor; do not do that without a manual
+  sweep over the affected receipts.
+- **Latency:** only rows arriving after their chunk was compressed (at least
+  a day late) wait for the sweep, up to about an hour more. Staging,
+  2026-10-16: no compressed batch has a receipt more than ~1.5 minutes after
+  its newest event.
+- **Unchanged:** window end (267), max_window, 1-minute overlap, upserts
+  (idempotent: energy updates only inside the correction deadline,
+  environment inserts with `ON CONFLICT DO NOTHING` and updates only
+  correctable buckets), advisory lock (shared by both scopes, so a sweep and a
+  forward run never overlap), EXCEPTION / rollback contract, demand watermark.
+- **Rollback:** `postgres/maintenance/303_routing_forward_floor_late_sweep_rollback.sql`
+  (guarded; restores the 267 / 291 bodies verbatim, removes the job, procedure
+  and checkpoint rows).
+- **Tests:** `app/tests/test_routing_forward_floor_late_sweep.py` (plans,
+  late rows in compressed and uncompressed chunks for both domains, sweep cap,
+  catch-up, idempotency, failure / retry, lock contention, demand-interval
+  completeness, the job procedure, the rollback script) and
+  `app/tests/test_routing_generator_contract.py`.
+- **Production precheck:** `scripts/diagnostics/prod_routing_bounded_read_timing.sql`
+  (read-only, guarded; never runs the unbounded read). Not run on production.
+
 ### Failure quarantine and recovery (jobs 1076/1068/1077)
 
 Three further jobs sit alongside the loaders above: `run_raw_receipt_state_job`
@@ -217,6 +272,100 @@ can under-report real failures. It is instead keyed on the row's stable
 identity, `(device_id, event_time, logical_point_id)`. This was re-verified,
 not changed, during the migration-243 work.
 
+### Recovered rows reach the measurement tables (migration 305)
+
+**Status: merged (`38f2b1c`) and deployed to staging 2026-10-19; not on
+production.**
+
+`telemetry.recover_failed_raw_messages` (job 1077) re-inserts a recovered
+message's `normalized_points` with the message's **original**
+`platform_received_at`. Recovery runs at least 20 minutes after receipt
+(job 1068's grace), usually hours later, and days later for
+`DEFERRED_UNCOMMISSIONED` messages replayed when a device is commissioned. So
+the row is below the forward window and below the 303 late-sweep window.
+Before 305 it was never routed, and no reconciler noticed, because every
+reconciler compares tiers derived from the same tables (plan CI-1 / T1.4).
+
+- **Queue:** the recovery insert is a data-modifying CTE whose `RETURNING
+  (device_id, event_time)` (the rows it added or superseded) goes into
+  `telemetry.routing_recovery_queue` in the same per-candidate transaction. A
+  rolled-back candidate queues nothing; a committed one cannot be lost.
+- **Recovery scope:** with `ems.routing_scope = 'recovery'` a loader fixes a
+  batch of pending queue ids (oldest first, at most 10,000) under its
+  advisory lock. It reads those pairs instead of the receipt window, from any
+  chunk, compressed or not. It then runs the unchanged bucket / rank / upsert
+  code and stamps `energy_routed_at` / `environment_routed_at` in the same
+  transaction. A failed or lock-skipped run stamps nothing, so the entries
+  stay pending. Status rows: `<pipeline>_recovery`.
+- **Schedule:** `telemetry.run_routing_late_sweep_job` (hh:31:30 UTC,
+  unchanged) runs the recovery scope for both loaders after the sweeps. It
+  then deletes entries both loaders routed more than 7 days ago. A recovered
+  row is routed within about an hour of job 1077's run (:48:49).
+- **Unchanged for forward / sweep runs:** the window read gains only
+  parameter-only guards (`v_scope <> 'recovery'` on the receipt arm, a
+  `v_scope = 'recovery'` queue arm). The receipt arm keeps startup chunk
+  exclusion under a generic plan, and the queue arm never executes outside the
+  recovery scope.
+- **Idempotent:** keyed upserts. Energy updates only a newer sample inside
+  the correction deadline; environment inserts with `DO NOTHING` and updates
+  only inside the deadline. A missing bucket is inserted even after its
+  deadline, and an existing row is never overwritten by an older or
+  out-of-deadline recovered sample.
+- **Tiers above:** `ca_energy_1min` refreshes 2 days back, and recoveries are
+  at most 48 h old (raw retention). Reconciler 1116 then repairs the 1-minute
+  tier, followed by 1118 / 1119 / 1120. Demand reconciler 1121's
+  `reconcile_window` became **48 hours** (was 6), so re-supplied demand
+  intervals are re-finalized (non-VALID only); migration 306 replaces the
+  hourly 48-hour window with 6 hours plus a 58-hour pass every 6 hours (below).
+  Dew point (1125, overlap 1 h) does not re-derive older recovered
+  environment rows.
+- **Rollback:** `postgres/maintenance/305_routing_recovery_queue_rollback.sql`
+  (guarded; restores the 220 / 303 bodies and 1121's 6-hour window, drops the
+  queue; reports pending entries).
+- **Tests:** `app/tests/test_routing_recovery_queue.py`, plus the updated 303,
+  generator-contract and bounded-update suites.
+
+### Demand reconciler: hourly 6 hours + a 58-hour pass every 6 hours (migration 306)
+
+**Status: PR open, not merged or deployed.**
+
+`analytics.reconcile_demand_intervals` (job 1121 on staging, hourly at :59
+UTC, schedule unchanged) re-finalizes `[checkpoint − window, checkpoint)`.
+At 48 hours every run cost ~2 minutes of one CPU (staging 2026-10-19: 6 h runs
+15.5 s avg over 330 runs, 48 h runs ~120 s), and in 14 days neither window
+repaired a row: the wide window exists for recovered messages (305), which
+are rare.
+
+- **Cadence:** config `reconcile_window` 6 hours, `wide_window` 58 hours,
+  `wide_every` 6 hours. A run uses the wide window unless a successful
+  (HEALTHY / REPAIRED) demand run with at least that window is in
+  `analytics.pipeline_reconciliation_log` from the last `wide_every` (30-minute
+  tolerance). A SKIPPED_LOCKED / NO_CHECKPOINT run (no window logged) or a
+  FAILED wide run is therefore retried by the next hourly run; the first run
+  after deployment is wide. Without the wide keys the procedure behaves as
+  before 306.
+- **Why 58 hours:** recovery refuses messages older than the raw retention
+  (48 h); routing by the 1142 recovery scope takes up to 43 minutes (+1 h per
+  skip), the next wide pass up to 6 hours, and the checkpoint lags ~15–30
+  minutes: the oldest recoverable interval is ~56 h 13 min before the
+  checkpoint at the latest wide pass that must see it. (The hourly 48-hour
+  window of 305 missed the oldest ~1–1.5 h of that range.)
+- **Validation:** `config.assert_demand_reconciliation_job_config` is the
+  job's `check_config` and is also called by the procedure when a wide key is
+  present. It delegates the other keys to the shared
+  `config.assert_reconciliation_job_config` (unchanged; it still rejects the
+  wide keys for the other nine reconcilers) and raises 22023 for: only one wide
+  key, a non-string or unparsable interval, `wide_every` under 1 hour,
+  `wide_window` not longer than `reconcile_window` or `wide_every`.
+- **Cost (staging, read-only measurement 2026-10-19):** the 58-hour
+  finalisation work took 147 s (12,528 `calculate_demand_window` calls, 54
+  ASSET scopes); with 20 hourly 6-hour runs that is ~900 s/day instead of
+  ~2,850 s/day. Production is not measured.
+- **Rollback:** `postgres/maintenance/306_demand_reconcile_wide_cadence_rollback.sql`
+  (guarded; restores the 213 body and the 305 config, drops the demand
+  validator).
+- **Tests:** `app/tests/test_demand_reconcile_wide_cadence.py`.
+
 ### Analytics tier: parent → child watermark cascade (migration 209)
 
 Since migration 209 the five `analytics.run_energy_consumption_*_job`
@@ -228,6 +377,16 @@ materialization watermark (`analytics.cagg_available_through()`); for
 `cp_15min`. Per run: `v_to = LEAST(now_binned, parent_available_through,
 checkpoint + max_catchup_window)`; the checkpoint advances only on success.
 A child can never outrun its parent, so a backlog drains naturally.
+
+**Migration 304 (plan T3.5 step 1):** the 15-minute tier is rolled up from the
+1-minute tier (buckets under a ≤ 60 s capture policy) and the 5-minute tier
+(buckets under a 300 s policy only). `_15min` therefore waits for `cp_5min`
+only while an enabled 300 s policy — site or platform default — overlaps the
+window the run refreshes (`analytics.energy_5min_capture_policy_overlaps`);
+otherwise its parent is `cp_1min` alone. Mixed fleets keep the
+`LEAST(cp_1min, cp_5min)` bound for every window that overlaps a 300 s policy.
+A 300 s policy added with a back-dated `effective_from` is, as before, repaired
+by reconcilers 1117 / 1118, not by the forward jobs.
 
 ### Demand tier: watermark + status-guarded re-finalization (migration 210)
 
@@ -289,9 +448,20 @@ device list `analytics.v_grafana_devices` (device-diagnostics, organization and
 site overview dashboards). Raw-receipt
 connectivity, live tiles and gateway online status keep 300 s.
 
+The Analytics `stale` flag ("No recent data") derives its pipeline allowance
+from these phases (migration 302, `analytics.energy_stale_pipeline_allowance`):
+cycle + chained phase waits + 60 s = 8 min 20 s, so 10 min 20 s after the last
+1-minute interval for a 60 s / 60 s site. The healthy age of the newest
+1-minute data peaks at 9:03 (measured); a missed batch, or a routing / refresh
+retry that lands after the 1-minute job's slot, peaks at 14:03 and is flagged
+until the next publication. See the
+[Analytics feature doc](../../07-features/analytics/README.md) and ADR-022
+Amendment 9.
+
 Raw receipt state (job 1076), customer alert evaluation (job 1127, whose 3-minute
 gap tolerance assumes a 1-minute cadence) and the 5-minute tier (job 1080,
-whose checkpoint gates the 15-minute tier) still run every minute.
+whose checkpoint gates the 15-minute tier only while a 300 s capture policy
+applies, migration 304) still run every minute.
 
 ### environment_daily tier: watermark over site-local days (migration 211)
 
