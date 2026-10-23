@@ -1,6 +1,6 @@
 # Production Release Plan: Migrations 266 → 301
 
-Status: **Release A deployed 2026-10-17 and accepted 2026-10-18** (section 6, "Release A acceptance"; 48-hour window closed 2026-10-19); **Release B1 (268, 269) deployed and accepted 2026-10-19** (section 2, "B1 execution record"); **Release B2 (14 migrations, 263–286) deployed 2026-10-20, D3 PASS** (section 2, "B2 execution record"); **Release C1 (15 migrations, through 291) deployed 2026-10-22 and accepted 2026-10-22 23:37 UTC** ("C1 acceptance"); **Release C2′ (292–295, 297, 298, `d52b049`) deployed 2026-10-23 05:23 UTC, run 39905366140, postcheck PASS** ("C2′ execution record"; acceptance pending); D PROPOSED, G3b met for deployment 2026-10-23 under an approved amendment (section 4), scope and dispatch not yet authorized; D1 / D4a / D4b / D8 / D9 decided 2026-10-17 (D8 condition confirmed), D3 decided 2026-10-19 for B1 and 2026-10-20 for B2, others open · Prepared: 2026-10-14 · Updated: 2026-10-23 · Owner: Engineering
+Status: **Release A deployed 2026-10-17 and accepted 2026-10-18** (section 6, "Release A acceptance"; 48-hour window closed 2026-10-19); **Release B1 (268, 269) deployed and accepted 2026-10-19** (section 2, "B1 execution record"); **Release B2 (14 migrations, 263–286) deployed 2026-10-20, D3 PASS** (section 2, "B2 execution record"); **Release C1 (15 migrations, through 291) deployed 2026-10-22 and accepted 2026-10-22 23:37 UTC** ("C1 acceptance"); **Release C2′ (292–295, 297, 298, `d52b049`) deployed 2026-10-23 05:23 UTC, run 39905366140, postcheck PASS** ("C2′ execution record"; acceptance pending); **Release D (299–308, `7e3da57`) deployed 2026-10-23 13:00 UTC, run 39957525916, postcheck PASS; six migration-300 jobs kept on five-minute schedules (user decision); 24-hour acceptance pending** ("Release D execution record"); D1 / D4a / D4b / D8 / D9 decided 2026-10-17 (D8 condition confirmed), D3 decided 2026-10-19 for B1 and 2026-10-20 for B2, others open · Prepared: 2026-10-14 · Updated: 2026-10-23 · Owner: Engineering
 Only Releases A and B1 have been executed. Every other dispatch, precheck and operator
 step below needs its own explicit approval
 ([release-process.md](release-process.md#every-phase-requires-its-own-explicit-approval)).
@@ -981,6 +981,112 @@ acceptance record]:
 | VALID share | 24 h before 05:15: 5376 rows / 96 buckets, 86.83 % VALID (702 NO_DATA, 6 INCOMPLETE). Buckets 05:15–06:00 and 06:30: 48 VALID / 56, identical by site to before. Bucket 06:15: 32 VALID, because all 22 `Unit 2` asset rows were INCOMPLETE (12 of 15 observations, 73.33 %); the 06:52 run re-evaluated it within the 30-minute overlap and it stayed INCOMPLETE, so the 3 minutes are absent from the source, not late. At 06:30 `Unit 2` returned 22 VALID, including its 6 usually NO_DATA assets | Not attributable to C2′ (source gap at one site); share still under observation |
 | Health | Failures (excl. 1114) 2840; 0 lock waiters, 0 long transactions; unscheduled set unchanged; ledger 170 / `543b536b…`; app containers healthy; disk 69 % | PASS |
 
+#### Release D execution record (2026-10-23)
+
+Scope approved by the user on 2026-10-23: all ten pending migrations
+299–308 from staging tip `7e3da57` (PR #144 squash, which added 307 / 308),
+default `staging-head` mode. Release-plan branch pushed before dispatch at
+`44a30b6` (G3b amendment, prepared post-deploy scripts). Backup taken first:
+`/opt/ems-platform/postgres/backups/prod_snapshot_20261023T0814Z.dump`
+(7,178,004,332 bytes, sha256 `46978832…`, `pg_restore --list` 6,955 entries;
+not test-restored), kept in place.
+
+Final gate [M 2026-10-23 12:59 UTC, read-only, statement_timeout 30 s,
+lock_timeout 2 s]: `origin/staging` = `7e3da5762ca6…`; ledger 170, head 298,
+digest `543b536b…` (= staging's first 170 rows), 0 rows ≥ 299; staging
+checksums for 299–308 = repository (`d91ec61f`, `849bd7fb`, `3568c0a8`,
+`644f278a`, `535b2dcf`, `f4e83b40`, `7776509c`, `fd558234`, `3abc40a7`,
+`9340d524`); every precondition of 299–308 true (those of 300 / 305 / 306
+that depend on earlier members of the set are supplied by them); views
+already the 307 body; PUBLIC EXECUTE on the six 308 routines; failures
+(excl. 1114) 2840, 0 failing, 0 job errors since 05:20; 1062 every 15 min
+fixed at :07/:22/:37/:52; unscheduled set unchanged (1053, 1114–1120, 1123,
+1124, 1132); 0 lock waiters, 0 long transactions, no compression /
+retention due within 90 min; routing lag 127 s; disk 34 GB free (65 %);
+containers healthy.
+
+| Step | Evidence | Result |
+|---|---|---|
+| Dispatch | 12:59:21 UTC, `deploy-production.yml --ref staging`, `promotion_mode=staging-head`, `release_git_sha` = `confirm_release_git_sha` = `7e3da5762ca6b69b1258f6264999ae546f7dc6a2`; run **39957525916** | success |
+| Validate (12:59:25–12:59:30) | `release_git_sha` = staging HEAD; image `ems-platform-app:7e3da57…@sha256:85fdfb5c…` (the staging-proven artifact of run 39922794254) | PASS |
+| Deploy (12:59:33–13:01:14) | Staging HEAD re-verified; **10 APPLY / 170 SKIP**: 299 13:00:47.49 … 308 13:00:52.34 (20–155 ms each). 300 printed its expected WARNING (capture policy 5: 300 + 30 s, accepted as D8) and six NOTICEs with the previous 1-minute settings of 1000 / 1001 / 1012 / 1044 / 1063 / 1083 | PASS |
+| Post-deployment verification (13:01:17–13:02:45) | REQUIRED: database structure 24 / 24, metadata integrity 27 / 27, energy routing metric identity PASS. ADVISORY (non-blocking) FAIL with the same findings as C2′: alert job not registered, 1 policy disabled (1053), routing max_runtime WARN ×2, 1 pipeline stage not SUCCESS; the job check now passes "runs every 5 minutes" for normalization and both routing jobs | PASS (advisories pre-existing) |
+
+Postcheck [M 13:04 and 13:16 UTC, read-only]:
+
+| Check | Evidence | Result |
+|---|---|---|
+| Ledger | 180 rows, head 308; the 170 prior rows unchanged (digest `543b536b…`); 299–308 once each, `applied`, checksums as above | PASS |
+| App | Checkout `7e3da57`; `ems-admin-portal` and `ems-live-telemetry` on `…@sha256:85fdfb5c…`, healthy; `/health` 200; 0 error lines in the app log since dispatch | PASS |
+| 299 / 302 | DEFAULT policy `normalized_receiving_threshold_seconds` 600; `energy_stale_pipeline_allowance(60)` 00:08:20 → Analytics stale threshold 10:20 (phased path, as on staging) | PASS |
+| 303 / 305 / 306 | Late-sweep job 1137 hourly at hh:31:30 (first run 14:31:30 UTC by design); demand reconciler 1119 config now `wide_every` 6 h / `wide_window` 58 h with `config.assert_demand_reconciliation_job_config`, **still unscheduled** (Oct-17 pause, not resumed) | PASS |
+| 307 / 308 | View md5s `2c75df88…` / `8a6d00ca…`, `security_barrier=true` (no change, production already had them); PUBLIC EXECUTE 0 / 6, `ems_admin` 6 / 6 | PASS |
+| Health | Failures (excl. 1114) 2840, 0 failing, 0 job errors since 12:59; 102 jobs, 91 scheduled (+1137); unscheduled set unchanged; 0 lock waiters; disk 34 GB free; demand 13:07 run on slot, latest interval 54 / 56 VALID (as before) | PASS |
+
+**Schedule decision (user, 2026-10-23): keep the six migration-300 jobs on
+five-minute schedules.** The prepared switch-back
+(`post_deploy_restore_1min_schedules.sql`) was **not run**. This supersedes
+D9's post-deploy restore: D9's restore existed because production routing
+was too slow for its 30 s slot on 2026-10-16 (§10.17 of the operations plan:
+p50 546 s, routing read 30 s timeouts); that cause is gone (migrations 267
+and 303; P12 25 / 33 ms; 93 h of 1-minute routing runs, all under a minute).
+Five minutes is what migration 300, `scripts/verify/verify_jobs.sh`
+(`f6efc1f`, PR #134) and staging (2,611 / 2,611 slots per job since
+2026-10-14, 0 job errors) all expect. Restoring 1 minute would have left
+three advisory FAILs on every later production deploy.
+
+First five-minute cycles on production [M 13:02–13:50 UTC]: normalization
+1.7–5.3 s per batch (estimate on 2026-10-16 was 32–103 s against a 90 s
+budget), energy routing 0.31–0.74 s, environment routing 0.14–0.16 s,
+`ca_energy_1min` / phase-power refreshes 0.05–0.57 s, 1-minute tier
+0.49–0.54 s; every slot ran; lag normalized 232–301 s, routing 327–395 s,
+1-minute tier 329–397 s (staging 15-minute limits 330 / 450 / 540 s); demand
+on slot.
+
+**24-hour acceptance: pending.** Read-only script
+`docs/10-operations/prepared/release-d/post300_24h_acceptance.sql`, baseline
+2026-10-23 13:49:54 UTC (dry-run clean, 3.8 s), due at or after 2026-10-24
+13:50 UTC. Criteria (staging §10.13–10.14): +288 ± 1 runs per job, demand
++96 ± 1; failures still 2840 and no job errors; demand finalization p99 ≤
+end + 8 min, max ≤ + 23 min; lag ≤ 330 / 450 / 540 s; 1-minute tier
+publication delay 4–8 min; non-VALID demand rows explained by gateways with
+no raw messages; no 5-minute energy window missing devices outside such
+gaps. Not measured by it: worst-case / percentile run durations (no
+per-run history; `enable_job_execution_logging` off).
+
+Remaining staging / production differences [M 2026-10-23 ~13:55 UTC, every
+job compared by procedure name, read-only]:
+
+| Difference | Production | Staging / repository | Status |
+|---|---|---|---|
+| Routing `max_runtime` (1001, 1012) | 30 min | 5 min (migration 194) | D7, below; not changed |
+| Oct-17 pauses | 1053 (raw_messages compression), 1114–1120 reconcilers unscheduled | scheduled | Intentional (D1 baseline 2840); resuming needs its own approval |
+| Dew-point forward job (1123) | unscheduled | scheduled (enabled out-of-band on staging; the repository registers it unscheduled) | Staging drift |
+| Alert evaluation job | not registered | registered (manual step `postgres/jobs/238_alert_evaluation_job.sql`) | Intentional; the job check reports an advisory FAIL |
+| `run_raw_message_failure_capture_job` config | no `max_window` | `max_window` 60 min | Staging hand-tuning (parity audit) |
+| `run_failed_message_recovery_job` limit | 100 | 1000 | Staging hand-tuning (parity audit) |
+| Phases of the 15-minute / hourly / daily tier jobs | registration-time offsets differ (e.g. 15-minute tier at +1:41 vs +2:28 in each 5 minutes) | — | Benign: both run after the 1-minute tier's +5:00 |
+
+**D7 (routing max_runtime 30 → 5 min): recommended, separately approved.**
+The 30-minute value was set by hand after migration 194 (applied
+2026-08-25) and before 2026-10-08, when production routing runs took
+466–592 s and a 5-minute limit would have killed every run. Today, on a
+fixed 5-minute grid, a run longer than 5 min skips the next slots anyway, so
+30 min only lets a stuck run (lock wait, IO stall) hold its advisory lock
+and delay routing, demand and every 1-minute tier for up to 30 min before it
+is killed; 5 min caps that at one slot. A killed run is retried after 1 min
+and its work is redone by the next run (checkpointed, idempotent). The risk
+of 5 min: a run that genuinely needs longer (catch-up after an outage; each
+run is bounded by `max_window` 2 h) would be killed repeatedly, and after
+`max_retries` 3 consecutive failures TimescaleDB stops retrying until the
+next scheduled slot. Evidence: steady-state routing 0.3–0.7 s per 5-minute
+batch [M]; a 2-hour catch-up window is ~24 batches, ≈ 10–20 s at today's
+rate [E], not measured on production since 303. Recommendation: after the
+24-hour acceptance passes, align to 5 minutes through a small forward
+migration (a no-op on staging, which already has 5 min), not a manual
+`alter_job`, so the change is version-controlled and the advisory WARNs
+clear.
+
 #### B1 approvals required (given 2026-10-19, see execution record)
 
 1. The read-only production steps 1, 2, 4 and 6: precheck, three parity
@@ -1327,7 +1433,7 @@ deployment itself still needs explicit scope and dispatch authorization.
   structurally verified (`pg_restore --list`, 6,955 entries) but has not
   been test-restored.
 
-#### Release D post-deploy step: 1-minute schedules (prepared, not run)
+#### Release D post-deploy step: 1-minute schedules (prepared, not run — superseded 2026-10-23: the six jobs stay on five-minute schedules)
 
 Run once, with its own approval, right after the deploy run and its
 post-deployment verification pass:
@@ -1521,7 +1627,7 @@ with P11 and check after B.
 | B | B1: **deployed 2026-10-19** (run 39293585987). B2: about 2026-10-22 | B1: A + 48 h, D3 (both met). B2: G2 |
 | C1 | about 2026-10-24, target no later than 2026-10-27 | B, D2, D5 |
 | C2′ | after C1 | C1, D4a |
-| D | not scheduled; G3b met for deployment 2026-10-23 (amended), awaiting scope and dispatch authorization | G3b |
+| D | **Deployed 2026-10-23** (run 39957525916, 299–308, `7e3da57`); 24-hour acceptance due 2026-10-24 13:50 UTC | G3b (amended) |
 
 The product-owner target for F1 (290) is 2026-10-27, with no retention
 changes. [P] Evidence from 2026-10-11 shows `energy_measurements` chunks
@@ -1546,6 +1652,6 @@ each release, precheck and schedule change still needs its own approval.
 | D4b | 299/300 on production (D) | **Decided 2026-10-17: deferred pending G3b.** 299's 600 s freshness rule and 300's 5-minute batches are not activated before the gates pass |
 | D5 | Admin Portal assignment on production | Release C makes "Assign Data Points" Save live |
 | D6 | Analytics UI on production | Confirm production stays API-only until a separate frontend rollout |
-| D7 | Routing job runtime limits | After A and 303 are measured (P11), whether to restore jobs 1001/1012 `max_runtime` from 30 to 5 minutes (separate approval) |
+| D7 | Routing job runtime limits | After A and 303 are measured (P11), whether to restore jobs 1001/1012 `max_runtime` from 30 to 5 minutes (separate approval). **2026-10-23: still 30 min; recommended to align to 5 min by forward migration after the Release D 24-hour acceptance ("Release D execution record"); not yet approved** |
 | D8 | Capture policy 5 under 300 | **Decided and condition met 2026-10-17: accept 300's WARNING.** The product owner (owner of the "Avinash Home" organization, site "Vivekanandanagar Home" `49500fb9-0ea9-4496-8eeb-55131c89d0c2`) confirmed on 2026-10-17 that the site's 300-second capture policy (policy 5, 300 + 30 s) is **intentional**, although the staging onboarding requests of 2026-08-02 / 08-06 asked for 60 s. Effect under 300: that site's boundary bucket is finalized one batch later (about 5 minutes more latency). The production policy is not changed. The production lookup (`scripts/diagnostics/prod_d8_capture_policy_lookup.sql`) was not run and is no longer needed for D8 |
-| D9 | How 303 reaches production | **Decided 2026-10-17: option (1).** Release D (299–303); restoring the six 300 jobs to 1-minute schedules is a post-deploy step that needs its own explicit approval; five-minute batching is activated only after replica validation (G3b item 4), by separate approval. Rejected: (2) D with 300 active; (3) runner change. **Amended 2026-10-23 (user-approved):** batching validation (item 4) belongs to the batching approval, not to the deploy; the post-deploy restore is prepared in G3b ("Release D post-deploy step") and still needs its own approval |
+| D9 | How 303 reaches production | **Decided 2026-10-17: option (1).** Release D (299–303); restoring the six 300 jobs to 1-minute schedules is a post-deploy step that needs its own explicit approval; five-minute batching is activated only after replica validation (G3b item 4), by separate approval. Rejected: (2) D with 300 active; (3) runner change. **Amended 2026-10-23 (user-approved):** batching validation (item 4) belongs to the batching approval, not to the deploy; the post-deploy restore is prepared in G3b ("Release D post-deploy step") and still needs its own approval. **Superseded 2026-10-23 (user decision after deploy):** the six jobs stay on five-minute schedules; the restore was not run ("Release D execution record") |
