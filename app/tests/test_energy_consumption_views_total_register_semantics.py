@@ -66,6 +66,13 @@ def buckets():
         assert n_import > 1, "fixture needs a profile with per-phase semantics rows"
         c.execute("INSERT INTO metadata.organizations (id, name, code) VALUES (%s, 'Mig 307 Org', 'MIG307_ORG')", (ORG,))
         c.execute("INSERT INTO metadata.sites (id, organization_id, name, code) VALUES (%s, %s, 'Mig 307 Site', 'MIG307_SITE')", (SITE, ORG))
+        # Own 60 s policy from well before the readings: the platform default
+        # starts when the database was deployed, which on CI is minutes ago.
+        # Removed with the site (ON DELETE CASCADE).
+        c.execute(
+            "INSERT INTO config.telemetry_capture_policies (site_id, capture_interval_seconds, effective_from) VALUES (%s, 60, %s)",
+            (SITE, minutes[0] - timedelta(days=1)),
+        )
         c.execute(
             "INSERT INTO metadata.gateways (id, organization_id, site_id, name, external_id) VALUES (%s, %s, %s, 'Mig 307 GW', 'MIG307_GW')",
             (GATEWAY, ORG, SITE),
