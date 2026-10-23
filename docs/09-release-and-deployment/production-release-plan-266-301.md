@@ -1215,6 +1215,42 @@ own approval:
 5. D8's condition met: the 300-second capture policy 5 confirmed
    intentional by the product owner (2026-10-17, recorded in section 9).
 
+**Item 2, last staging check: chunk rollover (B6) — PASSED with a documented
+source-data exception** (closed 2026-10-23, user-approved ruling).
+Evidence run 2026-10-23 05:00 UTC, read-only, by the scheduled B6 task
+(`ems-ops-snapshots/rollover-303/20261023T050002Z`); attribution queries
+08:20 UTC, read-only on staging.
+
+| Criterion | Evidence | Result |
+|---|---|---|
+| Floor advanced 7 days | R1 floor 2026-10-22 00:00 UTC (was 2026-10-15); chunk `_hyper_7_525_chunk` compressed; 9 compressed / 1 uncompressed | PASS |
+| Compression job | 1073 Success 04:48:49 UTC, 3 min 53 s; failures 14 (all 2026-09-18/19, unchanged) | PASS |
+| Routing durations | 1001 0.45 s, 1012 0.12 s (same order as +2 h); late sweep 1142 140 runs / 0 failures | PASS |
+| Checkpoints | Sweep 30 min behind forward, `never_ahead` true for both pipelines | PASS |
+| Completeness (corrected V6) | Energy 8,448 / 8,448 minutes, environment 695 / 695 device-minutes, 0 missing, 0 pending | PASS |
+| Demand VALID share (V7, stop rule > 1 pp drop) | 90.1 % last 24 h vs 100.0 % before; **fired** | Exception (below) |
+
+Source-data exception, attribution verified:
+
+- Raw messages per hour from gateway `Eniscope_3_Meenaxy_Unit2` (Meenaxy
+  Pharma, Unit 2): 2,027 at 06:00 and 1,670 at 07:00 UTC on 2026-10-22, then
+  **0 for every hour from 08:00 UTC on 10-22 to 05:00 UTC on 10-23**, then
+  1,553 at 06:00 and 2,287 at 07:00 UTC. The sibling gateways Eniscope 1 and
+  2 on the same site stayed at 2,049–2,302 per hour throughout, so the outage
+  is the one gateway, upstream of ingestion.
+- No normalized points or energy rows exist for its meters inside the gap
+  (checked for meter `E3_EM4_HTR_P1_01`), so nothing was received and dropped.
+- All 510 non-VALID demand intervals in the V7 window belong to that
+  gateway's 6 assets (504 NO_DATA 10-22 08:00 → 10-23 04:45, 6 INCOMPLETE at
+  07:45 as it went silent). Excluding those 6 assets, the VALID share is
+  **100.00 % in both 24-hour windows** (4,608 / 4,608).
+- After recovery the 6 assets are VALID again (36 / 36 intervals from 06:30
+  UTC). The gap started a day before the rollover, so it is not related to
+  the chunk boundary or to 303.
+
+Ruling: the V7 drop is a source outage, not a pipeline regression; B6 is
+recorded as passed. Item 2 is complete. Items 1, 3 and 4 remain open.
+
 After D, routing p99 must stay comfortably under ~25 s before five-minute
 batching is (re)activated.
 
