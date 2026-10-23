@@ -1,6 +1,6 @@
 # Incident History
 
-Status: HISTORICAL narrative, kept current for recent entries · Last reviewed: 2026-10-10
+Status: HISTORICAL narrative, kept current for recent entries · Last reviewed: 2026-10-23
 Verification basis: Audit evidence, Repository, Staging, Production (read-only)
 
 This is a record of real incidents: root cause, fix, and verification
@@ -8,6 +8,38 @@ evidence. For the current open/closed status of any item mentioned here,
 check [../06-platform/](../06-platform/) and
 [troubleshooting.md](troubleshooting.md) — this page is the story, not the
 live status.
+
+## Production-only database drift found by the hotfix parity audit (2026-10-23)
+
+A read-only comparison of production and staging (production `d52b049`,
+staging `8490e48`) found no code or migration hotfix on production: every
+production checkout is an ancestor of `staging` and all 170 shared ledger
+checksums match. Two database differences were outside the migration
+history and are now recorded as migrations:
+
+- **Energy consumption views (migration 307).** Production's
+  `analytics.v_energy_consumption_1min` / `_15min` join
+  `config.energy_register_semantics` only on the `ENERGY_IMPORT_TOTAL` /
+  `ENERGY_EXPORT_TOTAL` rows. The repository (baseline 001) and staging
+  joined every active row for the profile, which carries L1, L2, L3 and
+  TOTAL rows, so each device bucket came back 16 times. The production fix
+  predates the 2026-08-07 baseline and was never committed. No Grafana
+  dashboard, application route or web page reads these views, so no
+  customer-visible figure was affected. Migration 307 adopts production's
+  bodies (a no-op on production).
+- **PUBLIC EXECUTE on SECURITY DEFINER job routines (migration 308).** On
+  production any database login could `CALL` the 15-minute, hourly and
+  daily energy jobs and the environment daily job as `ems_admin`, or call
+  two trigger functions. Staging had PUBLIC removed by hand; the repository
+  never did. Migration 308 revokes PUBLIC only (a no-op on staging).
+
+Manual production changes that stay as they are, by decision: the Grafana
+default organization re-created in Grafana's own database on 2026-09-08
+(`grafana/org1_fix.sql`, backup kept on the host, not in git); routing jobs
+`max_runtime` 30 minutes (decision D7); the job pauses of 2026-10-17
+(`~/ems-ops/pause_jobs_20261017.sql`); the `ems_readonly` grants from before
+the baseline (security review pending). Host shell history is capped at
+2000 lines, so earlier manual commands may be missing from this record.
 
 ## Staging PostgreSQL crash-restart from an ad-hoc read-only query (2026-10-09)
 
