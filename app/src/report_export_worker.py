@@ -230,7 +230,7 @@ class ReportExportWorker:
         self.retention = retention
         self.worker_id = f"{socket.gethostname()}:{os.getpid()}:{uuid4().hex[:8]}"
         self._task: asyncio.Task | None = None
-        self._last_purge = 0.0
+        self._last_purge: float | None = None   # None: purge on the first iteration
 
     def start(self) -> None:
         if self._task is None:
@@ -250,7 +250,7 @@ class ReportExportWorker:
         """Purge when due, then claim and run one job. True when a job ran."""
 
         loop = asyncio.get_running_loop()
-        if loop.time() - self._last_purge >= PURGE_EVERY_SECONDS:
+        if self._last_purge is None or loop.time() - self._last_purge >= PURGE_EVERY_SECONDS:
             self._last_purge = loop.time()
             await purge_expired()
         job = await claim_job(self.worker_id)

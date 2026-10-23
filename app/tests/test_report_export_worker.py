@@ -7,6 +7,7 @@ message; losing the lease never overwrites the new holder's work.
 
 from __future__ import annotations
 
+import asyncio
 import io
 import zipfile
 from datetime import timedelta
@@ -126,7 +127,28 @@ async def test_worker_runs_one_claimed_job_and_purges(monkeypatch) -> None:
     w = worker.ReportExportWorker(poll_seconds=1, max_cells=10, retention=timedelta(hours=1))
     assert await w.run_once() is True
     assert await w.run_once() is False
+    # Purges on the first iteration whatever the loop clock reads, then only
+    # every PURGE_EVERY_SECONDS.
     assert calls == ["purge", "claim", f"run:{JOB_ID}", "claim"]
+
+
+async def test_first_purge_does_not_depend_on_the_monotonic_clock(monkeypatch) -> None:
+    calls: list[str] = []
+
+    async def claim(worker_id):
+        return None
+
+    async def purge():
+        calls.append("purge")
+
+    monkeypatch.setattr(worker, "claim_job", claim)
+    monkeypatch.setattr(worker, "purge_expired", purge)
+    loop = asyncio.get_running_loop()
+    monkeypatch.setattr(loop, "time", lambda: 5.0)   # a freshly booted host
+    w = worker.ReportExportWorker(poll_seconds=1, max_cells=10, retention=timedelta(hours=1))
+    await w.run_once()
+    await w.run_once()
+    assert calls == ["purge"]
 
 
 async def test_worker_start_and_stop_are_idempotent(monkeypatch) -> None:
