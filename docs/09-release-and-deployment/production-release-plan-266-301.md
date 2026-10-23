@@ -971,6 +971,16 @@ UTC onward) finalize intervals with the same VALID share as before, and no
 new failures over the following day. No job was retried, rescheduled or
 altered apart from 298's own change; no frontend was deployed.
 
+Interim acceptance check [M 06:41 and 06:53 UTC, read-only; not an
+acceptance record]:
+
+| Check | Evidence | Result |
+|---|---|---|
+| 1062 cadence | Runs 05:37, 05:52, 06:07, 06:22, 06:37, 06:52 all Success (4.6–5.9 s); next 07:07; total_failures 1 (unchanged); 0 job errors since dispatch | PASS |
+| Finalization | One batch of 56 rows per run, each finalizing the bucket that closed 7 min earlier (05:15 at 05:37 … 06:30 at 06:52); before the deploy the same buckets were finalized at +6 min by the 1-minute runs; checkpoint 06:45 SUCCESS; no missing buckets | PASS |
+| VALID share | 24 h before 05:15: 5376 rows / 96 buckets, 86.83 % VALID (702 NO_DATA, 6 INCOMPLETE). Buckets 05:15–06:00 and 06:30: 48 VALID / 56, identical by site to before. Bucket 06:15: 32 VALID, because all 22 `Unit 2` asset rows were INCOMPLETE (12 of 15 observations, 73.33 %); the 06:52 run re-evaluated it within the 30-minute overlap and it stayed INCOMPLETE, so the 3 minutes are absent from the source, not late. At 06:30 `Unit 2` returned 22 VALID, including its 6 usually NO_DATA assets | Not attributable to C2′ (source gap at one site); share still under observation |
+| Health | Failures (excl. 1114) 2840; 0 lock waiters, 0 long transactions; unscheduled set unchanged; ledger 170 / `543b536b…`; app containers healthy; disk 69 % | PASS |
+
 #### B1 approvals required (given 2026-10-19, see execution record)
 
 1. The read-only production steps 1, 2, 4 and 6: precheck, three parity
