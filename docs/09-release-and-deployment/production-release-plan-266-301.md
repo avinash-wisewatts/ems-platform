@@ -1,6 +1,6 @@
 # Production Release Plan: Migrations 266 → 301
 
-Status: **Release A deployed 2026-10-17 and accepted 2026-10-18** (section 6, "Release A acceptance"; 48-hour window closed 2026-10-19); **Release B1 (268, 269) deployed and accepted 2026-10-19** (section 2, "B1 execution record"); **Release B2 (14 migrations, 263–286) deployed 2026-10-20, D3 PASS** (section 2, "B2 execution record"); **Release C1 (15 migrations, through 291) deployed 2026-10-22 and accepted 2026-10-22 23:37 UTC** ("C1 acceptance"); C2′ and D PROPOSED; D1 / D4a / D4b / D8 / D9 decided 2026-10-17 (D8 condition confirmed), D3 decided 2026-10-19 for B1 and 2026-10-20 for B2, others open · Prepared: 2026-10-14 · Updated: 2026-10-23 · Owner: Engineering
+Status: **Release A deployed 2026-10-17 and accepted 2026-10-18** (section 6, "Release A acceptance"; 48-hour window closed 2026-10-19); **Release B1 (268, 269) deployed and accepted 2026-10-19** (section 2, "B1 execution record"); **Release B2 (14 migrations, 263–286) deployed 2026-10-20, D3 PASS** (section 2, "B2 execution record"); **Release C1 (15 migrations, through 291) deployed 2026-10-22 and accepted 2026-10-22 23:37 UTC** ("C1 acceptance"); **Release C2′ (292–295, 297, 298, `d52b049`) deployed 2026-10-23 05:23 UTC, run 39905366140, postcheck PASS** ("C2′ execution record"; acceptance pending); D PROPOSED; D1 / D4a / D4b / D8 / D9 decided 2026-10-17 (D8 condition confirmed), D3 decided 2026-10-19 for B1 and 2026-10-20 for B2, others open · Prepared: 2026-10-14 · Updated: 2026-10-23 · Owner: Engineering
 Only Releases A and B1 have been executed. Every other dispatch, precheck and operator
 step below needs its own explicit approval
 ([release-process.md](release-process.md#every-phase-requires-its-own-explicit-approval)).
@@ -805,10 +805,12 @@ decision. The parity audit and the R0 resolution of
 U1–U5 are in
 [staging-production-parity-2026-10-22.md](../10-operations/staging-production-parity-2026-10-22.md).
 
-#### C2′ preparation (2026-10-23; nothing changed on production)
+#### C2′ preparation (2026-10-23)
 
-Status: **prepared, not approved, not dispatched.** C1 acceptance does not
-authorize C2′, Release D or any other production change.
+Status: **deployed 2026-10-23** (see "C2′ execution record" below). The
+preparation record is kept as written before dispatch. C1 acceptance did not
+authorize C2′; the user authorized C2′ separately, conditional on the gates
+below. Neither covers Release D or any other production change.
 
 Scope [V]: target `d52b049b8acd2f741868f6ef10286e11767b07d4` (#132,
 2026-10-13). `105c6c1` → `d52b049` → `origin/staging` is a forward chain.
@@ -922,6 +924,52 @@ gate below passing):
    UTC, demand intervals finalized with the same VALID share, 0 new failures.
 
 Release D (299–303) stays separate, with its own scope decision and G3b.
+
+#### C2′ execution record (2026-10-23)
+
+Preparation commits on `docs/prod-release-plan-266-301` (pushed before
+dispatch; PR #137 itself was already squash-merged on 2026-10-21 as
+`8490e48`, so these commits are not yet on `staging`): `8c1c06a` (C1 record,
+parity audit), `cd11e47` (297 rollback script), `b55d41b` (C2′ preparation).
+
+Final gate [M 2026-10-23 05:21 UTC, read-only, statement_timeout 20 s,
+lock_timeout 2 s]: ledger 164 `0591dde9…`, 0 rows for 292–298; 292–295
+preconditions PASS; 294 / 295 anchors 0 / 0; 297 body md5s
+`9084fb8b…` / `7ba7388b…` / `35ff7b9c…` with owner `ems_admin`, SECURITY
+DEFINER, ACL `{ems_admin=X/ems_admin}`; 1116 / 1118 / 1120 unscheduled; 1062
+equal to the recorded rollback values (1 minute, fixed, initial_start
+2026-08-10 11:20:03.058347 UTC); grace 5 min 30 s; failures (excl. 1114)
+2840, 0 failing, 0 job errors in 24 h, 0 lock waiters, 0 long transactions;
+disk 69 % (31 GB free), load 0.51; running image `105c6c1`. Staging success
+run for `d52b049`: `38363172078`, which pushed
+`ems-platform-app:d52b049…@sha256:964d5002…`. Rollback script on the remote
+branch, sha256 `4cf93c85…`. Window: after the 05:13 UTC policy runs, well
+before 17:13 and 23:00 UTC.
+
+| Step | Evidence | Result |
+|---|---|---|
+| Dispatch | 05:22:06 UTC, `deploy-production.yml --ref staging`, `promotion_mode=staging-milestone`, `release_git_sha=d52b049b8acd2f741868f6ef10286e11767b07d4`; run **39905366140** | success |
+| Validate (05:22:12–05:22:33) | Forward-only check passed (last promoted `105c6c1`); image verified in GHCR; resolved `…@sha256:964d5002c71e…` = the staging-proven digest | PASS |
+| Deploy (05:22:36–05:23:49) | Digest re-resolved and pinned (same `964d5002…`); **6 APPLY / 164 SKIP**: 292 05:23:33.3, 293 .7, 294 05:23:34.1, 295 .5, 297 .9, 298 05:23:35.3 (26–58 ms each) | PASS |
+| Lock watch | 108 samples 05:21:59–05:30:54 (5 s, read-only): 96 IDLE, 12 RUNNING, max lock wait 0 s, 0 queued, never `WAITING` / `LONG_WAIT` / `ABORT_CANDIDATE`. The migrations ran between samples (about 2 s in all); the RUNNING samples (05:24:14–05:25:09) were the verification job's sessions. Guarded cancel not used | PASS |
+| Post-deployment verification (05:23:51–05:25:24) | REQUIRED: database structure PASS, metadata integrity PASS, energy routing metric identity PASS. ADVISORY (non-blocking): telemetry pipeline FAIL (1 stage not SUCCESS = `derived_space_dew_point_1min` NEVER_RUN, pre-existing; 4 stages older than 10 min, which are stages on 15-minute or longer cadences), job verification FAIL (alert job not registered, 1 policy disabled, routing max_runtime WARNs): same findings as C1 | PASS (advisories pre-existing) |
+
+Postcheck [M 05:32 UTC, read-only]:
+
+| Check | Evidence | Result |
+|---|---|---|
+| Ledger | 170 rows, head 298, digest `543b536b…`; the six rows present once, checksums = file sha256 (`a280f4c5…`, `83622a4f…`, `dbc6d2da…`, `f71ce79b…`, `ff575c4c…`, `ae9ae743…`), applied by `ems_admin`; 0 unexpected rows; the 164 prior rows byte-identical before and after (id, checksum, applied_at) | PASS |
+| 292 / 293 | 4 functions; the three portal reads SECURITY DEFINER, STABLE, `ems_admin`, EXECUTE `ems_admin` + `ems_app` only; helper `analytics_point_source_scale` owner-only | PASS |
+| 294 / 295 | 8 functions, `ems_admin`-owned, not granted; 0 restore / narrowing audit records (not executed) | PASS (inert) |
+| 297 | Bodies `c0426e6b…` / `8789f6ea…` / `e71b2511…` (= the 297 postcondition); owner, SECURITY DEFINER, ACL and search_path unchanged; 1116 / 1118 / 1120 still unscheduled | PASS |
+| 298 | 1062 every 15 min, `fixed_schedule`, `initial_start` 2026-10-23 05:37:00 UTC (minute 37 → :07/:22/:37/:52); max_runtime 10 min, 3 retries / 5 min, config and check function unchanged; last run 05:23:03 Success (the final 1-minute run); next 05:37:00 | PASS |
+| App | `ems-admin-portal` and `ems-live-telemetry` on `ems-platform-app:d52b049…`, both healthy; database container healthy, Postgres up since 2026-09-22 | PASS |
+| Health | Failures (excl. 1114) 2840; 0 failing; 0 job errors since dispatch; 0 lock waiters, 0 long transactions, 0 leftover lock-watch backends; unscheduled set unchanged; disk 69 %, 31 GB free; load 0.57 | PASS |
+
+C2′ acceptance (not yet recorded): the first quarter-hour demand runs (05:37
+UTC onward) finalize intervals with the same VALID share as before, and no
+new failures over the following day. No job was retried, rescheduled or
+altered apart from 298's own change; no frontend was deployed.
 
 #### B1 approvals required (given 2026-10-19, see execution record)
 
