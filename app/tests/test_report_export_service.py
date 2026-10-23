@@ -91,9 +91,10 @@ def test_invalid_requests_are_rejected_before_any_read(range_from, range_to, res
 def test_estimate_counts_system_and_phase_columns_per_asset() -> None:
     request = ExportRequest(T0, T0 + timedelta(days=1), "1h", "1h")
     estimate = estimate_export(request, SITE_ASSETS, CATALOG)
-    # A: Energy, Power, Power L1-L3, Voltage = 6; B: Energy, Frequency = 2; C: none.
-    assert (estimate.asset_count, estimate.column_count, estimate.bucket_count) == (3, 8, 24)
-    assert estimate.cells == 192
+    # A: Energy, Power, Power L1-L3, Voltage + Apparent Power, Current NEUTRAL = 8;
+    # B: Energy, Frequency + Temperature, Humidity, Occupancy, Illuminance = 6; C: none.
+    assert (estimate.asset_count, estimate.column_count, estimate.bucket_count) == (3, 14, 24)
+    assert estimate.cells == 336
 
 
 def test_export_mode_thresholds() -> None:
@@ -118,6 +119,7 @@ async def test_csv_columns_timestamps_and_values(monkeypatch) -> None:
     assert chiller[0] == [
         TIMESTAMP_UTC_HEADER, TIMESTAMP_LOCAL_HEADER,
         "Energy (kWh)", "Power (kW)", "Power L1 (kW)", "Power L2 (kW)", "Power L3 (kW)", "Voltage (V)",
+        "Apparent Power (kVA)", "Current NEUTRAL (A)",
     ]
     assert [row[:2] for row in chiller[1:]] == [
         ["2026-09-20 00:00:00", "2026-09-20 05:30:00"],
@@ -133,7 +135,10 @@ async def test_csv_columns_timestamps_and_values(monkeypatch) -> None:
 async def test_assets_are_separated(monkeypatch) -> None:
     tables = _zip_tables((await _export(monkeypatch, FakeAnalytics())).content)
     ahu = tables["AHU 2.csv"]
-    assert ahu[0][2:] == ["Energy (kWh)", "Frequency (Hz)"]
+    assert ahu[0][2:] == [
+        "Energy (kWh)", "Frequency (Hz)",
+        "Relative Humidity (%)", "Illuminance (lux)", "Occupancy Activity", "Temperature (degC)",
+    ]
     for row in ahu[1:]:
         assert all(2000 <= float(v) < 3000 for v in row[2:])
     for row in tables["Chiller_1.csv"][1:]:
@@ -153,9 +158,14 @@ async def test_asset_with_no_data_is_a_header_only_csv(monkeypatch) -> None:
 
 
 async def test_asset_with_assignments_but_no_readings_in_range_is_header_only(monkeypatch) -> None:
-    missing = {(ASSET_B, p, q, h) for p, q in (("ENERGY_IMPORT", "TOTAL"), ("FREQUENCY", None)) for h in range(3)}
+    points = (("ENERGY_IMPORT", "TOTAL"), ("FREQUENCY", None), ("TEMPERATURE", None), ("HUMIDITY", None),
+              ("OCCUPANCY_ACTIVITY", None), ("ILLUMINANCE", None))
+    missing = {(ASSET_B, p, q, h) for p, q in points for h in range(3)}
     ahu = _zip_tables((await _export(monkeypatch, FakeAnalytics(missing=missing))).content)["AHU 2.csv"]
-    assert ahu == [[TIMESTAMP_UTC_HEADER, TIMESTAMP_LOCAL_HEADER, "Energy (kWh)", "Frequency (Hz)"]]
+    assert ahu == [[
+        TIMESTAMP_UTC_HEADER, TIMESTAMP_LOCAL_HEADER, "Energy (kWh)", "Frequency (Hz)",
+        "Relative Humidity (%)", "Illuminance (lux)", "Occupancy Activity", "Temperature (degC)",
+    ]]
 
 
 async def test_every_read_uses_the_requested_range_and_portal_user(monkeypatch) -> None:
@@ -275,3 +285,74 @@ def test_download_url_only_while_completed_and_unexpired() -> None:
     assert build_job(_job_row(expires_at=T0), now=now).download_url is None
     assert build_job(_job_row(status="FAILED", expires_at=None), now=now).download_url is None
     assert build_job(_job_row(status="PROCESSING", expires_at=None), now=now).status_label == "Processing"
+
+
+# --- every confirmed catalogue point, not only the Analytics chart registry ----
+
+async def test_environmental_and_occupancy_points_are_exported_with_their_values(monkeypatch) -> None:
+    ahu = _zip_tables((await _export(monkeypatch, FakeAnalytics())).content)["AHU 2.csv"]
+    header = ahu[0]
+    for hour, row in enumerate(ahu[1:]):
+        cell = dict(zip(header, row))
+        assert cell["Temperature (degC)"] == format_value(value_for(ASSET_B, "TEMPERATURE", None, hour))
+        assert cell["Relative Humidity (%)"] == format_value(value_for(ASSET_B, "HUMIDITY", None, hour))
+        assert cell["Occupancy Activity"] == format_value(value_for(ASSET_B, "OCCUPANCY_ACTIVITY", None, hour))
+        assert cell["Illuminance (lux)"] == format_value(value_for(ASSET_B, "ILLUMINANCE", None, hour))
+        # Existing electrical columns are unchanged alongside them.
+        assert cell["Energy (kWh)"] == format_value(value_for(ASSET_B, "ENERGY_IMPORT", "TOTAL", hour))
+        assert cell["Frequency (Hz)"] == format_value(value_for(ASSET_B, "FREQUENCY", None, hour))
+
+
+async def test_non_registry_points_are_read_through_the_portal_series_for_their_own_asset(monkeypatch) -> None:
+    fake = FakeAnalytics()
+    await _export(monkeypatch, fake)
+    specs = [spec for kind, args in fake.calls if kind == "points" for spec in args[1]]
+    assert (ASSET_B, "TEMPERATURE", None) in specs
+    assert (ASSET_B, "OCCUPANCY_ACTIVITY", None) in specs
+    assert (ASSET_A, "CURRENT", "NEUTRAL") in specs
+    # Only the asset's own confirmed points: never another asset's sensors.
+    assert (ASSET_A, "TEMPERATURE", None) not in specs
+    assert (ASSET_B, "APPARENT_POWER", "TOTAL") not in specs
+    assert all(args[0] == 500 for kind, args in fake.calls if kind == "points")
+
+
+async def test_missing_environmental_readings_stay_empty_never_zero(monkeypatch) -> None:
+    fake = FakeAnalytics(missing={(ASSET_B, "TEMPERATURE", None, 1), (ASSET_B, "OCCUPANCY_ACTIVITY", None, 2)})
+    ahu = _zip_tables((await _export(monkeypatch, fake)).content)["AHU 2.csv"]
+    header = ahu[0]
+    assert ahu[2][header.index("Temperature (degC)")] == ""
+    assert ahu[3][header.index("Occupancy Activity")] == ""
+    assert ahu[3][header.index("Temperature (degC)")] != ""
+
+
+async def test_a_point_the_read_reports_unavailable_is_an_empty_column(monkeypatch) -> None:
+    fake = FakeAnalytics(unavailable={(ASSET_B, "ILLUMINANCE", None)})
+    ahu = _zip_tables((await _export(monkeypatch, fake)).content)["AHU 2.csv"]
+    column = ahu[0].index("Illuminance (lux)")
+    assert [row[column] for row in ahu[1:]] == ["", "", ""]
+    assert all(row[ahu[0].index("Temperature (degC)")] for row in ahu[1:])
+
+
+async def test_one_minute_export_has_no_per_phase_energy_columns(monkeypatch) -> None:
+    from tests.report_export_fixtures import catalog_row
+
+    catalog = CATALOG + [catalog_row(ASSET_A, "Chiller/1", "ENERGY_IMPORT", q) for q in ("L1", "L2", "L3")]
+    fake = FakeAnalytics()
+
+    async def with_phases(portal_user_id, site_id):
+        return list(catalog)
+
+    fake.catalog = with_phases
+    fake.install(monkeypatch)
+    ctx = await prepare_export(500, UUID(SITE_ID), ExportRequest(T0, T0 + timedelta(hours=1), "1m", "1m"))
+    header = _zip_tables((await build_export_zip(500, UUID(SITE_ID), ctx)).content)["Chiller_1.csv"][0]
+    assert not any("L1 (kWh)" in h or h.startswith("ENERGY_IMPORT") for h in header)
+    ctx = await prepare_export(500, UUID(SITE_ID), ExportRequest(T0, T0 + timedelta(hours=1), "15m", "15m"))
+    header = _zip_tables((await build_export_zip(500, UUID(SITE_ID), ctx)).content)["Chiller_1.csv"][0]
+    assert {"Energy L1 (kWh)", "Energy L2 (kWh)", "Energy L3 (kWh)"} <= set(header)
+
+
+def test_duplicate_headers_are_disambiguated() -> None:
+    from src.report_export_service import _unique_headers
+
+    assert _unique_headers(["Voltage (V)", "voltage (V)", "Power (kW)"]) == ["Voltage (V)", "voltage (V) (2)", "Power (kW)"]

@@ -162,7 +162,7 @@ def test_estimate_reports_mode_and_size(portal_client, monkeypatch, analytics, j
     response = portal_client.get(f"/api/v1/sites/{SITE_ID}/report-exports/estimate", params={"from": FROM, "to": TO, "resolution": "1h"})
     assert response.status_code == 200
     body = response.json()
-    assert (body["asset_count"], body["column_count"], body["bucket_count"], body["mode"]) == (3, 8, 3, "immediate")
+    assert (body["asset_count"], body["column_count"], body["bucket_count"], body["mode"]) == (3, 14, 3, "immediate")
 
 
 def test_estimate_and_download_for_an_inaccessible_site_are_404(portal_client, monkeypatch, analytics, jobs) -> None:

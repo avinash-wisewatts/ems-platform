@@ -5,8 +5,20 @@ page uses (analytics_trends_service: the site's catalogue, the persisted
 Energy tiers and the generic point series, migrations 276-292), evaluated for
 the requesting portal user -- for a background job, the job's owner. Nothing
 here reads a table directly or derives a value of its own: each CSV column is
-one Analytics series (System, then every phase the asset has assigned), and
+one series of a data point confirmed for the asset in its Analytics catalogue
+(metadata.asset_points through analytics.get_portal_analytics_catalog), and
 each row one Analytics bucket.
+
+Columns. Data points in the Analytics chart registry (ANALYTICS_DATA_POINTS:
+Energy, Power, Voltage, ...) are exported exactly as the Analytics page
+serves them (System, then every phase the asset has fully assigned). Every
+OTHER confirmed catalogue point -- environmental and occupancy points such
+as Temperature, Relative Humidity, Occupancy Activity and Illuminance, and
+electrical points the chart registry does not chart (Apparent Power, Current
+THD, Phase Angle, Neutral current, ...) -- is one more column per assigned
+qualifier, read through the same portal-scoped generic series read
+(analytics.get_portal_asset_point_series, migration 292). The chart registry
+bounds what the Analytics page charts, not what belongs to an asset.
 
 Request contract: [from, to) in UTC, resolution auto / 1m / 15m / 30m / 1h /
 1d with the ADR-019 maximum windows (the Analytics page's own bounds). Auto
@@ -42,6 +54,7 @@ from src.analytics_trends_service import (
     SOURCE_ENERGY,
     SOURCE_MEAN,
     AnalyticsSeries,
+    PointSpec,
     SeriesRequest,
     Selection,
     apply_floor_aware_auto,
@@ -71,6 +84,9 @@ RESOLUTION_SECONDS: dict[str, int] = {"1m": 60, "15m": 900, "30m": 1800, "1h": 3
 # Data points per generic-read call: bounded so one call never asks for more
 # series than an Analytics page request may (25), whatever the asset has.
 POINT_SPECS_PER_READ = 9
+
+# Qualifiers that denote the System (not a phase) series of a point.
+SYSTEM_QUALIFIERS: tuple[str | None, ...] = (None, "TOTAL", "AVG")
 
 STATUS_LABELS = {
     "QUEUED": "Queued",
@@ -161,6 +177,69 @@ def asset_column_count(points: dict[str, set[str | None]], resolution: str) -> i
     return count
 
 
+@dataclass(frozen=True)
+class ExtraColumn:
+    """A confirmed catalogue point outside the chart registry's columns."""
+
+    data_point: str
+    qualifier: str | None
+    label: str
+    unit: str | None
+
+    @property
+    def header(self) -> str:
+        label = self.label if self.qualifier in SYSTEM_QUALIFIERS else f"{self.label} {self.qualifier}"
+        return f"{label} ({self.unit})" if self.unit else label
+
+
+def _registry_columns(points: dict[str, set[str | None]], resolution: str) -> set[tuple[str, str | None]]:
+    """(data point, catalogue qualifier) pairs the registry columns serve."""
+
+    covered: set[tuple[str, str | None]] = set()
+    for code, qualifiers in points.items():
+        definition = ANALYTICS_DATA_POINTS[code]
+        if definition.system_qualifier in qualifiers:
+            covered.add((code, definition.system_qualifier))
+        if _phased(code, qualifiers, resolution):
+            covered.update((code, q) for q in definition.phase_qualifiers)
+    return covered
+
+
+def _extra_columns(
+    catalog_rows: list[dict[str, Any]], points_by_asset: dict[str, dict[str, set[str | None]]], resolution: str
+) -> dict[str, list[ExtraColumn]]:
+    """asset_id -> its confirmed catalogue points the registry columns do not
+    serve, ordered by data point then qualifier (System first). Per-phase
+    Energy has no 1-minute source, so it is not a 1-minute column."""
+
+    covered = {asset: _registry_columns(points, resolution) for asset, points in points_by_asset.items()}
+    seen: dict[str, dict[tuple[str, str | None], ExtraColumn]] = {}
+    for row in catalog_rows:
+        asset = str(row["asset_id"])
+        key = (row["data_point"], row.get("qualifier"))
+        if key in covered.get(asset, set()):
+            continue
+        definition = ANALYTICS_DATA_POINTS.get(key[0])
+        if definition is not None and definition.energy_direction and resolution == "1m":
+            continue
+        seen.setdefault(asset, {}).setdefault(
+            key,
+            ExtraColumn(
+                data_point=key[0],
+                qualifier=key[1],
+                label=row.get("data_point_name") or key[0],
+                unit=row.get("unit"),
+            ),
+        )
+    return {
+        asset: sorted(
+            columns.values(),
+            key=lambda c: (c.data_point, c.qualifier not in SYSTEM_QUALIFIERS, c.qualifier or ""),
+        )
+        for asset, columns in seen.items()
+    }
+
+
 def bucket_count(request: ExportRequest) -> int:
     return max(1, math.ceil((request.dt_to - request.dt_from).total_seconds() / RESOLUTION_SECONDS[request.resolution]))
 
@@ -177,7 +256,12 @@ def estimate_export(
     request: ExportRequest, site_assets: list[dict[str, Any]], catalog_rows: list[dict[str, Any]]
 ) -> ExportEstimate:
     points = _asset_points(catalog_rows)
-    columns = sum(asset_column_count(points.get(str(a["asset_id"]), {}), request.resolution) for a in site_assets)
+    extras = _extra_columns(catalog_rows, points, request.resolution)
+    columns = sum(
+        asset_column_count(points.get(str(a["asset_id"]), {}), request.resolution)
+        + len(extras.get(str(a["asset_id"]), []))
+        for a in site_assets
+    )
     buckets = bucket_count(request)
     return ExportEstimate(
         asset_count=len(site_assets), column_count=columns, bucket_count=buckets, cells=columns * buckets
@@ -212,6 +296,7 @@ class ExportContext:
     energy_floors: dict[str, datetime | None] = field(default_factory=dict)
     point_floors: dict[str, dict[str, datetime | None]] = field(default_factory=dict)
     points_by_asset: dict[str, dict[str, set[str | None]]] = field(default_factory=dict)
+    extras_by_asset: dict[str, list[ExtraColumn]] = field(default_factory=dict)
 
 
 @dataclass
@@ -253,6 +338,9 @@ async def prepare_export(portal_user_id: int, site_id: UUID, request: ExportRequ
     kinds = planned_kinds(plan_series(series_request, catalog_rows)) | planned_kinds(
         plan_series(three_phase, catalog_rows)
     )
+    if _extra_columns(catalog_rows, _asset_points(catalog_rows), request.resolution):
+        # Generic-read columns may be measurements or register deltas.
+        kinds |= {SOURCE_MEAN, SOURCE_DELTA}
     energy_floors: dict = {}
     point_floors: dict = {}
     if SOURCE_ENERGY in kinds:
@@ -277,6 +365,7 @@ async def prepare_export(portal_user_id: int, site_id: UUID, request: ExportRequ
         energy_floors=energy_floors,
         point_floors=point_floors,
         points_by_asset=_asset_points(catalog_rows),
+        extras_by_asset=_extra_columns(catalog_rows, _asset_points(catalog_rows), resolved.resolution),
     )
 
 
@@ -316,12 +405,45 @@ def _chunks(items: list, size: int) -> list[list]:
     return [items[i : i + size] for i in range(0, len(items), size)]
 
 
+async def _read_extra_columns(
+    portal_user_id: int, site_id: UUID, ctx: ExportContext, asset_id: str, columns: list[ExtraColumn]
+) -> list[dict[datetime, float | None]]:
+    """bucket_start -> value per extra column, through the generic portal
+    series read. A column the read reports unavailable (or returns no rows
+    for) has no values -- empty cells, never zeros."""
+
+    out: list[dict[datetime, float | None]] = []
+    for chunk in _chunks(columns, POINT_SPECS_PER_READ):
+        specs = [PointSpec(UUID(asset_id), c.data_point, c.qualifier) for c in chunk]
+        rows = await fetch_analytics_point_series(
+            portal_user_id,
+            site_id,
+            specs,
+            ctx.series_request.dt_from,
+            ctx.series_request.dt_to,
+            ctx.series_request.resolution,
+            ctx.as_of,
+        )
+        by_index: dict[int, list[dict[str, Any]]] = {}
+        for row in rows:
+            by_index.setdefault(int(row["series_index"]), []).append(row)
+        for index in range(1, len(chunk) + 1):
+            series_rows = by_index.get(index, [])
+            values: dict[datetime, float | None] = {}
+            if not any(r.get("unavailable_reasons") for r in series_rows):
+                for r in series_rows:
+                    if r.get("bucket_start") is not None:
+                        values[_utc(r["bucket_start"])] = None if r.get("value") is None else float(r["value"])
+            out.append(values)
+    return out
+
+
 async def collect_asset_table(
     portal_user_id: int, site_id: UUID, ctx: ExportContext, asset: dict[str, Any]
 ) -> AssetTable:
-    """Every Analytics series of one asset: System for each assigned data
-    point, then its phases when every phase is assigned. Columns in
-    registry order (System before its phases)."""
+    """Every series of one asset: the chart-registry columns (System for
+    each assigned data point, then its phases when every phase is assigned,
+    in registry order), then every other confirmed catalogue point."""
 
     asset_id = str(asset["asset_id"])
     name = asset.get("asset_name") or asset_id
@@ -351,22 +473,43 @@ async def collect_asset_table(
             if series is not None:
                 ordered.append(series)
 
+    extras = ctx.extras_by_asset.get(asset_id, [])
+    extra_values = await _read_extra_columns(portal_user_id, site_id, ctx, asset_id, extras) if extras else []
+
+    columns: list[dict[datetime, float | None]] = [
+        {_utc(p.bucket_start): p.value for p in series.points} for series in ordered
+    ] + extra_values
+    width = len(columns)
     rows: dict[datetime, list[float | None]] = {}
     has_data = False
-    for index, series in enumerate(ordered):
-        for point in series.points:
-            values = rows.setdefault(point.bucket_start, [None] * len(ordered))
-            values[index] = point.value
-            has_data = has_data or point.value is not None
+    for index, column in enumerate(columns):
+        for bucket_start, value in column.items():
+            rows.setdefault(bucket_start, [None] * width)[index] = value
+            has_data = has_data or value is not None
     if not has_data:
         rows = {}
     return AssetTable(
         asset_id=asset_id,
         asset_name=name,
-        headers=[column_header(s) for s in ordered],
+        headers=_unique_headers([column_header(s) for s in ordered] + [c.header for c in extras]),
         rows=rows,
         has_data=has_data,
     )
+
+
+def _unique_headers(headers: list[str]) -> list[str]:
+    """Two different points never share a header: a repeat gets " (2)"."""
+
+    out: list[str] = []
+    used: set[str] = set()
+    for header in headers:
+        candidate, n = header, 1
+        while candidate.casefold() in used:
+            n += 1
+            candidate = f"{header} ({n})"
+        used.add(candidate.casefold())
+        out.append(candidate)
+    return out
 
 
 # ---------------------------------------------------------------------------
