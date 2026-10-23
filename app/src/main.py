@@ -2,6 +2,7 @@ from src.grafana_client import GrafanaApiError
 import asyncio
 import contextlib
 from contextlib import asynccontextmanager
+from datetime import timedelta
 from pathlib import Path
 from typing import Annotated, AsyncIterator
 from uuid import UUID
@@ -55,6 +56,8 @@ from src.context.service import (
 )
 from src.routers.context import router as context_router
 from src.routers.analytics_api import router as analytics_api_router
+from src.routers.report_exports import router as report_exports_router
+from src.report_export_worker import ReportExportWorker
 from src.auth.security import hash_portal_password
 from src.auth.service import authenticate_portal_user
 from src.admin_navigation import administration_navigation
@@ -373,9 +376,21 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     """Initialize and close shared application resources."""
     await open_database_pool()
 
+    # Reports tab background exports (migration 309): one in-process worker.
+    report_export_worker: ReportExportWorker | None = None
+    if settings.report_export_worker_enabled:
+        report_export_worker = ReportExportWorker(
+            poll_seconds=settings.report_export_poll_seconds,
+            max_cells=settings.report_export_max_cells,
+            retention=timedelta(hours=settings.report_export_retention_hours),
+        )
+        report_export_worker.start()
+
     try:
         yield
     finally:
+        if report_export_worker is not None:
+            await report_export_worker.stop()
         await close_database_pool()
 
 
@@ -409,6 +424,7 @@ app.mount(
 
 app.include_router(context_router)
 app.include_router(analytics_api_router)
+app.include_router(report_exports_router)
 
 
 # ---------------------------------------------------------------------------

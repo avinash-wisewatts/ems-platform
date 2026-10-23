@@ -6,7 +6,11 @@ Related decisions: [ADR-007](../00-governance/decisions/ADR-007-analytics-api-bo
 
 ## Shape
 
-Semantic, read-only `GET /api/v1/*`. Flat top-level error envelope:
+Semantic, read-only `GET /api/v1/*` — with one additive, user-scoped write
+surface: the Reports tab's export jobs (`POST /api/v1/sites/{id}/report-exports`,
+`POST /api/v1/report-exports/{job_id}/retry`, 2026-10-24), which write only
+the caller's own job records (never EMS data), require `application/json`
+and reject cross-site requests. Flat top-level error envelope:
 `{"error": "<code>", "detail": "<message>"}` — `401 unauthenticated`, `403`,
 `404 not_found`, `422 invalid_parameter`/`invalid_resolution`/`invalid_request`.
 
@@ -40,6 +44,11 @@ UX-only.
 | `GET /api/v1/spaces/{space_id}/measurements` | Environmental series | `parameter` ∈ {TEMPERATURE, HUMIDITY, DEW_POINT}, `resolution` ∈ {raw, 1h}; `no_data` normal 200; inaccessible/unknown → 404 with no existence leak. DEW_POINT is consumed from the persisted tier — never recalculated in the browser. |
 | `GET /api/v1/sites/{site_id}/analytics/catalog` | Analytics v1 catalogue — ACTIVE assets and their confirmed semantic data points with availability bounds, request limits, ADR-019 resolution windows with each resolution's site-specific retention floor (`available_from`, migration 282) | Added 2026-09-27 (migrations 276/277, [ADR-022](../00-governance/decisions/ADR-022-analytics-v1-scope-and-contract.md)); deployed to staging 2026-09-27 (floors 2026-09-29). From `metadata.asset_points` only (ADR-018); inaccessible/unknown site → 404; no assignments → empty `assets`. See [../07-features/analytics/README.md](../07-features/analytics/README.md#api-contract). |
 | `GET /api/v1/sites/{site_id}/analytics/series` | Analytics v1 series for explicit `selection=<asset_id>:<DATA_POINT>` pairs | Added 2026-09-27 (migration 278); deployed to staging 2026-09-27, Data Quality contract (migration 282) 2026-09-29. `from`, `to`, `resolution` (`auto`/1m/15m/30m/1h/1d; ADR-019 windows), `phase`; Energy only in v1, from the persisted Energy tiers (migrations 279/280 — not keyed on the Grafana organization mapping); a request before the resolution's retention floor is `RESOLUTION_UNAVAILABLE` and Auto never selects such a resolution; 30m and 1h are on the site-local grid and 1d the DST-correct site-local day (migration 282; the earlier "1h is the UTC hour grid" is superseded); unavailable selections are returned with a status and reasons, never dropped; one `as_of` per request; per-bucket interval counts, bucket/data state and evidence flags, per-series data bounds and stale (no `coverage_ratio`) — [ADR-022 Amendment 4](../00-governance/decisions/ADR-022-analytics-v1-scope-and-contract.md#amendment-4-2026-09-29-data-quality-read-contract-migration-282); timestamps UTC. |
+| `GET /api/v1/sites/{site_id}/report-exports/estimate` | Reports tab: size and mode (`immediate`/`background`/`too_large`) of a site measurement export | Added 2026-10-24 (migration 309). `from`, `to`, `resolution` as `/analytics/series`; requires `report.export`. |
+| `GET /api/v1/sites/{site_id}/report-exports/file` | Reports tab: immediate ZIP (one CSV per site asset) | Added 2026-10-24. 422 `export_requires_background` above the immediate limit; `attachment`, `no-store`. |
+| `POST /api/v1/sites/{site_id}/report-exports` | Reports tab: queue a background export job (JSON `{from,to,resolution}`) | Added 2026-10-24. 202 job; 422 `export_too_large`; 429 `too_many_active_exports`; 415 non-JSON; 403 cross-site. |
+| `GET /api/v1/report-exports`, `GET /api/v1/report-exports/{job_id}` | Reports tab: the caller's jobs / one job (status, error, `download_url`) | Added 2026-10-24. Owner-only; another user's job is 404. |
+| `POST /api/v1/report-exports/{job_id}/retry`, `GET /api/v1/report-exports/{job_id}/file` | Reports tab: re-queue a FAILED job / download a COMPLETED job's ZIP | Added 2026-10-24. 409 `export_not_failed`; 410 expired or unfinished. |
 
 ## Extension model
 
@@ -58,5 +67,7 @@ site-wide environmental roll-up, comfort targets, device/point telemetry
 state (freshness — MVP-4), Attention/Issues surface (MVP-3, distinct from
 the frontend-only Energy Attention rule already shipped — see
 [ADR-010](../00-governance/decisions/ADR-010-mvp3-attention-materiality-policy.md)),
-cost, alert, export, portfolio, and reporting endpoints. See
+cost, alert, portfolio, and reporting endpoints. (Export: the Reports-tab
+site measurement export, 2026-10-24 — see
+[../07-features/export/README.md](../07-features/export/README.md).) See
 [../01-product/roadmap.md](../01-product/roadmap.md).

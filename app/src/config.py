@@ -67,6 +67,49 @@ class Settings(BaseSettings):
         alias="EMS_APP_SESSION_HTTPS_ONLY",
     )
 
+    # Reports tab export (report_export_service.py / report_export_worker.py).
+    # An export is sized as buckets x columns over the site's assets: up to
+    # immediate_max_cells it downloads in the request, up to max_cells it
+    # runs as a background job, beyond that it is refused.
+    report_export_immediate_max_cells: int = Field(
+        default=150_000,
+        ge=0,
+        alias="EMS_REPORT_EXPORT_IMMEDIATE_MAX_CELLS",
+    )
+
+    report_export_max_cells: int = Field(
+        default=3_000_000,
+        ge=1,
+        alias="EMS_REPORT_EXPORT_MAX_CELLS",
+    )
+
+    # How long a completed background export stays downloadable.
+    report_export_retention_hours: int = Field(
+        default=24,
+        ge=1,
+        le=720,
+        alias="EMS_REPORT_EXPORT_RETENTION_HOURS",
+    )
+
+    report_export_max_active_jobs: int = Field(
+        default=3,
+        ge=1,
+        le=20,
+        alias="EMS_REPORT_EXPORT_MAX_ACTIVE_JOBS",
+    )
+
+    report_export_worker_enabled: bool = Field(
+        default=True,
+        alias="EMS_REPORT_EXPORT_WORKER_ENABLED",
+    )
+
+    report_export_poll_seconds: float = Field(
+        default=5.0,
+        ge=1.0,
+        le=300.0,
+        alias="EMS_REPORT_EXPORT_POLL_SECONDS",
+    )
+
     model_config = SettingsConfigDict(
         extra="ignore",
         case_sensitive=True,

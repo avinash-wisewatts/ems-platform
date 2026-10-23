@@ -26,6 +26,10 @@ not the application's architectural boundary.
 ## Data access
 
 Read-only, via the Analytics API only ([../analytics-api/README.md](../analytics-api/README.md)).
+The one exception (2026-10-24): the Reports tab creates and retries the
+user's own export jobs through the Analytics API
+([../../07-features/export/README.md](../../07-features/export/README.md)) —
+no EMS data is written.
 No direct DB/TimescaleDB/Grafana access, no query builder, no dynamic SQL.
 
 ## Authentication

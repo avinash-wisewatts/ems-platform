@@ -81,3 +81,24 @@ describe("apiGet", () => {
     await expect(apiGet("/sites")).rejects.toBeInstanceOf(NetworkError);
   });
 });
+
+describe("Reports export client helpers", () => {
+  it("apiPostJson sends a same-origin JSON POST", async () => {
+    const { apiPostJson } = await import("./client");
+    const mock = stubFetch(() => ({ status: 202, jsonBody: { job_id: "j" } }));
+    await apiPostJson("/sites/s1/report-exports", { from: "a", to: "b" });
+    const [url, init] = mock.mock.calls[0]! as [string, RequestInit];
+    expect(url).toBe("/api/v1/sites/s1/report-exports");
+    expect(init.method).toBe("POST");
+    expect(init.credentials).toBe("same-origin");
+    expect((init.headers as Record<string, string>)["Content-Type"]).toBe("application/json");
+    expect(init.body).toBe('{"from":"a","to":"b"}');
+  });
+
+  it("contentDispositionFileName prefers filename* and falls back to filename", async () => {
+    const { contentDispositionFileName } = await import("./client");
+    expect(contentDispositionFileName("attachment; filename=\"a_b.zip\"; filename*=UTF-8''a%20%C3%A9.zip")).toBe("a é.zip");
+    expect(contentDispositionFileName('attachment; filename="plain.zip"')).toBe("plain.zip");
+    expect(contentDispositionFileName(null)).toBeNull();
+  });
+});

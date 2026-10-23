@@ -5,6 +5,9 @@ import { useSession } from "../auth/SessionProvider";
 import { useTenant } from "../tenant/TenantProvider";
 import { logout } from "../api/client";
 import { useActiveAlertCount } from "../alerts/useActiveAlertCount";
+import { hasPermission } from "../auth/permissions";
+import { ReportExportNotifications } from "../reportExports/ReportExportNotifications";
+import { ReportExportsProvider, useReportExports } from "../reportExports/ReportExportsProvider";
 import {
   NAV_GROUP_LABELS,
   PRIMARY_NAV,
@@ -24,6 +27,7 @@ const SHELL_ICON_KEYS = new Set<string>(["main-dashboard", "asset-view", "analyt
 
 function shellNavIcon(key: string): NavIconKey {
   if (key === "shell-alerts") return "alerts";
+  if (key === "shell-reports") return "reports";
   return SHELL_ICON_KEYS.has(key) ? (key as NavIconKey) : "settings";
 }
 
@@ -51,6 +55,17 @@ function shellNavIcon(key: string): NavIconKey {
  * Navigation gating is UX only, as before -- the backend remains
  * authoritative for access.
  */
+
+/** Finished background exports the user has not dismissed yet. */
+function ReportsNavBadge() {
+  const { notifications } = useReportExports();
+  if (notifications.length === 0) return null;
+  return (
+    <span className="app-shell__nav-badge" data-testid="shell-nav-reports-badge" aria-label={`${notifications.length} new`}>
+      {notifications.length}
+    </span>
+  );
+}
 
 function useNow(intervalMs = 30_000): Date {
   const [now, setNow] = useState(() => new Date());
@@ -421,7 +436,18 @@ function UserMenu() {
   );
 }
 
+/** The shell inside the Reports export state it shares with the Reports page
+ *  (nav badge, completion notifications). */
 export function AppLayout({ children }: { children: ReactNode }) {
+  const { user } = useSession();
+  return (
+    <ReportExportsProvider enabled={hasPermission(user, "report.export")}>
+      <AppShell>{children}</AppShell>
+    </ReportExportsProvider>
+  );
+}
+
+function AppShell({ children }: { children: ReactNode }) {
   const { user } = useSession();
   const { selectedSite, sites } = useTenant();
   const location = useLocation();
@@ -567,6 +593,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
                         {activeAlertCount}
                       </span>
                     ) : null}
+                    {item.key === "shell-reports" ? <ReportsNavBadge /> : null}
                   </NavLink>
                 </li>
               ))}
@@ -582,6 +609,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
           {children}
         </main>
       </div>
+      <ReportExportNotifications />
     </div>
   );
 }

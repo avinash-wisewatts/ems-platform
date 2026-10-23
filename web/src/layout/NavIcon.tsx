@@ -14,6 +14,7 @@ export type NavIconKey =
   | "analytics"
   | "single-line-diagram"
   | "alerts"
+  | "reports"
   | "settings"
   | "archive";
 
@@ -50,6 +51,12 @@ const PATHS: Record<NavIconKey, ReactNode> = {
     <>
       <path d="M12 4a5 5 0 0 0-5 5c0 5-2 6-2 6h14s-2-1-2-6a5 5 0 0 0-5-5Z" strokeLinejoin="round" />
       <path d="M10 19a2 2 0 0 0 4 0" />
+    </>
+  ),
+  reports: (
+    <>
+      <path d="M7 3.5h7l4 4V20a.5.5 0 0 1-.5.5h-10A.5.5 0 0 1 7 20Z" strokeLinejoin="round" />
+      <path d="M14 3.5V8h4M10 17v-3M12.5 17v-5M15 17v-2" strokeLinecap="round" />
     </>
   ),
   settings: (

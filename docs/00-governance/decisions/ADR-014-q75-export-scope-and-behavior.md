@@ -1,7 +1,9 @@
 # ADR-014: MVP-6 Export scope, content, format, and behavior (Q75)
 
 Status: Decided; amended 2026-09-15 (see "Amendment" below) — Energy
-contextual chart-data export implemented, not deployed
+contextual chart-data export implemented, not deployed; Amendment 2
+(2026-10-24) — dedicated Reports-tab site measurement export implemented
+(migration 309), staging deployment in progress
 Date: 2026-09-14 (MVP-6 Product Decision Workshop); amended 2026-09-15
 Decision owners: Product Owner
 Related requirements: EMS-REQ-094 through EMS-REQ-099
@@ -157,6 +159,34 @@ period-summary row instead.
   in force; this amendment narrows decision 1 only for the chart's own
   already-displayed series, not for raw telemetry generally.
 
+## Amendment 2 (2026-10-24) — dedicated Reports-tab site measurement export
+
+**Source.** An explicit Product request in the 2026-10-23/24 engineering
+session (the request text is the durable source; no separate workshop):
+add a **Reports** entry directly below **Alerts** in the EMS Web App
+primary navigation that exports **all available measurement data for every
+asset of a selected site** over a chosen date/time range, as **one ZIP
+with one CSV per asset** (`Timestamp (UTC)`, `Timestamp (Site Local)`, then
+every data point), immediate download for small exports and a background
+job with in-app completion notification for large ones. Decisions above
+are not edited; this records how that request relates to them.
+
+**Relationship to the decisions above (no silent reconciliation):**
+
+| Decision | Status for the Reports-tab export |
+|---|---|
+| 1 (aggregated, not raw) | **Narrowed further, by the request.** Each CSV column is an Analytics series exactly as the Analytics page displays it (ADR-022: bucket mean for measurements, bucket sum for Energy, at the chosen resolution `auto`/1m/15m/30m/1h/1d with the ADR-019 maximum windows). Still never finer than an Analytics resolution, i.e. no sub-minute raw telemetry. |
+| 2 (context fields) | Partly: site and time range are in the ZIP/CSV file names, metric name and unit in each column header. No comparison/baseline (none is displayed by Analytics). |
+| 3, 10, 11 (quality state for gaps / no-data) | **Open — not met.** A gap is a row with an empty cell; an asset with no data in range is a header-only CSV (never omitted, never a fabricated value). Per-cell data-quality state is **not** exported, because the requested column layout has none. Product decision needed: add quality columns, or accept empty cells. |
+| 4 (CSV) | Met (CSV files inside a ZIP container). |
+| 5 (size-tiered delivery) | Met. Threshold is an implementation default, configurable, not a product decision: estimated buckets x columns <= `EMS_REPORT_EXPORT_IMMEDIATE_MAX_CELLS` (150,000) downloads immediately; <= `EMS_REPORT_EXPORT_MAX_CELLS` (3,000,000) runs in the background; larger is refused with guidance. |
+| 6, 7 (dedicated area, multi-metric) | Met for measurements: every Analytics data point (Energy, Energy Export, Power, Reactive Power, Current, Voltage, Line to Line Voltage, Power Factor, Frequency; System and per-phase). Demand intervals and Power Quality THD are not Analytics data points and are not included. |
+| 9 (site-bounded range) | Met: the date picker is bounded by the site catalogue's earliest data (the Analytics rule). |
+| 12 (hierarchy level) | Site level only, by the request (every asset of the site). |
+
+Implementation and operations are described in
+[07-features/export/README.md](../../07-features/export/README.md).
+
 ## Rationale
 
 Decision 1 (aggregated, not raw) keeps Export aligned with Q75's own
@@ -256,6 +286,11 @@ such as `site_name` or `site_code` that starts with `=`, `+`, `-`, `@`, a tab
 or a line break is prefixed with `'` (CWE-1236). Numeric cells, including the
 `.toFixed(1)` strings such as `-3.5`, are never prefixed. The column set is
 unchanged. The Analytics CSV (ADR-022, F7) uses the same helper.
+
+Reports-tab site measurement export (Amendment 2): `postgres/migrations/309_report_export_jobs.sql`,
+`app/src/report_export_service.py`, `app/src/report_export_worker.py`,
+`app/src/routers/report_exports.py`, `web/src/routes/reportExports/ReportsPage.tsx`,
+`web/src/reportExports/`.
 
 ## Validation references
 

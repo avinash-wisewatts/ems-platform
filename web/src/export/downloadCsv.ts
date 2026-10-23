@@ -16,7 +16,12 @@
  *  buildEnergyConsumptionExportCsv's job) -- this function's only
  *  responsibility is invoking the browser download mechanism correctly. */
 export function downloadTextFile(filename: string, content: string, mimeType: string): void {
-  const blob = new Blob([content], { type: mimeType });
+  downloadBlob(filename, new Blob([content], { type: mimeType }));
+}
+
+/** Triggers a browser download of an already-built Blob (e.g. the Reports
+ *  tab's ZIP). DOM-only, like downloadTextFile. */
+export function downloadBlob(filename: string, blob: Blob): void {
   const url = URL.createObjectURL(blob);
   try {
     const anchor = document.createElement("a");
