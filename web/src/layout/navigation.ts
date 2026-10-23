@@ -104,7 +104,10 @@ export function visibleNav(items: readonly NavItem[], permissions: readonly stri
  * /features/* catch-all. "Single Line Diagram" and "Settings" have no
  * implementation yet, so they route into the existing, honest /features/*
  * catch-all (PlaceholderArea) exactly like every other not-yet-built feature
- * area -- never a fabricated screen.
+ * area -- never a fabricated screen. "Reports" (directly below Alerts) opens
+ * the site measurement export at /reports (routes/reportExports/ReportsPage.tsx)
+ * -- distinct from the Archive section's Site Performance Report
+ * (/features/reports), which is unchanged.
  */
 export const SHELL_PRIMARY_NAV: readonly NavItem[] = [
   {
@@ -122,6 +125,7 @@ export const SHELL_PRIMARY_NAV: readonly NavItem[] = [
     requiresAnyOf: ["dashboard.view"],
   },
   { key: "shell-alerts", label: "Alerts", to: "/features/alerts", requiresAnyOf: ["dashboard.view"] },
+  { key: "shell-reports", label: "Reports", to: "/reports", requiresAnyOf: ["report.export"] },
   { key: "settings", label: "Settings", to: "/features/settings", requiresAnyOf: ["dashboard.view"] },
 ];
 

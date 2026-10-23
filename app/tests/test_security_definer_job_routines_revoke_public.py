@@ -120,5 +120,7 @@ def test_manifest_registers_308_after_307():
 
     rows = list(csv.DictReader((REPO / "postgres" / "restructure_manifest.csv").read_text(encoding="utf-8").splitlines()))
     files = [r["source_file"] for r in rows if r["target_category"] == "migration"]
-    assert files[-1] == MIGRATION.name
-    assert files[-2] == "307_energy_consumption_views_total_register_semantics.sql"
+    # Later migrations (309+) follow; 308 stays directly after 307.
+    index = files.index(MIGRATION.name)
+    assert files[index - 1] == "307_energy_consumption_views_total_register_semantics.sql"
+    assert files.count(MIGRATION.name) == 1

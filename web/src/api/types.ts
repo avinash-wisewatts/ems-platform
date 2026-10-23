@@ -676,3 +676,51 @@ export type AnalyticsSeriesResponse = {
   /** One series per selection, in request order. */
   series: AnalyticsSeries[];
 };
+
+// ---- Reports tab: site measurement export (migration 309) --------------------
+
+/** "immediate": GET .../report-exports/file downloads it now; "background":
+ *  POST a job; "too_large": refused even as a background job. */
+export type ReportExportMode = "immediate" | "background" | "too_large";
+
+export type ReportExportEstimate = {
+  site_id: string;
+  range_from: string;
+  range_to: string;
+  requested_resolution: AnalyticsRequestedResolution;
+  resolution: AnalyticsResolutionCode;
+  asset_count: number;
+  column_count: number;
+  bucket_count: number;
+  estimated_cells: number;
+  mode: ReportExportMode;
+};
+
+export type ReportExportStatus = "QUEUED" | "PROCESSING" | "COMPLETED" | "FAILED" | "EXPIRED";
+
+export type ReportExportJob = {
+  job_id: string;
+  site_id: string;
+  site_name: string | null;
+  range_from: string;
+  range_to: string;
+  requested_resolution: AnalyticsRequestedResolution;
+  resolution: AnalyticsResolutionCode;
+  status: ReportExportStatus;
+  status_label: string;
+  attempts: number;
+  error_code: string | null;
+  error_message: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  expires_at: string | null;
+  file_name: string | null;
+  file_size_bytes: number | null;
+  asset_count: number | null;
+  row_count: number | null;
+  /** Same-origin, session-authenticated; null unless downloadable. */
+  download_url: string | null;
+};
+
+export type ReportExportJobListResponse = { jobs: ReportExportJob[] };

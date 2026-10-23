@@ -47,8 +47,9 @@ function useIsNarrow(): boolean {
   return useMediaQuery(NARROW_QUERY);
 }
 
-/** The earliest site-local date any catalogue data point has data from. */
-function earliestDataDate(catalog: AnalyticsCatalogResponse, timeZone: string | null | undefined): string | null {
+/** The earliest site-local date any catalogue data point has data from
+ *  (also bounds the Reports tab's date range, ADR-014 decision 9). */
+export function earliestDataDate(catalog: AnalyticsCatalogResponse, timeZone: string | null | undefined): string | null {
   let earliest: number | null = null;
   for (const asset of catalog.assets) {
     for (const point of asset.data_points) {

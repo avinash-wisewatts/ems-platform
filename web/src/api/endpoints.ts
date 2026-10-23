@@ -23,8 +23,16 @@
  *   GET /api/v1/alerts/{alert_id}                      (MVP-7)
  *   GET /api/v1/sites/{site_id}/analytics/catalog       (Analytics v1, ADR-022)
  *   GET /api/v1/sites/{site_id}/analytics/series        (Analytics v1, ADR-022)
+ *   GET  /api/v1/sites/{site_id}/report-exports/estimate (Reports tab)
+ *   GET  /api/v1/sites/{site_id}/report-exports/file     (Reports tab, ZIP)
+ *   POST /api/v1/sites/{site_id}/report-exports          (Reports tab)
+ *   GET  /api/v1/report-exports                          (Reports tab)
+ *   POST /api/v1/report-exports/{job_id}/retry           (Reports tab)
+ *   GET  /api/v1/report-exports/{job_id}/file            (Reports tab, ZIP)
  *
- * No other paths, no arbitrary parameters, no generic query mechanism.
+ * No other paths, no arbitrary parameters, no generic query mechanism. The
+ * two POSTs change only the caller's own export job records -- never EMS
+ * data.
  *
  * Slice 0 scope note: getSiteAssets returns identity + placement, plus
  * type/hierarchy/location fields for the Asset View screen (asset_type_name,
@@ -58,8 +66,11 @@
  * is no total-THD field to request or return.
  */
 
-import { apiGet } from "./client";
+import { apiGet, apiGetFile, apiPostJson } from "./client";
 import type {
+  ReportExportEstimate,
+  ReportExportJob,
+  ReportExportJobListResponse,
   Alert,
   AnalyticsCatalogResponse,
   AnalyticsDataPointCode,
@@ -415,4 +426,44 @@ export function getAnalyticsSeries(
     },
     init,
   );
+}
+
+// ---- Reports tab: site measurement export ------------------------------------
+
+export type ReportExportQuery = {
+  from: string;
+  to: string;
+  resolution: AnalyticsRequestedResolution;
+};
+
+/** Size of an export and whether it downloads now or runs in the background. */
+export function getReportExportEstimate(
+  siteId: string,
+  query: ReportExportQuery,
+  init?: RequestInit,
+): Promise<ReportExportEstimate> {
+  return apiGet<ReportExportEstimate>(`/sites/${encodeURIComponent(siteId)}/report-exports/estimate`, query, init);
+}
+
+/** A small export as a ZIP, generated in the request (422
+ *  `export_requires_background` when it is too large for that). */
+export function downloadReportExportNow(
+  siteId: string,
+  query: ReportExportQuery,
+  init?: RequestInit,
+): Promise<{ blob: Blob; fileName: string | null }> {
+  return apiGetFile(`/sites/${encodeURIComponent(siteId)}/report-exports/file`, query, init);
+}
+
+export function createReportExport(siteId: string, query: ReportExportQuery): Promise<ReportExportJob> {
+  return apiPostJson<ReportExportJob>(`/sites/${encodeURIComponent(siteId)}/report-exports`, query);
+}
+
+/** The signed-in user's export jobs, newest first. */
+export function getReportExports(init?: RequestInit): Promise<ReportExportJobListResponse> {
+  return apiGet<ReportExportJobListResponse>("/report-exports", undefined, init);
+}
+
+export function retryReportExport(jobId: string): Promise<ReportExportJob> {
+  return apiPostJson<ReportExportJob>(`/report-exports/${encodeURIComponent(jobId)}/retry`, {});
 }
