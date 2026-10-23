@@ -1350,7 +1350,9 @@ post-deployment verification pass:
 Tested 2026-10-23 on the disposable local test database (all migrations
 through 308, so in the post-300 state): `target=production` refused on the
 local job IDs; `target=local-test` restored all six and committed; a second
-run refused ("already restored"); the verification script ran clean. If a
+run refused ("already restored"); the verification script ran clean, and
+in the next minute each job ran once, successfully, at its restored second
+(:18, :19, :24, :24, :48, :50). If a
 check fails on production, the transaction rolls back and the jobs stay on
 five-minute schedules, which is the staging-validated configuration.
 
