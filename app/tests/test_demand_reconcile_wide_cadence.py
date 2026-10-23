@@ -183,14 +183,16 @@ def test_migration_body_is_the_213_body_plus_only_inserted_306_blocks(tx):
     assert "EXECUTE " not in new and "format(" not in new
 
 
-def test_manifest_registers_migration_306_last():
+def test_manifest_registers_migration_306_after_305():
+    # Relaxed from "306 last" when migrations 307 / 308 were registered after it.
     import csv
 
     rows = list(csv.DictReader((REPO / "postgres" / "restructure_manifest.csv").read_text(encoding="utf-8").splitlines()))
     migrations = [r for r in rows if r["target_category"] == "migration"]
-    assert migrations[-1]["source_file"] == "306_demand_reconcile_wide_cadence.sql"
-    assert migrations[-1]["target_path"] == "postgres/migrations/306_demand_reconcile_wide_cadence.sql"
-    assert migrations[-2]["source_file"] == "305_routing_recovery_queue.sql"
+    files = [r["source_file"] for r in migrations]
+    i = files.index("306_demand_reconcile_wide_cadence.sql")
+    assert migrations[i]["target_path"] == "postgres/migrations/306_demand_reconcile_wide_cadence.sql"
+    assert files[i - 1] == "305_routing_recovery_queue.sql"
 
 
 def test_health_view_still_has_one_demand_row(tx):
