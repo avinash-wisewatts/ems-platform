@@ -1,6 +1,6 @@
 # Production Release Plan: Migrations 266 → 301
 
-Status: **Release A deployed 2026-10-17 and accepted 2026-10-18** (section 6, "Release A acceptance"; 48-hour window closed 2026-10-19); **Release B1 (268, 269) deployed and accepted 2026-10-19** (section 2, "B1 execution record"); **Release B2 (14 migrations, 263–286) deployed 2026-10-20, D3 PASS** (section 2, "B2 execution record"); **Release C1 (15 migrations, through 291) deployed 2026-10-22 and accepted 2026-10-22 23:37 UTC** ("C1 acceptance"); **Release C2′ (292–295, 297, 298, `d52b049`) deployed 2026-10-23 05:23 UTC, run 39905366140, postcheck PASS** ("C2′ execution record"; acceptance pending); D PROPOSED; D1 / D4a / D4b / D8 / D9 decided 2026-10-17 (D8 condition confirmed), D3 decided 2026-10-19 for B1 and 2026-10-20 for B2, others open · Prepared: 2026-10-14 · Updated: 2026-10-23 · Owner: Engineering
+Status: **Release A deployed 2026-10-17 and accepted 2026-10-18** (section 6, "Release A acceptance"; 48-hour window closed 2026-10-19); **Release B1 (268, 269) deployed and accepted 2026-10-19** (section 2, "B1 execution record"); **Release B2 (14 migrations, 263–286) deployed 2026-10-20, D3 PASS** (section 2, "B2 execution record"); **Release C1 (15 migrations, through 291) deployed 2026-10-22 and accepted 2026-10-22 23:37 UTC** ("C1 acceptance"); **Release C2′ (292–295, 297, 298, `d52b049`) deployed 2026-10-23 05:23 UTC, run 39905366140, postcheck PASS** ("C2′ execution record"; acceptance pending); D PROPOSED, G3b met for deployment 2026-10-23 under an approved amendment (section 4), scope and dispatch not yet authorized; D1 / D4a / D4b / D8 / D9 decided 2026-10-17 (D8 condition confirmed), D3 decided 2026-10-19 for B1 and 2026-10-20 for B2, others open · Prepared: 2026-10-14 · Updated: 2026-10-23 · Owner: Engineering
 Only Releases A and B1 have been executed. Every other dispatch, precheck and operator
 step below needs its own explicit approval
 ([release-process.md](release-process.md#every-phase-requires-its-own-explicit-approval)).
@@ -1179,7 +1179,7 @@ validation and the P5 ranges and resolutions.
 +293 runs each, 0 failures, demand p99 end + 7:06.8, all reconcilers
 healthy. 302 was deployed to staging on 2026-10-16 and validated.
 
-### G3b: Production readiness for 299–303 (Release D) — NOT READY
+### G3b: Production readiness for 299–303 (Release D) — MET for deployment 2026-10-23 (amended gate, below)
 
 Read-only production assessment, 2026-10-16:
 
@@ -1204,14 +1204,19 @@ own approval:
 1. Release A deployed (**done 2026-10-17**); production routing durations
    measured (≥ 24 h, read-only sampler P11; **not yet run**. A 10-minute
    spot sample on 2026-10-18 is in section 6, "Release A acceptance").
+   **Met 2026-10-23 by existing run counts instead of the sampler (G3b
+   amendment, below).**
 2. Migration 303 merged, deployed to staging and validated there (plans,
    completeness, late data, catch-up, demand, rollback).
 3. The bounded routing read timed read-only on production (P12) and found
-   well within budget.
+   well within budget. **Passed 2026-10-23: 25 ms energy, 33 ms environment
+   (G3b amendment).**
 4. The five-minute normalization batch validated on a production-snapshot
    replica (D9; proposed setup in the operations plan, not yet approved). No
    one-off production normalization test is approved, and no production job
-   is to be delayed to create a batch.
+   is to be delayed to create a batch. **Moved 2026-10-23 to the separate
+   approval to enable five-minute batching; no longer a deployment gate
+   (G3b amendment).**
 5. D8's condition met: the 300-second capture policy 5 confirmed
    intentional by the product owner (2026-10-17, recorded in section 9).
 
@@ -1249,10 +1254,105 @@ Source-data exception, attribution verified:
   the chunk boundary or to 303.
 
 Ruling: the V7 drop is a source outage, not a pipeline regression; B6 is
-recorded as passed. Item 2 is complete. Items 1, 3 and 4 remain open.
+recorded as passed. Item 2 is complete.
 
 After D, routing p99 must stay comfortably under ~25 s before five-minute
 batching is (re)activated.
+
+#### G3b amendment (2026-10-23, user-approved)
+
+Two changes to the gate, approved by the user on 2026-10-23 to keep the
+readiness process proportionate. They apply to this deployment only;
+nothing else in G3b changes.
+
+1. **Item 1 is satisfied by existing production run counts instead of a
+   24-hour sampler.** Read-only `timescaledb_information.job_stats` /
+   `_timescaledb_internal.bgw_job_stat` on production [M]:
+
+   | Job (fixed 1-minute schedule) | From | To (2026-10-23 11:27 UTC) | Runs | Minutes | Failures |
+   |---|---|---|---|---|---|
+   | Energy routing 1001 | 93,174 runs, 2026-10-19 14:19:50 UTC | 98,761 | 5,587 | ≈ 5,587 (93 h) | 1,434 → 1,434 |
+   | Normalization 1000 | 129,033 runs, 2026-10-22 07:18:24 UTC | 130,721 | 1,688 | ≈ 1,689 (28 h) | 39 → 39 |
+
+   On a fixed schedule a run that outlasts its minute skips the next slot,
+   so one run per minute for 93 hours shows that no routing run exceeded
+   one minute and none failed. Supporting [M]: latest single runs 0.3–3.5 s
+   (1001 3.54 s, 1012 0.29 s, 1000 1.06 s at 11:21 UTC); energy routing lag
+   76–136 s throughout the 51-minute production backup (08:14–09:05 UTC),
+   112 s at the 11:22 UTC precheck; before Release A (2026-10-16) routing
+   started only every 8–10 minutes.
+   **Not measured:** worst-case and percentile (p95 / p99) run durations.
+   Production records only each job's latest duration and cumulative
+   totals (`timescaledb.enable_job_execution_logging` is off), so the
+   evidence bounds every run below 60 s but does not show whether runs fit
+   the ~25 s routing slot that five-minute batching needs. Cumulative
+   baseline at 11:27 UTC for a later mean: 1000 1,401,676.86 s / 130,721
+   runs; 1001 3,012,706.48 s / 98,761; 1012 2,894,253.32 s / 98,371.
+2. **Item 3 passed** (P12, 2026-10-23 ~11:24 UTC, read-only,
+   `default_transaction_read_only=on`, 30 s timeout,
+   `scripts/diagnostics/prod_routing_bounded_read_timing.sql`). The guard
+   found 13 compressed chunks and 1 uncompressed (floor 2026-10-22 00:00
+   UTC) and a plan touching no compressed chunk. Bounded energy read over a
+   5-minute receipt window: **25 ms** (15,720 rows, index scan of the one
+   uncompressed chunk, 526 buffers); bounded environment read **33 ms**.
+   The unbounded read timed out at 30 s 6 / 6 times on 2026-10-16. This
+   proves the 303 forward read is fast on production's data and chunk
+   layout; it does not time a whole routing run.
+3. **Item 4 moves out of this gate.** Five-minute batching validation is a
+   condition of the separate, future approval to enable five-minute
+   batching on production, not of deploying Release D. Deploying keeps
+   production on 1-minute schedules: migration 300 is applied with the
+   rest, and the six jobs are returned to their 1-minute schedules
+   immediately after the deploy (D9; prepared step below). The same future
+   approval must show routing p99 under ~25 s (item 1's open point).
+
+Gate status after the amendment: items 1, 2, 3 and 5 met; item 4 deferred
+to the batching approval. G3b no longer blocks the deployment; the
+deployment itself still needs explicit scope and dispatch authorization.
+
+**Remaining risks accepted with the amendment:**
+
+- From migration 300's commit until the restore, the six jobs run on
+  five-minute schedules (expected: the rest of the deploy run plus the
+  restore, minutes [E]). Effect if a batch overruns: data reaches
+  dashboards one 5-minute cycle later; no data loss (checkpointed,
+  idempotent; staging 24 h acceptance 2026-10-15) [A for production].
+- Worst-case / percentile routing durations unknown (item 1).
+- Migration 299's 600 s normalized-data "receiving" threshold becomes
+  active on deploy (D4b): devices count as receiving for up to 10 minutes
+  after their last normalized data instead of 5 (on staging since
+  2026-10-14).
+- The 2026-10-23 production backup
+  (`prod_snapshot_20261023T0814Z.dump`, 7.18 GB, sha256 `46978832…`) is
+  structurally verified (`pg_restore --list`, 6,955 entries) but has not
+  been test-restored.
+
+#### Release D post-deploy step: 1-minute schedules (prepared, not run)
+
+Run once, with its own approval, right after the deploy run and its
+post-deployment verification pass:
+
+1. `docs/10-operations/prepared/release-d/post_deploy_restore_1min_schedules.sql`
+   with `-v target=production`. One transaction. It refuses unless
+   migrations 300 and 308 are in the ledger, the six jobs resolve by name
+   to production IDs 1000, 1001, 1012, 1063, 1044 and 1083, and all six are
+   still on migration 300's five-minute fixed schedule. It restores
+   production's pre-300 settings read on 2026-10-23 (fixed 1-minute grid
+   and original `initial_start` for 1000 / 1001 / 1012 / 1063; non-fixed
+   1 minute for the 1044 / 1083 refreshes) and proves that no other
+   setting or job changed.
+2. `post_deploy_restore_1min_verify.sql` (read-only) at T0 and T+60 min.
+   Pass: all six on 1 minute and scheduled; each job's run count up by
+   59–61 per hour; failures unchanged (2,840 excluding 1114) and no job
+   errors since the restore; ingest checkpoint lag and energy routing lag
+   under 5 minutes.
+
+Tested 2026-10-23 on the disposable local test database (all migrations
+through 308, so in the post-300 state): `target=production` refused on the
+local job IDs; `target=local-test` restored all six and committed; a second
+run refused ("already restored"); the verification script ran clean. If a
+check fails on production, the transaction rolls back and the jobs stay on
+five-minute schedules, which is the staging-validated configuration.
 
 ## 5. Read-only production prechecks
 
@@ -1419,7 +1519,7 @@ with P11 and check after B.
 | B | B1: **deployed 2026-10-19** (run 39293585987). B2: about 2026-10-22 | B1: A + 48 h, D3 (both met). B2: G2 |
 | C1 | about 2026-10-24, target no later than 2026-10-27 | B, D2, D5 |
 | C2′ | after C1 | C1, D4a |
-| D | not scheduled | G3b |
+| D | not scheduled; G3b met for deployment 2026-10-23 (amended), awaiting scope and dispatch authorization | G3b |
 
 The product-owner target for F1 (290) is 2026-10-27, with no retention
 changes. [P] Evidence from 2026-10-11 shows `energy_measurements` chunks
@@ -1446,4 +1546,4 @@ each release, precheck and schedule change still needs its own approval.
 | D6 | Analytics UI on production | Confirm production stays API-only until a separate frontend rollout |
 | D7 | Routing job runtime limits | After A and 303 are measured (P11), whether to restore jobs 1001/1012 `max_runtime` from 30 to 5 minutes (separate approval) |
 | D8 | Capture policy 5 under 300 | **Decided and condition met 2026-10-17: accept 300's WARNING.** The product owner (owner of the "Avinash Home" organization, site "Vivekanandanagar Home" `49500fb9-0ea9-4496-8eeb-55131c89d0c2`) confirmed on 2026-10-17 that the site's 300-second capture policy (policy 5, 300 + 30 s) is **intentional**, although the staging onboarding requests of 2026-08-02 / 08-06 asked for 60 s. Effect under 300: that site's boundary bucket is finalized one batch later (about 5 minutes more latency). The production policy is not changed. The production lookup (`scripts/diagnostics/prod_d8_capture_policy_lookup.sql`) was not run and is no longer needed for D8 |
-| D9 | How 303 reaches production | **Decided 2026-10-17: option (1).** Release D (299–303); restoring the six 300 jobs to 1-minute schedules is a post-deploy step that needs its own explicit approval; five-minute batching is activated only after replica validation (G3b item 4), by separate approval. Rejected: (2) D with 300 active; (3) runner change |
+| D9 | How 303 reaches production | **Decided 2026-10-17: option (1).** Release D (299–303); restoring the six 300 jobs to 1-minute schedules is a post-deploy step that needs its own explicit approval; five-minute batching is activated only after replica validation (G3b item 4), by separate approval. Rejected: (2) D with 300 active; (3) runner change. **Amended 2026-10-23 (user-approved):** batching validation (item 4) belongs to the batching approval, not to the deploy; the post-deploy restore is prepared in G3b ("Release D post-deploy step") and still needs its own approval |
