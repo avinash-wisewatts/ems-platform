@@ -805,6 +805,124 @@ decision. The parity audit and the R0 resolution of
 U1–U5 are in
 [staging-production-parity-2026-10-22.md](../10-operations/staging-production-parity-2026-10-22.md).
 
+#### C2′ preparation (2026-10-23; nothing changed on production)
+
+Status: **prepared, not approved, not dispatched.** C1 acceptance does not
+authorize C2′, Release D or any other production change.
+
+Scope [V]: target `d52b049b8acd2f741868f6ef10286e11767b07d4` (#132,
+2026-10-13). `105c6c1` → `d52b049` → `origin/staging` is a forward chain.
+The manifest at `d52b049` is `105c6c1`'s 442 rows plus exactly 292, 293,
+294, 295, 297, 298, in that order (296 was never in the manifest). Ledger
+after: 164 → 170. Each of the six files was added once, never edited, and
+is byte-identical at `origin/staging` (sha256 prefixes: 292 `a280f4c5`,
+293 `83622a4f`, 294 `dbc6d2da`, 295 `f71ce79b`, 297 `ff575c4c`, 298
+`ae9ae743`). `deploy-staging.yml` `38363172078` succeeded for `d52b049`
+(all CI gates, both images built and pushed, staging deploy, post-deployment
+verification).
+
+Intervening changes `105c6c1..d52b049` (17 first-parent commits, 90 files):
+
+- Database: only the six migrations and their manifest rows.
+- Application image: `analytics_api_service.py`, `analytics_trends_service.py`,
+  `routers/analytics_api.py` (B3 point series and per-phase Energy on 292/293,
+  series summary over completed periods). Production is API-only (D6), so
+  these appear as new or changed API responses only.
+- Web (`web/`): Analytics F6/F7, CSV formula neutralization, Demand UI,
+  responsive navigation. Not deployed to production
+  (`deploy-production.yml` never runs `deploy_web_bundle.sh`).
+- Workflow: `deploy-production.yml` #110 (45-minute verification timeout)
+  and #111 (forward-only check reads the deployed release). Both are already
+  on `origin/staging` and were the workflow version used for B2 and C1; the
+  file is identical at `d52b049` and `origin/staging`.
+- `scripts/release/deploy_release.sh`, `scripts/apply_migrations.sh`,
+  `compose.yaml`, Grafana and Telegraf configuration: unchanged.
+- Tests and docs only otherwise.
+
+The image `ghcr.io/<repo>-app:d52b049…` was pushed by `38363172078`; it was
+not re-listed (no `read:packages` scope locally). The workflow's
+`resolve-image` step resolves and pins its digest before any SSH, so a
+missing image fails the run before production is touched.
+
+Production precheck [M 2026-10-23 05:03 UTC, read-only transaction,
+statement_timeout 20 s, lock_timeout 2 s; catalog, job catalog and small
+metadata tables only]:
+
+| Check | Evidence | Result |
+|---|---|---|
+| Ledger | 164 rows, head 291, digest `0591dde9…`; 0 rows for 292–298 | PASS |
+| 292 / 293 preconditions | Source tiers and tenancy / capture helpers present; none of the 292 functions exists | PASS |
+| 294 / 295 preconditions | `admin.save_asset_point_assignments` and required tables present; no 294 / 295 function exists | PASS |
+| 294 / 295 inert on production | 0 `onboarding_audit` rows at the 294 anchor (2026-10-09 12:56:55.116554 IST); 0 `asset_points` rows at the 295 anchor (2026-09-25 21:06:21.442284 IST). The production parity bridge rows have a different `created_at` | PASS (never call these functions on production) |
+| 297 preconditions (P6) | Body md5 `9084fb8b…`, `7ba7388b…`, `35ff7b9c…` = expected | PASS |
+| 297 targets | Reconcile jobs 1116 (15-min), 1118 (daily), 1120 (environment daily) are **unscheduled** (last runs Oct 16–17, 0 failures); 297 changes their bodies only, so there is no runtime effect until they are resumed | Note |
+| 298 / P7 | Exactly one demand job: **1062**, every 1 minute, `fixed_schedule` true, `initial_start` 2026-08-10 11:20:03.058347 UTC, max_runtime 10 min, 3 retries / 5 min, config unchanged since D4a; last run Success 0.59 s; 104,222 runs, 1 failure (historical) | PASS |
+| 298 grace | 7 enabled demand policies; grace 5 min 30 s ≤ the 7-minute phase, so no WARNING | PASS |
+| Health | Failure total (excluding 1114) 2840; 0 jobs failing; 0 job errors in 24 h; 0 lock waiters, 0 long transactions; unscheduled 1053, 1114–1120, 1123, 1124, 1132; disk 69 %, 31 GB free; DB 34 GB; TimescaleDB 2.28.2 | PASS |
+
+Rollback readiness:
+
+- **Database backup: none established [M].** No `emsadmin` crontab, no backup
+  entries in `/etc/cron.d` or systemd timers, no backup directories on the
+  host. Host or EBS snapshots, if any, are outside this repository and were
+  not checked (no AWS access). A, B1, B2 and C1 were deployed under the same
+  posture ([backups-and-recovery.md](../10-operations/backups-and-recovery.md)).
+  **Decided 2026-10-23 (user):** proceed without a snapshot; the
+  forward-only recovery risk is explicitly accepted for C2′.
+- Image: `rollback.yml` can redeploy `105c6c1`. **It reverses no migration**
+  (section 7): the six migrations, their functions and 298's schedule stay
+  in place after an image rollback. The `105c6c1` app does not call the 292
+  functions, so it runs unchanged on top of them.
+- Every database reversal below is a production change with its own
+  approval, shipped as a new forward migration (revert PR):
+  - 292: `DROP FUNCTION analytics.get_portal_asset_point_series(bigint, uuid,
+    uuid[], text[], text[], timestamptz, timestamptz, text, timestamptz)`,
+    `analytics.get_portal_analytics_point_availability(bigint, uuid, text[],
+    text[])`, `analytics.get_analytics_point_resolution_floors(timestamptz)`
+    and the helper `analytics.analytics_point_source_scale` (nothing in the
+    database depends on them; the d52b049 app's B3 endpoints do, so roll the
+    image back first).
+  - 293: replaces 292's series function only; reversed by 292's drop.
+  - 294: `DROP FUNCTION` `admin.restore_bulk_assignment_history_20261009`,
+    `admin.restore_bulk_assignment_history_core`,
+    `admin.bulk_assignment_restore_plan`, `admin.bulk_restore_first_reading`
+    (wrapper first). 295 calls `bulk_restore_first_reading`, so reverse 295
+    first.
+  - 295: `DROP FUNCTION` `admin.narrow_standin_energy_assignments_20260925`,
+    `admin.revert_standin_energy_narrowing`,
+    `admin.narrow_standin_energy_assignments_core`,
+    `admin.standin_energy_narrow_plan`.
+  - None of 292–295 changes data; their functions are never called on
+    production, so dropping them loses nothing.
+- 297: `docs/10-operations/prepared/T1.1/297_rollback.sql`, **committed
+  `cd11e47`** (sha256 `4cf93c85…`). It restores the exact migration-213
+  bodies (precondition: the 297 bodies `c0426e6b…` / `8789f6ea…` /
+  `e71b2511…`; postcondition: `9084fb8b…` / `7ba7388b…` / `35ff7b9c…`, which
+  are production's current bodies) plus owner `ems_admin`, SECURITY DEFINER,
+  search_path and grants; no data or ledger change. Validated 2026-10-11 in
+  a rolled-back transaction on the local test DB, and re-checked 2026-10-23
+  by recomputing every restored body's md5. Its target jobs 1116 / 1118 /
+  1120 are unscheduled, so 297 has no runtime effect either way.
+- 298: `alter_job(1062, schedule_interval => INTERVAL '1 minute',
+  fixed_schedule => true, initial_start => '2026-08-10 11:20:03.058347+00')`
+  (the recorded pre-298 values; 298 changes nothing else, by its
+  postcondition). Re-check the job ID by `proc_name` first.
+
+Approvals (dispatch authorized by the user 2026-10-23, conditional on every
+gate below passing):
+
+1. Backup decision: forward-only posture accepted (above).
+2. Read-only P6 / P7 re-run immediately before dispatch (this precheck,
+   repeated) and the B1-style lock watch.
+3. Dispatch of `deploy-production.yml`, `promotion_mode=staging-milestone`,
+   `release_git_sha=d52b049b8acd2f741868f6ef10286e11767b07d4`, at a named
+   time that avoids the 23:00 UTC 1136 reconcile and the 05:13 / 17:13 UTC
+   F1 policy runs.
+4. Postcheck: ledger 170 (292–298 APPLY, 164 SKIP), 1062 at :07/:22/:37/:52
+   UTC, demand intervals finalized with the same VALID share, 0 new failures.
+
+Release D (299–303) stays separate, with its own scope decision and G3b.
+
 #### B1 approvals required (given 2026-10-19, see execution record)
 
 1. The read-only production steps 1, 2, 4 and 6: precheck, three parity
