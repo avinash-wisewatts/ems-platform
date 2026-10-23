@@ -1,6 +1,6 @@
 # Production Release Plan: Migrations 266 → 301
 
-Status: **Release A deployed 2026-10-17 and accepted 2026-10-18** (section 6, "Release A acceptance"; 48-hour window closed 2026-10-19); **Release B1 (268, 269) deployed and accepted 2026-10-19** (section 2, "B1 execution record"); **Release B2 (14 migrations, 263–286) deployed 2026-10-20, D3 PASS** (section 2, "B2 execution record"); C1, C2′ and D PROPOSED; D1 / D4a / D4b / D8 / D9 decided 2026-10-17 (D8 condition confirmed), D3 decided 2026-10-19 for B1 and 2026-10-20 for B2, others open · Prepared: 2026-10-14 · Updated: 2026-10-20 · Owner: Engineering
+Status: **Release A deployed 2026-10-17 and accepted 2026-10-18** (section 6, "Release A acceptance"; 48-hour window closed 2026-10-19); **Release B1 (268, 269) deployed and accepted 2026-10-19** (section 2, "B1 execution record"); **Release B2 (14 migrations, 263–286) deployed 2026-10-20, D3 PASS** (section 2, "B2 execution record"); **Release C1 (15 migrations, through 291) deployed 2026-10-22 and accepted 2026-10-22 23:37 UTC** ("C1 acceptance"); C2′ and D PROPOSED; D1 / D4a / D4b / D8 / D9 decided 2026-10-17 (D8 condition confirmed), D3 decided 2026-10-19 for B1 and 2026-10-20 for B2, others open · Prepared: 2026-10-14 · Updated: 2026-10-23 · Owner: Engineering
 Only Releases A and B1 have been executed. Every other dispatch, precheck and operator
 step below needs its own explicit approval
 ([release-process.md](release-process.md#every-phase-requires-its-own-explicit-approval)).
@@ -633,6 +633,177 @@ locally with `--expect-assets 54`.
 | After | 1053 and 1114–1120 unscheduled; failure total 2840 |
 
 **B2 deployed 2026-10-20; D3 PASS.** Production ledger 149, head 286.
+
+#### C1 preparation (2026-10-21; nothing changed on production)
+
+State [V / M 2026-10-21, read-only]: production 149 rows, digest `a6d33cb0…`
+(head 286); staging 178 rows, head 306, at `8490e48` (`deploy-staging.yml`
+`39552368907`: 0 APPLY, 178 SKIP, ledger digest unchanged). Manifest at
+`105c6c1` = `ba2cb4b`'s 149 rows plus exactly 253, 254, 255, 256, 257, 258,
+259, 260, 261, 262, 287, 288, 289, 290, 291 (ledger after: 164, digest
+`0591dde9…` = staging's same 164 rows). Each of the 15 files was added once,
+never edited, and is byte-identical at `origin/staging`; staging's checksums
+equal them. `deploy-staging.yml` `37738437514` succeeded for `105c6c1` (all CI
+gates, deploy, post-deployment verification). `ba2cb4b` → `105c6c1` →
+`origin/staging` is a forward chain.
+
+Local validation [V, disposable test container, copy of production's B2
+state]: the runner at `105c6c1` applied exactly the 15 (15 APPLY, 149 SKIP)
+in an Asia/Kolkata **and** in a UTC session. No C1 precondition depends on
+the session time zone; every post-C1 definition is the same in both. The
+post-C1 state equals staging's for every C1 object except the environment
+loader (replaced on staging by 303), staging's `ems_investigator` grants and
+its one live commissioning record.
+
+Production compatibility [M 2026-10-21 06:36 UTC, read-only transaction, 3 s]:
+
+- 288: catalog `586a533d…`, availability `ab4e1d4d…`, comment `bb352ba5…`, no
+  object depends on the catalog. 290: every dependency present, nothing it
+  creates exists. 291: loader body `a3820ee2…` (267's),
+  `bucket_start` is a compression order-by column. Roles `ems_admin`,
+  `ems_app`, `ems_readonly` exist. No locks on the C1 tables.
+- Reference data (units, display categories, parameters, logical points) is
+  identical to the tested database (four digests and a line diff), so
+  254 / 262 / 289's data postconditions behave as tested.
+- **P9.** F1 (290): the oldest `energy_measurements` data is
+  2026-08-04 12:11 UTC (one device); several devices from 2026-08-09. With
+  90-day retention (daily at 04:34 UTC) real loss starts about
+  **2026-11-03** (2026-11-08 for several devices). 290's first run starts
+  at that oldest row. 291: **53,634** rows in compressed
+  `environment_measurements` chunks (43,600 on 2026-10-08); the 267 loader
+  fails above 100,000.
+
+290 operational load [V staging, E production]: the forward job backfills one
+day per 5-minute run from 2026-08-04, about 80 runs (about 7 hours). Staging:
+forward job 3,973 runs, 0 failures, 2.6 s average; reconcile job 14 runs, 0
+failures, **278 s per daily run** (first production run at 23:00 UTC after
+deploy). Daily source volume is the same (`energy_measurements` chunk 64 MB
+production, 65 MB staging). Staging's F1 table is 877 MB for about 9 weeks;
+production will add about 1 GB before F1's own compression policy (30 days)
+catches up.
+
+Locks: 253 and 254 run `ALTER TABLE … ADD COLUMN` on `metadata.asset_points`
+(read by every canonical Energy read since 263) and `config.parameters`
+(ACCESS EXCLUSIVE; no `lock_timeout`). The B1 lock watch and guarded cancel
+apply unchanged (they identify the runner's psql backend, not a table).
+
+Energy parity: C1 does not replace the canonical read (`667f9cc2…`, 270) and
+the Energy path selects logical points by name, so 254's `parameter_id`
+remapping cannot change Energy results [V].
+
+Customer-visible changes (production is API-only, D6): Admin Portal "Assign
+Data Points" Save goes live (D5); the Analytics catalogue reports power
+units as kW / kVA / kvar (289) and keeps closed assignments with their
+periods (288; production has only open bridge rows).
+
+Tooling (uncommitted, `scripts/diagnostics/`; local tests in `c1_tests/`):
+
+- `prod_c1_precheck.sql` (31 checks; `105c6c1`'s 164 manifest rows embedded):
+  ledger 149 / `a6d33cb0…`; pending exactly the 15 in manifest order; nothing
+  C1 creates exists; 288, 290 and 291's preconditions; reference data; P9 (F1
+  oldest data at least 2 days from its drop; compressed environment rows
+  under 100,000); P10; nine pipeline / Energy jobs (adds 1000, 1001, 1012);
+  no long, idle-in-transaction or C1-table lock holders.
+- `prod_c1_postcheck.sql` (60 checks): ledger 164 / `0591dde9…`, each of the
+  15 with its checksum in manifest order, the 149 unchanged; 15 routine
+  definitions, owners and execute privileges; 288's comment, 291's body; the
+  two new columns, 7 groups, reference data, inert commissioning backfill
+  (0 records, worker unscheduled), F1 table / policies / two scheduled jobs /
+  state; bridge; health as B2 plus jobs 1000, 1001, 1012.
+- `prod_c1_gate.py`: `prod_b2_gate.py` with C1's keys.
+- Tests: 36 mutation cases (18 per script, including running-job cases and
+  an SQL error) and 39 gate cases pass.
+- sha256 prefixes: precheck `9818e2d5…`, postcheck `aa15f135…`, gate
+  `ac2fb7b2…`.
+
+Decisions (2026-10-21): D2 keep the 2026-10-27 F1 target; D5 Assignment Save
+goes live with C1; parity = the B2 rule (exact equality, zero tolerance, no
+`PARITY_ERROR`; pre1 = pre2 before dispatch, pre2 = post after; 1d/1h/15m and
+native).
+
+Production precheck (approved, read-only, run once 2026-10-21 11:45:14 UTC):
+**31/31 PASS**, gate exit 0. Ledger 149 `a6d33cb0…`, pending exactly the 15,
+F1 oldest data chunk dropped from 2026-11-03, compressed env rows 53,634,
+failures 2840, 1053 + 1114–1120 unscheduled, no long/idle transactions or C1
+table holders. Disk 11:45 UTC: `/` (holds `/opt/ems-platform/postgres/data`)
+98,122 MB, 62,790 used, 35,317 free (65%; 59% on 2026-10-18); database
+31,462 MB. F1's ~1 GB fits; the ~6-point rise in 3 days is for the deferred
+disk review.
+
+Baseline captures (approved, read-only, 2026-10-21; B2 windows, 56 assets,
+300 s / 2 s; guard load / MB available / lock waiters):
+`c1_pre1` range 0.22/715/0, 168 calls, 0 errors, 46 s; native 0.83/705/0, 56,
+0, 3 s. `c1_pre2` range 0.70/716/0, 168, 0, 46 s; native 1.25/713/0, 56, 0,
+5 s. Read function `667f9cc2…` in all four. pre1 vs pre2 (`--criterion full`):
+**PASS**, range 168 pairs (56 each of 1d/1h/15m), native 56 pairs, no
+duplicates, no `PARITY_ERROR`. After: ledger 149, failures 2840, 1053 +
+1114–1120 unscheduled. Next: dispatch, on separate approval.
+
+#### C1 execution record (2026-10-22)
+
+- Dispatch-time precheck 05:10:16 UTC: 31/31 PASS (compressed env rows
+  63,657, about +10k/day). Disk 66%, 34,242 MB free.
+- Dispatched 05:12:01 UTC, `deploy-production.yml` run `39726655853`
+  (staging-milestone, `105c6c1`): success. 15 APPLY (05:13:28–05:13:35) /
+  149 SKIP; REQUIRED gates PASS; advisory FAILs identical to B2's. Two benign
+  psql transaction WARNINGs from 253's own BEGIN/COMMIT.
+- Lock watch 05:10:29–05:25:27: 180 samples (167 IDLE, 13 RUNNING), 0 s lock
+  wait, no ABORT_CANDIDATE; guarded cancel not used.
+- Postcheck 05:16:18: **60/60 PASS**; ledger 164, digest `0591dde9…`.
+- Post captures (guards 1.07/674/0 and 1.19/690/0) and pre2 vs post:
+  **PASS**, 168 range + 56 native pairs; read function `667f9cc2…` unchanged.
+- F1 (jobs 1135 forward, 1136 reconcile 23:00 UTC, 1133/1134 policies, 1132
+  commissioning unscheduled): first run 05:17, then about 2 days per 10 min;
+  06:28 checkpoint 2026-08-18 12:00, table 90 MB, 0 failures, failures 2840,
+  1053 + 1114–1120 unscheduled, free disk 33,732 MB.
+
+#### C1 acceptance (accepted 2026-10-22 23:37 UTC)
+
+Criteria: section 6 "Evidence of success" (C1 row and "All"), plus F1
+backfill completion and the first daily reconcile (job 1136) succeeding.
+
+**Accepted.** Final read-only check 2026-10-22 23:37 UTC [M]
+(`ssh ems-production` → `docker exec ems-timescaledb psql`,
+`default_transaction_read_only=on`, `BEGIN READ ONLY … ROLLBACK`,
+statement_timeout 20–30 s, lock_timeout 2 s; catalog, statistics, state
+tables and the ledger only, no hypertable scan):
+
+| Criterion | Evidence | Result |
+|---|---|---|
+| F1 backfill complete | Checkpoint 23:30 UTC = last closed bucket, lag 0. Caught up between 11:42 and 13:57 UTC (13:57 check: checkpoint 13:45 = last closed bucket), within the 12:30–13:30 UTC estimate | PASS |
+| F1 forward job (1135) steady state | 204 runs, 204 successes, 0 failures; one-bucket runs (23:34 UTC: 5.6 s, 960 rows; no-op runs about 0.02 s); 8 runs 22:56–23:37 UTC, none skipped during 1136 | PASS |
+| First daily reconcile (1136) | 1 run, Success, 23:00:00 → 23:03:56 UTC (3 min 56 s, limit 20 min); next 2026-10-23 23:00 UTC; 0 job errors | PASS |
+| 1136 repairs | 0 rows rewritten or added [E]: F1 chunk counters (`pg_stat_user_tables`) 22:56 → 23:37 UTC show `n_tup_upd` +0 on both chunks in the 3-day window (`_hyper_76_828` Oct 15, `_hyper_76_829` Oct 22) and `n_tup_ins` +2,880 = 3 forward buckets × 960 rows. 1136 records no repair count, so this is inferred from statistics counters, not instrumented | PASS (0 repairs, inferred) |
+| Environment routing (291) | 1012 last run SUCCESS 0.69 s at 23:36 UTC | PASS |
+| No new job failures | Failure total (excluding 1114) 2840 (all jobs 3021, unchanged all day); 0 jobs failing; 0 job errors in the last 14 h | PASS |
+| Ledger | 164 rows, head `291_environment_loader_bounded_update`, digest `0591dde9…` (unchanged) | PASS |
+| Host | 0 lock waiters, 0 transactions older than 2 min; disk 69 %, 31 GB free; DB 35 GB; ems-timescaledb healthy, Postgres up since 2026-09-22 04:34 UTC | PASS (disk review deferred) |
+| Paused jobs | 1053, 1114–1120, 1123, 1124, 1132 unscheduled (unchanged by C1) | Unchanged |
+
+Intermediate read-only checks the same day: 10:28 UTC (checkpoint
+2026-09-27 12:00), 11:39 / 11:42 UTC (2026-10-08 / 10-09 12:00), 13:57 UTC
+(caught up), 22:56 UTC (pre-reconcile snapshot; 1136 not yet started).
+No job was retried, rescheduled or altered.
+
+Earlier read-only check 2026-10-22 08:26 UTC [M] (superseded by the table
+above):
+
+| Criterion | Evidence | Result |
+|---|---|---|
+| Run, gates, ledger, postcheck | Execution record above; ledger 164 `0591dde9…` re-confirmed 07:18 UTC | PASS |
+| F1 forward job advancing | 1135: 34 runs, 0 failures, last 08:22:15 SUCCESS in 49 s, 63,200 rows; `max_catchup_window` 1 day, every 5 min | PASS |
+| F1 backfill complete | Checkpoint (`pipeline_state.last_received_at`) **2026-09-07 12:00 UTC**; about 45 days remain, so ETA about 12:30–13:30 UTC today [E]; table 424 MB, 6 chunks, none compressed | **INCOMPLETE** |
+| First daily reconcile (1136) | Not yet run; next start 2026-10-22 23:00 UTC | **PENDING** |
+| Environment routing (291) | 1012 last run SUCCESS 0.42 s; `environment_measurements` checkpoint 08:23 UTC | PASS |
+| No new job failures | Failure total (excluding 1114) 2840; 0 failing; 0 job errors since 05:10 UTC | PASS |
+| Host | 0 lock waiters, 0 long transactions; disk 67 %, 33,159 MB free | PASS (disk review deferred) |
+| Paused jobs | 1053, 1114–1120, 1123, 1124, 1132 unscheduled (unchanged by C1) | Unchanged |
+
+At 08:26 UTC C1 was not yet accepted; the re-checks above closed both open
+criteria. C2′ preparation was waiting on this acceptance and now needs its own
+decision. The parity audit and the R0 resolution of
+U1–U5 are in
+[staging-production-parity-2026-10-22.md](../10-operations/staging-production-parity-2026-10-22.md).
 
 #### B1 approvals required (given 2026-10-19, see execution record)
 

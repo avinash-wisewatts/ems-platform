@@ -12,6 +12,7 @@ Consolidated from platform manual chapters 19, 21, 23, 24, 25 (archived).
 | [troubleshooting.md](troubleshooting.md) | Symptom → likely cause → diagnostic steps → what NOT to do, built from real incidents. |
 | [incident-history.md](incident-history.md) | The detailed record of real incidents: root cause, fix, and verification evidence. |
 | [deadlock-normalization-raw-receipt-state.md](deadlock-normalization-raw-receipt-state.md) | Job 1000 vs raw-receipt-state job `40P01` deadlocks on `device_telemetry_state`: cause, migration 301 fix, checks, rollback. |
+| [staging-production-parity-2026-10-22.md](staging-production-parity-2026-10-22.md) | Read-only staging–production parity audit after Release C1, with the R0 resolution of U1–U5 (CR-only Energy bodies, view column drift, staging duplicates, ledger default, time zone). |
 
 ## Design principle
 
