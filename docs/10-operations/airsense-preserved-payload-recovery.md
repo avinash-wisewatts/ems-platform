@@ -1,6 +1,6 @@
 # Production: AirSense history recovery from preserved payloads
 
-Status: PAYLOADS PRESERVED (2026-10-24); recovery mechanism (migration 310) IMPLEMENTED, not deployed; production backfill NOT EXECUTED, awaiting approval · Last reviewed: 2026-10-24
+Status: PAYLOADS PRESERVED (5-minute failure export and 1-minute raw export, 2026-10-24); job 1061 PAUSED (2026-10-24 15:03); migration 310 DEPLOYED to staging and VALIDATED (2026-10-24), not on production; production backfill NOT EXECUTED, awaiting approval · Last reviewed: 2026-10-24
 Verification basis: Production (read-only), Staging (read-only), local test database
 
 ## Why
@@ -28,10 +28,9 @@ What is recoverable:
   history for this period is therefore real readings at 5-minute spacing, not
   1-minute. In the Analytics read, a 15-minute bucket then counts 3 of 15
   expected intervals (PARTIAL quality).
-- **About 2026-10-22 05:30 → registration (raw_messages).** Every packet is
-  still in `raw_messages`, so full 1-minute history exists. It drops from the
-  48-hour retention from 2026-10-25 ~10:08 IST, one day at a time. Preserving
-  it needs a second export (not done; see Approvals).
+- **2026-10-22 05:30 → registration (raw_messages).** Every packet was
+  still in `raw_messages`, so full 1-minute history exists. It was exported
+  on 2026-10-24 before the 48-hour retention dropped it (section 1b).
 - **Gaps that stay gaps:**
   - before 2026-09-24 (failure-table retention);
   - 2026-09-30 16:30 → 2026-10-02 12:30 (gateway outage: no packets);
@@ -76,6 +75,32 @@ Independent verification on the host:
   2026-09-24.
 
 The database rows were not altered or deleted.
+
+## 1b. Preserved one-minute raw packets (done 2026-10-24 15:02 IST, read-only)
+
+| | |
+|---|---|
+| Location (production host) | `/home/emsadmin/ems-preserved/airsense-raw-20261022-20261024/` (directory `drwx------ emsadmin`, files `-r--------`) |
+| Filter | `telemetry.raw_messages`, topic `wwems/v1/RADISSON_BLU/COIMBATORE/ENISCOPE_4_MAIN_KITCHEN/telemetry`, packets containing any of the three sensor UIDs, received 2026-10-22 05:30 (oldest retained) → 2026-10-24 13:13:31.011058 IST (Zone1 registration, the last) |
+| Files | one `COPY` per daily chunk (all columns, CSV with header): `raw_messages_airsense_20261022.csv.gz` (8,004,891 bytes, 5,760 packets), `_20261023.csv.gz` (7,937,742 bytes, 5,729), `_20261024.csv.gz` (2,626,998 bytes, 1,854); a manifest per file; `raw_messages_airsense.sha256` |
+| SHA-256 | `faa1cf85…453e`, `a9901c7a…74e4`, `362571e5…2fa3` (manifests `0f3289e6…f319`, `54e3571b…9d5c`, `2db59572…d5c0`) |
+| Scripts | `/home/emsadmin/ems-preserved/scripts/preserve_raw.sh`, `verify_raw.py` |
+
+Verified on the host:
+
+- `sha256sum -c` OK (6 files); `gzip -t` OK (3 files).
+- Row counts and identity digests recomputed from the files equal the
+  database manifests for all three slices.
+- Readings: Zone1 13,327 elements on 3,276 distinct minutes, Zone2 13,335 on
+  3,336, Lobby 13,327 on 3,203, of about 3,344 minutes in the window: near
+  complete 1-minute coverage.
+- Export time 55 s; the host kept about 700 MB available.
+- Retention job 1058 (48 h) next ran 2026-10-25 10:08:58 IST, after the
+  export.
+
+These packets overlap the failure export from 2026-10-22 05:30 to 13:51
+(the failure rows there are a subset). The backfill takes one sample per
+bucket, so overlapping packets are de-duplicated by the capture rules.
 
 ## 2. Recovery mechanism (migration 310)
 
@@ -129,6 +154,30 @@ window's chunks are read (see job 1061 below for why that matters).
   - a live-sampled bucket is never touched;
   - only allow-listed devices are processed;
   - failure rows become RECOVERED only when fully represented.
+- **Staging deployment (2026-10-24):** PR #149 merged as `eb54b77`; deploy
+  run 40083336139 succeeded, including post-deployment verification;
+  migration 310 applied 15:28:10 IST. A follow-up added the backfill to the
+  `assert_analytical_reconciliation` D writer-set guard. It matches only
+  through the live loader's `device_point_state` upsert, never a
+  `pipeline_state` checkpoint, which a regression test asserts.
+- **Staging validation of the deployed functions (2026-10-24, one
+  transaction ended by ROLLBACK, nothing persisted):**
+  - 720 real staging packets (06:00 → 09:00 IST) for the three sensors were
+    loaded as preserved packets.
+  - Dry run with live data present: 0 to insert. Every bucket was
+    BUCKET_TAKEN (526); late and superseded elements were classified as the
+    live loader does.
+  - After the live loader's 526 samples and 6,312 points for those buckets
+    were removed inside the transaction, the confirmed backfill rebuilt them:
+    - 526 / 526 the same sample (packet and event time);
+    - 6,312 / 6,312 identical points (raw value, numeric value, quality code
+      and source packet);
+    - 0 extra points;
+    - 526 routing-queue entries, audit records written;
+    - the repeat run inserted 0.
+  - A first attempt timed out and rolled back. The script's own delete had
+    no constant event-time bound, so it read every compressed chunk (the
+    job 1061 pattern). The bound fixed it; staging stayed healthy.
 - **Staging equivalence (read-only, 2026-10-24).** The migration's own plan
   functions were run over staging's `raw_messages` for the same three sensors
   (2026-10-24 06:00 → 09:00 IST, buckets the live loader had sampled kept for
@@ -168,11 +217,20 @@ run starts over: the backlog never moves, and each hourly run reads about 90
 days of compressed points on the 1.9 GB host. The standard path also cannot
 reach messages older than 48 hours.
 
-Recommendation (needs approval):
+**Paused 2026-10-24 15:03:57 IST** with the Product Owner's approval, in one
+guarded transaction:
 
-- Pause job 1061 until the backfill has run.
-- Then fix the two lookups with an event-time bound, as migrations 202 / 204
-  / 220 did for the other parts, and resume.
+- The guards required it to be the recovery job, scheduled and not running.
+- `SELECT alter_job(1061, scheduled => false)`.
+- Audit `admin.onboarding_audit` `d3bf7863-7abd-46a3-8134-45453354f153`
+  (`PAUSE_TIMESCALEDB_JOB`) holds the full prior state: scheduled, hourly,
+  `max_runtime` 10 min, config `{"limit": 100}`, last run 14:28 Failed,
+  total failures 138.
+- Settings are unchanged. The backlog is identical before and after
+  (140 deferred, 535 open, 8,863 permanent).
+- Resume: `SELECT alter_job(1061, scheduled => true);`, after the event-time
+  bound fix to the two lookups (as migrations 202 / 204 / 220 did for the
+  other parts).
 
 Pausing loses nothing today. Its queue holds only these sensors' packets
 (covered by the export and, for the last 48 h, by `raw_messages`) and
@@ -180,15 +238,20 @@ empty / invalid payloads with nothing to recover.
 
 ## 4. Procedure (each step needs explicit approval)
 
-1. **Deploy migration 310 through CI/CD.** Production is at migration 308.
-   310 follows 309 (Reports export tables), which is outside the production
-   scope. Decide before promoting:
-   - promote 309 with 310 (309 is database-only and inert without the
-     Reports app code); or
-   - run 310's reviewed function bodies as session-only `pg_temp` functions
-     (no schema change).
-2. **Load the export** into `telemetry.preserved_rtdata_packets` in one
-   session:
+1. **Get migration 310 onto production.** Production runs `7e3da57`
+   (migration 308). `deploy-production.yml` promotes only a commit on
+   staging's history (HEAD or an earlier milestone), with that commit's app
+   image and every migration up to it. Any commit containing 310 also
+   contains the Reports feature (#145, #146, migration 309), so:
+   - **Release route:** promote staging through the workflow. This releases
+     Reports to production, which first needs the staging Reports browser
+     acceptance (ADR-014 Amendment 2, 07-features/export).
+   - **Session route:** run 310's reviewed function bodies as session-only
+     `pg_temp` objects, generated mechanically from the migration file. No
+     schema change persists and no app changes, but the code is not
+     delivered by the workflow.
+2. **Load both exports** (failure rows and one-minute raw packets) into
+   `telemetry.preserved_rtdata_packets` in one session:
    - `CREATE TEMP TABLE f (LIKE telemetry.raw_message_failures)`, then
      `\copy f FROM STDIN WITH (FORMAT csv, HEADER)` fed by `zcat`.
    - `INSERT INTO telemetry.preserved_rtdata_packets SELECT raw_received_at,
