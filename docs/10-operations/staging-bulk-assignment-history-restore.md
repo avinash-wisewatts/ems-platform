@@ -317,12 +317,33 @@ their points start at the assignment time.
 - Production healthy: no failed jobs (102), containers healthy, no database
   restart.
 
-**Open finding (not changed).** The hand-made AirSense assignment on
-production gives Seasons Restaurant AHU-2 five points of the Zone1 sensor
-(saved 13:15:58, with no device relationship to AHU-2) as well as Zone2's.
-The Zone1 sensor's relationship is to Seasons Restaurant AHU-1
-(13:17:56), which has no AirSense points. This contradicts the confirmed
-mapping (Zone 1 -> AHU-1) and needs correcting through the Admin Portal.
+**AirSense Zone1 correction (2026-10-24 13:46:21 IST, Product Owner
+approved).** The hand-made AirSense assignment gave Seasons Restaurant AHU-2
+the Zone1 sensor's five points (saved 13:15:58), as well as Zone2's. Zone1's
+device relationship had since moved to AHU-1 (13:17:56), which had none.
+That contradicts the confirmed mapping (Zone 1 -> AHU-1). Because the
+relationship was gone, the Save path could not remove them, and the open
+rows blocked assigning them to AHU-1 (one physical point, one asset at a
+time). One guarded transaction (rehearsed with a rollback first):
+
+1. Closed exactly those five AHU-2 rows at their own start + 1 microsecond
+   (`ck_asset_points_effective_window` needs `effective_to > effective_from`).
+   AHU-2 never shows Zone1 data; the rows remain as history.
+2. Recorded it in `admin.onboarding_audit`
+   `efcde5b8-13b0-4c47-aad6-04420e69ea8a` (`CLOSE_ORPHANED_ASSET_POINTS`,
+   before/after for every row).
+3. Saved the same five points on Seasons Restaurant AHU-1 with
+   `admin.save_asset_point_assignments` (audit
+   `0429560a-52af-4e6d-93c6-798d5dbbc591`; 5 added, 0 removed). They start
+   at 13:46:21, unrestored, like the other hand-made AirSense points.
+
+Verified: AHU-2's Temperature comes from Zone2 only; AHU-1 lists the five
+Zone1 points; 3,273 rows, 5 closed. The catalogue still lists AHU-2's closed
+1-microsecond Zone1 period, as it lists every past assignment period.
+
+Product gap: removing or moving a device relationship does not close that
+device's open `asset_points` on the old asset, and the Save path then cannot
+close them.
 
 **Rollback.** Each restore audit holds every row's previous start. The
 assignments can be closed (never deleted) by a Save. Either is a separate,
