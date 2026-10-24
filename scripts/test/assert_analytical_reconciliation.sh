@@ -202,6 +202,11 @@ $t$;
 --    (Migration 290 / F1 added analytics.run_energy_register_delta_15min_job,
 --    the sole checkpoint writer of the energy_register_delta_15min tier; its
 --    refresh and reconcile routines write none.)
+--    (Migration 310 added telemetry.backfill_preserved_rtdata, an operator-run
+--    one-time backfill. Its last_received_at write is the live loader's
+--    telemetry.device_point_state upsert (per-point last seen), NOT a
+--    pipeline_state checkpoint: it never reads or writes pipeline_state, which
+--    app/tests/test_preserved_rtdata_backfill.py asserts.)
 -- ======================================================================
 DO $t$
 DECLARE v_writers text[]; v_expected text[];
@@ -220,7 +225,7 @@ BEGIN
         'telemetry.capture_raw_message_failures_incremental','telemetry.load_device_raw_receipt_state_incremental',
         'telemetry.load_energy_measurements_incremental','telemetry.load_environment_measurements_incremental',
         'telemetry.load_normalized_points_incremental','telemetry.run_derived_space_dew_point_1min_job',
-        'telemetry.run_environment_daily_job']) x;
+        'telemetry.run_environment_daily_job','telemetry.backfill_preserved_rtdata']) x;
     IF v_writers IS DISTINCT FROM v_expected THEN
         RAISE EXCEPTION 'D FAILED: the last_received_at writer set changed: %', v_writers;
     END IF;

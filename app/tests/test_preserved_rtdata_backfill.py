@@ -154,6 +154,15 @@ def test_functions_are_ems_admin_owned_and_not_granted(tx, sig):
         assert _one(cur, "SELECT has_function_privilege(%s, %s, 'EXECUTE')", (role, sig))[0] is False
 
 
+def test_the_backfill_never_touches_pipeline_checkpoints(tx):
+    """Its last_received_at write is device_point_state's (per point), never a
+    telemetry.pipeline_state checkpoint (assert_analytical_reconciliation D)."""
+    cur = tx.cursor()
+    for sig in (CORE_SIG, SAMPLES_SIG, POINTS_SIG):
+        definition = _one(cur, "SELECT pg_get_functiondef(%s::regprocedure)", (sig,))[0]
+        assert "pipeline_state" not in definition
+
+
 def test_preserved_packet_table_is_not_readable_by_the_app(tx):
     cur = tx.cursor()
     assert _one(cur, "SELECT has_table_privilege('ems_app', 'telemetry.preserved_rtdata_packets', 'SELECT')")[0] is False
