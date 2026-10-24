@@ -1398,3 +1398,43 @@ analytics()` are all unaffected.
 
 No code, schema, configuration, or data was changed in the course of
 recording this decision.
+
+---
+
+## Amendment 13 (2026-10-24): One-Time History-Restore Exceptions to Decision 6
+
+Numbered 13 because Amendments 11 and 12, which migrations 256-258 cite,
+are not yet committed to this file.
+
+Decision 6 is **not changed**: a point added to an already-ACTIVE asset
+still starts at its assignment time, and the Save path and the commissioning
+backfill (migrations 255-258, 287) still never backfill it. The Product
+Owner approved one-time exceptions to it (two on staging, two on
+production). Each:
+
+- covers only named audited Saves;
+- moves `effective_from` earlier, and nothing else, to the point's first
+  GOOD reading within the Amendment 8 90-day limit;
+- writes one audit record holding every row's start before and after.
+
+All but one run through migration 294's
+`admin.restore_bulk_assignment_history_core`
+(`RESTORE_BULK_ASSIGNMENT_HISTORY` audits), which never moves a start into
+another binding's or relationship's period. The exception is the production
+Banquet 2 AHU correction. It is a guarded manual update
+(`RESTORE_ASSIGNMENT_HISTORY_MANUAL`) with a one-time Product Owner override
+of that relationship bound, because the overridden Banquet 1 AHU link was
+declared incorrect.
+
+No telemetry is copied or rebuilt (Amendment 7). Records:
+
+| Decided | Executed | Scope | Record |
+|---|---|---|---|
+| 2026-10-09 | 2026-10-10 | The 2026-10-09 bulk assignment (2,964 rows on 54 ACTIVE assets) and the 2026-10-05 test Saves (15 rows) | [staging-bulk-assignment-history-restore.md](../../10-operations/staging-bulk-assignment-history-restore.md) |
+| 2026-10-24 | 2026-10-24 | Coimbatore Lobby Area AHU-1, Seasons Restaurant AHU-1 and AHU-2 AirSense Temperature, Relative Humidity, Occupancy Activity, Illuminance and PIR interval: 15 rows, new starts 2026-09-09 18:23-18:26 IST. The Product Owner confirmed the zone-to-AHU mapping and that the sensors had not moved since 2026-09-09. | same runbook, "2026-10-23/24 AirSense assignments" |
+| 2026-10-24 | 2026-10-24 (production) | Production bulk assignment of every enabled `PRIMARY_METER` point on the 56 ACTIVE assets of all organizations (3,136 rows, 56 audited Saves), then history restored for 3,024 of them to 2026-09-04/06 (the oldest retained point-level data); the two home meters had no history | same runbook, "Production: bulk meter-point assignment and history restore" |
+| 2026-10-24 | 2026-10-24 (production) | Banquet 2 AHU AirSense, 5 rows, to 2026-09-04 05:30:22 IST. The Banquet 1 AHU link was declared incorrect. This one is not done through migration 294's core: a guarded manual update, with a one-time override of the core's prior-relationship bound (audit `f0b9055c-a24f-4047-8540-ac10aaaaed92`). | same runbook, "Banquet 2 AHU AirSense history" |
+
+These are exceptions, not a rule: a further restore needs its own Product
+Owner decision, evidence that the readings belong to the asset, and a
+read-only dry run first.
