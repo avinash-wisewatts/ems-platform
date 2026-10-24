@@ -345,6 +345,69 @@ Product gap: removing or moving a device relationship does not close that
 device's open `asset_points` on the old asset, and the Save path then cannot
 close them.
 
+**Banquet 2 AHU AirSense history (2026-10-24 14:05:22 IST, Product Owner
+approved one-time override).** On production the sensor
+`E3_EM9_AirSense_Banquet 2 AHU` was linked to Banquet 1 AHU from 2026-08-30
+until the Product Owner removed that link at 14:02:07 (reason "incorrect",
+audit `81097e4c-22b0-4dfd-9304-6b1a404e18c8`). It was linked to
+Banquet 2 AHU at 12:27:57, and its five points (Temperature, Relative
+Humidity, Occupancy Activity, Illuminance, PIR interval) were saved at
+12:28:15.182001.
+
+- Evidence that the sensor always served Banquet 2 AHU:
+  - The device has been named "Banquet 2 AHU" since its creation on
+    2026-08-29.
+  - The staging Banquet 1 link (2026-09-09 08:29 to 17:22) was an admin
+    correction on the day it was set up.
+  - Production telemetry shows no gap or step around 2026-09-09 17:23 (a flat
+    25.40 degC from 17:05 to 17:41), and no unusual change from 2026-09-04 to
+    09-11.
+  - Banquet 1 AHU never held points from this sensor.
+  - The platform cannot prove physical location; the site confirmed it.
+- Migration 294's core refused the restore: `EXCLUDED_SHARED_METER` while
+  both links existed, then `NO_CHANGE_NO_HISTORY`, because the archived
+  Banquet 1 period (ending 14:02:07 today) is its lower bound.
+- With the Product Owner's approval of a one-time, narrowly scoped override
+  of that bound, one guarded transaction moved the five starts to each
+  point's first GOOD reading. The guards required:
+  - exactly the five open rows still at the Save time;
+  - a first reading from 2026-09-04 that is earlier than the Save time;
+  - the sensor linked to Banquet 2 AHU only;
+  - exactly one archived Banquet 1 period, reason "incorrect";
+  - no other asset holding the sensor's points.
+- The script was rehearsed with a rollback first. Baseline fingerprints were
+  taken twice and were stable.
+
+| Point | asset_point_id | Start before -> after (IST) |
+|---|---|---|
+| Illuminance | `0a2b5ac7-ff43-4422-8716-fe5a6676e7f8` | 2026-10-24 12:28:15.182001 -> 2026-09-04 05:30:22.22767 |
+| Relative Humidity | `618c4799-ff75-4ac2-ae2b-34ecb45d7124` | same |
+| Temperature | `40ba57a0-89fa-4d55-bf62-a77adcc44548` | same |
+| Occupancy Activity | `a7f40ecd-0bc3-492a-bc01-4724db463599` | same |
+| PIR interval | `765cf918-a1de-48ed-9af7-02752fdc24ed` | same |
+
+Audit `f0b9055c-a24f-4047-8540-ac10aaaaed92`
+(`RESTORE_ASSIGNMENT_HISTORY_MANUAL`, with every row's before and after
+start, the override and the reason).
+
+Verified (read-only):
+
+- Repeat-safe: a re-run stops at its first guard.
+- Unchanged: Banquet 1 AHU has no points or link from this sensor. These
+  match their before-fingerprints:
+  - the 3,268 other `asset_points` rows;
+  - daily energy and demand intervals;
+  - alerts;
+  - the asset Energy series;
+  - the catalogue.
+- The Analytics API shows all five points `NOT_ASSIGNED` on 2026-09-03 and
+  measured from 2026-09-04: 50 days with values, no zero days.
+
+Observed, unrelated: failed-message recovery (job 1061) has timed out (10-minute
+limit) at 13:28 and 13:53. It is retrying 563 `UNRESOLVED_DEVICE_ELEMENTS`
+messages from 2026-10-22 14:11 to 2026-10-24 12:51, sent by devices not yet
+registered then (the AirSense sensors registered today). Not changed here.
+
 **Rollback.** Each restore audit holds every row's previous start. The
 assignments can be closed (never deleted) by a Save. Either is a separate,
 explicitly approved write.
