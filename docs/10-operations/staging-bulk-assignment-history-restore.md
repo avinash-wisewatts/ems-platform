@@ -1,6 +1,6 @@
 # Staging: one-time history restore for the 9 October 2026 bulk assignment
 
-Status: EXECUTED on staging 2026-10-10 (migration 294 deployed by PR #118, squash 47d8065) · Last reviewed: 2026-10-10
+Status: EXECUTED on staging 2026-10-10 (migration 294 deployed by PR #118, squash 47d8065); second use EXECUTED 2026-10-24 (AirSense, 15 rows) · Last reviewed: 2026-10-24
 Verification basis: Repository, local test database, Staging (read-only)
 
 ## Why
@@ -145,6 +145,104 @@ audit before/after consistent; Banquet 2 AHU daily System Energy still has
 no Export on 10-06 to 10-08; every AirSense point starts 09-09 17:23:00.722;
 the 108 stand-in rows unchanged; staging healthy.
 
+## 2026-10-23/24 AirSense assignments (restored 2026-10-24)
+
+**Why.** On 2026-10-23 three ACTIVE Coimbatore AHUs were given their AirSense
+sensor's Temperature, Relative Humidity, Occupancy Activity and Illuminance
+(one audited Save each), and on 2026-10-24 the PIR interval (Time Since Last
+Occupancy Event, `OCCUPANCY_SECONDS_SINCE_LAST_PIR_EVENT`; one Save each).
+Each point started at its Save, so the Analytics page and Reports showed these
+points only from then, although every sensor has GOOD readings from
+2026-09-09.
+
+**Decision (Product Owner, 2026-10-24):** restore this history once, as an
+exception (ADR-018 Amendment 13; decision 6 is not changed). Product Owner
+confirmation: Seasons Restaurant Zone 1 serves AHU-1 and Zone 2 serves AHU-2,
+and neither sensor has moved since 2026-09-09. Audit actor `admin_avinash`.
+
+**Investigation (read-only, 2026-10-24).**
+
+- The older readings were never lost. `telemetry.normalized_points` (90 days)
+  and `analytics.point_telemetry_15m` (120 days) hold every sensor from
+  2026-09-09 18:23-18:26 IST, one GOOD reading a minute. The Analytics read
+  (migrations 292/293) attributes a reading to an asset only inside its
+  `asset_points` window, so the history was stored and processed, but not
+  returned. No telemetry stage needed reprocessing.
+- `telemetry.raw_messages` keeps 48 hours and cannot be replayed further. No
+  AirSense message failed normalization in the 30 days of
+  `raw_message_failures`.
+- `telemetry.environment_measurements` / `environment_daily` hold the same
+  readings by space (from 18:37-18:40 IST). Their loader always writes a NULL
+  `asset_id`, so they are not asset-attributed and were not changed.
+- Attribution: before 2026-10-23 ~12:43 IST none of the three sensors had a
+  current or archived device-to-asset relationship or an `asset_points` row
+  on any asset. Each has been bound to its space (Lobby, Seasons Restaurant)
+  since 2026-09-09 22:22, with no change. The sensors were registered
+  2026-09-09 18:40-18:43 IST.
+- Banquet 2 AHU is out of scope: its points were restored on 2026-10-10 to
+  2026-09-09 17:23:00.722, after its Banquet 1 AHU period
+  (until 17:22:53). Its earlier readings (from 08:27:59) stay with that period.
+- No other site or asset had new associations in the 14 days before the
+  restore.
+
+**Mechanism.** The deployed migration 294 core,
+`admin.restore_bulk_assignment_history_core`, one Save per call (expected 1
+audit / n rows), gateway `Eniscope_4_Main_Kitchen`, no excluded assets, as-of
+`now()`. No new code, migration or telemetry rebuild.
+
+**Dry run (read-only, 2026-10-24 ~12:25 IST):** 15 `RESTORE`, nothing
+excluded. Each point's first GOOD reading was found separately; the PIR
+interval's equals its sensor's other points.
+
+**Execution (2026-10-24 12:29:16 IST).** Six calls, each in its own
+transaction (`lock_timeout` 5 s, `statement_timeout` 60 s,
+`p_confirm_restore_count` = the dry run's count). Only `effective_from`
+changed.
+
+| Save (IST) | Asset | Points | Restored | Start before -> after (IST) | Audit record (`admin.onboarding_audit.id`) |
+|---|---|---|---|---|---|
+| 2026-10-23 12:44:01.999783 | Lobby Area AHU-1 | Temperature, Relative Humidity, Occupancy Activity, Illuminance | 4 | 10-23 12:44:01.999783 -> 09-09 18:23:00.71148 | `07c57bda-b59d-45db-b6ef-7680670d6b0a` |
+| 2026-10-23 12:45:25.468999 | Seasons Restaurant AHU-1 | same four | 4 | 10-23 12:45:25.468999 -> 09-09 18:25:01.3296 | `cfc75ba9-d7b3-4a61-be54-d4080238c37b` |
+| 2026-10-23 12:46:10.954358 | Seasons Restaurant AHU-2 | same four | 4 | 10-23 12:46:10.954358 -> 09-09 18:26:00.14984 | `59841a87-d92e-4878-9f28-71e0202a5df4` |
+| 2026-10-24 12:16:04.087256 | Lobby Area AHU-1 | PIR interval | 1 | 10-24 12:16:04.087256 -> 09-09 18:23:00.71148 | `0b3dd4c5-08a3-4771-87b9-89ef6a6a204c` |
+| 2026-10-24 12:16:36.748557 | Seasons Restaurant AHU-1 | PIR interval | 1 | 10-24 12:16:36.748557 -> 09-09 18:25:01.3296 | `9886fe52-3126-43ba-82bf-94084769b419` |
+| 2026-10-24 12:17:01.878952 | Seasons Restaurant AHU-2 | PIR interval | 1 | 10-24 12:17:01.878952 -> 09-09 18:26:00.14984 | `95dbf56b-a75f-473a-a07e-3cf174b2788b` |
+| | **Total** | | **15** | | |
+
+**Verification (read-only, after execution).**
+
+- Repeat-safe: the re-run dry run reports all 15 rows `SKIPPED_START_CHANGED`
+  at the new starts. Each audit record lists every row's
+  `effective_from_before` / `effective_from_after`.
+- Unchanged, compared with fingerprints taken just before the restore: every
+  other `asset_points` row (3,145, all sites, including Banquet 2 AHU's),
+  Coimbatore `energy_consumption_daily` 09-09 to 10-22, Coimbatore
+  `demand_intervals` 10-15 to 10-22, `analytics.alerts`, the sensors'
+  `point_telemetry_15m` rows and `environment_measurements` (still no asset).
+- Analytics / Reports (deployed read path, portal-scoped): for the three AHUs
+  the five restored columns now hold values from the 2026-09-09 18:00 IST
+  hour on 44 of 45 days; every other column of these AHUs, Banquet 1 AHU and
+  Banquet 2 AHU is identical to before.
+- Gaps stay empty, never zero: no data at all from 2026-09-30 16:30 to
+  2026-10-02 12:30 IST (gateway `Eniscope_4_Main_Kitchen` sent nothing; its
+  energy meters have no point data either), 43 of the 54 hours in that window
+  empty; partial days (e.g. 2026-09-21, about 21 of 96 quarter-hours) stay
+  partial. About 88 % (Lobby) and 92 % (Seasons) of quarter-hours hold data.
+- Raw = 15-minute tier = API: Seasons Restaurant AHU-1 Temperature and PIR
+  interval daily means on 2026-09-10, 09-21 and 10-15 are identical in
+  `normalized_points`, `point_telemetry_15m` and the Reports read (unit
+  conversion 1 / 0).
+- Staging healthy: no failed jobs (103), containers healthy, no database
+  restart.
+
+**Deadline / retention.** The 2026-09-09 readings leave `normalized_points`
+around 2026-12-08 (1-minute history) and `point_telemetry_15m` around
+2027-01-07 (15-minute and coarser history). That is normal retention, not a
+consequence of the restore.
+
+**Rollback.** Each audit record holds every row's previous start. Putting
+them back is a separate, explicitly approved write.
+
 ## Deadline
 
 Raw readings (`telemetry.normalized_points`, 90 days) for Unit 2 from
@@ -201,4 +299,5 @@ Must run before about 2026-11-22 (Unit 2 raw readings from 08-24 expire).
 
 - [incident-history.md](incident-history.md) -- the 2026-10-09 staging
   crash-restart caused by an unscoped read-only query during this analysis.
-- ADR-018 decisions 4–8, Amendments 6 and 8; migrations 255, 256–258, 287.
+- ADR-018 decisions 4–8, Amendments 6, 8 and 13 (the one-time restore
+  exceptions); migrations 255, 256–258, 287.
