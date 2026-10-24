@@ -1,10 +1,13 @@
 /**
  * Reports tab -- site measurement export.
  *
- * Exports every asset of the selected site for a date/time range as one ZIP
- * with one CSV per asset (Timestamp (UTC), Timestamp (Site Local), then one
- * column per data point and phase the asset has). Values are the Analytics
- * page's own series at the chosen resolution, read through the Analytics API.
+ * Exports the selected assets of a site (at most REPORT_MAX_ASSETS, chosen
+ * with the Analytics asset selector; every asset is preselected when the
+ * site has no more than that) for a date/time range as one ZIP with one CSV
+ * per asset (Timestamp (UTC), Timestamp (Site Local), then one column per
+ * data point and phase the asset has). Values are the Analytics page's own
+ * series at the chosen resolution, read through the Analytics API; 1 minute
+ * is available for up to 14 days.
  *
  * The site selector is the global site selection (the same one the sidebar
  * and the Analytics page use); the date range is the Analytics date range
@@ -23,7 +26,12 @@ import {
   retryReportExport,
 } from "../../api/endpoints";
 import { ApiError, ContractError } from "../../api/errors";
-import type { AnalyticsRequestedResolution, ReportExportEstimate, ReportExportJob } from "../../api/types";
+import type {
+  AnalyticsCatalogResponse,
+  AnalyticsRequestedResolution,
+  ReportExportEstimate,
+  ReportExportJob,
+} from "../../api/types";
 import { useSession } from "../../auth/SessionProvider";
 import { hasPermission } from "../../auth/permissions";
 import { EmptyState } from "../../components/states/EmptyState";
@@ -33,10 +41,18 @@ import { useReportExports } from "../../reportExports/ReportExportsProvider";
 import { useTenant } from "../../tenant/TenantProvider";
 import { AnalyticsDateRange } from "../analytics/AnalyticsDateRange";
 import { earliestDataDate } from "../analytics/AnalyticsPage";
+import { AssetSelector } from "../analytics/AnalyticsSelectors";
 import { RESOLUTION_OPTIONS, resolveDraftRange, type AnalyticsRangeSelection } from "../analytics/analyticsQuery";
 
+/** The most assets one export covers (the API's EMS_REPORT_EXPORT_MAX_ASSETS). */
+export const REPORT_MAX_ASSETS = 10;
+
 export const REPORT_MESSAGES = {
-  rangeTooLarge: "This resolution is not available for the selected range. Choose a coarser resolution or Auto.",
+  rangeTooLarge:
+    "This resolution is not available for the selected range (1 minute covers up to 14 days). Choose a shorter range, a coarser resolution or Auto.",
+  selectAssets: `Select the assets to export (up to ${REPORT_MAX_ASSETS}).`,
+  tooManyAssets: `Select at most ${REPORT_MAX_ASSETS} assets to export.`,
+  assetsUnavailable: "Unable to load this site's assets. Please try again.",
   tooLarge: "This export is too large. Choose a shorter time range or a coarser resolution.",
   immediate: "This export will download now.",
   background: "This export will run in the background. You can leave this page; you will be notified when it is ready.",
@@ -47,6 +63,7 @@ export const REPORT_MESSAGES = {
 } as const;
 
 type EstimateState =
+  | { status: "idle" }
   | { status: "loading" }
   | { status: "ready"; estimate: ReportExportEstimate }
   | { status: "error"; message: string };
@@ -54,6 +71,7 @@ type EstimateState =
 function errorMessage(error: unknown, fallback: string): string {
   if (error instanceof ContractError && error.code === "time_range_too_large") return REPORT_MESSAGES.rangeTooLarge;
   if (error instanceof ContractError && error.code === "export_too_large") return REPORT_MESSAGES.tooLarge;
+  if (error instanceof ContractError && error.code === "too_many_assets") return REPORT_MESSAGES.tooManyAssets;
   if (error instanceof ApiError && error.status === 429 && error.detail) return error.detail;
   return fallback;
 }
@@ -72,15 +90,23 @@ export function ReportsPage() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ tone: "info" | "error"; text: string } | null>(null);
   const [minDate, setMinDate] = useState<string | null>(null);
+  const [catalog, setCatalog] = useState<
+    { status: "loading" } | { status: "ready"; catalog: AnalyticsCatalogResponse } | { status: "error" }
+  >({ status: "loading" });
+  const [assetIds, setAssetIds] = useState<string[]>([]);
 
   const siteId = selectedSite?.site_id ?? null;
   const timeZone = selectedSite?.timezone;
   const span = useMemo(() => resolveDraftRange(range, timeZone), [range, timeZone]);
-  const query = useMemo(() => ({ from: span.from, to: span.to, resolution }), [span, resolution]);
+  const query = useMemo(() => ({ from: span.from, to: span.to, resolution, assetIds }), [span, resolution, assetIds]);
   const canExport = hasPermission(user, "report.export");
 
   useEffect(() => {
     if (!siteId || !canExport) return;
+    if (query.assetIds.length === 0) {
+      setEstimate({ status: "idle" });
+      return;
+    }
     const controller = new AbortController();
     setEstimate({ status: "loading" });
     getReportExportEstimate(siteId, query, { signal: controller.signal })
@@ -95,14 +121,24 @@ export function ReportsPage() {
 
   useEffect(() => setNotice(null), [siteId, query]);
 
+  // The site's assets (the Analytics catalogue) and the earliest date its
+  // data starts; a small site starts with every asset selected.
   useEffect(() => {
     setMinDate(null);
+    setAssetIds([]);
+    setCatalog({ status: "loading" });
     if (!siteId || !canExport) return;
     const controller = new AbortController();
     getAnalyticsCatalog(siteId, { signal: controller.signal })
-      .then((catalog) => setMinDate(earliestDataDate(catalog, timeZone)))
-      .catch(() => {
-        // No bound: the export itself still reports empty ranges honestly.
+      .then((result) => {
+        setCatalog({ status: "ready", catalog: result });
+        setMinDate(earliestDataDate(result, timeZone));
+        setAssetIds(result.assets.length <= REPORT_MAX_ASSETS ? result.assets.map((a) => a.asset_id) : []);
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setCatalog({ status: "error" });
       });
     return () => controller.abort();
   }, [siteId, timeZone, canExport]);
@@ -119,7 +155,17 @@ export function ReportsPage() {
   }
 
   const ready = estimate.status === "ready" ? estimate.estimate : null;
-  const disabled = busy || !ready || ready.mode === "too_large" || ready.asset_count === 0;
+  const disabled = busy || !ready || ready.mode === "too_large" || ready.asset_count === 0 || assetIds.length === 0;
+
+  function toggleAsset(assetId: string) {
+    setAssetIds((current) =>
+      current.includes(assetId)
+        ? current.filter((id) => id !== assetId)
+        : current.length < REPORT_MAX_ASSETS
+          ? [...current, assetId]
+          : current,
+    );
+  }
 
   async function queueBackground(id: string) {
     await createReportExport(id, query);
@@ -160,7 +206,8 @@ export function ReportsPage() {
       <header className="reports-header">
         <h1 className="reports-header__title">Reports</h1>
         <p className="reports-header__subtitle">
-          Export all measurement data for every asset of a site as a ZIP file with one CSV per asset.
+          Export all measurement data for up to {REPORT_MAX_ASSETS} assets of a site as a ZIP file with one CSV per
+          asset.
         </p>
       </header>
 
@@ -203,7 +250,25 @@ export function ReportsPage() {
           </label>
         </div>
 
+        <div className="reports-assets" data-testid="reports-assets">
+          {catalog.status === "loading" ? <p>Loading assets…</p> : null}
+          {catalog.status === "error" ? <p className="reports-summary__error">{REPORT_MESSAGES.assetsUnavailable}</p> : null}
+          {catalog.status === "ready" && catalog.catalog.assets.length === 0 ? <p>{REPORT_MESSAGES.noAssets}</p> : null}
+          {catalog.status === "ready" && catalog.catalog.assets.length > 0 ? (
+            <AssetSelector
+              assets={catalog.catalog.assets}
+              selected={assetIds}
+              maxAssets={REPORT_MAX_ASSETS}
+              onToggle={toggleAsset}
+              onSetAssets={(ids) => setAssetIds(ids.slice(0, REPORT_MAX_ASSETS))}
+            />
+          ) : null}
+        </div>
+
         <div className="reports-summary" data-testid="reports-estimate" aria-live="polite">
+          {estimate.status === "idle" && catalog.status === "ready" && catalog.catalog.assets.length > 0 ? (
+            <p data-testid="reports-select-assets">{REPORT_MESSAGES.selectAssets}</p>
+          ) : null}
           {estimate.status === "loading" ? <p>Preparing…</p> : null}
           {estimate.status === "error" ? <p className="reports-summary__error">{estimate.message}</p> : null}
           {ready ? (

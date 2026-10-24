@@ -876,6 +876,9 @@ summary.analytics-dq__heading { cursor: pointer; }
 .reports-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .reports-field__label { font-size: 12px; font-weight: 500; color: var(--muted); }
 .reports-field select { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: #fff; max-width: 100%; }
+.reports-assets { margin-top: 14px; max-width: 460px; border: 1px solid var(--line); border-radius: 8px; padding: 0 12px; }
+.reports-assets > p { margin: 10px 0; }
+.reports-assets .analytics-tree { max-height: 320px; overflow-y: auto; }
 .reports-summary { margin-top: 14px; min-height: 44px; }
 .reports-summary p { margin: 0 0 2px; }
 .reports-summary__mode { color: var(--muted); }

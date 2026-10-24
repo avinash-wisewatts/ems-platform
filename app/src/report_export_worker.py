@@ -61,15 +61,16 @@ class ActiveJobLimitError(Exception):
 
 
 async def create_job(
-    portal_user_id: int, site_id: UUID, request: ExportRequest, max_active: int
+    portal_user_id: int, site_id: UUID, request: ExportRequest, max_active: int, asset_ids: list[UUID]
 ) -> dict[str, Any] | None:
-    """None when the site is not accessible."""
+    """None when the site, or a selected asset, is not accessible
+    (migration 312)."""
 
     import psycopg.errors
 
     try:
         rows = await _execute(
-            "SELECT * FROM analytics.create_portal_report_export_job(%s, %s, %s, %s, %s, %s, %s)",
+            "SELECT * FROM analytics.create_portal_report_export_job(%s, %s, %s, %s, %s, %s, %s, %s::uuid[])",
             (
                 portal_user_id,
                 str(site_id),
@@ -78,6 +79,7 @@ async def create_job(
                 request.requested_resolution,
                 request.resolution,
                 max_active,
+                [str(a) for a in asset_ids],
             ),
             commit=True,
         )
@@ -174,11 +176,14 @@ async def run_job(job: dict[str, Any], worker_id: str, *, max_cells: int, retent
     job_id = UUID(str(job["id"]))
     portal_user_id = int(job["portal_user_id"])
     site_id = UUID(str(job["site_id"]))
+    asset_ids = job.get("asset_ids")
     request = ExportRequest(
         dt_from=job["range_from"],
         dt_to=job["range_to"],
         requested_resolution=job["requested_resolution"],
         resolution=job["resolution"],
+        # None: a job queued before migration 312 -- every asset of the site.
+        asset_ids=None if asset_ids is None else tuple(UUID(str(a)) for a in asset_ids),
     )
     try:
         ctx = await prepare_export(portal_user_id, site_id, request)

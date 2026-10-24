@@ -2,11 +2,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AppRoutes } from "../../router";
-import type { ReportExportEstimate, ReportExportJob } from "../../api/types";
+import type { AnalyticsCatalogResponse, ReportExportEstimate, ReportExportJob } from "../../api/types";
+import { catalogFixture } from "../analytics/analyticsTestFixtures";
 import { DISMISSED_STORAGE_KEY } from "../../reportExports/ReportExportsProvider";
 import { ADMIN_USER, SITES_ONE, VIEWER_USER, renderWithProviders } from "../../test-utils";
 
 const SITE_ID = SITES_ONE.sites[0]!.site_id;
+
+/** A site with `n` assets (a1..an) in the Analytics catalogue. */
+function siteCatalog(n: number): AnalyticsCatalogResponse {
+  const full = catalogFixture({ site_id: SITE_ID });
+  return { ...full, assets: full.assets.slice(0, n) };
+}
 
 function estimate(overrides: Partial<ReportExportEstimate> = {}): ReportExportEstimate {
   return {
@@ -59,6 +66,7 @@ function stubReports(opts: {
   jobs?: () => ReportExportJob[];
   created?: ReportExportJob;
   zipStatus?: number;
+  catalog?: AnalyticsCatalogResponse;
 }) {
   const calls: Call[] = [];
   const mock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -68,6 +76,9 @@ function stubReports(opts: {
     calls.push({ url, method, body: (init?.body as string) ?? null, contentType: headers.get("Content-Type") });
     const json = (status: number, body: unknown) =>
       ({ ok: status < 300, status, statusText: "", headers: new Headers(), json: async () => body }) as unknown as Response;
+    if (url === `/api/v1/sites/${SITE_ID}/analytics/catalog`) {
+      return json(200, opts.catalog ?? siteCatalog(4));
+    }
     if (url.startsWith(`/api/v1/sites/${SITE_ID}/report-exports/estimate`)) {
       const e = opts.estimate ?? estimate();
       return "error" in e ? json(e.status, { error: e.error, detail: e.detail }) : json(200, e);
@@ -259,6 +270,43 @@ describe("Reports tab", () => {
     const toast = await screen.findByTestId("export-notification-bad");
     expect(toast).toHaveTextContent("Export failed");
     expect(toast).toHaveTextContent("The export is too large.");
+  });
+
+  it("preselects every asset of a small site and sends the selection with every request", async () => {
+    const { calls } = stubReports({ estimate: estimate({ mode: "background" }) });
+    renderReports();
+    await waitFor(() => expect(screen.getByTestId("reports-estimate")).toHaveTextContent("run in the background"));
+    expect(screen.getByTestId("asset-selected-count")).toHaveTextContent("4 of 4");
+    const estimateCall = calls.find((c) => c.url.includes("/report-exports/estimate"))!;
+    expect(new URL(estimateCall.url, "http://localhost").searchParams.getAll("asset_id")).toEqual(["a1", "a2", "a3", "a4"]);
+    await userEvent.click(screen.getByTestId("reports-export-button"));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST")).toBe(true));
+    expect(JSON.parse(calls.find((c) => c.method === "POST")!.body!).asset_ids).toEqual(["a1", "a2", "a3", "a4"]);
+  });
+
+  it("asks for a selection of at most 10 assets on a larger site", async () => {
+    const { calls } = stubReports({ catalog: siteCatalog(13) });
+    renderReports();
+    expect(await screen.findByTestId("reports-select-assets")).toHaveTextContent("Select the assets to export (up to 10).");
+    expect(screen.getByTestId("reports-export-button")).toBeDisabled();
+    expect(calls.some((c) => c.url.includes("/report-exports/estimate"))).toBe(false);
+
+    await userEvent.click(within(screen.getByTestId("asset-selector")).getByRole("button", { name: "Select All" }));
+    expect(screen.getByTestId("asset-selected-count")).toHaveTextContent("10 of 13");
+    expect(screen.getByTestId("asset-limit-reached")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("reports-export-button")).toBeEnabled());
+    const estimateCall = calls.filter((c) => c.url.includes("/report-exports/estimate")).at(-1)!;
+    expect(new URL(estimateCall.url, "http://localhost").searchParams.getAll("asset_id")).toHaveLength(10);
+
+    await userEvent.click(within(screen.getByTestId("asset-selector")).getByRole("button", { name: "Clear All" }));
+    expect(screen.getByTestId("reports-select-assets")).toBeInTheDocument();
+    expect(screen.getByTestId("reports-export-button")).toBeDisabled();
+  });
+
+  it("explains the 14-day limit of 1-minute exports", async () => {
+    stubReports({ estimate: { status: 422, error: "time_range_too_large", detail: "max" } });
+    renderReports();
+    await waitFor(() => expect(screen.getByTestId("reports-estimate")).toHaveTextContent("1 minute covers up to 14 days"));
   });
 
   it("is not offered to a user without report.export", async () => {

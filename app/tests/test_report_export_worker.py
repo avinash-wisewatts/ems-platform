@@ -165,3 +165,28 @@ async def test_worker_start_and_stop_are_idempotent(monkeypatch) -> None:
     w.start()
     await w.stop()
     await w.stop()
+
+
+async def test_job_exports_only_its_selected_assets(monkeypatch) -> None:
+    from tests.report_export_fixtures import ASSET_B
+
+    fake, recorder = FakeAnalytics(), Recorder()
+    await _run(monkeypatch, fake, recorder, _job(asset_ids=[UUID(ASSET_B)]))
+    assert recorder.failed == []
+    content, asset_count = recorder.completed[0][3], recorder.completed[0][4]
+    assert asset_count == 1
+    with zipfile.ZipFile(io.BytesIO(content)) as archive:
+        assert archive.namelist() == ["AHU 2.csv"]
+
+
+async def test_job_whose_selected_asset_is_no_longer_available_fails(monkeypatch) -> None:
+    fake, recorder = FakeAnalytics(), Recorder()
+    await _run(monkeypatch, fake, recorder, _job(asset_ids=[UUID(int=7)]))
+    assert recorder.completed == []
+    assert recorder.failed[0][2] == "invalid_assets"
+
+
+async def test_job_queued_before_asset_selection_exports_the_whole_site(monkeypatch) -> None:
+    fake, recorder = FakeAnalytics(), Recorder()
+    await _run(monkeypatch, fake, recorder, _job(asset_ids=None))
+    assert recorder.completed[0][4] == 3
