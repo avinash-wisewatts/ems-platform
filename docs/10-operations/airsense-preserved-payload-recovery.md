@@ -1,6 +1,6 @@
 # Production: AirSense history recovery from preserved payloads
 
-Status: PAYLOADS PRESERVED (2026-10-24); recovery mechanism (migration 310) IMPLEMENTED, not deployed; production backfill NOT EXECUTED, awaiting approval · Last reviewed: 2026-10-24
+Status: PAYLOADS PRESERVED (5-minute failure export and 1-minute raw export, 2026-10-24); job 1061 PAUSED (2026-10-24 15:03); migration 310 DEPLOYED to staging and VALIDATED (2026-10-24), not on production; production backfill NOT EXECUTED, awaiting approval · Last reviewed: 2026-10-24
 Verification basis: Production (read-only), Staging (read-only), local test database
 
 ## Why
@@ -28,10 +28,9 @@ What is recoverable:
   history for this period is therefore real readings at 5-minute spacing, not
   1-minute. In the Analytics read, a 15-minute bucket then counts 3 of 15
   expected intervals (PARTIAL quality).
-- **About 2026-10-22 05:30 → registration (raw_messages).** Every packet is
-  still in `raw_messages`, so full 1-minute history exists. It drops from the
-  48-hour retention from 2026-10-25 ~10:08 IST, one day at a time. Preserving
-  it needs a second export (not done; see Approvals).
+- **2026-10-22 05:30 → registration (raw_messages).** Every packet was
+  still in `raw_messages`, so full 1-minute history exists. It was exported
+  on 2026-10-24 before the 48-hour retention dropped it (section 1b).
 - **Gaps that stay gaps:**
   - before 2026-09-24 (failure-table retention);
   - 2026-09-30 16:30 → 2026-10-02 12:30 (gateway outage: no packets);
@@ -76,6 +75,32 @@ Independent verification on the host:
   2026-09-24.
 
 The database rows were not altered or deleted.
+
+## 1b. Preserved one-minute raw packets (done 2026-10-24 15:02 IST, read-only)
+
+| | |
+|---|---|
+| Location (production host) | `/home/emsadmin/ems-preserved/airsense-raw-20261022-20261024/` (directory `drwx------ emsadmin`, files `-r--------`) |
+| Filter | `telemetry.raw_messages`, topic `wwems/v1/RADISSON_BLU/COIMBATORE/ENISCOPE_4_MAIN_KITCHEN/telemetry`, packets containing any of the three sensor UIDs, received 2026-10-22 05:30 (oldest retained) → 2026-10-24 13:13:31.011058 IST (Zone1 registration, the last) |
+| Files | one `COPY` per daily chunk (all columns, CSV with header): `raw_messages_airsense_20261022.csv.gz` (8,004,891 bytes, 5,760 packets), `_20261023.csv.gz` (7,937,742 bytes, 5,729), `_20261024.csv.gz` (2,626,998 bytes, 1,854); a manifest per file; `raw_messages_airsense.sha256` |
+| SHA-256 | `faa1cf85…453e`, `a9901c7a…74e4`, `362571e5…2fa3` (manifests `0f3289e6…f319`, `54e3571b…9d5c`, `2db59572…d5c0`) |
+| Scripts | `/home/emsadmin/ems-preserved/scripts/preserve_raw.sh`, `verify_raw.py` |
+
+Verified on the host:
+
+- `sha256sum -c` OK (6 files); `gzip -t` OK (3 files).
+- Row counts and identity digests recomputed from the files equal the
+  database manifests for all three slices.
+- Readings: Zone1 13,327 elements on 3,276 distinct minutes, Zone2 13,335 on
+  3,336, Lobby 13,327 on 3,203, of about 3,344 minutes in the window: near
+  complete 1-minute coverage.
+- Export time 55 s; the host kept about 700 MB available.
+- Retention job 1058 (48 h) next ran 2026-10-25 10:08:58 IST, after the
+  export.
+
+These packets overlap the failure export from 2026-10-22 05:30 to 13:51
+(the failure rows there are a subset). The backfill takes one sample per
+bucket, so overlapping packets are de-duplicated by the capture rules.
 
 ## 2. Recovery mechanism (migration 310)
 
@@ -129,6 +154,30 @@ window's chunks are read (see job 1061 below for why that matters).
   - a live-sampled bucket is never touched;
   - only allow-listed devices are processed;
   - failure rows become RECOVERED only when fully represented.
+- **Staging deployment (2026-10-24):** PR #149 merged as `eb54b77`; deploy
+  run 40083336139 succeeded, including post-deployment verification;
+  migration 310 applied 15:28:10 IST. A follow-up added the backfill to the
+  `assert_analytical_reconciliation` D writer-set guard. It matches only
+  through the live loader's `device_point_state` upsert, never a
+  `pipeline_state` checkpoint, which a regression test asserts.
+- **Staging validation of the deployed functions (2026-10-24, one
+  transaction ended by ROLLBACK, nothing persisted):**
+  - 720 real staging packets (06:00 → 09:00 IST) for the three sensors were
+    loaded as preserved packets.
+  - Dry run with live data present: 0 to insert. Every bucket was
+    BUCKET_TAKEN (526); late and superseded elements were classified as the
+    live loader does.
+  - After the live loader's 526 samples and 6,312 points for those buckets
+    were removed inside the transaction, the confirmed backfill rebuilt them:
+    - 526 / 526 the same sample (packet and event time);
+    - 6,312 / 6,312 identical points (raw value, numeric value, quality code
+      and source packet);
+    - 0 extra points;
+    - 526 routing-queue entries, audit records written;
+    - the repeat run inserted 0.
+  - A first attempt timed out and rolled back. The script's own delete had
+    no constant event-time bound, so it read every compressed chunk (the
+    job 1061 pattern). The bound fixed it; staging stayed healthy.
 - **Staging equivalence (read-only, 2026-10-24).** The migration's own plan
   functions were run over staging's `raw_messages` for the same three sensors
   (2026-10-24 06:00 → 09:00 IST, buckets the live loader had sampled kept for
@@ -168,11 +217,20 @@ run starts over: the backlog never moves, and each hourly run reads about 90
 days of compressed points on the 1.9 GB host. The standard path also cannot
 reach messages older than 48 hours.
 
-Recommendation (needs approval):
+**Paused 2026-10-24 15:03:57 IST** with the Product Owner's approval, in one
+guarded transaction:
 
-- Pause job 1061 until the backfill has run.
-- Then fix the two lookups with an event-time bound, as migrations 202 / 204
-  / 220 did for the other parts, and resume.
+- The guards required it to be the recovery job, scheduled and not running.
+- `SELECT alter_job(1061, scheduled => false)`.
+- Audit `admin.onboarding_audit` `d3bf7863-7abd-46a3-8134-45453354f153`
+  (`PAUSE_TIMESCALEDB_JOB`) holds the full prior state: scheduled, hourly,
+  `max_runtime` 10 min, config `{"limit": 100}`, last run 14:28 Failed,
+  total failures 138.
+- Settings are unchanged. The backlog is identical before and after
+  (140 deferred, 535 open, 8,863 permanent).
+- Resume: `SELECT alter_job(1061, scheduled => true);`, after the event-time
+  bound fix to the two lookups (as migrations 202 / 204 / 220 did for the
+  other parts).
 
 Pausing loses nothing today. Its queue holds only these sensors' packets
 (covered by the export and, for the last 48 h, by `raw_messages`) and
@@ -180,23 +238,72 @@ empty / invalid payloads with nothing to recover.
 
 ## 4. Procedure (each step needs explicit approval)
 
-1. **Deploy migration 310 through CI/CD.** Production is at migration 308.
-   310 follows 309 (Reports export tables), which is outside the production
-   scope. Decide before promoting:
-   - promote 309 with 310 (309 is database-only and inert without the
-     Reports app code); or
-   - run 310's reviewed function bodies as session-only `pg_temp` functions
-     (no schema change).
-2. **Load the export** into `telemetry.preserved_rtdata_packets` in one
-   session:
+0. **Route decision (2026-10-24).** The Reports feature (#145, #146,
+   migration 309) is NOT approved for production. Constraints, verified:
+   - `scripts/apply_migrations.sh` applies every migration in the release
+     commit's manifest that the ledger lacks; it has no exclude or target
+     option.
+   - `deploy-production.yml` releases only a commit on staging's history that
+     staging deployed successfully, with that commit's image.
+   - Every staging commit with 310 (`eb54b77` onward) also has 309 and the
+     Reports app, whose worker starts at boot and calls 309's functions.
+
+   So 310 cannot reach production through the workflow without 309. 310
+   itself does not use any 309 object, and production already has
+   everything 310 needs (bucket resolver, RECOVERED status, routing queue,
+   15-minute and 1-hour backfill procedures).
+
+   Recommended route: **session-only recovery** — 310's reviewed functions
+   run as `pg_temp` objects with a temporary packet table in one operator
+   session per approved batch. No schema change, no ledger change, no app
+   release; writes and audit records as in 310. The script is generated from
+   the migration file, committed and CI-checked for identity, and rehearsed
+   on staging with a rollback.
+
+   Separately, production cannot take any later staging release without 309
+   while Reports stays staging-only. That needs its own decision (for
+   example environment-scoped migrations in the release process).
+1. **Get migration 310 onto production.** Production runs `7e3da57`
+   (migration 308). `deploy-production.yml` promotes only a commit on
+   staging's history (HEAD or an earlier milestone), with that commit's app
+   image and every migration up to it. Any commit containing 310 also
+   contains the Reports feature (#145, #146, migration 309), so:
+   - **Release route:** promote staging through the workflow. This releases
+     Reports to production, which first needs the staging Reports browser
+     acceptance (ADR-014 Amendment 2, 07-features/export).
+   - **Session route:** run 310's reviewed function bodies as session-only
+     `pg_temp` objects, generated mechanically from the migration file. No
+     schema change persists and no app changes, but the code is not
+     delivered by the workflow.
+2. **Load both exports** (failure rows and one-minute raw packets) into
+   `telemetry.preserved_rtdata_packets` in one session:
    - `CREATE TEMP TABLE f (LIKE telemetry.raw_message_failures)`, then
      `\copy f FROM STDIN WITH (FORMAT csv, HEADER)` fed by `zcat`.
    - `INSERT INTO telemetry.preserved_rtdata_packets SELECT raw_received_at,
      raw_message_id, source_identifier, payload, '<file name>' FROM f`.
    - Verify 8,201 rows and the identity digest against the manifest.
-3. **Dry run per day** (30 calls, 2026-09-24 → 2026-10-24, the three device
-   ids). Review the totals (expected about 288 SELECTED per sensor-day,
-   12 points each).
+3. **Dry run per day.** Batches are IST days of receipt, 2026-09-24 →
+   2026-10-24 (no packets on 2026-10-01), the last ending 13:13:31.011058,
+   with the three device ids. Expected (computed 2026-10-24 from both
+   verified exports with the function's rules; the production dry run must
+   match):
+
+   | | Samples | Points | Late (gap) | Superseded | Already sampled live |
+   |---|---|---|---|---|---|
+   | Zone1 | 10,697 | 128,364 | 295 | 9,834 | 18 |
+   | Zone2 | 10,803 | 129,636 | 25 | 10,001 | 23 |
+   | Lobby | 10,035 | 120,420 | 1,142 | 9,602 | 48 |
+   | **Total** | **31,535** | **378,420** | | | |
+
+   - 2026-09-24 → 2026-10-21: about 280 samples per sensor-day (5-minute
+     spacing); about 3,400 points per sensor-day.
+   - 2026-10-22 and 2026-10-23: 1-minute packets, about 1,170–1,430 samples
+     and 14,000–17,200 points per sensor-day.
+   - 2026-10-24: up to the registrations; Lobby has 524 late elements.
+   - 667 packets are in both exports; they are loaded once
+     (`ON CONFLICT DO NOTHING` on the packet key).
+   - One bucket at a batch boundary can be taken by the earlier batch: 1 per
+     sensor on 2026-10-23. The value is a real reading either way.
 4. **Execute per day** with the confirmation count, in its own transaction
    (`lock_timeout` 5 s, `statement_timeout` 120 s), oldest first. Capture
    before/after fingerprints of unrelated data first.
@@ -216,6 +323,96 @@ empty / invalid payloads with nothing to recover.
    separate, audited change. Seasons AHU-1 needs the same override as
    Banquet 2: the closed 1 µs AHU-2 Zone1 rows make the restore function
    refuse it.
+
+## 5. Session route, production dry run and job 1061 fix (2026-10-24)
+
+**Session script (PR #151).**
+`scripts/maintenance/airsense_recovery_session.sql`, sha256 `c2311655…0235`,
+is generated by `scripts/maintenance/generate_airsense_recovery_session.py`
+from migration 310. The only differences:
+
+- the four object names become `pg_temp.`; the advisory-lock key string is
+  kept;
+- `CREATE TEMP TABLE`;
+- no OWNER / REVOKE / COMMENT / postcondition block.
+
+`app/tests/test_airsense_recovery_session.py` (6 tests) proves:
+
+- the committed file equals the generator output;
+- the bodies equal 310's apart from those renames;
+- nothing persistent is created;
+- on the same packets, the session functions return identical samples,
+  points, dry run and inserted rows.
+
+**Staging rehearsal of the session script** (one transaction, ROLLBACK; 720
+real staging packets):
+
+- 0 sample and 0 point differences against the deployed migration 310;
+  identical dry runs;
+- 526 / 526 samples and 6,312 / 6,312 points rebuilt identically through the
+  session copy;
+- an audit record inside the transaction;
+- the repeat run inserts 0 (session and 310);
+- after ROLLBACK the session function and table are gone, with 0 packets,
+  0 audits and 0 queue entries.
+
+**Production dry run** (2026-10-24, one psql session, one transaction ended
+by ROLLBACK, 3 min 45 s; about 780 MB of memory stayed available):
+
+- Both exports passed `sha256sum -c` first.
+- Streamed into session tables; loaded rows and identity digests equal every
+  manifest (failures 8,201 `514edd69…`; raw 5,760 `c852184c…`, 5,729
+  `9d34a742…`, 1,854 `c54b9ce7…`).
+- 20,877 distinct packets. 667 are in both exports with identical payloads,
+  loaded once.
+- 37 batches: IST days 2026-09-24 → 10-21, 6-hour batches for 10-22 and
+  10-23, and 10-24 to 13:13:31.011058.
+- Dry run only (`p_dry_run` never passed); 0 points already present; no
+  NOT_FINAL, NO_POLICY or OUT_OF_RETENTION.
+
+| Sensor | Samples | Points to insert | Late (gap) | Superseded | Already sampled live |
+|---|---|---|---|---|---|
+| Zone1 | 10,704 | 128,448 | 295 | 9,828 | 17 |
+| Zone2 | 10,810 | 129,720 | 25 | 9,995 | 22 |
+| Lobby | 10,042 | 120,504 | 1,142 | 9,596 | 47 |
+| **Total** | **31,556** | **378,672** | | | |
+
+- The batch for 2026-10-01 is empty (gateway outage).
+- A dry run claims nothing, so a bucket whose packets straddle a batch
+  boundary is counted in both batches. The totals are an upper bound (at
+  most about one sample per sensor per boundary).
+- At execution, each batch's dry run must be repeated immediately before it
+  runs, and its count used as the confirmation.
+- Side-effect fingerprint, taken before and after the session, identical:
+  - audit rows 520, backfill audits 0;
+  - AirSense capture samples (before 13:14) 89;
+  - AirSense points 1,068;
+  - routing queue 0;
+  - AirSense device-state md5 `3e93a120…`;
+  - AirSense failure statuses unchanged;
+  - no `telemetry.preserved_rtdata_packets` table.
+- Session objects were gone after the rollback.
+
+**Job 1061 fix (migration 311, PR #152).**
+
+- **Change:** the migration-305 recovery body verbatim, plus a per-candidate
+  event-time span (its own elements, by the `raw_messages` primary key) that
+  bounds both `normalized_points` lookups to `[min − 1 day, max + 1 day)`.
+- **Guards:** precondition md5 `76e7c9e2…` (production and staging both
+  match); postcondition `31f4db2f…`.
+- **Tests:**
+  - the diff removes nothing;
+  - generic-plan startup chunk exclusion;
+  - the end-to-end recovery → queue → sweep tests pass unchanged.
+- **Staging rehearsal** (applied inside a transaction, ROLLBACK, for a real
+  candidate):
+  - the 305 form plans an Append over all 10 chunks (9 compressed);
+  - the 311 form gives ChunkAppend "Chunks excluded during startup: 9" and
+    executes in 0.4 ms;
+  - after rollback, staging is back on the 305 body and the ledger has no
+    311 row.
+- **Status:** not merged. Job 1061 stays paused. Production delivery depends
+  on [release-strategy-staging-only-features.md](release-strategy-staging-only-features.md).
 
 ## Rollback
 
