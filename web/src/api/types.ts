@@ -719,6 +719,8 @@ export type ReportExportJob = {
   file_size_bytes: number | null;
   asset_count: number | null;
   row_count: number | null;
+  /** The selected assets; null for a job queued before asset selection (whole site). */
+  asset_ids?: string[] | null;
   /** Same-origin, session-authenticated; null unless downloadable. */
   download_url: string | null;
 };

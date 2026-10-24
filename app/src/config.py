@@ -68,9 +68,12 @@ class Settings(BaseSettings):
     )
 
     # Reports tab export (report_export_service.py / report_export_worker.py).
-    # An export is sized as buckets x columns over the site's assets: up to
-    # immediate_max_cells it downloads in the request, up to max_cells it
-    # runs as a background job, beyond that it is refused.
+    # An export covers at most max_assets selected assets of a site and is
+    # sized as buckets x columns over them: up to immediate_max_cells it
+    # downloads in the request, up to max_cells it runs as a background job,
+    # beyond that it is refused. max_cells admits the largest export the
+    # contract allows: 10 assets x ~60 columns x 14 days at 1 minute
+    # (20,160 buckets) is ~12 M cells.
     report_export_immediate_max_cells: int = Field(
         default=150_000,
         ge=0,
@@ -78,9 +81,16 @@ class Settings(BaseSettings):
     )
 
     report_export_max_cells: int = Field(
-        default=3_000_000,
+        default=20_000_000,
         ge=1,
         alias="EMS_REPORT_EXPORT_MAX_CELLS",
+    )
+
+    report_export_max_assets: int = Field(
+        default=10,
+        ge=1,
+        le=50,
+        alias="EMS_REPORT_EXPORT_MAX_ASSETS",
     )
 
     # How long a completed background export stays downloadable.
