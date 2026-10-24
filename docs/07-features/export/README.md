@@ -1,6 +1,6 @@
 # Export — Reports tab site measurement export
 
-Status: IMPLEMENTED (2026-10-24, migration 309); staging deployment in progress · Owner: Product + Engineering
+Status: IMPLEMENTED (2026-10-24, migration 309); deployed to staging 2026-10-24; not deployed to production; UI acceptance testing outstanding · Owner: Product + Engineering
 Decisions: [ADR-014](../../00-governance/decisions/ADR-014-q75-export-scope-and-behavior.md) (Amendment 2), [ADR-022](../../00-governance/decisions/ADR-022-analytics-v1-scope-and-contract.md) (the series exported), [ADR-019](../../00-governance/decisions/ADR-019-analytical-backbone-time-basis-and-tiers.md) (resolutions and windows), [ADR-007](../../00-governance/decisions/ADR-007-analytics-api-boundary.md) (API boundary)
 
 ## Purpose
@@ -141,4 +141,17 @@ is a separate, open Product question (ADR-022's curated registry).
 - Local end-to-end (2026-10-24, disposable test database): immediate ZIP,
   background job Queued → Completed, owner download, anonymous 401,
   other-organization user 404, failed-job retry.
-- Staging: see the PR / deployment record.
+- Staging: see "Deployment and acceptance" below.
+
+## Deployment and acceptance
+
+| Environment | State (checked 2026-10-24, read-only) | Acceptance |
+|---|---|---|
+| Staging | Deployed: PR #145 (squash `4f01764`, deploy run 40009981810) and the all-points fix PR #146 (squash `257b503`, deploy run 40069783724); migration 309 in the ledger (181 rows). | Backend export verified read-only: the deployed code was run inside the app container for the Coimbatore AHUs, with every catalogue column present and gaps empty. **Reports UI acceptance testing is outstanding**: the Reports page has not been exercised by a logged-in user (immediate and background export, notification, download, retry). |
+| Production | **Not deployed.** The app image is `7e3da57` (PR #144), which contains neither `4f01764` nor `257b503`; the ledger ends at migration 308 (180 rows); `analytics.report_export_jobs` / `report_export_files` do not exist. | **Outstanding** until Reports (migration 309 and the app/web image) is promoted to production through the production release process; then repeat the UI acceptance there. |
+
+Before any production promotion:
+
+- Complete the staging UI acceptance.
+- Get a Product Owner answer on the per-cell quality-state point (ADR-014
+  decisions 3/10/11).

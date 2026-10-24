@@ -3,7 +3,8 @@
 Status: Decided; amended 2026-09-15 (see "Amendment" below) — Energy
 contextual chart-data export implemented, not deployed; Amendment 2
 (2026-10-24) — dedicated Reports-tab site measurement export implemented
-(migration 309), staging deployment in progress
+(migration 309), deployed to staging 2026-10-24, not deployed to production;
+Reports UI acceptance testing outstanding (see 07-features/export)
 Date: 2026-09-14 (MVP-6 Product Decision Workshop); amended 2026-09-15
 Decision owners: Product Owner
 Related requirements: EMS-REQ-094 through EMS-REQ-099
