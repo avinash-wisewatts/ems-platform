@@ -1,4 +1,4 @@
-# Staging: one-time history restore for the 9 October 2026 bulk assignment
+# One-time asset point assignment history restores (staging 2026-10-10 and 2026-10-24; production 2026-10-24)
 
 Status: EXECUTED on staging 2026-10-10 (migration 294 deployed by PR #118, squash 47d8065); second use EXECUTED 2026-10-24 (AirSense, 15 rows) · Last reviewed: 2026-10-24
 Verification basis: Repository, local test database, Staging (read-only)
@@ -242,6 +242,91 @@ consequence of the restore.
 
 **Rollback.** Each audit record holds every row's previous start. Putting
 them back is a separate, explicitly approved write.
+
+## Production: bulk meter-point assignment and history restore (2026-10-24)
+
+**Decision (Product Owner, 2026-10-24):** assign every enabled point of each
+ACTIVE asset's `PRIMARY_METER` on production, in all organizations, as the
+2026-10-09 staging bulk assignment did. Then restore each new point's history
+to its first GOOD reading within 90 days, as a one-time exception
+(ADR-018 Amendment 13). The AirSense points had already been assigned by
+hand and were out of scope.
+
+**Before (read-only).**
+
+- 56 ACTIVE assets in 4 organizations, each with one `PRIMARY_METER` (55
+  ACTIVE devices, 1 REGISTERED: Home Lift's Lift Energy Meter). Each meter has
+  58 enabled points. No meter is shared with another asset, and none has an
+  archived relationship.
+- 132 `asset_points` rows: 112 System Energy stand-ins (`-infinity`
+  Energy Import/Export on every primary meter) and 20 AirSense rows saved by
+  hand on 2026-10-24.
+- The four functions used (`save_asset_point_assignments`,
+  `restore_bulk_assignment_history_core`, `bulk_assignment_restore_plan`,
+  `bulk_restore_first_reading`) are byte-identical to staging.
+- Demand cannot change method: no primary meter has native demand registers,
+  every site's demand basis is `ACTIVE_POWER_KW`, and Energy Import (the
+  highest available method's point) was already assigned.
+
+**Assignment (2026-10-24 13:29:38.746483 IST).** One transaction, 56
+audited `admin.save_asset_point_assignments` calls (actor `admin_avinash`,
+portal user 1), one per (asset, primary meter), each submitting the
+meter's 58 enabled points with no friendly name. A rolled-back rehearsal
+matched first. A guard aborted the commit unless there were exactly 56
+audits, 3,136 added and 0 removed. Result: 3,136 rows added (the 112
+stand-ins kept unchanged), no commissioning triggered, 3,268 rows in total.
+
+**History restore (13:3x IST).** Migration 294 core,
+`restore_bulk_assignment_history_core('admin_avinash',
+'2026-10-24 13:29:38.746483+05:30', 56, 3136, <gateway>, '{}', now(), ...)`,
+one gateway per transaction, after a read-only dry run per gateway
+(2-5 s each).
+
+| Gateway | Restored | New start (IST) | Audit record |
+|---|---|---|---|
+| Eniscope_1_Chiller | 448 | 2026-09-04 05:30:53-54 | `04162b61-cdae-4993-a804-99253ce34be0` |
+| Eniscope_2_Plumbing | 448 | 2026-09-06 03:31:55-03:38:47 | `fddb6aaf-ce79-4bb6-8339-64eb16fbd88c` |
+| Eniscope_3_AHU | 448 | 2026-09-04 05:30:44-59 | `9ba07493-2f32-404b-8fe0-d31fd43e9cf5` |
+| Eniscope_4_Main_Kitchen | 448 | 2026-09-04 05:30:44-59 | `7b165846-d8b4-4e15-9f24-8bf1302a2038` |
+| Eniscope_1_Meenaxy_Unit2 | 448 | 2026-09-04 05:30:54-56 | `4e08c57d-3397-48c2-ab6f-6b5e672c3cdd` |
+| Eniscope_2_Meenaxy_Unit2 | 448 | 2026-09-04 05:30:54-59 | `4663976a-37d4-41bd-8da6-626008dbfb36` |
+| Eniscope_3_Meenaxy_Unit2 | 336 | 2026-09-04 05:30:57-59 | `6e8eaa93-f677-4f45-ae1d-4bd5ab14be17` |
+| SVSS Gateway, Eniscope Home | 0 (112 `NO_CHANGE_NO_HISTORY`) | assignment time | not called |
+| **Total** | **3,024** | | |
+
+2026-09-04 05:30 IST (00:00 UTC) is the oldest data `normalized_points`
+holds on production, so earlier meter history is not recoverable through the
+point-level foundation. System Energy (the stand-ins) is unaffected and keeps
+its own history. The two home meters have no GOOD readings in the window;
+their points start at the assignment time.
+
+**Verification (read-only).**
+
+- Repeat-safe: re-run dry runs report 3,024 `SKIPPED_START_CHANGED` and the
+  112 home rows `NO_CHANGE_NO_HISTORY`.
+- Unchanged against fingerprints taken twice before (both identical): the
+  132 earlier `asset_points` rows; `energy_consumption_daily` 2026-09-01 to
+  10-21 per site; `demand_intervals` 2026-10-15 to 10-21 per site; alerts
+  (none); the asset Energy series (`get_portal_asset_energy_series`, daily,
+  2026-10-10 to 10-21, fixed as-of) for every site.
+- The Analytics catalogue grew as expected (Coimbatore 79 -> 1,583 rows,
+  Unit 2 44 -> 1,078, each home site 2 -> 49).
+- The point series serves the restored history: for example Seasons
+  Restaurant AHU-1 and EN-AirCompressor-01 Power are `NOT_ASSIGNED` until
+  2026-09-03 and `MEASURED` from 2026-09-04.
+- Production healthy: no failed jobs (102), containers healthy, no database
+  restart.
+
+**Open finding (not changed).** The hand-made AirSense assignment on
+production gives Seasons Restaurant AHU-2 five points of the Zone1 sensor
+(saved 13:15:58, with no device relationship to AHU-2) as well as Zone2's.
+The Zone1 sensor's relationship is to Seasons Restaurant AHU-1
+(13:17:56), which has no AirSense points. This contradicts the confirmed
+mapping (Zone 1 -> AHU-1) and needs correcting through the Admin Portal.
+
+**Rollback.** Each restore audit holds every row's previous start. The
+assignments can be closed (never deleted) by a Save. Either is a separate,
+explicitly approved write.
 
 ## Deadline
 
