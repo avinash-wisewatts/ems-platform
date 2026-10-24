@@ -1401,7 +1401,7 @@ recording this decision.
 
 ---
 
-## Amendment 13 (2026-10-24): One-Time Staging History-Restore Exceptions to Decision 6
+## Amendment 13 (2026-10-24): One-Time History-Restore Exceptions to Decision 6
 
 Numbered 13 because Amendments 11 and 12, which migrations 256-258 cite,
 are not yet committed to this file.
@@ -1409,17 +1409,22 @@ are not yet committed to this file.
 Decision 6 is **not changed**: a point added to an already-ACTIVE asset
 still starts at its assignment time, and the Save path and the commissioning
 backfill (migrations 255-258, 287) still never backfill it. The Product
-Owner approved one-time exceptions to it (two on staging, one on
+Owner approved one-time exceptions to it (two on staging, two on
 production). Each:
 
 - covers only named audited Saves;
-- runs through migration 294's
-  `admin.restore_bulk_assignment_history_core`;
 - moves `effective_from` earlier, and nothing else, to the point's first
   GOOD reading within the Amendment 8 90-day limit;
-- never moves a start into another binding's or relationship's period;
-- writes one audit record (`RESTORE_BULK_ASSIGNMENT_HISTORY`) holding every
-  row's start before and after.
+- writes one audit record holding every row's start before and after.
+
+All but one run through migration 294's
+`admin.restore_bulk_assignment_history_core`
+(`RESTORE_BULK_ASSIGNMENT_HISTORY` audits), which never moves a start into
+another binding's or relationship's period. The exception is the production
+Banquet 2 AHU correction. It is a guarded manual update
+(`RESTORE_ASSIGNMENT_HISTORY_MANUAL`) with a one-time Product Owner override
+of that relationship bound, because the overridden Banquet 1 AHU link was
+declared incorrect.
 
 No telemetry is copied or rebuilt (Amendment 7). Records:
 
