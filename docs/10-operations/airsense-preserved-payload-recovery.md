@@ -238,6 +238,31 @@ empty / invalid payloads with nothing to recover.
 
 ## 4. Procedure (each step needs explicit approval)
 
+0. **Route decision (2026-10-24).** The Reports feature (#145, #146,
+   migration 309) is NOT approved for production. Constraints, verified:
+   - `scripts/apply_migrations.sh` applies every migration in the release
+     commit's manifest that the ledger lacks; it has no exclude or target
+     option.
+   - `deploy-production.yml` releases only a commit on staging's history that
+     staging deployed successfully, with that commit's image.
+   - Every staging commit with 310 (`eb54b77` onward) also has 309 and the
+     Reports app, whose worker starts at boot and calls 309's functions.
+
+   So 310 cannot reach production through the workflow without 309. 310
+   itself does not use any 309 object, and production already has
+   everything 310 needs (bucket resolver, RECOVERED status, routing queue,
+   15-minute and 1-hour backfill procedures).
+
+   Recommended route: **session-only recovery** — 310's reviewed functions
+   run as `pg_temp` objects with a temporary packet table in one operator
+   session per approved batch. No schema change, no ledger change, no app
+   release; writes and audit records as in 310. The script is generated from
+   the migration file, committed and CI-checked for identity, and rehearsed
+   on staging with a rollback.
+
+   Separately, production cannot take any later staging release without 309
+   while Reports stays staging-only. That needs its own decision (for
+   example environment-scoped migrations in the release process).
 1. **Get migration 310 onto production.** Production runs `7e3da57`
    (migration 308). `deploy-production.yml` promotes only a commit on
    staging's history (HEAD or an earlier milestone), with that commit's app
@@ -257,9 +282,28 @@ empty / invalid payloads with nothing to recover.
    - `INSERT INTO telemetry.preserved_rtdata_packets SELECT raw_received_at,
      raw_message_id, source_identifier, payload, '<file name>' FROM f`.
    - Verify 8,201 rows and the identity digest against the manifest.
-3. **Dry run per day** (30 calls, 2026-09-24 → 2026-10-24, the three device
-   ids). Review the totals (expected about 288 SELECTED per sensor-day,
-   12 points each).
+3. **Dry run per day.** Batches are IST days of receipt, 2026-09-24 →
+   2026-10-24 (no packets on 2026-10-01), the last ending 13:13:31.011058,
+   with the three device ids. Expected (computed 2026-10-24 from both
+   verified exports with the function's rules; the production dry run must
+   match):
+
+   | | Samples | Points | Late (gap) | Superseded | Already sampled live |
+   |---|---|---|---|---|---|
+   | Zone1 | 10,697 | 128,364 | 295 | 9,834 | 18 |
+   | Zone2 | 10,803 | 129,636 | 25 | 10,001 | 23 |
+   | Lobby | 10,035 | 120,420 | 1,142 | 9,602 | 48 |
+   | **Total** | **31,535** | **378,420** | | | |
+
+   - 2026-09-24 → 2026-10-21: about 280 samples per sensor-day (5-minute
+     spacing); about 3,400 points per sensor-day.
+   - 2026-10-22 and 2026-10-23: 1-minute packets, about 1,170–1,430 samples
+     and 14,000–17,200 points per sensor-day.
+   - 2026-10-24: up to the registrations; Lobby has 524 late elements.
+   - 667 packets are in both exports; they are loaded once
+     (`ON CONFLICT DO NOTHING` on the packet key).
+   - One bucket at a batch boundary can be taken by the earlier batch: 1 per
+     sensor on 2026-10-23. The value is a real reading either way.
 4. **Execute per day** with the confirmation count, in its own transaction
    (`lock_timeout` 5 s, `statement_timeout` 120 s), oldest first. Capture
    before/after fingerprints of unrelated data first.
