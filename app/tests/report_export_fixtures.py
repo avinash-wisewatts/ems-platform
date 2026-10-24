@@ -23,7 +23,13 @@ NO_FLOORS = {r: None for r in ("1m", "15m", "30m", "1h", "1d")}
 
 UNITS = {
     "ENERGY_IMPORT": "kWh", "ENERGY_EXPORT": "kWh", "ACTIVE_POWER": "kW", "VOLTAGE_LINE_NEUTRAL": "V",
-    "FREQUENCY": "Hz",
+    "FREQUENCY": "Hz", "TEMPERATURE": "degC", "HUMIDITY": "%", "ILLUMINANCE": "lux", "APPARENT_POWER": "kVA",
+    "CURRENT": "A",
+}
+# Catalogue names as staging returns them (analytics.get_portal_analytics_catalog).
+NAMES = {
+    "TEMPERATURE": "Temperature", "HUMIDITY": "Relative Humidity", "OCCUPANCY_ACTIVITY": "Occupancy Activity",
+    "ILLUMINANCE": "Illuminance", "APPARENT_POWER": "Apparent Power", "CURRENT": "Current",
 }
 
 
@@ -31,7 +37,7 @@ def catalog_row(asset_id: str, name: str, data_point: str, qualifier: str | None
     return {
         "asset_id": asset_id, "asset_name": name, "asset_type_id": None, "asset_type_name": "AHU",
         "building_name": None, "floor_name": None, "space_id": None, "space_name": None, "location_path": None,
-        "data_point": data_point, "data_point_name": data_point, "category": None,
+        "data_point": data_point, "data_point_name": NAMES.get(data_point, data_point), "category": None,
         "unit": UNITS.get(data_point), "qualifier": qualifier, "assigned_from": None, "assigned_to": None,
     }
 
@@ -41,8 +47,17 @@ CATALOG = [
     catalog_row(ASSET_A, "Chiller/1", "ACTIVE_POWER"),
     *(catalog_row(ASSET_A, "Chiller/1", "ACTIVE_POWER", q) for q in ("L1", "L2", "L3")),
     catalog_row(ASSET_A, "Chiller/1", "VOLTAGE_LINE_NEUTRAL", "AVG"),
+    # Confirmed electrical points the Analytics chart registry does not chart.
+    catalog_row(ASSET_A, "Chiller/1", "APPARENT_POWER", "TOTAL"),
+    catalog_row(ASSET_A, "Chiller/1", "CURRENT", "NEUTRAL"),
     catalog_row(ASSET_B, "AHU 2", "ENERGY_IMPORT"),
     catalog_row(ASSET_B, "AHU 2", "FREQUENCY", None),
+    # Environmental / occupancy points of an AirSense device assigned to the
+    # AHU (as the Seasons Restaurant AHUs on staging).
+    catalog_row(ASSET_B, "AHU 2", "TEMPERATURE", None),
+    catalog_row(ASSET_B, "AHU 2", "HUMIDITY", None),
+    catalog_row(ASSET_B, "AHU 2", "OCCUPANCY_ACTIVITY", None),
+    catalog_row(ASSET_B, "AHU 2", "ILLUMINANCE", None),
 ]
 
 SITE_ASSETS = [
@@ -52,8 +67,11 @@ SITE_ASSETS = [
 ]
 
 ASSET_OFFSET = {ASSET_A: 1000.0, ASSET_B: 2000.0, ASSET_C: 3000.0}
-POINT_OFFSET = {"ACTIVE_POWER": 10.0, "VOLTAGE_LINE_NEUTRAL": 200.0, "FREQUENCY": 50.0}
-QUALIFIER_OFFSET = {"TOTAL": 0.0, "AVG": 0.0, None: 0.0, "L1": 0.1, "L2": 0.2, "L3": 0.3}
+POINT_OFFSET = {
+    "ACTIVE_POWER": 10.0, "VOLTAGE_LINE_NEUTRAL": 200.0, "FREQUENCY": 50.0, "TEMPERATURE": 20.0,
+    "HUMIDITY": 60.0, "OCCUPANCY_ACTIVITY": 500.0, "ILLUMINANCE": 30.0, "APPARENT_POWER": 12.0, "CURRENT": 5.0,
+}
+QUALIFIER_OFFSET = {"TOTAL": 0.0, "AVG": 0.0, None: 0.0, "L1": 0.1, "L2": 0.2, "L3": 0.3, "NEUTRAL": 0.4}
 
 
 def value_for(asset_id: str, data_point: str, qualifier: str | None, hour: int) -> float:
@@ -64,9 +82,13 @@ class FakeAnalytics:
     """Fake fetchers. `missing` = set of (asset, data_point, qualifier, hour)
     with no reading (value None, GAP)."""
 
-    def __init__(self, *, accessible: bool = True, missing: set | None = None, hours: int = 3) -> None:
+    def __init__(
+        self, *, accessible: bool = True, missing: set | None = None, hours: int = 3, unavailable: set | None = None
+    ) -> None:
         self.accessible = accessible
         self.missing = missing or set()
+        # (asset, data_point, qualifier) the generic read reports unavailable.
+        self.unavailable = unavailable or set()
         self.hours = hours
         self.calls: list[tuple[str, Any]] = []
 
@@ -136,7 +158,10 @@ class FakeAnalytics:
                     "valid_intervals": 0 if missing else 4, "invalid_intervals": 0, "gap_intervals": 0,
                     "reset_intervals": 0, "rollover_intervals": 0, "expected_intervals": 4,
                     "assigned_expected_intervals": 4, "data_state": "GAP" if missing else "MEASURED",
-                    "quality": "GAP" if missing else "GOOD", "unavailable_reasons": None,
+                    "quality": "GAP" if missing else "GOOD",
+                    "unavailable_reasons": ["BEFORE_RETENTION_FLOOR"]
+                    if (str(spec.asset_id), spec.data_point, spec.qualifier) in self.unavailable
+                    else None,
                     "first_data_at": T0 - timedelta(days=9), "last_data_at": AS_OF, "assigned_in_range": True,
                 })
         return rows

@@ -43,10 +43,19 @@ asset name (characters invalid in file names replaced, duplicates numbered
   `YYYY-MM-DD HH:MM:SS`; the local time follows DST (the UTC column
   disambiguates repeated local hours); UTC is used if the site has no
   timezone.
-- One column per Analytics series of the asset, System first then each
-  phase the asset has fully assigned: e.g. `Energy (kWh)`, `Power (kW)`,
-  `Power L1 (kW)`, `Line to Line Voltage L12 (V)`. Values: bucket sum for
-  Energy, bucket mean for measurements, up to 6 decimals.
+- One column per series of every data point confirmed for the asset
+  (`metadata.asset_points`, as listed by the asset's Analytics catalogue):
+  - the Analytics chart data points first, exactly as the Analytics page
+    serves them — System, then each phase the asset has fully assigned:
+    e.g. `Energy (kWh)`, `Power (kW)`, `Power L1 (kW)`,
+    `Line to Line Voltage L12 (V)`;
+  - then every other confirmed point, one column per assigned qualifier,
+    named by its catalogue name: e.g. `Temperature (degC)`,
+    `Relative Humidity (%)`, `Occupancy Activity`, `Illuminance (lux)`,
+    `Apparent Power (kVA)`, `Current NEUTRAL (A)`. Per-phase Energy has no
+    1-minute source and is not a 1-minute column.
+  Values: bucket sum for Energy / register points, bucket mean for
+  measurements (as converted by the read layer), up to 6 decimals.
 - A missing reading is an empty cell. An asset with no data in the range
   (or no assigned data points) is a header-only CSV — never omitted.
 - Header text is CSV-escaped and formula-injection guarded.
@@ -60,7 +69,10 @@ exported — open Product question.
   uses (catalogue, `get_portal_asset_energy_series`,
   `get_portal_asset_point_series`, retention floors), keyed on the
   requesting user — for a background job, the job's owner, re-checked at
-  run time. One asset at a time; at most 9 series per read.
+  run time. One asset at a time; at most 9 series per read. The Analytics
+  chart registry (`ANALYTICS_DATA_POINTS`) decides what the Analytics page
+  charts; it does not limit the export, whose columns come from the asset's
+  confirmed catalogue points.
 - **API** (additive, `app/src/routers/report_exports.py`, every route
   requires `report.export` server-side):
   `GET /api/v1/sites/{id}/report-exports/estimate`,
@@ -98,6 +110,25 @@ exported — open Product question.
 
 ZIPs are held in the database until purged; with the defaults a file is a
 few MB at most. Rollback: migration 309's header.
+
+## Fix history
+
+**2026-10-24 — missing non-chart data points.** Reported on staging: the
+Coimbatore Seasons Restaurant AHU-1/AHU-2 CSVs lacked Temperature,
+Humidity and Occupancy. The assets have confirmed `asset_points` on their
+AirSense devices (`ENV_TEMPERATURE`, `ENV_RELATIVE_HUMIDITY`,
+`OCCUPANCY_ACTIVITY`, `ENV_ILLUMINANCE_LUX`), the catalogue function returns
+them (`TEMPERATURE`, `HUMIDITY`, `OCCUPANCY_ACTIVITY`, `ILLUMINANCE`), and
+`get_portal_asset_point_series` serves their telemetry. Root cause: the
+export planned columns from the Analytics chart registry, which lists nine
+electrical data points, so every other confirmed point was dropped. That
+affected the 4 AHUs with AirSense sensors at Coimbatore (plus Battery
+Voltage and Time Since Last Occupancy Event on Banquet 2 AHU) and, on every
+metered asset at both staging sites, Apparent Power, Apparent Energy,
+Current THD, Phase Angle and Neutral current. Fixed in
+`app/src/report_export_service.py` (extra catalogue columns); the Analytics
+page is unchanged. Whether the Analytics page should also chart these points
+is a separate, open Product question (ADR-022's curated registry).
 
 ## Validation
 
