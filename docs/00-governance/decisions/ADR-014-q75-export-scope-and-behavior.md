@@ -6,7 +6,8 @@ contextual chart-data export implemented, not deployed; Amendment 2
 (migration 309), deployed to staging 2026-10-24, not deployed to production;
 Reports UI acceptance testing outstanding (see 07-features/export); Amendment 3
 (2026-10-24) — asset selection (at most 10) and 14-day 1-minute exports
-(migration 312) implemented, not merged or deployed
+(migration 312) deployed to staging (PR #153, `7c28cfd`) and accepted there
+2026-10-25; not deployed to production
 Date: 2026-09-14 (MVP-6 Product Decision Workshop); amended 2026-09-15
 Decision owners: Product Owner
 Related requirements: EMS-REQ-094 through EMS-REQ-099

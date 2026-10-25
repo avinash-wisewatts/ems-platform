@@ -1,6 +1,6 @@
 # Export — Reports tab site measurement export
 
-Status: IMPLEMENTED (2026-10-24, migration 309); deployed to staging 2026-10-24; not deployed to production; UI acceptance testing outstanding. Asset selection and 14-day 1-minute exports (migration 312, ADR-014 Amendment 3) implemented 2026-10-24, not merged or deployed · Owner: Product + Engineering
+Status: IMPLEMENTED (2026-10-24, migration 309); deployed to staging 2026-10-24; not deployed to production; UI acceptance testing outstanding. Asset selection and 14-day 1-minute exports (migration 312, ADR-014 Amendment 3): PR #153 merged `7c28cfd` and deployed to staging 2026-10-24; staging UI acceptance completed 2026-10-25; not deployed to production · Owner: Product + Engineering
 Decisions: [ADR-014](../../00-governance/decisions/ADR-014-q75-export-scope-and-behavior.md) (Amendment 2), [ADR-022](../../00-governance/decisions/ADR-022-analytics-v1-scope-and-contract.md) (the series exported), [ADR-019](../../00-governance/decisions/ADR-019-analytical-backbone-time-basis-and-tiers.md) (resolutions and windows), [ADR-007](../../00-governance/decisions/ADR-007-analytics-api-boundary.md) (API boundary)
 
 ## Purpose
@@ -190,20 +190,77 @@ selection (ADR-014 Amendment 3).
 - Local end-to-end (2026-10-24, disposable test database): immediate ZIP,
   background job Queued → Completed, owner download, anonymous 401,
   other-organization user 404, failed-job retry.
-- Staging: see "Deployment and acceptance" below. Asset selection and the
-  1-minute read (migration 312) are not on staging yet; after deployment,
-  repeat the read-only timing check of the 1-minute read for one Coimbatore
-  asset over 14 days and export 10 assets x 14 days at 1 minute in the UI.
+- Staging: see "Deployment and acceptance" and "Staging acceptance of
+  migration 312" below.
 
 ## Deployment and acceptance
 
 | Environment | State (checked 2026-10-24, read-only) | Acceptance |
 |---|---|---|
-| Staging | Deployed: PR #145 (squash `4f01764`, deploy run 40009981810) and the all-points fix PR #146 (squash `257b503`, deploy run 40069783724); migration 309 in the ledger (181 rows). | Backend export verified read-only: the deployed code was run inside the app container for the Coimbatore AHUs, with every catalogue column present and gaps empty. **Reports UI acceptance testing is outstanding**: the Reports page has not been exercised by a logged-in user (immediate and background export, notification, download, retry). |
+| Staging | Deployed: PR #145 (squash `4f01764`, deploy run 40009981810), the all-points fix PR #146 (squash `257b503`, deploy run 40069783724) and asset selection / 14-day 1-minute PR #153 (squash `7c28cfd`, deploy run 40108375840: migration 312 APPLY once in 137 ms with postconditions passed, post-deployment verification passed); ledger 183 rows; both app containers on `7c28cfd`, healthy. | **Accepted 2026-10-25** (authenticated UI acceptance by the Product Owner through the local Web App against staging over the SSH tunnel, plus read-only evidence below). Not yet exercised by a second portal user: staging has one active portal user (a GLOBAL admin), so non-owner / other-organization isolation rests on the real-database tests. |
 | Production | **Not deployed.** The app image is `7e3da57` (PR #144), which contains neither `4f01764` nor `257b503`; the ledger ends at migration 308 (180 rows); `analytics.report_export_jobs` / `report_export_files` do not exist. | **Outstanding** until Reports (migration 309 and the app/web image) is promoted to production through the production release process; then repeat the UI acceptance there. |
 
-Before any production promotion:
+### Staging acceptance of migration 312 (2026-10-24/25)
 
-- Complete the staging UI acceptance.
-- Get a Product Owner answer on the per-cell quality-state point (ADR-014
-  decisions 3/10/11).
+Evidence collected read-only (SELECT-only SQL, read-only HTTP; the ZIP was
+copied to the engineer's machine and inspected there).
+
+- **Deployed 1-minute read** (`get_portal_asset_measurements_1m`, every
+  catalogue point, 14 days): Chiller1 49 points (37 measurement, 12 register
+  points reported and omitted) -- 20,121 minute rows, 744,477 values,
+  10.7 s; Banquet 2 AHU 55 points (12 omitted) -- 20,137 rows, 865,136
+  values, 13.2 s. The previous per-point read did not finish 9 points x 1
+  day in 90 s. Host memory unchanged during the reads.
+- **Background exports run in the UI** (Coimbatore, 11 Oct - 25 Oct 00:00
+  IST, all COMPLETED on the first attempt, queue wait under 5 s):
+
+  | Resolution | Assets | Rows | ZIP size | Run time |
+  |---|---|---|---|---|
+  | Auto (1 h) | 9 (AHUs + chillers) | 3,024 | 0.5 MB | 61 s |
+  | 1 minute | 9 (AHUs + chillers) | 181,440 | 18.3 MB | 2 min 52 s |
+  | 1 minute | 6 (pumps, cooling towers) | 120,960 | 10.3 MB | 1 min 27 s |
+  | 1 minute | 5 (kitchen) | 100,800 | 10.1 MB | 1 min 14 s |
+
+  The largest single export had 9 assets; a 10-asset export was not run
+  (extrapolated: ~3 min 10 s and ~20 MB).
+- **ZIP / CSV integrity** (9-asset 1-minute file, byte size equal to the
+  stored size): `testzip` OK; one CSV per selected asset; each exactly
+  20,160 rows (14 x 1,440), consecutive minutes with no step other than
+  1 minute, no ragged rows, site-local column at +05:30; total rows equal
+  the job's `row_count`; 99.7-99.9 % of cells filled. No register columns
+  (Apparent Energy, per-phase Energy) are present; System Energy and Energy
+  Export are. The AirSense AHUs carry Temperature, Relative Humidity,
+  Illuminance, Occupancy Activity and Time Since Last Occupancy Event.
+- **Access control**: anonymous estimate, create, list, job and file
+  requests through the proxy are 401; for an unknown portal user the job,
+  file, list and 1-minute read return nothing; an asset of the other
+  staging site requested under Coimbatore returns nothing; `ems_app` has no
+  SELECT on `analytics.report_export_files`. App log: create 202, estimate
+  200 (and 4 validation 422s), downloads 200, no 5xx, no tracebacks.
+- **The four 422s are expected validation errors, not a defect.** The
+  access log shows the same estimate four times: 1 minute for
+  10 Oct 00:00 – 25 Oct 00:00 IST, which is **15 days** (the 1-minute limit is
+  14). Replaying that request against the deployed parser gives
+  `time_range_too_large`; exactly 14 days is accepted. The page shows "1 minute
+  covers up to 14 days…", and the user then exported 11–25 Oct. Possible UX
+  improvement, not required: disable "1 minute" for ranges longer than 14
+  days instead of answering with the message.
+- **Expiry**: files expire 24 h after completion; an export created before
+  312 reached `expires_at` (25 Oct 01:06 IST) and was purged by the worker
+  (status EXPIRED, file deleted).
+- **Storage**: `analytics.report_export_files` 46 MB for 6 unexpired files
+  (the four acceptance exports ~39 MB), released as each file expires.
+  Database 29 GB, disk 41 GB free (58 % used).
+- **Health after the test**: PostgreSQL not restarted (up since
+  2026-09-22); pipeline jobs 1000 / 1001 / 1012 / 1076 succeeding;
+  environment telemetry current; containers healthy.
+
+**Verified limits.** The largest verified UI export is **9 assets** (14 days
+at 1 minute). Performance at the 10-asset maximum is an **estimate** (about
+3 min 10 s, about 20 MB), extrapolated from the 5-, 6- and 9-asset runs.
+
+Before any production promotion, close the checklist in
+[10-operations/reports-export-production-readiness.md](../../10-operations/reports-export-production-readiness.md).
+It covers the Product Owner decision on per-cell data quality (ADR-014
+decisions 3/10/11), the read-only production timing of the 1-minute read,
+release sequencing, storage and memory limits, and the 10-asset estimate.
