@@ -11,10 +11,15 @@ set -Eeuo pipefail
 #   ./scripts/apply_migrations.sh --baseline
 #   ./scripts/apply_migrations.sh
 #
+# Required environment (every mode except --list)
+# -----------------------------------------------
+#   DEPLOY_ENVIRONMENT=staging|production|test
+#
 # Optional environment overrides
 # ------------------------------
 #   COMPOSE_FILE=/path/to/compose.yaml
 #   MIGRATION_MANIFEST=/path/to/restructure_manifest.csv
+#   MIGRATION_SCOPE=/path/to/migration_environment_scope.csv
 #   DB_CONTAINER=timescaledb
 #   DB_NAME=ems
 #   DB_USER=ems_admin
@@ -26,6 +31,9 @@ set -Eeuo pipefail
 # * New forward migrations 002+ are executed exactly once.
 # * Editing an already recorded migration causes a hard checksum failure.
 # * Each executed migration and its ledger insert occur in one transaction.
+# * A migration listed in the scope file runs only in the environments it
+#   names; elsewhere it is reported as SKIP-ENV and gets no ledger row. A
+#   scoped-out migration that is already in the ledger is a hard failure.
 # =============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -33,6 +41,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 COMPOSE_FILE="${COMPOSE_FILE:-${PROJECT_ROOT}/compose.yaml}"
 MIGRATION_MANIFEST="${MIGRATION_MANIFEST:-${PROJECT_ROOT}/postgres/restructure_manifest.csv}"
+MIGRATION_SCOPE="${MIGRATION_SCOPE:-${PROJECT_ROOT}/postgres/migration_environment_scope.csv}"
 
 DB_CONTAINER="${DB_CONTAINER:-timescaledb}"
 DB_NAME="${DB_NAME:-ems}"
@@ -48,6 +57,24 @@ case "${MODE}" in
         exit 2
         ;;
 esac
+
+DEPLOY_ENVIRONMENT="${DEPLOY_ENVIRONMENT:-}"
+
+if [[ "${MODE}" != "--list" ]]; then
+    case "${DEPLOY_ENVIRONMENT}" in
+        staging|production|test)
+            ;;
+        *)
+            echo "ERROR: DEPLOY_ENVIRONMENT must be staging, production or test (got '${DEPLOY_ENVIRONMENT}')." >&2
+            exit 2
+            ;;
+    esac
+fi
+
+if [[ ! -f "${MIGRATION_SCOPE}" ]]; then
+    echo "ERROR: Migration scope file not found: ${MIGRATION_SCOPE}" >&2
+    exit 1
+fi
 
 if [[ ! -f "${COMPOSE_FILE}" ]]; then
     echo "ERROR: Compose file not found: ${COMPOSE_FILE}" >&2
@@ -122,6 +149,54 @@ for relative_path in "${MIGRATION_FILES[@]}"; do
     fi
 done
 
+# Environment scope: migration_id -> '|'-separated environments. Validated in
+# full before any database work.
+declare -A MANIFEST_IDS=()
+for relative_path in "${MIGRATION_FILES[@]}"; do
+    filename="$(basename "${relative_path}")"
+    MANIFEST_IDS["${filename%.sql}"]=1
+done
+
+declare -A MIGRATION_ENVIRONMENTS=()
+while IFS=',' read -r scope_id scope_environments _scope_reason; do
+    scope_id="${scope_id%$'\r'}"
+    [[ -z "${scope_id}" || "${scope_id}" == "migration_id" ]] && continue
+
+    if [[ -z "${MANIFEST_IDS[${scope_id}]:-}" ]]; then
+        echo "ERROR: Scope file names a migration that is not in the manifest: ${scope_id}" >&2
+        exit 1
+    fi
+    if [[ -n "${MIGRATION_ENVIRONMENTS[${scope_id}]:-}" ]]; then
+        echo "ERROR: Scope file lists ${scope_id} more than once." >&2
+        exit 1
+    fi
+    if [[ -z "${scope_environments}" ]]; then
+        echo "ERROR: Scope file gives ${scope_id} no environments." >&2
+        exit 1
+    fi
+
+    IFS='|' read -r -a scope_list <<< "${scope_environments}"
+    for scope_environment in "${scope_list[@]}"; do
+        case "${scope_environment}" in
+            staging|production|test)
+                ;;
+            *)
+                echo "ERROR: Scope file gives ${scope_id} an unknown environment: '${scope_environment}'" >&2
+                exit 1
+                ;;
+        esac
+    done
+
+    MIGRATION_ENVIRONMENTS["${scope_id}"]="${scope_environments}"
+done < "${MIGRATION_SCOPE}"
+
+in_scope() {
+    local scope_environments="${MIGRATION_ENVIRONMENTS[$1]:-}"
+
+    [[ -z "${scope_environments}" ]] && return 0
+    [[ "|${scope_environments}|" == *"|${DEPLOY_ENVIRONMENT}|"* ]]
+}
+
 if [[ "${MODE}" == "--list" ]]; then
     printf '%s\n' "${MIGRATION_FILES[@]}"
     exit 0
@@ -131,6 +206,8 @@ echo "WiseWatts EMS migration runner"
 echo "=============================="
 echo "Database:  ${database_identity}"
 echo "Manifest:  ${MIGRATION_MANIFEST}"
+echo "Scope:     ${MIGRATION_SCOPE}"
+echo "Environment: ${DEPLOY_ENVIRONMENT}"
 echo "Mode:      ${MODE}"
 echo "Migrations selected: ${#MIGRATION_FILES[@]}"
 echo
@@ -152,6 +229,16 @@ for relative_path in "${MIGRATION_FILES[@]}"; do
             WHERE migration_id = '${migration_id_sql}';
         "
     )"
+
+    if ! in_scope "${migration_id}"; then
+        if [[ -n "${existing_record}" ]]; then
+            echo "ERROR: ${migration_id} is scoped to '${MIGRATION_ENVIRONMENTS[${migration_id}]}' but is recorded in the ${DEPLOY_ENVIRONMENT} ledger." >&2
+            exit 1
+        fi
+
+        echo "SKIP-ENV ${migration_id} (${MIGRATION_ENVIRONMENTS[${migration_id}]})"
+        continue
+    fi
 
     if [[ -n "${existing_record}" ]]; then
         existing_checksum="${existing_record%%|*}"

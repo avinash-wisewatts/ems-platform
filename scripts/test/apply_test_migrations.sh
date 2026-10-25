@@ -8,7 +8,9 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 # contains one immutable baseline migration followed by future migrations 002+.
 # A clean test database first receives the canonical deployment, then executes
 # the active migration stream normally. No historical ledger simulation is
-# required.
+# required. DEPLOY_ENVIRONMENT=test also applies the staging-scoped migrations
+# (postgres/migration_environment_scope.csv), so every migration is tested.
+DEPLOY_ENVIRONMENT="test" \
 COMPOSE_FILE="${PROJECT_ROOT}/compose.test.yaml" \
 DB_CONTAINER="timescaledb-test" \
 DB_NAME="ems_test" \

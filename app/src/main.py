@@ -376,9 +376,10 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     """Initialize and close shared application resources."""
     await open_database_pool()
 
-    # Reports tab background exports (migration 309): one in-process worker.
+    # Reports tab background exports (migration 309): one in-process worker,
+    # only where Reports is enabled (staging-only; see config.reports_enabled).
     report_export_worker: ReportExportWorker | None = None
-    if settings.report_export_worker_enabled:
+    if settings.reports_enabled and settings.report_export_worker_enabled:
         report_export_worker = ReportExportWorker(
             poll_seconds=settings.report_export_poll_seconds,
             max_cells=settings.report_export_max_cells,
@@ -424,7 +425,9 @@ app.mount(
 
 app.include_router(context_router)
 app.include_router(analytics_api_router)
-app.include_router(report_exports_router)
+# Reports export routes exist only where Reports is enabled (staging-only).
+if settings.reports_enabled:
+    app.include_router(report_exports_router)
 
 
 # ---------------------------------------------------------------------------

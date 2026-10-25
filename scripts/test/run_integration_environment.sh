@@ -25,6 +25,10 @@ echo "[4/14] Baselining historical migrations and applying forward migrations...
 "${SCRIPT_DIR}/apply_test_migrations.sh"
 
 echo
+echo "[migration-scope] Running migration environment-scope assertions (scratch database)..."
+"${SCRIPT_DIR}/assert_migration_environment_scope.sh"
+
+echo
 echo "[5/14] Running energy-register semantic assertions..."
 "${SCRIPT_DIR}/assert_energy_register_semantics.sh"
 

@@ -44,6 +44,10 @@ on:
         description: "Optional: previously-built frontend (-web) image reference to roll the SPA back to. Leave blank to leave the deployed frontend bundle untouched."
         required: false
         default: ""
+      expected_migrations:
+        description: "Migrations the target commit's runner will apply (usually none for a rollback), comma-separated ids or numeric prefixes, or none. Refused unless exact, and never a migration scoped away from the environment."
+        required: true
+        default: "none"
 
 permissions:
   contents: read
@@ -60,13 +64,25 @@ jobs:
           host: ${{ inputs.target_environment == 'production' && secrets.PRODUCTION_HOST || secrets.STAGING_HOST }}
           username: ${{ inputs.target_environment == 'production' && secrets.PRODUCTION_USER || secrets.STAGING_USER }}
           key: ${{ inputs.target_environment == 'production' && secrets.PRODUCTION_SSH_KEY || secrets.STAGING_SSH_KEY }}
-          envs: RELEASE_SHA,APP_IMAGE,WEB_IMAGE,REGISTRY_USERNAME,REGISTRY_PASSWORD,PROJECT_PATH_VALUE,ENV_NAME_VALUE
+          envs: RELEASE_SHA,APP_IMAGE,WEB_IMAGE,REGISTRY_USERNAME,REGISTRY_PASSWORD,PROJECT_PATH_VALUE,ENV_NAME_VALUE,EXPECTED_MIGRATIONS
           script: |
             set -euo pipefail
             export PROJECT_PATH="${PROJECT_PATH_VALUE}"
             export APP_IMAGE="${APP_IMAGE}"
             export RELEASE_GIT_SHA="${RELEASE_SHA}"
             export ENVIRONMENT_NAME="${ENV_NAME_VALUE}"
+            export EXPECTED_MIGRATIONS="${EXPECTED_MIGRATIONS}"
+
+            # Pending-migration precheck, before anything changes: a rollback
+            # target may predate the migration environment scope, and its
+            # runner would apply every pending manifest row. The check runs
+            # from origin/staging's copy (see precheck_release_migrations.sh).
+            cd "${PROJECT_PATH}"
+            git fetch --quiet origin "+refs/heads/staging:refs/remotes/origin/staging" "${RELEASE_GIT_SHA}"
+            precheck="$(mktemp)"
+            git show origin/staging:scripts/release/precheck_release_migrations.sh > "${precheck}"
+            bash "${precheck}"
+            rm -f "${precheck}"
 
             # Optional, independent frontend rollback: only runs when a -web
             # image tag was supplied. Placed BEFORE deploy_release.sh so the
@@ -81,9 +97,10 @@ jobs:
             fi
 
             "${PROJECT_PATH}/scripts/release/deploy_release.sh"
-            "${PROJECT_PATH}/scripts/release/post_deploy_verify.sh"
+            DEPLOY_ENVIRONMENT="${ENVIRONMENT_NAME}" "${PROJECT_PATH}/scripts/release/post_deploy_verify.sh"
         env:
           RELEASE_SHA: ${{ inputs.release_git_sha }}
+          EXPECTED_MIGRATIONS: ${{ inputs.expected_migrations }}
           APP_IMAGE: ${{ inputs.image_tag }}
           WEB_IMAGE: ${{ inputs.web_image_tag }}
           ENV_NAME_VALUE: ${{ inputs.target_environment }}

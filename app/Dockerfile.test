@@ -3,6 +3,9 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/workspace/app
+# The Reports export is off by default (staging-only); the suite tests it on.
+# test_reports_feature_flag.py imports the app with it off in a subprocess.
+ENV EMS_REPORTS_ENABLED=true
 
 WORKDIR /workspace
 
@@ -27,6 +30,14 @@ COPY postgres/ddl /workspace/postgres/ddl
 COPY postgres/migrations /workspace/postgres/migrations
 COPY postgres/jobs /workspace/postgres/jobs
 COPY postgres/restructure_manifest.csv /workspace/postgres/restructure_manifest.csv
+# Migration environment scope and the release precheck that reads it
+# (app/tests/test_check_pending_migrations.py).
+COPY postgres/migration_environment_scope.csv /workspace/postgres/migration_environment_scope.csv
+COPY postgres/migration_environment_scope_objects.csv /workspace/postgres/migration_environment_scope_objects.csv
+COPY scripts/release /workspace/scripts/release
+# Release workflows, for the precheck / gate wiring contract
+# (app/tests/test_release_workflow_scope_contract.py).
+COPY .github/workflows /workspace/.github/workflows
 # Migration 303 rollback script, executed (rolled back) by
 # app/tests/test_routing_forward_floor_late_sweep.py.
 COPY postgres/maintenance/303_routing_forward_floor_late_sweep_rollback.sql /workspace/postgres/maintenance/303_routing_forward_floor_late_sweep_rollback.sql

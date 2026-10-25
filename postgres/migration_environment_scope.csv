@@ -1,0 +1,4 @@
+migration_id,environments,reason
+309_report_export_jobs,staging|test,Reports export (ADR-014 Amendment 2) is not approved for production
+310_preserved_rtdata_backfill,staging|test,One-time AirSense history recovery; production was recovered by a reviewed session script on 2026-10-24
+312_report_export_asset_selection_1m,staging|test,Reports export (ADR-014 Amendment 2) is not approved for production

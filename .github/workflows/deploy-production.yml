@@ -103,6 +103,9 @@ on:
         options:
           - staging-head
           - staging-milestone
+      expected_migrations:
+        description: "Migrations this release applies to production, comma-separated ids or numeric prefixes (e.g. 311), or none. The deploy is refused unless the target's runner would apply exactly these, and never a staging-only migration (postgres/migration_environment_scope.csv)."
+        required: true
 
 permissions:
   contents: read
@@ -466,16 +469,28 @@ jobs:
           host: ${{ secrets.PRODUCTION_HOST }}
           username: ${{ secrets.PRODUCTION_USER }}
           key: ${{ secrets.PRODUCTION_SSH_KEY }}
-          envs: RELEASE_SHA,APP_IMAGE,REGISTRY_USERNAME,REGISTRY_PASSWORD
+          envs: RELEASE_SHA,APP_IMAGE,REGISTRY_USERNAME,REGISTRY_PASSWORD,EXPECTED_MIGRATIONS
           script: |
             set -euo pipefail
             export PROJECT_PATH="${{ secrets.PRODUCTION_PROJECT_PATH }}"
             export APP_IMAGE="${APP_IMAGE}"
             export RELEASE_GIT_SHA="${RELEASE_SHA}"
             export ENVIRONMENT_NAME="production"
+            export EXPECTED_MIGRATIONS="${EXPECTED_MIGRATIONS}"
+            # Pending-migration precheck (before any change): the target's own
+            # runner must apply exactly expected_migrations and no staging-only
+            # migration. The check runs from origin/staging's copy, never from
+            # the host checkout (the release currently deployed).
+            cd "${PROJECT_PATH}"
+            git fetch --quiet origin "+refs/heads/staging:refs/remotes/origin/staging" "${RELEASE_GIT_SHA}"
+            precheck="$(mktemp)"
+            git show origin/staging:scripts/release/precheck_release_migrations.sh > "${precheck}"
+            bash "${precheck}"
+            rm -f "${precheck}"
             "${PROJECT_PATH}/scripts/release/deploy_release.sh"
         env:
           RELEASE_SHA: ${{ inputs.release_git_sha }}
+          EXPECTED_MIGRATIONS: ${{ inputs.expected_migrations }}
           APP_IMAGE: ${{ steps.resolve-image.outputs.image_with_digest }}
           REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
           REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
@@ -503,4 +518,6 @@ jobs:
           script: |
             set -euo pipefail
             cd "${{ secrets.PRODUCTION_PROJECT_PATH }}"
-            ./scripts/release/post_deploy_verify.sh
+            # DEPLOY_ENVIRONMENT=production enables the REQUIRED
+            # "Staging-only Objects Absent" gate (309 / 310 / 312, Reports).
+            DEPLOY_ENVIRONMENT=production ./scripts/release/post_deploy_verify.sh

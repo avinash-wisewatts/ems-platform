@@ -368,8 +368,9 @@ are rare.
 
 ### Failed-message recovery: event-time bound on the `normalized_points` lookups (migration 311)
 
-**Status: PR #152 open, not merged or deployed.** Production job 1061 stays
-paused (since 2026-10-24) until this reaches production.
+**Status: merged (PR #152, `4a26d3a`) and applied on staging 2026-10-25
+09:49 UTC; not on production.** Production job 1061 stays paused (since
+2026-10-24) until this reaches production.
 
 `telemetry.recover_failed_raw_messages` (job 1061 on production, 1077 on
 staging) looks up `normalized_points` twice per candidate: the capture-sample
@@ -396,10 +397,11 @@ AirSense sensors were commissioned on 2026-10-24; each run then hit the
 - **Rollback:** `postgres/maintenance/311_recovery_lookup_event_time_bound_rollback.sql`
   (guarded; restores 305's body exactly). Run it before the 305 or 303
   rollback: theirs refuse any body other than their own.
-- **Production route:** production can't take this through the normal
-  release while migrations 309 / 312 (Reports) are staging-only. The release
-  strategy is proposed in PR #150 (`docs/10-operations/release-strategy-staging-only-features.md`),
-  not decided.
+- **Production route:** migrations 309 / 310 / 312 are staging-only
+  (`postgres/migration_environment_scope.csv`), so a production release of a
+  later `staging` commit applies 311 alone, with `expected_migrations=311`
+  ([ci-cd.md](../../09-release-and-deployment/ci-cd.md#environment-scoped-migrations)).
+  Not deployed: each production step needs its own approval.
 - **Tests:** `app/tests/test_recovery_lookup_event_time_bound.py`, plus the
   updated 303 rollback tests (rollback order 311 → 306 → 305).
 
