@@ -237,6 +237,14 @@ copied to the engineer's machine and inspected there).
   staging site requested under Coimbatore returns nothing; `ems_app` has no
   SELECT on `analytics.report_export_files`. App log: create 202, estimate
   200 (and 4 validation 422s), downloads 200, no 5xx, no tracebacks.
+- **The four 422s are expected validation errors, not a defect.** The
+  access log shows the same estimate four times: 1 minute for
+  10 Oct 00:00 – 25 Oct 00:00 IST, which is **15 days** (the 1-minute limit is
+  14). Replaying that request against the deployed parser gives
+  `time_range_too_large`; exactly 14 days is accepted. The page shows "1 minute
+  covers up to 14 days…", and the user then exported 11–25 Oct. Possible UX
+  improvement, not required: disable "1 minute" for ranges longer than 14
+  days instead of answering with the message.
 - **Expiry**: files expire 24 h after completion; an export created before
   312 reached `expires_at` (25 Oct 01:06 IST) and was purged by the worker
   (status EXPIRED, file deleted).
@@ -247,10 +255,12 @@ copied to the engineer's machine and inspected there).
   2026-09-22); pipeline jobs 1000 / 1001 / 1012 / 1076 succeeding;
   environment telemetry current; containers healthy.
 
-Before any production promotion:
+**Verified limits.** The largest verified UI export is **9 assets** (14 days
+at 1 minute). Performance at the 10-asset maximum is an **estimate** (about
+3 min 10 s, about 20 MB), extrapolated from the 5-, 6- and 9-asset runs.
 
-- Get a Product Owner answer on the per-cell quality-state point (ADR-014
-  decisions 3/10/11).
-- Production volumes are larger than staging's: repeat the read-only timing
-  of the 1-minute read on production before enabling 14-day 1-minute
-  exports there.
+Before any production promotion, close the checklist in
+[10-operations/reports-export-production-readiness.md](../../10-operations/reports-export-production-readiness.md).
+It covers the Product Owner decision on per-cell data quality (ADR-014
+decisions 3/10/11), the read-only production timing of the 1-minute read,
+release sequencing, storage and memory limits, and the 10-asset estimate.
