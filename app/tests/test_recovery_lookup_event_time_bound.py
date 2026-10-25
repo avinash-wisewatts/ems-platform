@@ -115,3 +115,26 @@ def test_manifest_registers_311_after_310_with_lf_and_no_transaction_control():
     raw = M311.read_bytes()
     assert b"\r\n" not in raw
     assert "\nBEGIN;" not in raw.decode("utf-8").upper() and "\nCOMMIT;\n" not in raw.decode("utf-8").split("$procedure$")[0].upper()
+
+
+ROLLBACK_311 = REPO / "postgres" / "maintenance" / "311_recovery_lookup_event_time_bound_rollback.sql"
+
+
+def _script_body(path):
+    text = path.read_text(encoding="utf-8")
+    assert text.count("\nBEGIN;\n") == 1 and text.rstrip().endswith("COMMIT;")
+    return text.split("\nBEGIN;\n", 1)[1].rsplit("COMMIT;", 1)[0]
+
+
+def test_rollback_restores_the_migration_305_body_and_then_refuses(tx):
+    tx.execute(_script_body(ROLLBACK_311))
+    md5 = tx.execute("SELECT md5(replace(prosrc, E'\\r', '')) FROM pg_proc WHERE oid = %s::regprocedure", (SIG,)).fetchone()[0]
+    assert md5 == "76e7c9e2140fe46a3012e7f654a80294"
+    with pytest.raises(psycopg.errors.RaiseException, match="311 rollback refused"):
+        with tx.transaction():
+            tx.execute(_script_body(ROLLBACK_311))
+
+
+def test_rollback_restores_exactly_the_body_in_migration_305():
+    assert _body(ROLLBACK_311) == _body(M305)
+    assert b"\r" not in ROLLBACK_311.read_bytes()   # the guards use the E'\r' escape, not a raw CR
