@@ -1,6 +1,6 @@
 # Production Release Plan: Migrations 266 → 301
 
-Status: **Release A deployed 2026-10-17 and accepted 2026-10-18** (section 6, "Release A acceptance"; 48-hour window closed 2026-10-19); **Release B1 (268, 269) deployed and accepted 2026-10-19** (section 2, "B1 execution record"); **Release B2 (14 migrations, 263–286) deployed 2026-10-20, D3 PASS** (section 2, "B2 execution record"); **Release C1 (15 migrations, through 291) deployed 2026-10-22 and accepted 2026-10-22 23:37 UTC** ("C1 acceptance"); **Release C2′ (292–295, 297, 298, `d52b049`) deployed 2026-10-23 05:23 UTC, run 39905366140, postcheck PASS** ("C2′ execution record"; acceptance pending); **Release D (299–308, `7e3da57`) deployed 2026-10-23 13:00 UTC, run 39957525916, postcheck PASS; six migration-300 jobs kept on five-minute schedules (user decision); 24-hour acceptance pending** ("Release D execution record"); D1 / D4a / D4b / D8 / D9 decided 2026-10-17 (D8 condition confirmed), D3 decided 2026-10-19 for B1 and 2026-10-20 for B2, others open · Prepared: 2026-10-14 · Updated: 2026-10-23 · Owner: Engineering
+Status: **Release A deployed 2026-10-17 and accepted 2026-10-18** (section 6, "Release A acceptance"; 48-hour window closed 2026-10-19); **Release B1 (268, 269) deployed and accepted 2026-10-19** (section 2, "B1 execution record"); **Release B2 (14 migrations, 263–286) deployed 2026-10-20, D3 PASS** (section 2, "B2 execution record"); **Release C1 (15 migrations, through 291) deployed 2026-10-22 and accepted 2026-10-22 23:37 UTC** ("C1 acceptance"); **Release C2′ (292–295, 297, 298, `d52b049`) deployed 2026-10-23 05:23 UTC, run 39905366140, postcheck PASS; accepted 2026-10-25** ("C2′ acceptance"); **Release D (299–308, `7e3da57`) deployed 2026-10-23 13:00 UTC, run 39957525916, postcheck PASS; six migration-300 jobs kept on five-minute schedules (user decision); 24-hour acceptance pending** ("Release D execution record"); D1 / D4a / D4b / D8 / D9 decided 2026-10-17 (D8 condition confirmed), D3 decided 2026-10-19 for B1 and 2026-10-20 for B2, others open · Prepared: 2026-10-14 · Updated: 2026-10-25 · Owner: Engineering
 Only Releases A and B1 have been executed. Every other dispatch, precheck and operator
 step below needs its own explicit approval
 ([release-process.md](release-process.md#every-phase-requires-its-own-explicit-approval)).
@@ -966,10 +966,11 @@ Postcheck [M 05:32 UTC, read-only]:
 | App | `ems-admin-portal` and `ems-live-telemetry` on `ems-platform-app:d52b049…`, both healthy; database container healthy, Postgres up since 2026-09-22 | PASS |
 | Health | Failures (excl. 1114) 2840; 0 failing; 0 job errors since dispatch; 0 lock waiters, 0 long transactions, 0 leftover lock-watch backends; unscheduled set unchanged; disk 69 %, 31 GB free; load 0.57 | PASS |
 
-C2′ acceptance (not yet recorded): the first quarter-hour demand runs (05:37
-UTC onward) finalize intervals with the same VALID share as before, and no
-new failures over the following day. No job was retried, rescheduled or
-altered apart from 298's own change; no frontend was deployed.
+C2′ acceptance criteria: the first quarter-hour demand runs (05:37 UTC
+onward) finalize intervals with the same VALID share as before, and no new
+failures over the following day. No job was retried, rescheduled or altered
+apart from 298's own change; no frontend was deployed. Recorded as accepted
+on 2026-10-25 ("C2′ acceptance" below).
 
 Interim acceptance check [M 06:41 and 06:53 UTC, read-only; not an
 acceptance record]:
@@ -980,6 +981,57 @@ acceptance record]:
 | Finalization | One batch of 56 rows per run, each finalizing the bucket that closed 7 min earlier (05:15 at 05:37 … 06:30 at 06:52); before the deploy the same buckets were finalized at +6 min by the 1-minute runs; checkpoint 06:45 SUCCESS; no missing buckets | PASS |
 | VALID share | 24 h before 05:15: 5376 rows / 96 buckets, 86.83 % VALID (702 NO_DATA, 6 INCOMPLETE). Buckets 05:15–06:00 and 06:30: 48 VALID / 56, identical by site to before. Bucket 06:15: 32 VALID, because all 22 `Unit 2` asset rows were INCOMPLETE (12 of 15 observations, 73.33 %); the 06:52 run re-evaluated it within the 30-minute overlap and it stayed INCOMPLETE, so the 3 minutes are absent from the source, not late. At 06:30 `Unit 2` returned 22 VALID, including its 6 usually NO_DATA assets | Not attributable to C2′ (source gap at one site); share still under observation |
 | Health | Failures (excl. 1114) 2840; 0 lock waiters, 0 long transactions; unscheduled set unchanged; ledger 170 / `543b536b…`; app containers healthy; disk 69 % | PASS |
+
+#### C2′ acceptance (accepted 2026-10-25)
+
+Criteria: section 6 "Evidence of success" (C2′ row and "All"), over the
+24 hours after the first quarter-hour demand run: 2026-10-23 05:37 UTC →
+2026-10-24 05:37 UTC.
+
+**Accepted** (recorded at the user's instruction on 2026-10-25, from the
+evidence below). This acceptance covers C2′ only. **Release D's 24-hour
+acceptance is separate and is not decided here** ("Release D execution
+record").
+
+Read-only checks 2026-10-25 07:22–07:40 UTC [M] (`ssh ems-production` →
+`docker exec ems-timescaledb psql`, `default_transaction_read_only=on`,
+`BEGIN TRANSACTION READ ONLY … ROLLBACK`, statement_timeout 30 s,
+lock_timeout 2 s; job catalog and statistics, the ledger,
+`analytics.demand_intervals` and `telemetry.raw_messages` bounded to the
+window):
+
+| Criterion | Evidence | Result |
+|---|---|---|
+| Run, gates | Run 39905366140 success; REQUIRED gates (database structure, metadata integrity, energy routing metric identity) PASS; the advisory FAILs are the pre-existing C1 findings ("C2′ execution record") | PASS |
+| Ledger | Postcheck 05:32 UTC: 170 rows, the six C2′ rows once each, checksums = staging. Re-checked 2026-10-25: the six rows still `applied`, `checksum_sha256` = sha256 of the repository files (292–308 compared at `7e3da57`: 16 / 16 identical) | PASS |
+| No new job failures | 0 rows in `timescaledb_information.job_errors` between 2026-10-23 05:22 and 2026-10-24 05:37 UTC. The 12:59 UTC Release D gate saw failures (excl. 1114) 2840, 0 failing. The first new failure after C2′ is job 1061 at 2026-10-24 07:58 UTC, after this window (see below) | PASS |
+| 1062 schedule | Every 15 min, `fixed_schedule` true, `initial_start` 2026-10-23 05:37:00 UTC → :07/:22/:37/:52; max_runtime 10 min. `total_failures` 1 (historical, unchanged since before C2′); 167 runs against 166 expected since 2026-10-23 13:49:54 UTC | PASS |
+| Finalization | 0 missing quarter-hour buckets 2026-10-23 05:15 → 2026-10-24 05:15 UTC (97 buckets × 56 rows). Finalized at interval end + 7:05–7:16 (p50 425 s / p99 435 s, C2′-only part) and + 7:03–7:06 (C2′ + D part); before C2′, + 6:05–6:09 with the 1-minute runs. The extra minute is 298's :07 slot, as designed | PASS |
+| VALID share | Steady state is 96.43 % (54 / 56 per bucket). The two rows missing in every bucket are the single assets of `SVSS Nivas` and `Vivekanandanagar Home`, whose gateways send no raw messages (NO_DATA in all 97 buckets of the window). Same share before and after: 96.43 % on 2026-10-19 and 2026-10-21 (whole days, before C2′) and on 2026-10-24 and 2026-10-25 (after). Window: 05:15–12:45 UTC 91.07 % (1,680 rows); 12:45 UTC → 05:30 UTC 96.38 % (3,752 rows). The 24 h immediately before C2′ (86.83 %) is not a usable baseline: it falls inside the `Unit 2` gateway outage (2026-10-22 07:48 → 2026-10-23 about 06:00 UTC) | PASS |
+| Non-VALID rows in the window | All explained by missing source data, none by C2′: `Unit 2` NO_DATA 24 rows (4 buckets 05:15–06:00, end of the outage); `Unit 2` INCOMPLETE 66 rows = 22 assets × buckets 06:15, 11:45 and 12:00, each matching minutes with **no `Unit 2` raw messages at all** (06:15–06:17, 11:58–11:59, 12:00), while the neighbouring buckets 11:30 and 12:15 have raw data in every minute; `Coimbatore` INCOMPLETE 2 rows (13:30) | PASS (source gaps) |
+| Host and app | 2026-10-25: checkout `7e3da57`; `ems-admin-portal` / `ems-live-telemetry` healthy, `/health` 200; database container healthy; disk 64 %, 36 GB free | PASS |
+
+**Overlap with Release D.** Release D was deployed at 13:00 UTC on
+2026-10-23, 7.5 hours into this window. From then on, C2′ is observed
+together with D's five-minute pipeline schedule (migration 300). C2′'s
+criteria are specific to job 1062 and the demand VALID share, and both still
+hold under D (above). A failure that started after D could not be attributed
+to C2′ alone, but none occurred inside the window.
+
+**Not part of C2′; open under Release D.** On 2026-10-25 the failure total
+(excl. 1114) is **2847**, 7 more than the 2840 baseline. All 7 hit a job's
+`max_runtime` after this window:
+
+- job 1061 (`run_failed_message_recovery_job`): 3 runs of exactly 10 min on
+  2026-10-24 07:58, 08:23 and 08:58 UTC; now unscheduled (audited pause),
+  last status Failed. PR #152 traces this to the recovery body that
+  migration 305 installed (Release D); the fix (migration 311) is not merged.
+- job 1060 (`run_raw_receipt_state_job`): 4 runs of exactly 1 min on
+  2026-10-24 12:47, 12:49, 12:50 and 14:18 UTC; it has run successfully since.
+  No cause recorded.
+
+These count against Release D's criterion "failures still 2840 and no job
+errors", not against C2′.
 
 #### Release D execution record (2026-10-23)
 
@@ -1626,7 +1678,7 @@ with P11 and check after B.
 | A | **Deployed 2026-10-17** (run 39030992116; 266 12:05:04 UTC, 267 12:05:05 UTC; first 1h forward run 12:07 UTC SUCCESS, checkpoint 12:00 UTC, no 1h gap, no top-up needed). **Accepted 2026-10-18** (section 6, "Release A acceptance"); 48-hour observation ends 2026-10-19 12:05 UTC | G1 met; D1 decided 2026-10-17 (option a, baseline 2840) |
 | B | B1: **deployed 2026-10-19** (run 39293585987). B2: about 2026-10-22 | B1: A + 48 h, D3 (both met). B2: G2 |
 | C1 | about 2026-10-24, target no later than 2026-10-27 | B, D2, D5 |
-| C2′ | after C1 | C1, D4a |
+| C2′ | **Deployed 2026-10-23** (run 39905366140, 292–295, 297, 298, `d52b049`). **Accepted 2026-10-25** (section 2, "C2′ acceptance") | C1, D4a |
 | D | **Deployed 2026-10-23** (run 39957525916, 299–308, `7e3da57`); 24-hour acceptance due 2026-10-24 13:50 UTC | G3b (amended) |
 
 The product-owner target for F1 (290) is 2026-10-27, with no retention
