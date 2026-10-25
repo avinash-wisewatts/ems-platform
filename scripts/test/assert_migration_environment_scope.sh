@@ -39,7 +39,7 @@ runner() {
     # $1 = DEPLOY_ENVIRONMENT ('' for unset), $2 = scope file, rest = runner args
     local environment="$1" scope="$2"
     shift 2
-    env ${environment:+DEPLOY_ENVIRONMENT="${environment}"} \
+    env -u DEPLOY_ENVIRONMENT -u ENVIRONMENT_NAME ${environment:+DEPLOY_ENVIRONMENT="${environment}"} \
         COMPOSE_FILE="${COMPOSE_FILE}" DB_CONTAINER="timescaledb-test" \
         DB_NAME="${SCRATCH_DB}" DB_USER="ems_admin" \
         MIGRATION_MANIFEST="${work}/manifest.csv" MIGRATION_SCOPE="${scope}" \
@@ -101,6 +101,20 @@ grep -q "^SKIP  900_scope_fixture_all" "${work}/out" && grep -q "^SKIP-ENV 901" 
 runner production "${work}/scope.csv" --status > "${work}/out" 2>&1 || fail "--status failed"
 if grep -q "^PENDING" "${work}/out"; then fail "--status reports a pending migration"; fi
 echo "PASS: production re-run and --status: nothing pending"
+
+# 3b. Transition: the previous release's deploy_release.sh calls the runner
+#     without DEPLOY_ENVIRONMENT; the workflows export ENVIRONMENT_NAME.
+env -u DEPLOY_ENVIRONMENT ENVIRONMENT_NAME=production \
+    COMPOSE_FILE="${COMPOSE_FILE}" DB_CONTAINER="timescaledb-test" DB_NAME="${SCRATCH_DB}" DB_USER="ems_admin" \
+    MIGRATION_MANIFEST="${work}/manifest.csv" MIGRATION_SCOPE="${work}/scope.csv" \
+    "${PROJECT_ROOT}/scripts/apply_migrations.sh" --status > "${work}/out" 2>&1 || { cat "${work}/out"; fail "runner refused ENVIRONMENT_NAME=production"; }
+grep -q "^Environment: production" "${work}/out" && grep -q "^SKIP-ENV 901" "${work}/out" || fail "ENVIRONMENT_NAME fallback not used"
+env DEPLOY_ENVIRONMENT=staging ENVIRONMENT_NAME=production \
+    COMPOSE_FILE="${COMPOSE_FILE}" DB_CONTAINER="timescaledb-test" DB_NAME="${SCRATCH_DB}" DB_USER="ems_admin" \
+    MIGRATION_MANIFEST="${work}/manifest.csv" MIGRATION_SCOPE="${work}/scope.csv" \
+    "${PROJECT_ROOT}/scripts/apply_migrations.sh" --status > "${work}/out" 2>&1 || fail "--status with both variables failed"
+grep -q "^PENDING 901_scope_fixture_staging_only" "${work}/out" || fail "DEPLOY_ENVIRONMENT did not take precedence over ENVIRONMENT_NAME"
+echo "PASS: ENVIRONMENT_NAME fallback (previous deploy_release.sh); DEPLOY_ENVIRONMENT takes precedence"
 
 # 4. Staging applies the staging-only migration.
 runner staging "${work}/scope.csv" > "${work}/out" 2>&1 || fail "staging run failed"

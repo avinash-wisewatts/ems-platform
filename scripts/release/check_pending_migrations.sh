@@ -98,6 +98,15 @@ echo "Would apply (${#pending[@]}): ${pending[*]:-none}"
 echo "Declared:             ${expected}"
 
 refused=0
+# A scoped-out migration already in this environment's ledger is a leak; a
+# scope-aware runner would stop on it partway through its manifest, after
+# applying the migrations before it. Refuse up front instead.
+for id in "${!denied[@]}"; do
+    if [[ -n "${recorded[${id}]:-}" ]]; then
+        echo "REFUSED: ${id} is scoped away from ${environment} but is already recorded in its ledger." >&2
+        refused=1
+    fi
+done
 for id in "${pending[@]}"; do
     if [[ -n "${denied[${id}]:-}" ]]; then
         echo "REFUSED: ${id} is scoped away from ${environment} but the target runner would apply it." >&2

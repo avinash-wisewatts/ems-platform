@@ -89,6 +89,14 @@ def test_rollback_to_an_older_production_commit_with_nothing_pending_is_allowed(
     assert code == 0, out
 
 
+def test_a_staging_only_migration_already_in_the_production_ledger_is_refused_up_front(tmp_path):
+    # The scope-aware runner would stop at 309 in manifest order, after
+    # applying anything pending before it; the precheck refuses first.
+    code, out = _run(tmp_path, ledger_ids=PRODUCTION_LEDGER + ["309_report_export_jobs"])
+    assert code == 1
+    assert "REFUSED: 309_report_export_jobs is scoped away from production but is already recorded in its ledger." in out
+
+
 def test_staging_applies_staging_only_migrations(tmp_path):
     code, out = _run(tmp_path, environment="staging", ledger_ids=_ids_through("308_"),
                      expected="309,310,312,311")

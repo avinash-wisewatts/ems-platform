@@ -98,7 +98,9 @@ recovery; production was recovered by a reviewed session script on
 
 - **Runner.** `scripts/apply_migrations.sh` requires `DEPLOY_ENVIRONMENT`
   (`deploy_release.sh` passes `ENVIRONMENT_NAME`; the test runner passes
-  `test`). A scoped-out migration prints `SKIP-ENV` and gets **no ledger
+  `test`). Without it, it uses `ENVIRONMENT_NAME`, which the release
+  workflows export: the first deploy of this change runs the previous
+  release's `deploy_release.sh`, which does not pass `DEPLOY_ENVIRONMENT`. A scoped-out migration prints `SKIP-ENV` and gets **no ledger
   row**. A scoped-out migration that is already in the ledger stops the
   runner. The scope file is validated before any database work.
 - **Precheck (before any change).** `deploy-production.yml` and `rollback.yml`

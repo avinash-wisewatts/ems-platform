@@ -13,7 +13,7 @@ set -Eeuo pipefail
 #
 # Required environment (every mode except --list)
 # -----------------------------------------------
-#   DEPLOY_ENVIRONMENT=staging|production|test
+#   DEPLOY_ENVIRONMENT=staging|production|test   (default: ENVIRONMENT_NAME)
 #
 # Optional environment overrides
 # ------------------------------
@@ -58,7 +58,11 @@ case "${MODE}" in
         ;;
 esac
 
-DEPLOY_ENVIRONMENT="${DEPLOY_ENVIRONMENT:-}"
+# Falls back to ENVIRONMENT_NAME, which the release workflows export before
+# calling deploy_release.sh. Needed for the first deploy of this runner: the
+# deploy_release.sh that runs is the PREVIOUS release's (the host checkout
+# before it checks out the target), which does not pass DEPLOY_ENVIRONMENT.
+DEPLOY_ENVIRONMENT="${DEPLOY_ENVIRONMENT:-${ENVIRONMENT_NAME:-}}"
 
 if [[ "${MODE}" != "--list" ]]; then
     case "${DEPLOY_ENVIRONMENT}" in
