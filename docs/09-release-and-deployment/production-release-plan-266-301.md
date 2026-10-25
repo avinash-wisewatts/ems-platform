@@ -1654,8 +1654,9 @@ ceiling passes. The criteria in this subsection remain a proposal until the
 user approves them as formal.
 
 **Evaluator tests.** `test_p11_lag_acceptance.py` (standard library;
-18 cases): healthy window; ceilings at / below / one second above for each
-stage; the D-021 retry case; excursion duration (two consecutive cycles fail)
+18 cases): healthy window; ceilings at and one second above for normalized,
+energy routing and the 1-minute tier, plus just below for energy routing; the
+D-021 retry case (environment routing, 785 s); excursion duration (two consecutive cycles fail)
 and count (three pass, four fail, counted per stage); gaps scoped to their
 stages, to [start, end + 5 min), not elsewhere, never excusing missing samples;
 malformed or overlapping gaps rejected (exit 2); coverage below 99 % fails; an
