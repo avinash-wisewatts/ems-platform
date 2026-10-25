@@ -77,7 +77,8 @@ def test_auto_resolution_follows_the_analytics_window_rule() -> None:
     [
         ("2026-09-20T00:00:00Z", "2026-09-20T00:00:00Z", "1h", "invalid_time_range"),
         ("2026-09-21T00:00:00Z", "2026-09-20T00:00:00Z", "1h", "invalid_time_range"),
-        ("2026-09-01T00:00:00Z", "2026-09-05T00:00:00Z", "1m", "time_range_too_large"),
+        # An export serves 1 minute for up to 14 days (the Analytics page: 3).
+        ("2026-09-01T00:00:00Z", "2026-09-15T00:01:00Z", "1m", "time_range_too_large"),
         ("2026-09-20T00:00:00Z", "2026-09-21T00:00:00Z", "5m", "invalid_resolution"),
         ("yesterday", "2026-09-21T00:00:00Z", "1h", "invalid_time_range"),
     ],
@@ -356,3 +357,128 @@ def test_duplicate_headers_are_disambiguated() -> None:
     from src.report_export_service import _unique_headers
 
     assert _unique_headers(["Voltage (V)", "voltage (V)", "Power (kW)"]) == ["Voltage (V)", "voltage (V) (2)", "Power (kW)"]
+
+
+# --- asset selection (at most 10 assets) ------------------------------------------
+
+def test_one_minute_export_serves_up_to_fourteen_days() -> None:
+    request = parse_export_request(range_from="2026-09-01T00:00:00Z", range_to="2026-09-15T00:00:00Z", resolution="1m")
+    assert (request.resolution, request.dt_to - request.dt_from) == ("1m", timedelta(days=14))
+
+
+def test_selected_assets_are_deduplicated_and_bounded() -> None:
+    a, b = UUID(ASSET_A), UUID(ASSET_B)
+    request = parse_export_request(
+        range_from="2026-09-20T00:00:00Z", range_to="2026-09-21T00:00:00Z", resolution="1h",
+        asset_ids=[a, b, a], max_assets=2,
+    )
+    assert request.asset_ids == (a, b)
+    with pytest.raises(ApiContractError) as exc:
+        parse_export_request(
+            range_from="2026-09-20T00:00:00Z", range_to="2026-09-21T00:00:00Z", resolution="1h",
+            asset_ids=[UUID(int=i) for i in range(11)], max_assets=10,
+        )
+    assert exc.value.code == "too_many_assets"
+    with pytest.raises(ApiContractError) as exc:
+        parse_export_request(
+            range_from="2026-09-20T00:00:00Z", range_to="2026-09-21T00:00:00Z", resolution="1h", asset_ids=[], max_assets=10
+        )
+    assert exc.value.code == "no_assets_selected"
+
+
+async def test_export_contains_only_the_selected_assets(monkeypatch) -> None:
+    fake = FakeAnalytics()
+    fake.install(monkeypatch)
+    request = ExportRequest(T0, T0 + timedelta(hours=3), "1h", "1h", asset_ids=(UUID(ASSET_B),))
+    ctx = await prepare_export(500, UUID(SITE_ID), request)
+    result = await build_export_zip(500, UUID(SITE_ID), ctx)
+    assert sorted(_zip_tables(result.content)) == ["AHU 2.csv"]
+    assert result.asset_count == 1
+    read_assets = {a for kind, args in fake.calls if kind == "points" for a, _, _ in args[1]}
+    read_assets |= {a for kind, args in fake.calls if kind == "energy" for a in args[1]}
+    assert read_assets == {ASSET_B}
+
+
+async def test_a_selected_asset_outside_the_site_is_refused(monkeypatch) -> None:
+    fake = FakeAnalytics()
+    fake.install(monkeypatch)
+    request = ExportRequest(T0, T0 + timedelta(hours=3), "1h", "1h", asset_ids=(UUID(ASSET_A), UUID(int=7)))
+    with pytest.raises(ApiContractError) as exc:
+        await prepare_export(500, UUID(SITE_ID), request)
+    assert exc.value.code == "invalid_assets"
+    assert not [c for c in fake.calls if c[0] in ("energy", "points", "measurements_1m")]
+
+
+# --- 1 minute: one device-keyed read per asset (migration 312) -----------------------
+
+async def _one_minute(monkeypatch, fake: FakeAnalytics, hours: int = 2):
+    fake.install(monkeypatch)
+    ctx = await prepare_export(500, UUID(SITE_ID), ExportRequest(T0, T0 + timedelta(hours=hours), "1m", "1m"))
+    return _zip_tables((await build_export_zip(500, UUID(SITE_ID), ctx)).content)
+
+
+async def test_one_minute_measurements_come_from_one_read_per_asset(monkeypatch) -> None:
+    fake = FakeAnalytics()
+    await _one_minute(monkeypatch, fake)
+    # Never the per-point generic read at 1 minute (System Energy's read asks
+    # it for no point, which reads nothing); one 312 read per asset with columns.
+    assert not [c for c in fake.calls if c[0] == "points" and c[1][1]]
+    reads = [args for kind, args in fake.calls if kind == "measurements_1m"]
+    assert sorted(args[1] for args in reads) == sorted([ASSET_A, ASSET_B])
+    chiller = next(args for args in reads if args[1] == ASSET_A)
+    assert chiller[2] == [
+        ("ACTIVE_POWER", "TOTAL"), ("ACTIVE_POWER", "L1"), ("ACTIVE_POWER", "L2"), ("ACTIVE_POWER", "L3"),
+        ("VOLTAGE_LINE_NEUTRAL", "AVG"), ("APPARENT_POWER", "TOTAL"), ("CURRENT", "NEUTRAL"),
+    ]
+    assert (chiller[0], chiller[3], chiller[4]) == (500, T0, T0 + timedelta(hours=2))
+
+
+async def test_one_minute_columns_match_the_generic_export(monkeypatch) -> None:
+    tables = await _one_minute(monkeypatch, FakeAnalytics())
+    chiller, ahu = tables["Chiller_1.csv"], tables["AHU 2.csv"]
+    assert chiller[0] == [
+        TIMESTAMP_UTC_HEADER, TIMESTAMP_LOCAL_HEADER,
+        "Energy (kWh)", "Power (kW)", "Power L1 (kW)", "Power L2 (kW)", "Power L3 (kW)", "Voltage (V)",
+        "Apparent Power (kVA)", "Current NEUTRAL (A)",
+    ]
+    assert ahu[0][2:] == [
+        "Energy (kWh)", "Frequency (Hz)", "Relative Humidity (%)", "Illuminance (lux)", "Occupancy Activity",
+        "Temperature (degC)",
+    ]
+    # One row per minute; each minute carries its own reading.
+    assert len(chiller) - 1 == 120
+    assert chiller[1][:2] == ["2026-09-20 00:00:00", "2026-09-20 05:30:00"]
+    assert chiller[62][:2] == ["2026-09-20 01:01:00", "2026-09-20 06:31:00"]
+    assert chiller[62][4] == format_value(value_for(ASSET_A, "ACTIVE_POWER", "L1", 1))
+    column = ahu[0].index("Temperature (degC)")
+    assert ahu[1][column] == format_value(value_for(ASSET_B, "TEMPERATURE", None, 0))
+
+
+async def test_one_minute_register_points_are_not_columns(monkeypatch) -> None:
+    from tests.report_export_fixtures import catalog_row
+
+    catalog = CATALOG + [catalog_row(ASSET_A, "Chiller/1", "APPARENT_ENERGY", "TOTAL")]
+    fake = FakeAnalytics()
+
+    async def with_register(portal_user_id, site_id):
+        return list(catalog)
+
+    fake.catalog = with_register
+    header = (await _one_minute(monkeypatch, fake))["Chiller_1.csv"][0]
+    assert not any(h.startswith("APPARENT_ENERGY") for h in header)
+    assert "Apparent Power (kVA)" in header
+
+
+async def test_one_minute_missing_readings_stay_empty_and_every_minute_is_a_row(monkeypatch) -> None:
+    fake = FakeAnalytics(missing={(ASSET_A, "ACTIVE_POWER", "L2", 0)}, hours=1)
+    chiller = (await _one_minute(monkeypatch, fake))["Chiller_1.csv"]
+    column = chiller[0].index("Power L2 (kW)")
+    assert [row[column] for row in chiller[1:61]] == [""] * 60
+    # The second hour has no reading at all, yet its minutes are rows.
+    assert len(chiller) - 1 == 120
+    assert all(cell == "" for row in chiller[61:] for cell in row[2:])
+
+
+async def test_one_minute_asset_without_readings_is_header_only(monkeypatch) -> None:
+    tables = await _one_minute(monkeypatch, FakeAnalytics())
+    assert len(tables["Spare Pump.csv"]) == 1

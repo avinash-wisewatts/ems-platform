@@ -38,7 +38,7 @@ class FakeJobs:
         self.files: dict[str, tuple[str, bytes]] = {}
         self.max_active = max_active
 
-    async def create(self, portal_user_id, site_id, request, max_active):
+    async def create(self, portal_user_id, site_id, request, max_active, asset_ids):
         if str(site_id) != SITE_ID:
             return None
         active = [r for r in self.rows.values() if r["portal_user_id"] == portal_user_id and r["status"] in ("QUEUED", "PROCESSING")]
@@ -51,7 +51,7 @@ class FakeJobs:
             "requested_resolution": request.requested_resolution, "resolution": request.resolution,
             "status": "QUEUED", "attempts": 0, "error_code": None, "error_message": None, "created_at": now,
             "started_at": None, "completed_at": None, "expires_at": None, "file_name": None,
-            "file_size_bytes": None, "asset_count": None, "row_count": None,
+            "file_size_bytes": None, "asset_count": None, "row_count": None, "asset_ids": list(asset_ids),
         }
         self.rows[str(row["id"])] = row
         return row
@@ -336,3 +336,89 @@ def test_routes_require_the_report_export_permission(portal_client, monkeypatch,
     assert analytics.calls == [] and not jobs.rows
     # Other /api/v1 reads are unaffected.
     assert portal_client.get("/api/v1/me").status_code == 200
+
+
+# --- asset selection ------------------------------------------------------------------
+
+def test_estimate_counts_only_the_selected_assets(portal_client, monkeypatch, analytics, jobs) -> None:
+    from tests.report_export_fixtures import ASSET_B
+
+    _login(portal_client, monkeypatch)
+    response = portal_client.get(
+        f"/api/v1/sites/{SITE_ID}/report-exports/estimate",
+        params={"from": FROM, "to": TO, "resolution": "1h", "asset_id": [ASSET_B]},
+    )
+    assert response.status_code == 200
+    assert (response.json()["asset_count"], response.json()["column_count"]) == (1, 6)
+
+
+def test_more_than_the_maximum_assets_is_422(portal_client, monkeypatch, analytics, jobs) -> None:
+    from tests.report_export_fixtures import ASSET_A, ASSET_B
+
+    _login(portal_client, monkeypatch)
+    monkeypatch.setattr(get_settings(), "report_export_max_assets", 1)
+    selected = portal_client.get(
+        f"/api/v1/sites/{SITE_ID}/report-exports/estimate",
+        params={"from": FROM, "to": TO, "resolution": "1h", "asset_id": [ASSET_A, ASSET_B]},
+    )
+    assert (selected.status_code, selected.json()["error"]) == (422, "too_many_assets")
+    # Without a selection the whole site counts against the same maximum.
+    whole_site = portal_client.get(
+        f"/api/v1/sites/{SITE_ID}/report-exports/file", params={"from": FROM, "to": TO, "resolution": "1h"}
+    )
+    assert (whole_site.status_code, whole_site.json()["error"]) == (422, "too_many_assets")
+    created = _create(portal_client, body={"from": FROM, "to": TO, "resolution": "1h", "asset_ids": [ASSET_A, ASSET_B]})
+    assert (created.status_code, created.json()["error"]) == (422, "too_many_assets")
+    assert not jobs.rows
+
+
+def test_an_asset_that_is_not_on_the_site_is_422(portal_client, monkeypatch, analytics, jobs) -> None:
+    _login(portal_client, monkeypatch)
+    for path in ("estimate", "file"):
+        response = portal_client.get(
+            f"/api/v1/sites/{SITE_ID}/report-exports/{path}",
+            params={"from": FROM, "to": TO, "resolution": "1h", "asset_id": [str(uuid4())]},
+        )
+        assert (response.status_code, response.json()["error"]) == (422, "invalid_assets")
+    created = _create(portal_client, body={"from": FROM, "to": TO, "resolution": "1h", "asset_ids": [str(uuid4())]})
+    assert (created.status_code, created.json()["error"]) == (422, "invalid_assets")
+    assert not jobs.rows
+
+
+def test_immediate_download_exports_the_selected_assets(portal_client, monkeypatch, analytics, jobs) -> None:
+    from tests.report_export_fixtures import ASSET_A
+
+    _login(portal_client, monkeypatch)
+    response = portal_client.get(
+        f"/api/v1/sites/{SITE_ID}/report-exports/file",
+        params={"from": FROM, "to": TO, "resolution": "1h", "asset_id": [ASSET_A]},
+    )
+    assert response.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        assert archive.namelist() == ["Chiller_1.csv"]
+
+
+def test_a_job_keeps_its_selection(portal_client, monkeypatch, analytics, jobs) -> None:
+    from tests.report_export_fixtures import ASSET_A, ASSET_B, ASSET_C
+
+    _login(portal_client, monkeypatch)
+    response = _create(portal_client, body={"from": FROM, "to": TO, "resolution": "1h", "asset_ids": [ASSET_B]})
+    assert response.status_code == 202
+    assert response.json()["asset_ids"] == [ASSET_B]
+    # A whole-site request is stored as the site's current assets.
+    whole_site = _create(portal_client)
+    assert sorted(whole_site.json()["asset_ids"]) == sorted([ASSET_A, ASSET_B, ASSET_C])
+
+
+def test_one_minute_export_for_fourteen_days_is_a_background_job(portal_client, monkeypatch, analytics, jobs) -> None:
+    from tests.report_export_fixtures import ASSET_A
+
+    _login(portal_client, monkeypatch)
+    params = {"from": "2026-09-06T00:00:00Z", "to": "2026-09-20T00:00:00Z", "resolution": "1m", "asset_id": [ASSET_A]}
+    estimate = portal_client.get(f"/api/v1/sites/{SITE_ID}/report-exports/estimate", params=params)
+    assert estimate.status_code == 200
+    assert (estimate.json()["bucket_count"], estimate.json()["mode"]) == (20160, "background")
+    too_long = portal_client.get(
+        f"/api/v1/sites/{SITE_ID}/report-exports/estimate", params={**params, "from": "2026-09-05T23:59:00Z"}
+    )
+    assert (too_long.status_code, too_long.json()["error"]) == (422, "time_range_too_large")

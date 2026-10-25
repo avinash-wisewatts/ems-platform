@@ -270,6 +270,7 @@ def test_tables_are_not_directly_accessible_and_functions_are_ems_app_only(conn)
         WHERE n.nspname = 'analytics' AND p.proname LIKE '%%report_export%%'
         """,
     )
-    assert len(functions) == 10
+    # Migration 309's ten, plus migration 312's create with selected assets.
+    assert len(functions) == 11
     for name, definer, public_exec, app_exec in functions:
         assert definer and not public_exec and app_exec, name

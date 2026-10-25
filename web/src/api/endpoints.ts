@@ -434,7 +434,13 @@ export type ReportExportQuery = {
   from: string;
   to: string;
   resolution: AnalyticsRequestedResolution;
+  /** The selected assets (the API allows at most 10). */
+  assetIds: readonly string[];
 };
+
+function reportExportParams(query: ReportExportQuery) {
+  return { from: query.from, to: query.to, resolution: query.resolution, asset_id: [...query.assetIds] };
+}
 
 /** Size of an export and whether it downloads now or runs in the background. */
 export function getReportExportEstimate(
@@ -442,7 +448,11 @@ export function getReportExportEstimate(
   query: ReportExportQuery,
   init?: RequestInit,
 ): Promise<ReportExportEstimate> {
-  return apiGet<ReportExportEstimate>(`/sites/${encodeURIComponent(siteId)}/report-exports/estimate`, query, init);
+  return apiGet<ReportExportEstimate>(
+    `/sites/${encodeURIComponent(siteId)}/report-exports/estimate`,
+    reportExportParams(query),
+    init,
+  );
 }
 
 /** A small export as a ZIP, generated in the request (422
@@ -452,11 +462,16 @@ export function downloadReportExportNow(
   query: ReportExportQuery,
   init?: RequestInit,
 ): Promise<{ blob: Blob; fileName: string | null }> {
-  return apiGetFile(`/sites/${encodeURIComponent(siteId)}/report-exports/file`, query, init);
+  return apiGetFile(`/sites/${encodeURIComponent(siteId)}/report-exports/file`, reportExportParams(query), init);
 }
 
 export function createReportExport(siteId: string, query: ReportExportQuery): Promise<ReportExportJob> {
-  return apiPostJson<ReportExportJob>(`/sites/${encodeURIComponent(siteId)}/report-exports`, query);
+  return apiPostJson<ReportExportJob>(`/sites/${encodeURIComponent(siteId)}/report-exports`, {
+    from: query.from,
+    to: query.to,
+    resolution: query.resolution,
+    asset_ids: query.assetIds,
+  });
 }
 
 /** The signed-in user's export jobs, newest first. */

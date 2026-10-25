@@ -90,6 +90,8 @@ class FakeAnalytics:
         # (asset, data_point, qualifier) the generic read reports unavailable.
         self.unavailable = unavailable or set()
         self.hours = hours
+        # Data points the 1-minute read reports as register (delta) points.
+        self.registers: set[str] = {"APPARENT_ENERGY"}
         self.calls: list[tuple[str, Any]] = []
 
     async def site(self, portal_user_id, site_id):
@@ -166,6 +168,32 @@ class FakeAnalytics:
                 })
         return rows
 
+    async def measurements_1m(self, portal_user_id, site_id, asset_id, columns, dt_from, dt_to, as_of):
+        """The migration 312 read: (register indexes, minute rows). Each
+        minute of the first `hours` hours carries its hour's value."""
+
+        self.calls.append(
+            ("measurements_1m", (portal_user_id, str(asset_id), [(c.data_point, c.qualifier) for c in columns], dt_from, dt_to))
+        )
+        registers = {i for i, c in enumerate(columns, start=1) if c.data_point in self.registers}
+        minutes = []
+        for hour in self._hours(dt_from, dt_to):
+            for minute in range(60):
+                start = T0 + timedelta(hours=hour, minutes=minute)
+                if not (dt_from <= start < dt_to):
+                    continue
+                indexes, vals = [], []
+                for i, c in enumerate(columns, start=1):
+                    if i in registers or (str(asset_id), c.data_point, c.qualifier, hour) in self.missing:
+                        continue
+                    if (str(asset_id), c.data_point, c.qualifier) in self.unavailable:
+                        continue
+                    indexes.append(i)
+                    vals.append(value_for(str(asset_id), c.data_point, c.qualifier, hour))
+                if indexes:
+                    minutes.append({"bucket_start": start, "series_indexes": indexes, "vals": vals})
+        return registers, minutes
+
     def install(self, monkeypatch, *modules: str) -> None:
         mapping = {
             "fetch_analytics_site": self.site,
@@ -176,6 +204,7 @@ class FakeAnalytics:
             "fetch_analytics_point_resolution_floors": self.point_floors,
             "fetch_analytics_energy_series": self.energy_series,
             "fetch_analytics_point_series": self.point_series,
+            "fetch_asset_measurements_1m": self.measurements_1m,
         }
         for module in ("src.report_export_service", *modules):
             for name, fake in mapping.items():

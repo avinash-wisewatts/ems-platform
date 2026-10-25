@@ -105,13 +105,14 @@ def test_bounded_lookup_excludes_out_of_window_chunks_with_parameters(tx):
     cc.execute("DEALLOCATE p311")
 
 
-def test_manifest_registers_311_after_310_with_lf_and_no_transaction_control():
+def test_manifest_registers_311_after_312_with_lf_and_no_transaction_control():
     import csv
 
     rows = list(csv.DictReader((REPO / "postgres" / "restructure_manifest.csv").read_text(encoding="utf-8").splitlines()))
     files = [r["source_file"] for r in rows if r["target_category"] == "migration"]
     assert files.count(M311.name) == 1
-    assert files[files.index(M311.name) - 1] == "310_preserved_rtdata_backfill.sql"
+    # Appended after 312, which staging applied first: manifest order = apply order.
+    assert files[files.index(M311.name) - 1] == "312_report_export_asset_selection_1m.sql"
     raw = M311.read_bytes()
     assert b"\r\n" not in raw
     assert "\nBEGIN;" not in raw.decode("utf-8").upper() and "\nCOMMIT;\n" not in raw.decode("utf-8").split("$procedure$")[0].upper()

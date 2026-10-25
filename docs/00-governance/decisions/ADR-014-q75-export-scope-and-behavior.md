@@ -4,7 +4,10 @@ Status: Decided; amended 2026-09-15 (see "Amendment" below) — Energy
 contextual chart-data export implemented, not deployed; Amendment 2
 (2026-10-24) — dedicated Reports-tab site measurement export implemented
 (migration 309), deployed to staging 2026-10-24, not deployed to production;
-Reports UI acceptance testing outstanding (see 07-features/export)
+Reports UI acceptance testing outstanding (see 07-features/export); Amendment 3
+(2026-10-24) — asset selection (at most 10) and 14-day 1-minute exports
+(migration 312) deployed to staging (PR #153, `7c28cfd`) and accepted there
+2026-10-25; not deployed to production
 Date: 2026-09-14 (MVP-6 Product Decision Workshop); amended 2026-09-15
 Decision owners: Product Owner
 Related requirements: EMS-REQ-094 through EMS-REQ-099
@@ -299,3 +302,41 @@ Frontend test suite, `tsc --noEmit`, `eslint --max-warnings 0`, and
 `vite build` all pass for the corrected implementation (see
 requirements-traceability.md §12 for counts). Not deployed to staging or
 production; no live end-to-end validation performed.
+
+
+## Amendment 3 (2026-10-24) — asset selection and 14-day 1-minute exports
+
+**Source.** Product request in the 2026-10-24 engineering session: the
+Reports tab must download 1-minute data for up to 14 days; if that is too
+much data, provide an asset selection like the Analytics tab's, limited to
+10 assets.
+
+**Analysis (staging, read-only, 2026-10-24).** Coimbatore has 32 assets
+with ~49 columns each: a whole-site 14-day 1-minute export is ~32 M cells,
+so selection is required. Independently of size, the 1-minute read path
+was the bottleneck: the generic Analytics read probes
+`telemetry.normalized_points` by `(logical_point_id, time)` and did not
+finish 9 points x 1 day in 90 s; reading each device once on the existing
+`(device_id, event_time)` index served all 58 points of a meter for 14
+days in 2.9 s. Separately, 1-minute exports of metered assets failed on
+register points (Apparent Energy) that have no 1-minute source.
+
+**Decision.**
+
+1. An export covers a selection of at most 10 assets of a site (the
+   Analytics asset selector; a site with no more than 10 assets starts
+   fully selected). A request without a selection covers the whole site
+   and is held to the same maximum. A background job stores its selection.
+2. An export serves 1 minute for up to 14 days (other resolutions keep the
+   ADR-019 / Analytics windows).
+3. At 1 minute, measurement columns come from a dedicated device-keyed,
+   portal-scoped read (migration 312) with the Analytics 1m value rules;
+   System Energy from the persisted Energy tier. Register points other than
+   System Energy are not 1-minute columns.
+4. The background size limit is raised to 20 M cells so that the largest
+   allowed export is accepted; no new index.
+
+**Consequences.** A 10-asset, 14-day 1-minute export is a background job of
+roughly 12 M cells and tens of MB of ZIP. The Analytics page is unchanged
+(still 3 days at 1 minute); whether it should use the device-keyed read is
+a separate question.

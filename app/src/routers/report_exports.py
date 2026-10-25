@@ -8,9 +8,16 @@
     POST /api/v1/report-exports/{job_id}/retry              re-queue a FAILED job
     GET  /api/v1/report-exports/{job_id}/file               download a COMPLETED job
 
+An export covers the selected assets of the site (asset_id query parameters,
+or asset_ids in the POST body), at most EMS_REPORT_EXPORT_MAX_ASSETS (10);
+without a selection, every asset of the site, which is then subject to the
+same maximum. A selected asset that is not an accessible asset of the site
+is HTTP 422 (invalid_assets).
+
 The export reads only through the portal-scoped Analytics functions
-(report_export_service.py), keyed on the authenticated portal_user_id; job
-records are written only through the migration 309 functions. An
+(report_export_service.py, migration 312 for 1 minute), keyed on the
+authenticated portal_user_id; job records are written only through the
+migration 309 / 312 functions. An
 inaccessible site, or a job that is not the caller's or whose site the caller
 can no longer access, is HTTP 404 -- indistinguishable from a missing one.
 
@@ -45,6 +52,7 @@ from src.report_export_service import (
     export_mode,
     parse_export_request,
     prepare_export,
+    select_assets,
 )
 from src.report_export_worker import (
     ActiveJobLimitError,
@@ -75,6 +83,12 @@ class ReportExportCreateRequest(BaseModel):
     range_from: str = Field(alias="from", description="Inclusive ISO-8601 start (UTC).")
     range_to: str = Field(alias="to", description="Exclusive ISO-8601 end (UTC).")
     resolution: str | None = Field(default=None, description="auto (default), 1m, 15m, 30m, 1h or 1d.")
+    asset_ids: list[UUID] | None = Field(
+        default=None, description="The selected assets (at most 10); omitted = every asset of the site."
+    )
+
+
+_ASSET_QUERY_DESCRIPTION = "A selected asset (repeat for each, at most 10); omitted = every asset of the site."
 
 
 def _require_exporter(request: Request) -> AuthenticatedPortalUser:
@@ -117,11 +131,43 @@ def _zip_response(file_name: str, content: bytes) -> Response:
     )
 
 
-def _parse(range_from: str, range_to: str, resolution: str | None) -> ExportRequest:
+def _parse(range_from: str, range_to: str, resolution: str | None, asset_ids: list[UUID] | None) -> ExportRequest:
     try:
-        return parse_export_request(range_from=range_from, range_to=range_to, resolution=resolution)
+        return parse_export_request(
+            range_from=range_from,
+            range_to=range_to,
+            resolution=resolution,
+            asset_ids=asset_ids,
+            max_assets=get_settings().report_export_max_assets,
+        )
     except ApiContractError as exc:
         raise _contract_error(exc)
+
+
+def _check_asset_count(count: int) -> None:
+    """Every export, selected or whole-site, covers at most max_assets."""
+
+    max_assets = get_settings().report_export_max_assets
+    if count > max_assets:
+        raise _contract_error(
+            ApiContractError("too_many_assets", f"Select at most {max_assets} assets to export.")
+        )
+
+
+async def _selected_assets_and_catalog(
+    portal_user_id: int, site_id: UUID, export_request: ExportRequest
+) -> tuple[list[dict], list[dict]]:
+    """The selected site assets (422 for one that is not accessible) and
+    their catalogue rows."""
+
+    try:
+        assets = select_assets(await fetch_site_assets(portal_user_id, site_id), export_request.asset_ids)
+    except ApiContractError as exc:
+        raise _contract_error(exc)
+    _check_asset_count(len(assets))
+    selected = {str(a["asset_id"]) for a in assets}
+    catalog_rows = [r for r in await fetch_analytics_catalog(portal_user_id, site_id) if str(r["asset_id"]) in selected]
+    return assets, catalog_rows
 
 
 async def _site_names(portal_user_id: int) -> dict[str, str]:
@@ -141,13 +187,13 @@ async def estimate_site_report_export(
     range_from: str = Query(..., alias="from", description="Inclusive ISO-8601 start (UTC)."),
     range_to: str = Query(..., alias="to", description="Exclusive ISO-8601 end (UTC)."),
     resolution: str | None = Query(None, description="auto (default), 1m, 15m, 30m, 1h or 1d."),
+    asset_ids: list[UUID] | None = Query(None, alias="asset_id", description=_ASSET_QUERY_DESCRIPTION),
 ) -> ReportExportEstimateResponse:
     user = _require_exporter(request)
-    export_request = _parse(range_from, range_to, resolution)
+    export_request = _parse(range_from, range_to, resolution, asset_ids)
     if await fetch_analytics_site(user.portal_user_id, site_id) is None:
         raise _not_found("Site")
-    site_assets = await fetch_site_assets(user.portal_user_id, site_id)
-    catalog_rows = await fetch_analytics_catalog(user.portal_user_id, site_id)
+    site_assets, catalog_rows = await _selected_assets_and_catalog(user.portal_user_id, site_id, export_request)
     estimate = estimate_export(export_request, site_assets, catalog_rows)
     settings = get_settings()
     return ReportExportEstimateResponse(
@@ -181,12 +227,17 @@ async def download_site_report_export(
     range_from: str = Query(..., alias="from", description="Inclusive ISO-8601 start (UTC)."),
     range_to: str = Query(..., alias="to", description="Exclusive ISO-8601 end (UTC)."),
     resolution: str | None = Query(None, description="auto (default), 1m, 15m, 30m, 1h or 1d."),
+    asset_ids: list[UUID] | None = Query(None, alias="asset_id", description=_ASSET_QUERY_DESCRIPTION),
 ) -> Response:
     user = _require_exporter(request)
-    export_request = _parse(range_from, range_to, resolution)
-    ctx = await prepare_export(user.portal_user_id, site_id, export_request)
+    export_request = _parse(range_from, range_to, resolution, asset_ids)
+    try:
+        ctx = await prepare_export(user.portal_user_id, site_id, export_request)
+    except ApiContractError as exc:
+        raise _contract_error(exc)
     if ctx is None:
         raise _not_found("Site")
+    _check_asset_count(len(ctx.site_assets))
     estimate = estimate_export(ctx.request, ctx.site_assets, ctx.catalog_rows)
     if estimate.cells > get_settings().report_export_immediate_max_cells:
         raise _contract_error(
@@ -212,15 +263,14 @@ async def create_site_report_export(
 ) -> ReportExportJob:
     user = _require_exporter(request)
     _require_same_site_json(request)
-    export_request = _parse(body.range_from, body.range_to, body.resolution)
+    export_request = _parse(body.range_from, body.range_to, body.resolution, body.asset_ids)
     settings = get_settings()
     if await fetch_analytics_site(user.portal_user_id, site_id) is None:
         raise _not_found("Site")
-    estimate = estimate_export(
-        export_request,
-        await fetch_site_assets(user.portal_user_id, site_id),
-        await fetch_analytics_catalog(user.portal_user_id, site_id),
-    )
+    site_assets, catalog_rows = await _selected_assets_and_catalog(user.portal_user_id, site_id, export_request)
+    if not site_assets:
+        raise _contract_error(ApiContractError("no_assets_selected", "This site has no assets to export."))
+    estimate = estimate_export(export_request, site_assets, catalog_rows)
     if estimate.cells > settings.report_export_max_cells:
         raise _contract_error(
             ApiContractError(
@@ -229,8 +279,14 @@ async def create_site_report_export(
             )
         )
     try:
+        # The job keeps the selection as it is now (a whole-site request
+        # becomes the site's current assets).
         row = await create_job(
-            user.portal_user_id, site_id, export_request, settings.report_export_max_active_jobs
+            user.portal_user_id,
+            site_id,
+            export_request,
+            settings.report_export_max_active_jobs,
+            [UUID(str(a["asset_id"])) for a in site_assets],
         )
     except ActiveJobLimitError:
         raise HTTPException(
