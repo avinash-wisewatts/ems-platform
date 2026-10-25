@@ -35,6 +35,9 @@ COPY postgres/maintenance/305_routing_recovery_queue_rollback.sql /workspace/pos
 # Migration 306 rollback script, executed (rolled back) by
 # app/tests/test_demand_reconcile_wide_cadence.py and run first by the 303 rollback tests.
 COPY postgres/maintenance/306_demand_reconcile_wide_cadence_rollback.sql /workspace/postgres/maintenance/306_demand_reconcile_wide_cadence_rollback.sql
+# Migration 311 rollback script, run first by the 303 rollback tests and by
+# app/tests/test_recovery_lookup_event_time_bound.py.
+COPY postgres/maintenance/311_recovery_lookup_event_time_bound_rollback.sql /workspace/postgres/maintenance/311_recovery_lookup_event_time_bound_rollback.sql
 COPY scripts/test /workspace/scripts/test
 # Phase 4 routing generator: spec, template, generator, and committed artifact
 # consumed by app/tests/test_routing_generator_contract.py.

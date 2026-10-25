@@ -609,6 +609,9 @@ ROLLBACK_SQL = (
 # is rolled back before 305, newest first.
 ROLLBACK_305_SQL = ROLLBACK_SQL.with_name("305_routing_recovery_queue_rollback.sql")
 ROLLBACK_306_SQL = ROLLBACK_SQL.with_name("306_demand_reconcile_wide_cadence_rollback.sql")
+# Migration 311 replaced 305's recovery body; its rollback restores that body
+# first, so the 305 rollback (which refuses any other body) can run.
+ROLLBACK_311_SQL = ROLLBACK_SQL.with_name("311_recovery_lookup_event_time_bound_rollback.sql")
 
 
 def _script_body(path):
@@ -623,6 +626,7 @@ def _rollback_body():
 
 @pytest.fixture
 def tx_pre_305(tx):
+    tx.execute(_script_body(ROLLBACK_311_SQL))
     tx.execute(_script_body(ROLLBACK_306_SQL))
     tx.execute(_script_body(ROLLBACK_305_SQL))
     return tx

@@ -42,7 +42,10 @@ MIGRATION_ID = "305_routing_recovery_queue"
 BODY_MD5 = {
     "telemetry.load_energy_measurements_incremental(interval,interval)": "9b035f4a55edbf99ec2a5db4bb173d09",
     "telemetry.load_environment_measurements_incremental(interval,interval)": "d2d906d4da78eeba3740b2b0d082a237",
-    "telemetry.recover_failed_raw_messages(integer)": "76e7c9e2140fe46a3012e7f654a80294",
+    # Migration 311 replaced the migration-305 recovery body (76e7c9e2...) with
+    # the same body plus the event-time bound on its two normalized_points
+    # lookups; test_recovery_lookup_event_time_bound.py covers that change.
+    "telemetry.recover_failed_raw_messages(integer)": "31f4db2fbe27b6b072c0aa17bf5660d9",
     "telemetry.run_routing_late_sweep_job(integer,jsonb)": "e649c982e6bf5089a6f126dd4c330405",
 }
 PIPELINE = {ENERGY: "energy_measurements", ENV: "environment_measurements"}

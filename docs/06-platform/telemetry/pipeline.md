@@ -366,6 +366,43 @@ are rare.
   validator).
 - **Tests:** `app/tests/test_demand_reconcile_wide_cadence.py`.
 
+### Failed-message recovery: event-time bound on the `normalized_points` lookups (migration 311)
+
+**Status: PR #152 open, not merged or deployed.** Production job 1061 stays
+paused (since 2026-10-24) until this reaches production.
+
+`telemetry.recover_failed_raw_messages` (job 1061 on production, 1077 on
+staging) looks up `normalized_points` twice per candidate: the capture-sample
+`EXISTS` and the `v_has_normalized` join. The keys are known only at run
+time, so with migration 305's body every compressed chunk is decompressed for
+the candidate's devices. On production, candidates became eligible after three
+AirSense sensors were commissioned on 2026-10-24; each run then hit the
+10-minute `max_runtime` and rolled back.
+
+- **Change:** migration 305's body verbatim, plus the candidate's own
+  event-time span (element `ts`, else `received_at`), read once by the
+  `raw_messages` primary key, and `np.event_time` within `[span − 1 day,
+  span + 1 day)` on both lookups. Every matchable row lies in that window, so
+  results are unchanged. The bounds reach the planner as parameters, and
+  TimescaleDB excludes chunks at executor startup (`ChunkAppend`).
+- **Measured (staging, read-only, 2026-10-25, one packet with 11 capture
+  samples):** capture-sample lookup 5,046 ms / ~178,000 buffers unbounded
+  (every compressed chunk decompressed) against 11.9 ms / 46 buffers bounded.
+  Staging has no `UNRESOLVED_DEVICE_ELEMENTS` candidates, so job 1077 does not
+  exercise this path there. Production (TimescaleDB 2.28.2) is not measured.
+- **Guards:** precondition = the deployed body is 305's (md5 `76e7c9e2…`);
+  postcondition = md5 `31f4db2f…`. Owner, grants, COMMENT, jobs and data are
+  unchanged.
+- **Rollback:** `postgres/maintenance/311_recovery_lookup_event_time_bound_rollback.sql`
+  (guarded; restores 305's body exactly). Run it before the 305 or 303
+  rollback: theirs refuse any body other than their own.
+- **Production route:** production can't take this through the normal
+  release while migrations 309 / 312 (Reports) are staging-only. The release
+  strategy is proposed in PR #150 (`docs/10-operations/release-strategy-staging-only-features.md`),
+  not decided.
+- **Tests:** `app/tests/test_recovery_lookup_event_time_bound.py`, plus the
+  updated 303 rollback tests (rollback order 311 → 306 → 305).
+
 ### Analytics tier: parent → child watermark cascade (migration 209)
 
 Since migration 209 the five `analytics.run_energy_consumption_*_job`
