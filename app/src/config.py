@@ -67,6 +67,15 @@ class Settings(BaseSettings):
         alias="EMS_APP_SESSION_HTTPS_ONLY",
     )
 
+    # Reports tab export: off unless the environment sets it. Its database
+    # objects (migrations 309 / 312) are staging-only
+    # (postgres/migration_environment_scope.csv), so it is never enabled on
+    # production. Gates both the report-export routes and the worker.
+    reports_enabled: bool = Field(
+        default=False,
+        alias="EMS_REPORTS_ENABLED",
+    )
+
     # Reports tab export (report_export_service.py / report_export_worker.py).
     # An export covers at most max_assets selected assets of a site and is
     # sized as buckets x columns over them: up to immediate_max_cells it

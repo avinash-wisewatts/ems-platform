@@ -29,8 +29,10 @@ set -Eeuo pipefail
 #                        itself, telegraf/config, grafana/provisioning,
 #                        grafana/dashboards, postgres/migrations) matches the
 #                        same release as the image being deployed.
-#   ENVIRONMENT_NAME      "staging" or "production" (used only for logging
-#                        and the local deployment history record).
+#   ENVIRONMENT_NAME      "staging" or "production". Selects the migration
+#                        scope (postgres/migration_environment_scope.csv, as
+#                        DEPLOY_ENVIRONMENT for scripts/apply_migrations.sh)
+#                        and names the local deployment history record.
 #
 # Optional environment variables:
 #   COMPOSE_FILE          Defaults to PROJECT_PATH/compose.yaml
@@ -55,6 +57,15 @@ set -Eeuo pipefail
 : "${APP_IMAGE:?APP_IMAGE is required}"
 : "${RELEASE_GIT_SHA:?RELEASE_GIT_SHA is required}"
 : "${ENVIRONMENT_NAME:?ENVIRONMENT_NAME is required (staging|production)}"
+
+case "${ENVIRONMENT_NAME}" in
+    staging|production)
+        ;;
+    *)
+        echo "ERROR: ENVIRONMENT_NAME must be staging or production (got '${ENVIRONMENT_NAME}')." >&2
+        exit 1
+        ;;
+esac
 
 COMPOSE_FILE="${COMPOSE_FILE:-${PROJECT_PATH}/compose.yaml}"
 DB_CONTAINER="${DB_CONTAINER:-timescaledb}"
@@ -130,7 +141,7 @@ echo
 
 echo "[4/6] Applying database migrations..."
 DB_CONTAINER="${DB_CONTAINER}" DB_NAME="${DB_NAME}" DB_USER="${DB_USER}" \
-    COMPOSE_FILE="${COMPOSE_FILE}" \
+    COMPOSE_FILE="${COMPOSE_FILE}" DEPLOY_ENVIRONMENT="${ENVIRONMENT_NAME}" \
     ./scripts/apply_migrations.sh
 echo
 

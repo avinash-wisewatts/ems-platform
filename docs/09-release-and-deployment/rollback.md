@@ -11,6 +11,12 @@ without affecting the Administration App, Grafana, the database, or the
 energy subsystem — see
 [../00-governance/decisions/ADR-006-ems-web-app-vs-admin-portal.md](../00-governance/decisions/ADR-006-ems-web-app-vs-admin-portal.md).
 
+A rollback declares `expected_migrations` (normally `none`) and passes the
+same pending-migration precheck as a production release before anything
+changes: the target commit's runner may not apply any migration other than
+the declared ones, and never a staging-only one
+([ci-cd.md](ci-cd.md#environment-scoped-migrations)).
+
 ## Database rollback — deliberately not implemented
 
 The migration system (`scripts/apply_migrations.sh`) is **forward-only,

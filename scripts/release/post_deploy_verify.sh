@@ -15,6 +15,11 @@ set -uo pipefail
 #                                 whether anything is commissioned yet --
 #                                 zero sites/devices is a WARN there, not a
 #                                 FAIL, and stays a WARN here too)
+#       - verify_energy_routing_identity.sh -- E6 (migration 215)
+#       - verify_environment_scope.sh -- with DEPLOY_ENVIRONMENT=production:
+#                                 no ledger row or object of a staging-only
+#                                 migration (309 / 310 / 312) and no Reports
+#                                 export route; passes elsewhere
 #
 #     ADVISORY (reported in full, never fails the pipeline):
 #       - verify_pipeline.sh   -- includes normalization/energy/environment
@@ -95,6 +100,17 @@ echo "============================================================"
 # or a loader that resolves electrical signals by a hard-coded UUID. Passes
 # cleanly when no energy meter is commissioned.
 if ! "${VERIFY_DIR}/verify_energy_routing_identity.sh"; then
+    REQUIRED_FAILED=1
+fi
+
+echo
+echo "============================================================"
+echo "REQUIRED: Staging-only Objects Absent"
+echo "============================================================"
+# Production only (DEPLOY_ENVIRONMENT, set by deploy-production.yml): no
+# ledger row or object of a staging-only migration (309 / 310 / 312), and no
+# Reports export route. Passes without checking on any other environment.
+if ! "${VERIFY_DIR}/verify_environment_scope.sh"; then
     REQUIRED_FAILED=1
 fi
 

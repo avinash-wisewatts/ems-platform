@@ -12,6 +12,11 @@ normal app deploy cannot accidentally disrupt the database, ingestion, or
 dashboards. See [../06-platform/deployment/README.md](../06-platform/deployment/README.md)
 for the service dependency graph this respects.
 
+Migrations run with `DEPLOY_ENVIRONMENT=${ENVIRONMENT_NAME}`, so staging-only
+migrations (`postgres/migration_environment_scope.csv`) are skipped on
+production; production releases first pass the pending-migration precheck
+(`expected_migrations`). See [ci-cd.md](ci-cd.md#environment-scoped-migrations).
+
 ## One-time, separately-authorized exceptions
 
 Some configuration changes require a `timescaledb` recreate (a `postmaster`
