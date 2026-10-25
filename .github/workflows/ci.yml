@@ -170,6 +170,30 @@ jobs:
       - name: Dependency audit (report only -- does not fail the build)
         run: npm audit --omit=dev || true
 
+  release-d-lag-evaluator:
+    # Release D lag evaluator (docs/10-operations/prepared/release-d): the
+    # standard-library fault-injection tests of p11_lag_acceptance.py. Uses the
+    # runner's python3 only -- no packages, no database, no remote host.
+    name: Release D lag evaluator tests (unittest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run the evaluator tests (fails on any failure, or if fewer than 18 ran)
+        run: |
+          # The default run shell is `bash -e` without pipefail: without this,
+          # a failing unittest would be hidden by `| tee`.
+          set -o pipefail
+          python3 --version
+          python3 -I -m unittest discover \
+            -s docs/10-operations/prepared/release-d \
+            -p 'test_p11_lag_acceptance.py' -v 2>&1 | tee lag-evaluator-tests.log
+          ran="$(sed -n 's/^Ran \([0-9]*\) tests\{0,1\} in .*/\1/p' lag-evaluator-tests.log)"
+          if [[ -z "${ran}" || "${ran}" -lt 18 ]]; then
+            echo "::error::expected at least 18 evaluator tests, ran '${ran:-none}'"
+            exit 1
+          fi
+
   summary:
     name: CI summary
     runs-on: ubuntu-latest
@@ -180,6 +204,7 @@ jobs:
       - app-tests
       - database-integration-tests
       - web-frontend
+      - release-d-lag-evaluator
     outputs:
       passed: ${{ steps.result.outputs.passed }}
     steps:
