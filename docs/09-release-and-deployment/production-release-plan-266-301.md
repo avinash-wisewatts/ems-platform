@@ -1100,7 +1100,8 @@ on slot.
 2026-10-23 13:49:54 UTC (dry-run clean, 3.8 s), due at or after 2026-10-24
 13:50 UTC. Criteria (staging §10.13–10.14): +288 ± 1 runs per job, demand
 +96 ± 1; failures still 2840 and no job errors; demand finalization p99 ≤
-end + 8 min, max ≤ + 23 min; lag ≤ 330 / 450 / 540 s; 1-minute tier
+end + 8 min, max ≤ + 23 min; lag ≤ 330 / 450 / 540 s (superseded
+2026-10-25 by the formal "Release D lag criteria", section 6); 1-minute tier
 publication delay 4–8 min; non-VALID demand rows explained by gateways with
 no raw messages; no 5-minute energy window missing devices outside such
 gaps. Not measured by it: worst-case / percentile run durations (no
@@ -1606,14 +1607,17 @@ Stop and report, without retrying, if any of these happen:
 | B | Parity comparison passes D3; Grafana Energy panels load; no lock waits from 268 left behind; Analytics API endpoints respond |
 | C1 | F1 forward job advancing through history; environment routing succeeds (291) |
 | C2′ | Demand job 1062 at :07/:22/:37/:52; demand intervals finalized with the same VALID share as before |
-| D | Routing durations within budget (P11); no 40P01 over the following days; five-minute phases only once activation is approved (D9) |
+| D | Lag and routing within the Release D lag criteria (P11; "Release D lag criteria" below, formal since 2026-10-25; was "routing durations within budget (P11)"); no 40P01 over the following days; five-minute phases only once activation is approved (D9) |
 
-### Release D lag criteria — PROPOSED revision (2026-10-25, not approved)
+### Release D lag criteria (formal; adopted 2026-10-25)
 
-**Status: proposal for review. The formal criteria above and in the
-"Release D execution record" are unchanged until the user approves this.**
-If approved, it replaces "lag ≤ 330 / 450 / 540 s" in the Release D 24-hour
-criteria and defines "Routing durations within budget (P11)" for Release D.
+**Status: FORMAL** — adopted by the user on 2026-10-25 (proposed the same day;
+see "Adoption" below). These criteria supersede "lag ≤ 330 / 450 / 540 s" in
+the Release D 24-hour criteria ("Release D execution record"; that historical
+text is kept and marked superseded) and define "lag and routing within the
+Release D lag criteria (P11)" in the D row above. All other Release D criteria
+are unchanged. Release D is **not** accepted: acceptance still needs the fixed
+24-hour production window and the user's sign-off.
 
 **Why.** The 330 / 450 / 540 s figures come from the staging 15-minute
 validation (operations plan §10.13: expected checkpoint ages "≤ 5.5 min",
@@ -1632,37 +1636,48 @@ Job phases are identical on staging and production (+160 / +250 / +255 /
 +280 / +285 / +0 s, migration 300), so the sawtooth shape is the same; only
 input timing and run durations differ, which the production window measures.
 
-**Proposed definition** — P11 samples (30 s, `run_readonly_job_sampler.sh`)
-over the fixed acceptance window [w0, w1), lag = `now() −
+**Definition** — P11 samples (30 s, `run_readonly_job_sampler.sh`) over the
+fixed 24-hour acceptance window [w0, w0 + 24 h), per stage, lag = `now() −
 pipeline_state.last_received_at`, evaluated by
 `docs/10-operations/prepared/release-d/p11_lag_acceptance.py`:
 
 | # | Criterion |
 |---|---|
-| L0 | Coverage ≥ 99 % of the expected 30-second samples, per stage |
-| L1 | Per-cycle peak (max lag in each 5-minute UTC cycle): normalized ≤ 330 s, energy and environment routing ≤ 540 s, 1-minute tier ≤ 540 s |
-| L2 | **Absolute** hard ceilings, every cycle: normalized and routing ≤ 600 s (migration 299's normalized freshness threshold), 1-minute tier ≤ 620 s (migration 302's Analytics stale threshold, 10:20). An excursion (L3) never exempts a ceiling; only a documented source gap (L4) does |
-| L3 | Retry excursions: a cycle whose peak is above its L1 target but within its L2 ceiling. Each run of consecutive such cycles is at most one cycle long; at most three per 24 hours, per stage (⌊3 × window hours / 24⌋ for a shorter window) |
-| L4 | Documented source gaps (no raw messages, evidenced by the acceptance SQL's section D / F listings), one row per gap: `start,end,stages,reason`, inside the window, non-overlapping per stage, with a reason. A gap exempts, for the named stages only, the cycles that overlap [start, end + 5 min) (one catch-up cycle); every exempt cycle is listed with its peak. A gap never excuses a missing P11 sample (L0) |
+| L0 | Coverage ≥ 99 % of the 2,880 expected 30-second samples, per stage, over the whole window. A source gap never excuses a missing sample |
+| L1 | Normal per-cycle peak targets (max lag in each 5-minute cycle): normalized ≤ 330 s, energy and environment routing ≤ 540 s, 1-minute tier ≤ 540 s. A sample above its target is an excursion sample (L3) |
+| L2 | **Absolute** hard ceilings, every sample: normalized and routing ≤ 600 s (migration 299's normalized freshness threshold), 1-minute tier ≤ 620 s (migration 302's Analytics stale threshold, 10:20). An excursion (L3) never exempts a ceiling; only a documented source gap (L4) does |
+| L3 | Excursion: a run of consecutive samples above the stage's L1 target. Each lasts at most one five-minute cycle = **10 consecutive 30-second samples**; a missing sample inside a run counts towards its length. At most **three excursions per stage** in the 24-hour window |
+| L4 | Documented source gaps (no raw messages, evidenced by the acceptance SQL's section D / F listings), one row per gap: `start,end,stages,reason`, inside the window, end after start, non-overlapping per stage, with a reason; any invalid row stops the evaluation. A gap exempts, for the named stages only, the samples in the cycles that overlap the gap plus one catch-up cycle ([start, end + 5 min)); every exempt cycle is listed with its peak |
+| L5 | Insufficient evidence never passes: only a complete window of exactly 24 h can pass (a shorter window, or samples ending early, fails); a stage below L0 fails |
 
-**Decision (user, 2026-10-25).** A qualifying retry-related excursion may
-exceed the per-cycle target (L1), limited by L3, but the L2 ceilings are
-absolute except for documented source gaps. Consequence: a full retried batch
-(D-021: about one extra cycle, ~785 s for routing, ~817 s for the 1-minute tier
-from the measured peaks) fails the window; an excursion that stays within the
-ceiling passes. The criteria in this subsection remain a proposal until the
-user approves them as formal.
+**Adoption (user, 2026-10-25).** Of the two readings proposed for excursions
+versus ceilings, option (a) was adopted: a qualifying retry-related excursion
+may exceed the per-cycle target (L1), limited by L3, but the L2 ceilings are
+absolute except for documented source gaps (L4). Consequence: a full retried
+batch (D-021: about one extra cycle, ~785 s for routing, ~817 s for the
+1-minute tier from the measured peaks) fails the window; an excursion that
+stays within the ceiling passes. The excursion duration is counted in samples
+(10 consecutive 30-second samples), not in 5-minute grid cycles, so an
+excursion that straddles a cycle boundary is one excursion.
 
 **Evaluator tests.** `test_p11_lag_acceptance.py` (standard library;
-18 cases): healthy window; ceilings at and one second above for normalized,
-energy routing and the 1-minute tier, plus just below for energy routing; the
-D-021 retry case (environment routing, 785 s); excursion duration (two consecutive cycles fail)
-and count (three pass, four fail, counted per stage); gaps scoped to their
-stages, to [start, end + 5 min), not elsewhere, never excusing missing samples;
-malformed or overlapping gaps rejected (exit 2); coverage below 99 % fails; an
-incomplete window never passes. Mutation-checked: ceiling-exempt excursions,
-gaps applying to every stage, a wider gap reach, ignored coverage and ignored
-excursion rules are each caught.
+26 cases, run in CI by the "Release D lag evaluator tests" job, which also fails
+if fewer than 26 run): healthy window, including P11's :07 / :37 sample
+offsets; for every stage, the ceiling at, one second below and one second
+above; the D-021 retry at 785 s on both routing stages; an excursion never
+exempting the ceiling; excursions of exactly 10 samples pass and 11 fail,
+including across a cycle boundary; a missing sample inside an excursion counts,
+trailing missing samples do not; three excursions pass and four fail, counted
+per stage; gaps scoped to their stages and to [start, end + 5 min), not
+elsewhere, never excusing missing samples; invalid gap rows (outside the
+window, end before or equal to start, no reason, no stages, unknown stage, bad
+time) and overlapping gaps rejected (exit 2), adjacent gaps accepted; coverage
+28 missing samples pass, 29 fail; a stage with no samples, an incomplete
+window and a shorter-than-24-hour window never pass. Mutation-checked
+(2026-10-25): an 11-sample limit, uncounted interior missing samples, an
+excursion exempting the ceiling, gaps applying to all stages, a wider gap
+reach, ignored coverage, four allowed excursions, a non-24-hour window, and a
+zero-length gap are each caught.
 
 ### Release A acceptance (2026-10-18)
 

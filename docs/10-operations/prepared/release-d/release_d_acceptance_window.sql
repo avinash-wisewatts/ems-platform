@@ -26,9 +26,10 @@
 --      max <= + 23 min; no missing quarter-hour bucket.
 --   D  non-VALID demand rows explained by gateways with no raw messages
 --      (listed for review: gateway names differ between metadata and topics).
---   E  1-minute tier publication delay within 4:00-8:00 during the window;
---      lag at the check (normalized <= 330 s, routing <= 450 s, 1-minute tier
---      <= 540 s). Lag over the window needs the P11 sampler.
+--   E  1-minute tier publication delay within 4:00-8:00 during the window.
+--      Lag is judged by the formal "Release D lag criteria" (plan section 6)
+--      from the P11 samples with p11_lag_acceptance.py; the lag at the check
+--      is shown for information only (a snapshot of a sawtooth).
 --   F  energy rows per 5-minute window: no window missing devices except
 --      during source gaps from D (listed for review).
 -- ============================================================================
@@ -207,10 +208,8 @@ e AS (
             AND calculated_at >= :'w0'::timestamptz AND calculated_at < :'we'::timestamptz
           GROUP BY 1) r),
 l AS (
-    SELECT bool_and(CASE pipeline_name
-                        WHEN 'normalized_points' THEN extract(epoch FROM now() - last_received_at) <= 330
-                        WHEN 'energy_consumption_1min' THEN extract(epoch FROM now() - last_received_at) <= 540
-                        ELSE extract(epoch FROM now() - last_received_at) <= 450 END) AS ok
+    SELECT string_agg(pipeline_name || ' ' || round(extract(epoch FROM now() - last_received_at)) || ' s', ', '
+                      ORDER BY pipeline_name) AS snapshot
     FROM telemetry.pipeline_state
     WHERE pipeline_name IN ('normalized_points', 'energy_measurements', 'environment_measurements', 'energy_consumption_1min'))
 SELECT * FROM (VALUES
@@ -222,8 +221,8 @@ SELECT * FROM (VALUES
     ('C no missing demand bucket', CASE WHEN (SELECT missing FROM cm) = 0 THEN 'PASS' ELSE 'FAIL (' || (SELECT missing FROM cm) || ')' END),
     ('D non-VALID explained by source gaps', 'CHECK (listings D)'),
     ('E 1-min publication delay 4:00-8:00', CASE WHEN (SELECT min_d FROM e) >= INTERVAL '4 minutes' AND (SELECT max_d FROM e) <= INTERVAL '8 minutes' THEN 'PASS' ELSE 'FAIL' END),
-    ('E lag at the check', CASE WHEN (SELECT ok FROM l) THEN 'PASS (snapshot)' ELSE 'FAIL (snapshot)' END),
-    ('E lag over the window', 'CHECK (P11 sampler)'),
+    ('E lag (formal Release D lag criteria)', 'CHECK (P11 samples: p11_lag_acceptance.py must exit 0)'),
+    ('E lag at the check (information only)', 'INFO: ' || coalesce((SELECT snapshot FROM l), 'no pipeline_state rows')),
     ('F energy windows complete outside gaps', 'CHECK (listing F)')
 ) AS t(criterion, result);
 

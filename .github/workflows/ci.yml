@@ -179,7 +179,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run the evaluator tests (fails on any failure, or if fewer than 18 ran)
+      - name: Run the evaluator tests (fails on any failure, or if fewer than 26 ran)
         run: |
           # The default run shell is `bash -e` without pipefail: without this,
           # a failing unittest would be hidden by `| tee`.
@@ -189,8 +189,8 @@ jobs:
             -s docs/10-operations/prepared/release-d \
             -p 'test_p11_lag_acceptance.py' -v 2>&1 | tee lag-evaluator-tests.log
           ran="$(sed -n 's/^Ran \([0-9]*\) tests\{0,1\} in .*/\1/p' lag-evaluator-tests.log)"
-          if [[ -z "${ran}" || "${ran}" -lt 18 ]]; then
-            echo "::error::expected at least 18 evaluator tests, ran '${ran:-none}'"
+          if [[ -z "${ran}" || "${ran}" -lt 26 ]]; then
+            echo "::error::expected at least 26 evaluator tests, ran '${ran:-none}'"
             exit 1
           fi
 
