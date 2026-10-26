@@ -6,7 +6,8 @@
  *   no CSRF token needed for these GET-only reads (SameSite=Lax + same-origin).
  *   The only writes are the Reports tab's own export jobs (apiPostJson): JSON
  *   bodies, which the server requires, so a cross-site form cannot send one.
- * - Never talks to anything except /api/v1/*.
+ * - Talks only to /api/v1/* and the sign-in / sign-out endpoints below
+ *   (/auth/* on the customer host, /logout on the Administration App path).
  * - Maps the flat Phase 7 error envelope onto typed errors.
  */
 
@@ -153,14 +154,91 @@ export function contentDispositionFileName(header: string | null): string | null
   return plain ? plain[1]!.trim() : null;
 }
 
-/** Reuse the existing portal logout, then hand off to the existing login page. */
+/*
+ * Sign-in (ADR-023). On the customer host the customer API serves the app's
+ * own JSON sign-in (/auth/*), with a session separate from the
+ * Administration App's. During the transition the app is also still served
+ * through the Administration App, which has no /auth/* and signs in with its
+ * server-rendered /login. GET /auth/session tells the two apart: only the
+ * customer API answers it (with JSON); the Administration App redirects it
+ * to /login, which a manual-redirect fetch sees as an opaque redirect.
+ */
+
+/** Full-page navigation (a seam so tests can observe it). */
+export const browser = {
+  assign(url: string): void {
+    window.location.assign(url);
+  },
+};
+
+/** App-relative path of the current location (router paths, without /app). */
+export function currentAppPath(): string {
+  const path = window.location.pathname.replace(/^\/app(?=\/|$)/, "") || "/";
+  return path + window.location.search;
+}
+
+/** Only a same-app path may be a post-sign-in destination (no open redirect). */
+export function safeNextPath(next: string | null | undefined): string {
+  if (!next || !next.startsWith("/") || next.startsWith("//") || next.includes("\\")) return "/";
+  return next;
+}
+
+/** True when this host offers the app's own sign-in (the customer API). */
+export async function customerSignInAvailable(): Promise<boolean> {
+  try {
+    const response = await fetch("/auth/session", {
+      credentials: "same-origin",
+      redirect: "manual",
+      headers: { Accept: "application/json" },
+    });
+    if (response.status !== 200) return false;
+    const body: unknown = await response.json();
+    return typeof body === "object" && body !== null && (body as { sign_in?: unknown }).sign_in === "customer";
+  } catch {
+    return false;
+  }
+}
+
+export type SignInResult = "ok" | "invalid" | "error";
+
+/** Sign in through the customer API. The browser adds the same-origin Origin header it requires. */
+export async function signIn(username: string, password: string): Promise<SignInResult> {
+  try {
+    const response = await fetch("/auth/login", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+    if (response.ok) return "ok";
+    return response.status === 401 ? "invalid" : "error";
+  } catch {
+    return "error";
+  }
+}
+
+/** URL of the app's own sign-in page, preserving the return path. */
+export function signInUrl(nextPath: string = currentAppPath()): string {
+  return `/app/sign-in?next=${encodeURIComponent(safeNextPath(nextPath))}`;
+}
+
+/** Sign out: the customer API's session where it exists, else the existing portal logout. */
 export async function logout(): Promise<void> {
+  if (await customerSignInAvailable()) {
+    try {
+      await fetch("/auth/logout", { method: "POST", credentials: "same-origin" });
+    } catch {
+      // best effort; redirect regardless
+    }
+    browser.assign(signInUrl("/"));
+    return;
+  }
   try {
     await fetch("/logout", { method: "POST", credentials: "same-origin" });
   } catch {
     // best effort; redirect regardless
   }
-  window.location.assign(loginUrl());
+  browser.assign(loginUrl());
 }
 
 /** URL of the existing server-rendered login page, preserving the return path. */

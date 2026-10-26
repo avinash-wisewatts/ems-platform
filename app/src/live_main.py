@@ -11,7 +11,10 @@ from fastapi.responses import JSONResponse
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool, PoolTimeout
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.requests import HTTPConnection
 
+from src.auth.customer_session import read_customer_identity, same_origin
+from src.auth.models import AuthenticatedPortalUser
 from src.auth.session import SESSION_IDENTITY_KEY, deserialize_authenticated_user
 from src.live_config import get_live_settings
 from src.live_telemetry.broker import LiveTelemetryBroker
@@ -140,6 +143,36 @@ def grafana_stream_authorized(websocket: WebSocket) -> bool:
     return secrets.compare_digest(presented, settings.grafana_stream_token)
 
 
+def portal_identity(connection: HTTPConnection, *, websocket: bool) -> AuthenticatedPortalUser | None:
+    """The signed-in portal identity of a request or WebSocket, else None.
+
+    The Administration App session (this app's SessionMiddleware) as before;
+    otherwise, when configured, the customer API session (ADR-023): its own
+    cookie and secret, customer audience, and -- for a browser WebSocket --
+    an Origin naming the host it reached, so another site cannot open a live
+    stream with a customer's cookie. Asset access is still decided per
+    identity by admin.portal_user_can_access_asset.
+    """
+
+    identity = deserialize_authenticated_user(
+        connection.scope.get("session", {}).get(SESSION_IDENTITY_KEY)
+    )
+    if identity is not None or not settings.customer_session_secret:
+        return identity
+    customer = read_customer_identity(
+        connection.headers.get("cookie"),
+        secret=settings.customer_session_secret,
+        cookie_name=settings.customer_session_cookie_name,
+        max_age_seconds=settings.customer_session_max_age_seconds,
+        allow_staff=settings.customer_allow_staff,
+    )
+    if customer is None:
+        return None
+    if websocket and not same_origin(connection.headers.get("origin"), connection.headers.get("host")):
+        return None
+    return customer
+
+
 async def actor_can_access_asset(actor_id: int, asset_id: UUID) -> bool:
     assert pool is not None
     async with pool.connection() as connection:
@@ -166,9 +199,7 @@ async def asset_ids_for_device(device_id: str) -> list[UUID]:
 async def publish_device_update(device_id: str) -> None:
     for asset_id in await asset_ids_for_device(device_id):
         for websocket in await hub.subscribers_for(asset_id):
-            identity = deserialize_authenticated_user(
-                websocket.scope.get("session", {}).get(SESSION_IDENTITY_KEY)
-            )
+            identity = portal_identity(websocket, websocket=True)
             if identity is None:
                 await hub.remove(asset_id, websocket)
                 continue
@@ -353,9 +384,7 @@ async def health() -> JSONResponse:
 
 @app.get("/api/live/assets/{asset_id}")
 async def live_snapshot(request: Request, asset_id: UUID) -> JSONResponse:
-    identity = deserialize_authenticated_user(
-        request.session.get(SESSION_IDENTITY_KEY)
-    )
+    identity = portal_identity(request, websocket=False)
     if identity is None:
         return JSONResponse({"detail": "Authentication required"}, status_code=401)
     if not await actor_can_access_asset(identity.portal_user_id, asset_id):
@@ -366,9 +395,7 @@ async def live_snapshot(request: Request, asset_id: UUID) -> JSONResponse:
 
 @app.websocket("/api/live/assets/{asset_id}/ws")
 async def live_asset_websocket(websocket: WebSocket, asset_id: UUID) -> None:
-    identity = deserialize_authenticated_user(
-        websocket.scope.get("session", {}).get(SESSION_IDENTITY_KEY)
-    )
+    identity = portal_identity(websocket, websocket=True)
     if identity is None:
         await websocket.close(code=4401)
         return

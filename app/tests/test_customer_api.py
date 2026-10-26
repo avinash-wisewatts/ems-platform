@@ -88,7 +88,7 @@ def _admin_login(portal_client, monkeypatch, user=CUSTOMER):
 
 def test_customer_api_exposes_only_api_v1_auth_and_health(customer_module) -> None:
     paths = {getattr(r, "path", None) for r in customer_module.app.routes}
-    assert {p for p in paths if not p.startswith("/api/v1/")} == {"/auth/login", "/auth/logout", "/health"}
+    assert {p for p in paths if not p.startswith("/api/v1/")} == {"/auth/login", "/auth/logout", "/auth/session", "/health"}
     for forbidden in ("/login", "/logout", "/administration", "/onboarding", "/context", "/app", "/static",
                       "/forbidden", "/api/live/assets/{asset_id}/ws", "/openapi.json", "/docs"):
         assert not any(p == forbidden or p.startswith(forbidden + "/") for p in paths), forbidden
@@ -142,6 +142,15 @@ def test_no_api_documentation_is_served(customer_client, monkeypatch) -> None:
 
 
 # --- authentication and session ------------------------------------------------------
+
+def test_sign_in_mode_probe_is_public_and_identity_free(customer_client, monkeypatch) -> None:
+    for signed_in in (False, True):
+        if signed_in:
+            assert _customer_login(customer_client, monkeypatch).status_code == 200
+        response = customer_client.get("/auth/session")
+        assert (response.status_code, response.json()) == (200, {"sign_in": "customer"})
+        assert response.headers["cache-control"] == "no-store"
+
 
 def test_unauthenticated_api_is_a_json_401_never_a_redirect(customer_client) -> None:
     response = customer_client.get("/api/v1/me")

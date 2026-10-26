@@ -12,6 +12,7 @@ import { PlaceholderArea } from "./routes/PlaceholderArea";
 import { Forbidden } from "./routes/Forbidden";
 import { NotFound } from "./routes/NotFound";
 import { LoginRedirect } from "./routes/LoginRedirect";
+import { SignIn } from "./routes/SignIn";
 import { Loading } from "./components/states/Loading";
 import { SpacesList } from "./routes/spaces/SpacesList";
 import { SpaceDetail } from "./routes/spaces/SpaceDetail";
@@ -28,6 +29,7 @@ import { ReportsPage } from "./routes/reportExports/ReportsPage";
 /**
  * Foundation routes:
  *   /            session/tenant bootstrap -> redirect
+ *   /sign-in     sign-in page (customer API on the customer host, ADR-023)
  *   /select      organization / site picker
  *   /dashboard   Main Dashboard (WiseWatts redesign) -- the new landing screen
  *   /asset-view  Asset View (WiseWatts redesign) -- filters + live tiles
@@ -72,6 +74,7 @@ export function AppRoutes() {
   return (
     <Routes>
       <Route path="/" element={<Bootstrap />} />
+      <Route path="/sign-in" element={<SignIn />} />
       <Route
         path="/select"
         element={

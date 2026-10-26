@@ -57,6 +57,22 @@ class LiveSettings(BaseSettings):
 
     grafana_stream_token: str = Field(min_length=32, alias="EMS_GRAFANA_STREAM_TOKEN")
 
+    # Customer API session (ADR-023 stage 3). The edge proxy routes the
+    # customer host's /api/live/* here directly, so this service also accepts
+    # the customer API's session cookie -- signed with the customer API's own
+    # secret (its EMS_APP_SESSION_SECRET), never the Administration App's.
+    # Unset: only the Administration App session is accepted, as before.
+    customer_session_secret: str | None = Field(
+        default=None, min_length=32, alias="EMS_CUSTOMER_SESSION_SECRET"
+    )
+    customer_session_cookie_name: str = Field(
+        default="ems_session", alias="EMS_CUSTOMER_SESSION_COOKIE_NAME"
+    )
+    customer_session_max_age_seconds: int = Field(
+        default=28800, ge=300, le=86400, alias="EMS_CUSTOMER_SESSION_MAX_AGE_SECONDS"
+    )
+    customer_allow_staff: bool = Field(default=False, alias="EMS_CUSTOMER_ALLOW_STAFF")
+
     # Bounds concurrent telemetry.ingest_live_rtdata() calls so an MQTT burst
     # (e.g. the retained-message flood on reconnect) cannot occupy every
     # connection in the live-telemetry DB pool. Kept below the pool's

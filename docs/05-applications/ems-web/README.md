@@ -31,9 +31,10 @@ SHA-labelled `ghcr.io/<repo>-web:<sha>` nginx image (`web/Dockerfile`).
 **Target (ADR-023, stages 1–2 implemented, not deployed):** a dedicated
 customer hostname served by an edge proxy: `/app` → `ems-web`, `/api/v1` and
 `/auth` → `customer-api`, so customer requests no longer pass through the
-Administration App. Stage 3 (pending) replaces the redirect to the
-Administration App's `/login` with the app's own sign-in page calling
-`POST /auth/login`.
+Administration App. Stage 3 (implemented, not merged) adds the app's own
+sign-in page (`/app/sign-in`, `POST /auth/login`), which hands over to the
+Administration App's `/login` wherever `/auth/*` is absent (`GET /auth/session`
+probe), so it works on both paths during the transition.
 
 Either way `/app` is a delivery detail, not the application's architectural
 boundary — see

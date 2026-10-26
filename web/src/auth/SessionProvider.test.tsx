@@ -48,7 +48,9 @@ describe("SessionProvider -- bootstraps the existing portal session", () => {
     expect(screen.getByTestId("err").textContent).toBe("NetworkError");
   });
 
-  it("goToLogin sends the browser to the existing /login page", async () => {
+  // ADR-023: the app's own sign-in page, which itself hands over to the
+  // Administration App's /login where /auth/* does not exist (SignIn.test.tsx).
+  it("goToLogin sends the browser to the app's sign-in page with the return path", async () => {
     const assign = vi.fn();
     vi.stubGlobal("location", { ...window.location, assign, pathname: "/app/home", search: "" });
 
@@ -62,6 +64,6 @@ describe("SessionProvider -- bootstraps the existing portal session", () => {
       </SessionProvider>,
     );
     screen.getByText("login").click();
-    expect(assign).toHaveBeenCalledWith(expect.stringContaining("/login?next_path="));
+    expect(assign).toHaveBeenCalledWith("/app/sign-in?next=%2Fhome");
   });
 });

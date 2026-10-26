@@ -49,7 +49,13 @@ PROJECT_PATH=/opt/ems-platform ENVIRONMENT_NAME=staging \
 ```
 Verify: `docker inspect ems-customer-api` healthy; its `/health` reports database user `ems_customer_api`.
 
-**E. Stage 3 must be merged and deployed first** (frontend sign-in page; live-telemetry customer session). Do not activate the edge before it.
+**E. Stage 3** (frontend sign-in page `/app/sign-in`; live-telemetry accepts the customer session) must be merged and deployed first. Then, as one approved step, give live-telemetry the customer session secret and recreate only it (live updates blip for a few seconds; the admin path keeps working):
+```
+# on the host: copy the customer API's session secret, never print it
+sed -n 's/^EMS_APP_SESSION_SECRET=/EMS_CUSTOMER_SESSION_SECRET=/p' app/customer-api.env >> app/live-telemetry.env
+APP_IMAGE=<running live-telemetry image> docker compose -f /opt/ems-platform/compose.yaml up -d --no-build --no-deps --force-recreate live-telemetry
+```
+Rollback: remove the `EMS_CUSTOMER_SESSION_SECRET` line and recreate live-telemetry the same way. Do not activate the edge before E.
 
 **F. Edge proxy** — root `.env`: `EMS_CUSTOMER_HOST`, `EMS_STAFF_HOST`, `EMS_STAFF_ALLOWED_CIDRS`, `EMS_EDGE_TLS=<acme e-mail>`; then
 ```

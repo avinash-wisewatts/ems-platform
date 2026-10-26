@@ -1,6 +1,6 @@
 # ADR-023: Separate the customer EMS application from the staff Administration App
 
-Status: Decided (user, 2026-10-26); stages 1–2 implemented on `feature/customer-api-separation`, not merged, not deployed; stages 3–5 not started.
+Status: Decided (user, 2026-10-26); stages 1–2 merged (PR #157, `5cd6a99`) and deployed to staging 2026-10-26 (migration 313 applied; customer-api credentials provisioned, service not yet started; edge not started); stage 3 implemented on `feature/customer-sign-in-stage3`, not merged; stages 4–5 not started.
 Date: 2026-10-26
 Decision owners: Product Owner; Architecture
 Related decisions: [ADR-006](ADR-006-ems-web-app-vs-admin-portal.md) (Amendment 1: dedicated `ems-web` container — the intermediate step this ADR completes), [ADR-007](ADR-007-analytics-api-boundary.md)
@@ -24,9 +24,9 @@ After ADR-006 Amendment 1, the EMS frontend runs in its own `ems-web` container,
 
 | Stage | Content | Status |
 |---|---|---|
-| 1 | Edge proxy definition (`edge`, profile-gated, not started) | Implemented, not deployed |
-| 2 | `customer-api`, customer auth, migration 313, staff-only switch (off), deploy script | Implemented, not deployed |
-| 3 | Frontend sign-in page and `/auth` client; live-telemetry accepts the customer session; Reports worker to customer-api | Not started |
+| 1 | Edge proxy definition (`edge`, profile-gated, not started) | On staging, not started |
+| 2 | `customer-api`, customer auth, migration 313, staff-only switch (off), deploy script | On staging: 313 applied, role login + `app/customer-api.env` provisioned; service start via `deploy-customer-api.yml` (PR #158) pending |
+| 3 | Frontend sign-in page (`/app/sign-in`, falls back to `/login` on the admin path) and `/auth` client; `GET /auth/session` probe; live-telemetry accepts the customer session (own secret, customer audience, same-origin WebSocket) | Implemented, not merged. Reports worker stays in admin-portal until stage 4 |
 | 4 | Activate routing (DNS, TLS, security group), `EMS_ADMIN_STAFF_ONLY=true`, remove `/app` and `/api/v1` from admin-portal, close `:8080` / `:3000` | Not started — approval per step |
 | 5 | Production | Not started — separate approval (release plan D6) |
 
@@ -40,7 +40,7 @@ After ADR-006 Amendment 1, the EMS frontend runs in its own `ems-web` container,
 ## Consequences
 
 - The EMS frontend bundle is public on the customer host (all data still requires a customer session); previously `/app` itself required a session.
-- Until stage 3, the frontend still sends unauthenticated users to `/login`, which does not exist on the customer host — routing must not be activated before stage 3.
+- Until stage 3 is deployed (and live-telemetry has the customer session secret), the frontend would send customers to `/login`, which does not exist on the customer host — routing must not be activated before then.
 - Two processes serve `/api/v1` during the transition; they share code, and parity is tested.
 - Session revocation is unchanged (signed cookies, up to `EMS_APP_SESSION_MAX_AGE_SECONDS`); data access stops immediately for a deactivated user because the database checks `is_active`.
 
