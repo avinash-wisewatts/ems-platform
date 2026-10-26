@@ -74,6 +74,21 @@ admin-portal container and served same-origin under `/app` — a delivery
 mechanism, not the architectural boundary. See
 [../../05-applications/README.md](../../05-applications/README.md).
 
+**Amendment 1 (2026-10-26) — dedicated `ems-web` container.** Approved by
+the user as "Option A" after a read-only topology investigation (no reverse
+proxy or TLS on either host). The `-web` image runs as its own `ems-web`
+compose service; `admin-portal` proxies `/app/*` to it, after its existing
+authentication/authorization middleware, when `EMS_WEB_UPSTREAM` is set.
+This makes the frontend restartable and rollbackable by recreating only
+`ems-web` (`scripts/release/deploy_web.sh`, `deploy-web.yml`), without
+touching the Administration App process. Same origin, URL, cookie and
+permissions; no second auth system. The bind-mounted bundle hook stays as
+the fallback. Status: **implemented on `feature/ems-web-container`, not
+merged, not deployed**; production remains API-only (release plan D6).
+Alternative rejected: a front reverse proxy with `auth_request` (moves the
+public port binding, adds shared ingress ahead of the TLS work). See
+[../../04-architecture/deployment-architecture.md](../../04-architecture/deployment-architecture.md).
+
 ## Validation references
 
 Phase 8 exit criterion met: an internal user can log in, select an

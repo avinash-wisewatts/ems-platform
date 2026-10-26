@@ -5,8 +5,10 @@ from contextlib import asynccontextmanager
 from datetime import timedelta
 from pathlib import Path
 from typing import Annotated, AsyncIterator
+from urllib.parse import quote
 from uuid import UUID
 
+import httpx
 import websockets
 from websockets.exceptions import InvalidHandshake, WebSocketException
 from fastapi import FastAPI, Form, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -392,6 +394,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     finally:
         if report_export_worker is not None:
             await report_export_worker.stop()
+        if _web_upstream_client is not None:
+            await _web_upstream_client.aclose()
         await close_database_pool()
 
 
@@ -447,10 +451,110 @@ if settings.reports_enabled:
 # Middleware redirects an unauthenticated visitor to the existing /login flow
 # and the SPA reuses the resulting session cookie. No second auth system, no
 # CORS, no new cookie.
+#
+# Dedicated-container mode (EMS_WEB_UPSTREAM set): the same /app URL space is
+# instead proxied to the `ems-web` container (web/Dockerfile's nginx image),
+# so the frontend is deployed, restarted and rolled back by recreating only
+# that container (scripts/release/deploy_web.sh). Requests still pass the
+# same PortalAuthenticationMiddleware first (unauthenticated -> /login,
+# DASHBOARD_VIEW required); only GET/HEAD are forwarded, and no cookie or
+# other credential is sent upstream -- ems-web serves static files only.
+# When EMS_WEB_UPSTREAM is unset the bind-mounted bundle hook below applies
+# exactly as before; it is the rollback fallback.
 # ---------------------------------------------------------------------------
 _spa_directory = base_directory / "spa"
 
-if (_spa_directory / "index.html").is_file():
+# Request headers forwarded to ems-web (conditional-GET support only) and
+# response headers returned from it. Everything else -- Cookie, Authorization,
+# Set-Cookie, hop-by-hop and encoding headers -- is deliberately dropped.
+_WEB_UPSTREAM_REQUEST_HEADERS = ("accept", "if-none-match", "if-modified-since")
+_WEB_UPSTREAM_RESPONSE_HEADERS = (
+    "content-type",
+    "cache-control",
+    "etag",
+    "last-modified",
+    "expires",
+    "x-robots-tag",
+)
+_web_upstream_client: httpx.AsyncClient | None = None
+
+
+def _get_web_upstream_client() -> httpx.AsyncClient:
+    """Return the shared HTTP client used to reach the ems-web container."""
+
+    global _web_upstream_client
+
+    if _web_upstream_client is None:
+        _web_upstream_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(10.0, connect=3.0),
+            follow_redirects=False,
+        )
+
+    return _web_upstream_client
+
+
+if settings.web_upstream:
+    _web_upstream = settings.web_upstream
+
+    @app.api_route("/app", methods=["GET", "HEAD"], include_in_schema=False)
+    @app.api_route("/app/{spa_path:path}", methods=["GET", "HEAD"], include_in_schema=False)
+    async def proxy_frontend_shell(
+        request: Request,
+        spa_path: str = "",
+    ) -> Response:
+        """Proxy /app/* to the dedicated ems-web container.
+
+        Authentication and DASHBOARD_VIEW are already enforced by
+        PortalAuthenticationMiddleware before this handler runs. ems-web
+        owns SPA fallback (client-side routes -> index.html) and the
+        immutable caching of hashed /app/assets/*.
+        """
+
+        if (
+            "\\" in spa_path
+            or "\x00" in spa_path
+            or any(segment in {".", ".."} for segment in spa_path.split("/"))
+        ):
+            return Response(status_code=404, headers={"cache-control": "no-store"})
+
+        upstream_url = _web_upstream + quote(request.url.path, safe="/")
+        if request.url.query:
+            upstream_url += "?" + request.url.query
+
+        try:
+            upstream = await _get_web_upstream_client().request(
+                request.method,
+                upstream_url,
+                headers={
+                    name: request.headers[name]
+                    for name in _WEB_UPSTREAM_REQUEST_HEADERS
+                    if name in request.headers
+                },
+            )
+        except httpx.HTTPError:
+            return Response(
+                content=b"The EMS web application is temporarily unavailable.",
+                status_code=502,
+                media_type="text/plain",
+                headers={"cache-control": "no-store"},
+            )
+
+        headers = {
+            name: upstream.headers[name]
+            for name in _WEB_UPSTREAM_RESPONSE_HEADERS
+            if name in upstream.headers
+        }
+        location = upstream.headers.get("location")
+        if location and location.startswith("/") and not location.startswith("//"):
+            headers["location"] = location
+
+        return Response(
+            content=b"" if request.method == "HEAD" else upstream.content,
+            status_code=upstream.status_code,
+            headers=headers,
+        )
+
+elif (_spa_directory / "index.html").is_file():
     _spa_assets_directory = _spa_directory / "assets"
 
     if _spa_assets_directory.is_dir():

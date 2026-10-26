@@ -15,13 +15,29 @@ sustainability capabilities. See
 
 ## Technology and delivery
 
-React / TypeScript SPA. Currently delivered as an independently versioned
-`ghcr.io/<repo>-web:<sha>` artifact, mounted read-only into the
-admin-portal container and served same-origin under `/app` by the existing
-FastAPI hook. This is a delivery mechanism chosen because no reverse proxy
-exists yet — see
-[../../04-architecture/deployment-architecture.md](../../04-architecture/deployment-architecture.md) —
-not the application's architectural boundary.
+React / TypeScript SPA. Built once in CI as an independently versioned,
+SHA-labelled `ghcr.io/<repo>-web:<sha>` nginx image (`web/Dockerfile`).
+
+- **Deployed today (staging only):** the image's bundle is extracted and
+  mounted read-only into the admin-portal container and served same-origin
+  under `/app` by the existing FastAPI hook. Production serves no frontend
+  (API-only, release plan D6).
+- **Implemented, not deployed (branch `feature/ems-web-container`,
+  2026-10-26):** the image runs as the dedicated `ems-web` container;
+  admin-portal proxies `/app/*` to it after authentication when the host
+  sets `EMS_WEB_UPSTREAM`. Deployed and rolled back on its own
+  (`deploy-web.yml` / `scripts/release/deploy_web.sh`, recreating only
+  `ems-web`); the bind-mount hook remains the fallback.
+
+Either way `/app` is a delivery detail, not the application's architectural
+boundary — see
+[../../04-architecture/deployment-architecture.md](../../04-architecture/deployment-architecture.md).
+
+**Reports tab visibility.** The SPA shows Reports (and polls its job list)
+only when `GET /api/v1/me` lists `report.export`. On the same branch, `/me`
+advertises it only where `EMS_REPORTS_ENABLED` is on (staging), since the
+Reports routes are not mounted elsewhere; the role grant and server-side
+authorization are unchanged.
 
 ## Data access
 

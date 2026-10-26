@@ -202,6 +202,17 @@ services:
     env_file:
       - ./app/.env
 
+    environment:
+      # Dedicated EMS Web App container switch. Set EMS_WEB_UPSTREAM in the
+      # host root .env (normally http://ems-web:80) to serve /app/* by
+      # proxying -- after this service's own authentication/authorization --
+      # to the `ems-web` service below. Unset/empty (the default, and the
+      # state of any host that has not opted in, including production) keeps
+      # the bind-mounted bundle hook (EMS_WEB_SPA_PATH volume below), which is
+      # also the rollback fallback. Deliberately NOT a depends_on: recreating
+      # admin-portal never touches ems-web, and vice versa.
+      EMS_WEB_UPSTREAM: ${EMS_WEB_UPSTREAM:-}
+
     depends_on:
       timescaledb:
         condition: service_healthy
@@ -248,3 +259,48 @@ services:
       timeout: 5s
       retries: 10
       start_period: 30s
+
+
+  ems-web:
+    # EMS Customer Web App -- the static React bundle served by nginx from
+    # its own container, so it is deployed, restarted and rolled back
+    # independently of admin-portal (scripts/release/deploy_web.sh recreates
+    # ONLY this service).
+    #
+    # Built once in CI from web/Dockerfile, tagged with the immutable Git
+    # commit SHA (ghcr.io/<owner>/<repo>-web:<sha>) and deployed by digest;
+    # deploy_web.sh sets EMS_WEB_IMAGE to that exact reference. `build:` is
+    # retained only so local `docker compose build` works; deployment scripts
+    # never pass --build. Never created by deploy_release.sh (which names
+    # admin-portal/live-telemetry only), so a host that has not deployed it
+    # -- production today -- is unaffected by its presence here.
+    image: ${EMS_WEB_IMAGE:-ems-platform-prod-web:local}
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+
+    container_name: ems-web
+
+    restart: unless-stopped
+
+    # No `ports:` -- reachable only on the compose network, by admin-portal
+    # (EMS_WEB_UPSTREAM=http://ems-web:80). The browser only ever talks to the
+    # admin-portal origin, which authenticates before proxying /app/*. No
+    # env_file: this container holds no secrets and no credentials.
+
+    # Static file server only: immutable root filesystem; nginx's cache, pid
+    # and temp paths are in-memory.
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:80/app/ || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 5s

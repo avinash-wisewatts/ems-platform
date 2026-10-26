@@ -6,9 +6,91 @@ artifact**. It is deployed and rolled back **separately** from the
 the admin portal, Grafana, energy pipelines, Phase 6, or the Phase 7 backend
 contract.
 
-This document records the mechanism that is now wired into the repository. It
-has **not been executed** — the first staging deployment is a separately
-authorized step.
+This document records the mechanism that is now wired into the repository.
+**Status (2026-10-26):** the bind-mounted bundle mechanism below is deployed
+on staging (5 `-web` deploys recorded 2026-10-24…25); production serves no
+frontend (API-only, release plan D6). The dedicated-container mode in the
+next section is **implemented on `feature/ems-web-container`, not merged, not
+deployed**.
+
+---
+
+## Dedicated container mode — `ems-web` (implemented, not deployed)
+
+Approved 2026-10-26 ("Option A"; ADR-006 Amendment 1). The same `-web:<sha>`
+image runs as the `ems-web` compose service, and `admin-portal` proxies
+`/app/*` to it **after** its existing authentication/authorization
+middleware.
+
+```
+browser ── :8080 ── admin-portal ──(session + DASHBOARD_VIEW)──▶ /app/* ──▶ ems-web:80 (nginx, no host port)
+                        └── /login /logout /api/v1/* /api/live/* /administration/* (unchanged)
+```
+
+| Concern | Behaviour |
+|---|---|
+| URL / origin / cookie | Unchanged: `/app` on the admin-portal origin, `ems_admin_session`, no CORS, no new public port |
+| Unauthenticated `/app/*` (incl. assets) | Unchanged: 303 → `/login?next_path=…`; never reaches `ems-web` |
+| Permission | Unchanged: `/app/*` GET/HEAD requires `DASHBOARD_VIEW` |
+| Forwarded to `ems-web` | GET/HEAD only; `Accept`, `If-None-Match`, `If-Modified-Since` only — **no Cookie, Authorization or X-Forwarded-***; dot-segment paths rejected (404) |
+| Returned from `ems-web` | Status + `Content-Type`, `Cache-Control`, `ETag`, `Last-Modified`, `Expires`, `X-Robots-Tag`, relative `Location` only |
+| Caching | Entry document / client routes: `no-store`. Hashed `/app/assets/*`: `public, max-age=31536000, immutable`; missing asset → 404 |
+| `ems-web` down | `/app/*` → 502 (`no-store`); `/login`, `/api/v1/*`, admin routes unaffected; recovers when `ems-web` is back |
+| Hardening | No host port, no env file/secrets, read-only root fs (tmpfs for nginx paths), `no-new-privileges`, `server_tokens off`, `absolute_redirect off` |
+
+**Switch.** `EMS_WEB_UPSTREAM` in the host **root** `.env` (compose passes it
+to `admin-portal`; empty by default):
+
+```
+EMS_WEB_UPSTREAM=http://ems-web:80
+```
+
+`admin-portal` reads it at process start, so turning container mode on or
+off is a host `.env` edit plus one `admin-portal` recreate
+(`docker compose -f <path>/compose.yaml up -d --no-build --no-deps --force-recreate admin-portal`).
+This is a one-time, separately authorized step per host; after it, frontend
+deploys never touch `admin-portal`.
+
+**Web-only deploy / rollback.** One operation, either direction:
+
+- GitHub: `deploy-web.yml` → `target_environment=staging`,
+  `web_git_sha=<40-char sha>` (must be in `staging`'s history; resolved to
+  its digest).
+- Host: `EMS_WEB_IMAGE=ghcr.io/<owner>/<repo>-web:<sha>@sha256:<digest> PROJECT_PATH=<path> ENVIRONMENT_NAME=staging <path>/scripts/release/deploy_web.sh`
+
+`deploy_web.sh` checks the deployed `compose.yaml` defines `ems-web`; pulls;
+refuses an image whose `org.opencontainers.image.revision` label disagrees
+with its tag or that lacks `/usr/share/nginx/html/app/index.html`; recreates
+**only** `ems-web` (`--no-deps --no-build`); waits for health and, if the new
+image is unhealthy, restores the previously running image and fails;
+appends `<PROJECT_PATH>/.deploy-history/<env>-web-container.log`
+(`…|<ref>|<repo digest>|previous=<ref>`). It never runs migrations, never
+moves the host checkout, never edits a `.env`, never names another service.
+
+**Normal releases.** `deploy-staging.yml` now builds the `-web` image with
+`--build-arg GIT_SHA=<sha>` (provenance label), captures its pushed digest,
+and runs `deploy_web.sh` by digest **after** `deploy_web_bundle.sh` (kept, so
+the fallback stays current) and **before** `deploy_release.sh`.
+`rollback.yml` is unchanged (its `web_image_tag` still drives the bundle
+fallback). `deploy-production.yml` deploys neither (contract-tested).
+
+**Fallback.** Unset `EMS_WEB_UPSTREAM` and recreate `admin-portal`: `/app`
+is served again from the bind-mounted bundle exactly as before. Rolling the
+`-app` image back to a commit that predates this change has the same effect
+(that `compose.yaml` has no `EMS_WEB_UPSTREAM`); a running `ems-web` is then
+simply unused.
+
+**Production.** Not a target of `deploy-web.yml` and not deployed by
+`deploy-production.yml` — production stays API-only until a separately
+authorized frontend rollout (D6). The Reports dependency is already handled
+for that day: `GET /api/v1/me` advertises `report.export` only where
+`EMS_REPORTS_ENABLED` is on, so the SPA hides the Reports tab and never
+polls the (unmounted) report-export routes on production.
+
+**Verification assets.** `scripts/test/assert_ems_web_container.sh <image>
+[<sha>]` (also a CI step in `web-docker-build-validate`);
+`app/tests/test_web_upstream_proxy.py`;
+`app/tests/test_web_container_release_contract.py`.
 
 ---
 
@@ -247,11 +329,13 @@ The shipped bundle depends only on `react`, `react-dom`, `react-router-dom`,
 
 ---
 
-## Fallback serving model — sidecar + front proxy
+## Alternative serving models
 
-If path-prefixed serving is ever unsuitable, run `web/Dockerfile`'s image as a
-`web-frontend` compose service (`127.0.0.1:<port>`, it already serves the
-bundle via `nginx.conf`) and have a front proxy route `/app` → `web-frontend`
-and `/api`,`/login`,`/logout` → `admin-portal`. Same cookie (same host), still
-no CORS. This is heavier (a proxy the repo currently defers) and is **not** the
-Phase 8 choice; documented for completeness.
+- **Dedicated container behind admin-portal** — adopted 2026-10-26 as the
+  target; see "Dedicated container mode" at the top of this document.
+- **Dedicated container behind a front reverse proxy** (route `/app` →
+  `ems-web` and everything else → `admin-portal`, with `auth_request` to keep
+  the auth gate) — **not chosen**: it moves the public `:8080` binding off
+  `admin-portal` and adds a shared ingress component ahead of the planned
+  TLS work. Revisit together with that work; the `ems-web` image and
+  `deploy_web.sh` would carry over unchanged.

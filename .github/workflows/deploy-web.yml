@@ -1,0 +1,121 @@
+name: Deploy EMS Web App (web-only)
+
+# Web-only deploy AND rollback of the dedicated EMS Web App container
+# (compose service `ems-web`). Runs scripts/release/deploy_web.sh on the
+# target host, which recreates ONLY ems-web -- never admin-portal,
+# live-telemetry, timescaledb, telegraf or grafana -- and never runs
+# migrations, never moves the host's release checkout, never edits a .env.
+#
+# Roll forward and roll back are the same operation: dispatch this workflow
+# with the Git SHA of the -web image to run. Any commit that CI built on
+# `staging` is a valid target (GHCR keeps every -web:<sha> image); the image
+# is resolved to its immutable digest here and deployed by digest. The
+# previously running image is printed by deploy_web.sh and recorded in
+# <PROJECT_PATH>/.deploy-history/<environment>-web-container.log.
+#
+# Compatibility is the operator's call: the chosen frontend must work with
+# the backend currently deployed on the host (normally: the same or an
+# adjacent staging commit).
+#
+# Production is deliberately NOT a target. Production stays API-only until a
+# separately authorized frontend rollout (production release plan D6);
+# app/tests/test_web_container_release_contract.py enforces this.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_environment:
+        description: "Environment to deploy the EMS Web App container to"
+        required: true
+        type: choice
+        options:
+          - staging
+      web_git_sha:
+        description: "Full 40-character Git SHA of the -web image to run (a commit in staging's history that CI built)"
+        required: true
+
+concurrency:
+  group: deploy-web-${{ inputs.target_environment }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  REGISTRY: ghcr.io
+  WEB_IMAGE_NAME: ${{ github.repository }}-web
+
+jobs:
+  deploy-web:
+    name: Deploy EMS Web App container (${{ inputs.target_environment }})
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.target_environment }}
+    steps:
+      - name: Validate web_git_sha is a staging commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WEB_GIT_SHA: ${{ inputs.web_git_sha }}
+        run: |
+          if [[ ! "${WEB_GIT_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::web_git_sha must be a full 40-character lowercase Git SHA."
+            exit 1
+          fi
+          head="$(gh api "repos/${{ github.repository }}/git/ref/heads/staging" --jq '.object.sha')"
+          status="$(gh api "repos/${{ github.repository }}/compare/${WEB_GIT_SHA}...${head}" --jq '.status')" || {
+            echo "::error::Could not compare ${WEB_GIT_SHA} with staging HEAD (${head})."
+            exit 1
+          }
+          if [[ "${status}" != "ahead" && "${status}" != "identical" ]]; then
+            echo "::error::${WEB_GIT_SHA} is not in staging's history (compare status '${status}')."
+            exit 1
+          fi
+          echo "${WEB_GIT_SHA} is in staging's history (status '${status}' against ${head})."
+
+      - name: Resolve and pin the -web image digest
+        # Same-job step output (never a cross-job output) -- see
+        # deploy-production.yml "Resolve and pin the deployment image".
+        id: resolve-image
+        env:
+          WEB_GIT_SHA: ${{ inputs.web_git_sha }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME || github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD || secrets.GITHUB_TOKEN }}
+        run: |
+          image="${REGISTRY}/${WEB_IMAGE_NAME}:${WEB_GIT_SHA}"
+          echo "${REGISTRY_PASSWORD}" | docker login "${REGISTRY}" \
+            --username "${REGISTRY_USERNAME}" \
+            --password-stdin
+          inspect_output="$(docker buildx imagetools inspect "${image}" 2>&1)" || {
+            echo "::error::Image not found in registry: ${image}"
+            echo "${inspect_output}"
+            exit 1
+          }
+          digest="$(echo "${inspect_output}" | awk '/^Digest:/{print $2; exit}')"
+          if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Could not resolve a digest for ${image}"
+            exit 1
+          fi
+          echo "image_with_digest=${image}@${digest}" >> "$GITHUB_OUTPUT"
+          echo "Resolved image: ${image}@${digest}"
+
+      - name: Deploy ems-web over SSH (ems-web only)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          envs: EMS_WEB_IMAGE,ENV_NAME_VALUE,REGISTRY_USERNAME,REGISTRY_PASSWORD
+          script: |
+            set -euo pipefail
+            export PROJECT_PATH="${{ secrets.STAGING_PROJECT_PATH }}"
+            export ENVIRONMENT_NAME="${ENV_NAME_VALUE}"
+            export EMS_WEB_IMAGE="${EMS_WEB_IMAGE}"
+            # No git fetch/checkout: the host keeps its current release
+            # checkout; deploy_web.sh uses the compose.yaml already there.
+            "${PROJECT_PATH}/scripts/release/deploy_web.sh"
+            docker inspect --format 'ems-web image={{.Config.Image}} health={{.State.Health.Status}}' ems-web
+        env:
+          EMS_WEB_IMAGE: ${{ steps.resolve-image.outputs.image_with_digest }}
+          ENV_NAME_VALUE: ${{ inputs.target_environment }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME || github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD || secrets.GITHUB_TOKEN }}

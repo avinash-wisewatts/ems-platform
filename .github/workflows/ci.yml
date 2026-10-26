@@ -86,8 +86,12 @@ jobs:
         run: |
           docker build \
             --file web/Dockerfile \
+            --build-arg GIT_SHA="${{ github.sha }}" \
             --tag ems-web:ci-build-validate \
             ./web
+
+      - name: Smoke-test the ems-web container (as compose runs it)
+        run: ./scripts/test/assert_ems_web_container.sh ems-web:ci-build-validate "${{ github.sha }}"
 
   app-tests:
     name: Application test suite (pytest)
