@@ -23,6 +23,9 @@ COPY grafana/plugin-src/wisewatts-live-datasource/src/datasource.ts /workspace/g
 COPY telegraf/config/telegraf.conf /workspace/telegraf/config/telegraf.conf
 COPY telegraf/.env.example /workspace/telegraf/.env.example
 COPY app/live-telemetry.env.example /workspace/app/live-telemetry.env.example
+# Static contract inputs for test_customer_separation_release_contract.py (ADR-023).
+COPY edge/Caddyfile /workspace/edge/Caddyfile
+COPY app/customer-api.env.example /workspace/app/customer-api.env.example
 COPY scripts/bootstrap /workspace/scripts/bootstrap
 COPY app/src /workspace/app/src
 COPY app/tests /workspace/app/tests

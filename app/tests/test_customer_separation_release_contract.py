@@ -22,7 +22,6 @@ import yaml
 
 REPO = Path(__file__).resolve().parents[2]
 WORKFLOWS = REPO / ".github" / "workflows"
-CADDYFILE = (REPO / "edge" / "Caddyfile").read_text(encoding="utf-8")
 DEPLOY = REPO / "scripts" / "release" / "deploy_customer_api.sh"
 
 
@@ -34,7 +33,12 @@ def _code(path: Path) -> str:
     return "\n".join(l for l in path.read_text(encoding="utf-8").splitlines() if not l.lstrip().startswith("#"))
 
 
+def _caddyfile() -> str:
+    return (REPO / "edge" / "Caddyfile").read_text(encoding="utf-8")
+
+
 def _site_block(host_var: str) -> str:
+    CADDYFILE = _caddyfile()
     start = CADDYFILE.index("{$" + host_var + "} {")
     depth, i = 0, CADDYFILE.index("{", start + len(host_var) + 3)
     for j in range(i, len(CADDYFILE)):
@@ -94,7 +98,7 @@ def test_staff_host_is_ip_restricted_and_the_only_way_to_admin_portal() -> None:
     assert "@not_staff not remote_ip {$EMS_STAFF_ALLOWED_CIDRS:127.0.0.1/32}" in block
     assert "respond @not_staff 403" in block
     assert block.index("respond @not_staff 403") < block.index("reverse_proxy admin-portal:8080")
-    assert len(re.findall(r"reverse_proxy\s+admin-portal", CADDYFILE)) == 1
+    assert len(re.findall(r"reverse_proxy\s+admin-portal", _caddyfile())) == 1
 
 
 def test_deploy_release_still_names_only_admin_portal_and_live_telemetry() -> None:
