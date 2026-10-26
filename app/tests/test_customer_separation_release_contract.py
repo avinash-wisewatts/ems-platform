@@ -39,8 +39,8 @@ def _caddyfile() -> str:
 
 def _site_block(host_var: str) -> str:
     CADDYFILE = _caddyfile()
-    start = CADDYFILE.index("{$" + host_var + "} {")
-    depth, i = 0, CADDYFILE.index("{", start + len(host_var) + 3)
+    start = CADDYFILE.index("{$" + host_var + ":")
+    depth, i = 0, CADDYFILE.index("} {", start) + 2
     for j in range(i, len(CADDYFILE)):
         depth += {"{": 1, "}": -1}.get(CADDYFILE[j], 0)
         if depth == 0:
