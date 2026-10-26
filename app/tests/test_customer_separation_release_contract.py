@@ -90,7 +90,28 @@ def test_customer_host_routes_only_customer_paths() -> None:
     assert "@customer_api path /api/v1/* /auth/*" in block
     # `redir /app/ 302` would parse /app/ as a matcher and leave / unanswered.
     assert "redir * /app/ 302" in block
-    assert block.rstrip().endswith("handle {\n\t\trespond 404\n\t}")
+    assert block.rstrip().endswith("handle {\n\t\t\trespond 404\n\t\t}\n\t}")
+
+
+def test_customer_allowlist_runs_before_every_route() -> None:
+    block = _site_block("EMS_CUSTOMER_HOST")
+    route = block[block.index("route {"):]
+    rules = [l.strip() for l in route.splitlines()[1:] if l.strip() and not l.strip().startswith("#")]
+    # Inside `route` the order is literal; outside it Caddy would run `handle`
+    # before `respond` and the allowlist would never apply.
+    assert rules[:2] == ["@not_allowed not remote_ip {$EMS_CUSTOMER_ALLOWED_CIDRS:0.0.0.0/0 ::/0}",
+                         "respond @not_allowed 403"]
+    before_route = [l.strip() for l in block[: block.index("route {")].splitlines() if not l.strip().startswith("#")]
+    assert not any(l.startswith(("handle", "reverse_proxy", "respond", "redir")) for l in before_route)
+    assert _services()["edge"]["environment"]["EMS_CUSTOMER_ALLOWED_CIDRS"] == "${EMS_CUSTOMER_ALLOWED_CIDRS:-0.0.0.0/0 ::/0}"
+
+
+def test_certificate_modes_are_selected_by_configuration() -> None:
+    text = _caddyfile()
+    for mode in ("internal", "acme", "acme_ip"):
+        assert f"(tls_{mode}) {{" in text
+    assert "profile shortlived" in text.split("(tls_acme_ip) {", 1)[1].split("\n}\n", 1)[0]
+    assert text.count("import tls_{$EMS_EDGE_TLS:internal}") == 2
 
 
 def test_staff_host_is_ip_restricted_and_the_only_way_to_admin_portal() -> None:

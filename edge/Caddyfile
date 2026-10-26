@@ -12,14 +12,26 @@
 # refuses every client address outside EMS_STAFF_ALLOWED_CIDRS.
 #
 # Configuration (root .env of the host; see compose.yaml service `edge`):
-#   EMS_CUSTOMER_HOST        customer hostname, e.g. app.<domain>
-#   EMS_STAFF_HOST           staff hostname, e.g. admin.<domain>
-#   EMS_STAFF_ALLOWED_CIDRS  space-separated client CIDRs allowed on the staff
-#                            host; default 127.0.0.1/32 (nobody external)
-#   EMS_EDGE_TLS             "internal" (default: Caddy's own CA, for local
-#                            and pre-DNS testing) or an ACME account e-mail
-#                            to obtain public Let's Encrypt certificates
-#                            (needs DNS pointing here and ports 80/443 open)
+#   EMS_CUSTOMER_HOST          customer site address: a hostname such as
+#                              app.<domain>, or the host's public IP
+#   EMS_STAFF_HOST             staff hostname, e.g. admin.<domain>
+#   EMS_CUSTOMER_ALLOWED_CIDRS space-separated client CIDRs allowed on the
+#                              customer host (controlled testing); default
+#                              everyone (0.0.0.0/0 ::/0)
+#   EMS_STAFF_ALLOWED_CIDRS    space-separated client CIDRs allowed on the
+#                              staff host; default 127.0.0.1/32 (nobody external)
+#   EMS_EDGE_TLS               certificate mode (snippet tls_<mode> below):
+#                                internal  Caddy's own CA -- browsers warn
+#                                          (default; local / pre-DNS testing)
+#                                acme      Let's Encrypt for a hostname
+#                                          (needs public DNS to this host)
+#                                acme_ip   Let's Encrypt for an IP-address
+#                                          site address: 6-day "shortlived"
+#                                          profile, renewed automatically
+#   Both ACME modes validate over ports 80 / 443 from the public internet
+#   (http-01 / tls-alpn-01), so those ports must be open to everyone at the
+#   firewall; access is then restricted here, by the allowlists, which do not
+#   affect certificate validation (handled by Caddy before any route).
 #
 # remote_ip matches the TCP peer, which is the client because this proxy
 # terminates the public connection itself. If a load balancer is ever put in
@@ -39,45 +51,70 @@
 	}
 }
 
+(tls_internal) {
+	tls internal
+}
+
+(tls_acme) {
+	tls {
+		issuer acme
+	}
+}
+
+(tls_acme_ip) {
+	tls {
+		issuer acme {
+			profile shortlived
+		}
+	}
+}
+
 {$EMS_CUSTOMER_HOST} {
-	tls {$EMS_EDGE_TLS:internal}
+	import tls_{$EMS_EDGE_TLS:internal}
 	import security_headers
 	encode zstd gzip
 
-	# Customer API: sign-in / sign-out and the Analytics API (src.customer_main).
-	@customer_api path /api/v1/* /auth/*
-	handle @customer_api {
-		reverse_proxy customer-api:8070
-	}
+	# `route` keeps this order literal: Caddy would otherwise run every
+	# `handle` before a top-level `respond`, bypassing the allowlist.
+	route {
+		@not_allowed not remote_ip {$EMS_CUSTOMER_ALLOWED_CIDRS:0.0.0.0/0 ::/0}
+		respond @not_allowed 403
 
-	# Live asset values (WebSocket). live-telemetry validates the session
-	# itself; it accepts the customer session from ADR-023 stage 3.
-	@live path /api/live/*
-	handle @live {
-		reverse_proxy live-telemetry:8090
-	}
+		# Customer API: sign-in / sign-out and the Analytics API (src.customer_main).
+		@customer_api path /api/v1/* /auth/*
+		handle @customer_api {
+			reverse_proxy customer-api:8070
+		}
 
-	# The EMS frontend (static bundle; every data call is authenticated by
-	# customer-api).
-	handle /app* {
-		reverse_proxy ems-web:80
-	}
+		# Live asset values (WebSocket). live-telemetry validates the session
+		# itself; it accepts the customer session from ADR-023 stage 3.
+		@live path /api/live/*
+		handle @live {
+			reverse_proxy live-telemetry:8090
+		}
 
-	# `*` is required: a first argument starting with / would be parsed as a
-	# path matcher, not the redirect target.
-	handle / {
-		redir * /app/ 302
-	}
+		# The EMS frontend (static bundle; every data call is authenticated by
+		# customer-api).
+		handle /app* {
+			reverse_proxy ems-web:80
+		}
 
-	# Nothing else exists on the customer host -- in particular no
-	# administration, onboarding, login-page, Grafana or API-docs route.
-	handle {
-		respond 404
+		# `*` is required: a first argument starting with / would be parsed as a
+		# path matcher, not the redirect target.
+		handle / {
+			redir * /app/ 302
+		}
+
+		# Nothing else exists on the customer host -- in particular no
+		# administration, onboarding, login-page, Grafana or API-docs route.
+		handle {
+			respond 404
+		}
 	}
 }
 
 {$EMS_STAFF_HOST} {
-	tls {$EMS_EDGE_TLS:internal}
+	import tls_{$EMS_EDGE_TLS:internal}
 	import security_headers
 
 	@not_staff not remote_ip {$EMS_STAFF_ALLOWED_CIDRS:127.0.0.1/32}
