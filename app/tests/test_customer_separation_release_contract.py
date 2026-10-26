@@ -128,3 +128,14 @@ def test_production_workflows_deploy_none_of_it() -> None:
         for forbidden in ("customer-api", "customer_api", "deploy_customer_api", "--profile", "Caddyfile"):
             assert forbidden not in text, (name, forbidden)
         assert not re.search(r"edge", text), name
+
+
+def test_deploy_customer_api_workflow_is_customer_api_only_staging_only_and_digest_pinned() -> None:
+    text = (WORKFLOWS / "deploy-customer-api.yml").read_text(encoding="utf-8")
+    workflow = yaml.safe_load(text)
+    on = workflow.get("on", workflow.get(True))
+    assert on["workflow_dispatch"]["inputs"]["target_environment"]["options"] == ["staging"]
+    assert '"${PROJECT_PATH}/scripts/release/deploy_customer_api.sh"' in text
+    assert "@${digest}" in text and "imagetools inspect" in text and "-app" in text
+    for forbidden in ("deploy_release", "apply_migrations", "deploy_web", "git checkout", "PRODUCTION_", "--profile edge"):
+        assert forbidden not in text, forbidden

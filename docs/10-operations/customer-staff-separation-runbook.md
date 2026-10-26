@@ -41,12 +41,17 @@ Rollback: `ALTER ROLE ems_customer_api NOLOGIN PASSWORD NULL`.
 
 **C. Customer API configuration**: create `/opt/ems-platform/app/customer-api.env` from `app/customer-api.env.example` (mode 640, owner as `app/.env`): the role password from B, a **new** session secret (≥ 32 characters, different from `app/.env`), `EMS_APP_SESSION_HTTPS_ONLY=true`, `EMS_APP_ENV=staging`, `EMS_REPORTS_ENABLED=true` (staging has Reports), `EMS_REPORT_EXPORT_WORKER_ENABLED=false`.
 
-**D. Start the customer API** (internal only; no public effect):
-```
-EMS_CUSTOMER_API_IMAGE=ghcr.io/<owner>/<repo>-app:<sha>@sha256:<digest> \
-PROJECT_PATH=/opt/ems-platform ENVIRONMENT_NAME=staging \
-  /opt/ems-platform/scripts/release/deploy_customer_api.sh
-```
+**D. Start the customer API** (internal only; no public effect): dispatch
+`.github/workflows/deploy-customer-api.yml` with `target_environment=staging`
+and `app_git_sha=<the staging commit to run>`. The GHCR packages are private
+and the hosts hold no registry login, so the workflow (which has the
+registry secrets) resolves the digest and runs
+`scripts/release/deploy_customer_api.sh` over SSH. Rollback is the same
+dispatch with the previous SHA.
+
+Staging status: B and C done 2026-10-26 (~09:57 UTC; secrets generated on
+the host, never displayed; `app/customer-api.env` mode 640). D pending the
+workflow above.
 Verify: `docker inspect ems-customer-api` healthy; its `/health` reports database user `ems_customer_api`.
 
 **E. Stage 3 must be merged and deployed first** (frontend sign-in page; live-telemetry customer session). Do not activate the edge before it.
