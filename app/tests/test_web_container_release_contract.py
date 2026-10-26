@@ -116,9 +116,14 @@ def test_production_never_deploys_the_web_container():
     assert "deploy_web.sh" not in (WORKFLOWS / "rollback.yml").read_text(encoding="utf-8")
 
 
-def test_web_image_carries_its_source_revision():
-    dockerfile = (REPO / "web" / "Dockerfile").read_text(encoding="utf-8")
-    assert "ARG GIT_SHA" in dockerfile
-    assert 'org.opencontainers.image.revision="${GIT_SHA}"' in dockerfile
-    nginx = (REPO / "web" / "nginx.conf").read_text(encoding="utf-8")
-    assert "absolute_redirect off;" in nginx
+def test_ci_smoke_tests_the_labelled_web_image():
+    # web/ is not part of the app test image, so the image itself (revision
+    # label == source SHA, SPA fallback, caching, relative redirects) is
+    # verified by scripts/test/assert_ems_web_container.sh in the CI
+    # web-docker-build-validate job; this pins that wiring.
+    text = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+    job = text.split("web-docker-build-validate:", 1)[1].split("\n  app-tests:", 1)[0]
+    assert '--build-arg GIT_SHA="${{ github.sha }}"' in job
+    assert './scripts/test/assert_ems_web_container.sh ems-web:ci-build-validate "${{ github.sha }}"' in job
+    smoke = (REPO / "scripts" / "test" / "assert_ems_web_container.sh").read_text(encoding="utf-8")
+    assert "org.opencontainers.image.revision" in smoke and "--read-only" in smoke
