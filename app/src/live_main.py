@@ -395,6 +395,14 @@ async def live_snapshot(request: Request, asset_id: UUID) -> JSONResponse:
 
 @app.websocket("/api/live/assets/{asset_id}/ws")
 async def live_asset_websocket(websocket: WebSocket, asset_id: UUID) -> None:
+    # Accept before any check (as main.py's proxy_asset_live_websocket does):
+    # only a close frame after the handshake can carry 4401 / 4404 to a
+    # browser. Closing before accept makes uvicorn deny the handshake with an
+    # HTTP 403, which the browser reports as a generic 1006 -- and
+    # useAssetLiveSocket.ts would keep reconnecting instead of stopping. This
+    # matters on the customer host, where the edge routes browsers here
+    # directly (ADR-023). Nothing is sent before the checks pass.
+    await websocket.accept()
     identity = portal_identity(websocket, websocket=True)
     if identity is None:
         await websocket.close(code=4401)
@@ -403,7 +411,6 @@ async def live_asset_websocket(websocket: WebSocket, asset_id: UUID) -> None:
         await websocket.close(code=4404)
         return
     rows = await fetch_asset_state(identity.portal_user_id, asset_id)
-    await websocket.accept()
     await hub.add(asset_id, websocket)
     try:
         await websocket.send_json(jsonable_encoder({"type": "snapshot", "asset_id": str(asset_id), "points": rows}))

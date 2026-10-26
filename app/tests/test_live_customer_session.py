@@ -157,3 +157,15 @@ def test_reader_and_origin_helpers() -> None:
     assert same_origin("https://App.Example.Test:8443", "app.example.test:8443")
     assert not same_origin("https://evil.example", "app.example.test")
     assert not same_origin(None, "app.example.test") and not same_origin("null", "app.example.test")
+
+
+def test_the_handshake_is_accepted_before_any_check() -> None:
+    # Over a real server a pre-accept close becomes an HTTP 403 handshake
+    # denial (browser close code 1006), and useAssetLiveSocket.ts would keep
+    # reconnecting; only post-accept closes deliver 4401 / 4404.
+    import inspect
+
+    source = inspect.getsource(live_main.live_asset_websocket)
+    accept = source.index("await websocket.accept()")
+    assert accept < source.index("portal_identity(") < source.index("close(code=4401)")
+    assert accept < source.index("actor_can_access_asset(")
