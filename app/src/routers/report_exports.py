@@ -40,7 +40,7 @@ from src.analytics_api_service import ApiContractError, fetch_accessible_sites, 
 from src.auth.authorization import PortalPermission, has_permission
 from src.auth.models import AuthenticatedPortalUser
 from src.analytics_trends_service import fetch_analytics_catalog, fetch_analytics_site
-from src.config import get_settings
+from src.config import get_core_settings
 from src.report_export_service import (
     ExportRequest,
     ReportExportEstimateResponse,
@@ -138,7 +138,7 @@ def _parse(range_from: str, range_to: str, resolution: str | None, asset_ids: li
             range_to=range_to,
             resolution=resolution,
             asset_ids=asset_ids,
-            max_assets=get_settings().report_export_max_assets,
+            max_assets=get_core_settings().report_export_max_assets,
         )
     except ApiContractError as exc:
         raise _contract_error(exc)
@@ -147,7 +147,7 @@ def _parse(range_from: str, range_to: str, resolution: str | None, asset_ids: li
 def _check_asset_count(count: int) -> None:
     """Every export, selected or whole-site, covers at most max_assets."""
 
-    max_assets = get_settings().report_export_max_assets
+    max_assets = get_core_settings().report_export_max_assets
     if count > max_assets:
         raise _contract_error(
             ApiContractError("too_many_assets", f"Select at most {max_assets} assets to export.")
@@ -195,7 +195,7 @@ async def estimate_site_report_export(
         raise _not_found("Site")
     site_assets, catalog_rows = await _selected_assets_and_catalog(user.portal_user_id, site_id, export_request)
     estimate = estimate_export(export_request, site_assets, catalog_rows)
-    settings = get_settings()
+    settings = get_core_settings()
     return ReportExportEstimateResponse(
         site_id=site_id,
         range_from=export_request.dt_from,
@@ -239,7 +239,7 @@ async def download_site_report_export(
         raise _not_found("Site")
     _check_asset_count(len(ctx.site_assets))
     estimate = estimate_export(ctx.request, ctx.site_assets, ctx.catalog_rows)
-    if estimate.cells > get_settings().report_export_immediate_max_cells:
+    if estimate.cells > get_core_settings().report_export_immediate_max_cells:
         raise _contract_error(
             ApiContractError(
                 "export_requires_background",
@@ -264,7 +264,7 @@ async def create_site_report_export(
     user = _require_exporter(request)
     _require_same_site_json(request)
     export_request = _parse(body.range_from, body.range_to, body.resolution, body.asset_ids)
-    settings = get_settings()
+    settings = get_core_settings()
     if await fetch_analytics_site(user.portal_user_id, site_id) is None:
         raise _not_found("Site")
     site_assets, catalog_rows = await _selected_assets_and_catalog(user.portal_user_id, site_id, export_request)

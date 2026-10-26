@@ -60,6 +60,17 @@ jobs:
       - name: Validate compose configuration (staging/production shape)
         run: docker compose -f compose.yaml config -q
 
+      - name: Validate compose configuration (customer API and edge profiles, ADR-023)
+        run: docker compose -f compose.yaml --profile customer --profile edge config -q
+
+      - name: Validate and format-check the edge proxy configuration (edge/Caddyfile)
+        run: |
+          image="$(docker compose -f compose.yaml --profile edge config --format json | python3 -c 'import json,sys; print(json.load(sys.stdin)["services"]["edge"]["image"])')"
+          docker run --rm -e EMS_CUSTOMER_HOST=app.example.test -e EMS_STAFF_HOST=admin.example.test \
+            -v "$PWD/edge:/etc/caddy:ro" "${image}" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+          docker run --rm -v "$PWD/edge:/etc/caddy:ro" "${image}" \
+            sh -c 'caddy fmt /etc/caddy/Caddyfile | diff - /etc/caddy/Caddyfile'
+
       - name: Validate compose configuration (disposable test database)
         run: docker compose -f compose.test.yaml config -q
 

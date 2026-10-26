@@ -4,62 +4,21 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class Settings(BaseSettings):
-    """Runtime configuration loaded from container environment variables."""
+class CoreSettings(BaseSettings):
+    """Configuration shared by every API process (admin portal, customer API).
+
+    Holds only what the shared /api/v1 code, the database pool and the signed
+    session need. Administration-only configuration -- Grafana credentials,
+    the /app delivery switches -- lives in Settings below, so the customer API
+    (src.customer_main, configured by src.customer_config) never requires or
+    holds it.
+    """
 
     db_host: str = Field(alias="EMS_APP_DB_HOST")
     db_port: int = Field(default=5432, alias="EMS_APP_DB_PORT")
     db_name: str = Field(alias="EMS_APP_DB_NAME")
     db_user: str = Field(alias="EMS_APP_DB_USER")
     db_password: str = Field(alias="EMS_APP_DB_PASSWORD")
-
-    grafana_url: str = Field(
-        default="http://grafana:3000",
-        alias="EMS_GRAFANA_URL",
-    )
-
-    # Same-origin proxy target for the Asset View live WebSocket (see
-    # main.py's proxy_asset_live_websocket). Reuses the exact env var name
-    # the grafana container already sets for its own backend plugin's
-    # connection to the same service (compose.yaml) -- one internal address,
-    # two independent, already-authenticated consumers.
-    live_telemetry_ws_base_url: str = Field(
-        default="ws://live-telemetry:8090",
-        alias="EMS_LIVE_TELEMETRY_WS_BASE_URL",
-    )
-
-    # Dedicated EMS Web App container (compose service `ems-web`). When set
-    # (e.g. http://ems-web:80), /app/* is served by proxying -- after the
-    # existing authentication/authorization middleware -- to that container
-    # instead of from the bind-mounted bundle at app/src/spa. Unset or empty
-    # (the default) keeps the bind-mounted bundle hook exactly as before,
-    # which is also the rollback fallback. See main.py's /app block.
-    web_upstream: str | None = Field(
-        default=None,
-        alias="EMS_WEB_UPSTREAM",
-    )
-
-    @field_validator("web_upstream")
-    @classmethod
-    def _normalize_web_upstream(cls, value: str | None) -> str | None:
-        if value is None or not value.strip():
-            return None
-        value = value.strip().rstrip("/")
-        if not value.startswith(("http://", "https://")):
-            raise ValueError("EMS_WEB_UPSTREAM must be an http:// or https:// URL")
-        return value
-
-    grafana_admin_user: str = Field(
-        alias="EMS_GRAFANA_ADMIN_USER",
-    )
-
-    grafana_admin_password: str = Field(
-        alias="EMS_GRAFANA_ADMIN_PASSWORD",
-    )
-
-    grafana_db_password: str = Field(
-        alias="EMS_GRAFANA_DB_PASSWORD",
-    )
 
     app_env: str = Field(
         default="production",
@@ -167,6 +126,89 @@ class Settings(BaseSettings):
         )
 
 
+class Settings(CoreSettings):
+    """Administration portal configuration (CoreSettings plus admin-only)."""
+
+    grafana_url: str = Field(
+        default="http://grafana:3000",
+        alias="EMS_GRAFANA_URL",
+    )
+
+    # Same-origin proxy target for the Asset View live WebSocket (see
+    # main.py's proxy_asset_live_websocket). Reuses the exact env var name
+    # the grafana container already sets for its own backend plugin's
+    # connection to the same service (compose.yaml) -- one internal address,
+    # two independent, already-authenticated consumers.
+    live_telemetry_ws_base_url: str = Field(
+        default="ws://live-telemetry:8090",
+        alias="EMS_LIVE_TELEMETRY_WS_BASE_URL",
+    )
+
+    # Dedicated EMS Web App container (compose service `ems-web`). When set
+    # (e.g. http://ems-web:80), /app/* is served by proxying -- after the
+    # existing authentication/authorization middleware -- to that container
+    # instead of from the bind-mounted bundle at app/src/spa. Unset or empty
+    # (the default) keeps the bind-mounted bundle hook exactly as before,
+    # which is also the rollback fallback. See main.py's /app block.
+    web_upstream: str | None = Field(
+        default=None,
+        alias="EMS_WEB_UPSTREAM",
+    )
+
+    @field_validator("web_upstream")
+    @classmethod
+    def _normalize_web_upstream(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        value = value.strip().rstrip("/")
+        if not value.startswith(("http://", "https://")):
+            raise ValueError("EMS_WEB_UPSTREAM must be an http:// or https:// URL")
+        return value
+
+    # Staff-only Administration App. When on, only GLOBAL-scope portal
+    # identities (WiseWatts staff) can sign in to, or keep using, this
+    # process; organization- and selected-sites-scoped identities (customers)
+    # get the same generic login failure and are signed out. Off by default
+    # until customers sign in through the customer API instead (ADR-023).
+    admin_staff_only: bool = Field(
+        default=False,
+        alias="EMS_ADMIN_STAFF_ONLY",
+    )
+
+    grafana_admin_user: str = Field(
+        alias="EMS_GRAFANA_ADMIN_USER",
+    )
+
+    grafana_admin_password: str = Field(
+        alias="EMS_GRAFANA_ADMIN_PASSWORD",
+    )
+
+    grafana_db_password: str = Field(
+        alias="EMS_GRAFANA_DB_PASSWORD",
+    )
+
+
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+# The settings object of the running API process, for code shared by more
+# than one process (src.database, the /api/v1 routers). The customer API
+# registers its CustomerSettings at import (src.customer_main); the admin
+# portal registers nothing and keeps using get_settings(), so its behaviour --
+# and every test that patches get_settings() -- is unchanged.
+_core_settings: CoreSettings | None = None
+
+
+def use_core_settings(settings: CoreSettings) -> None:
+    """Register the settings object of the running process."""
+
+    global _core_settings
+    _core_settings = settings
+
+
+def get_core_settings() -> CoreSettings:
+    """Return the running process's settings (admin portal by default)."""
+
+    return _core_settings if _core_settings is not None else get_settings()

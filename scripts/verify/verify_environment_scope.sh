@@ -5,8 +5,10 @@
 #
 # For DEPLOY_ENVIRONMENT=production: every migration that
 # postgres/migration_environment_scope.csv scopes away from production
-# (309 / 310 / 312) must have no ledger row, none of the objects it creates
-# (postgres/migration_environment_scope_objects.csv) may exist, and the
+# (309 / 310 / 312 / 313) must have no ledger row, none of the objects it
+# creates (postgres/migration_environment_scope_objects.csv) may exist -- for
+# a role, which is cluster-wide, "exists" means holds a schema or function
+# privilege in this database -- and the
 # running admin portal must expose no Reports export route.
 #
 # Read-only. Any other environment: the gate does not apply and passes
@@ -78,6 +80,7 @@ while IFS=',' read -r id object_type object_name; do
     case "${object_type}" in
         table) present="$(psql_q "SELECT to_regclass('${object_name}') IS NOT NULL")" ;;
         function) present="$(psql_q "SELECT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = '${schema}' AND p.proname = '${name}')")" ;;
+        role) present="$(psql_q "SELECT EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolname = '${object_name}' AND (EXISTS (SELECT 1 FROM pg_namespace n CROSS JOIN LATERAL aclexplode(n.nspacl) a WHERE n.nspacl IS NOT NULL AND a.grantee = r.oid) OR EXISTS (SELECT 1 FROM pg_proc p CROSS JOIN LATERAL aclexplode(p.proacl) a WHERE p.proacl IS NOT NULL AND a.grantee = r.oid)))")" ;;
         *) echo "[FAIL] ${OBJECTS_FILE}: unknown object type '${object_type}'"; failed=1; continue ;;
     esac
     if [[ "${present}" != "f" ]]; then

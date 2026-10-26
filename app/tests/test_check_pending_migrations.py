@@ -3,7 +3,7 @@ refuses a deploy unless the target runner would apply exactly the declared
 migrations and nothing scoped away from the environment.
 
 Pure file inputs: no database. The real repository manifest and scope file are
-used where it matters (309 / 310 / 312 staging-only; 311 the next production
+used where it matters (309 / 310 / 312 / 313 staging-only; 311 the next production
 migration after 308).
 """
 
@@ -99,7 +99,7 @@ def test_a_staging_only_migration_already_in_the_production_ledger_is_refused_up
 
 def test_staging_applies_staging_only_migrations(tmp_path):
     code, out = _run(tmp_path, environment="staging", ledger_ids=_ids_through("308_"),
-                     expected="309,310,312,311")
+                     expected="309,310,312,311,313")
     assert code == 0, out
 
 
@@ -124,6 +124,7 @@ def test_scope_file_contract():
         "309_report_export_jobs": "staging|test",
         "310_preserved_rtdata_backfill": "staging|test",
         "312_report_export_asset_selection_1m": "staging|test",
+        "313_customer_api_role": "staging|test",
     }
     manifest_ids = set(_ids_through("~never~"))
     assert set(scoped) <= manifest_ids
@@ -139,6 +140,6 @@ def test_scope_objects_are_created_by_their_migrations():
         assert migration_id in scoped
         listed.add(migration_id)
         sql = (REPO / "postgres" / "migrations" / f"{migration_id}.sql").read_text(encoding="utf-8").lower()
-        keyword = "table" if object_type == "table" else "function"
+        keyword = {"table": "table", "function": "function", "role": "role"}[object_type]
         assert f"{keyword} {name}" in sql.replace("if not exists ", "").replace("or replace ", ""), name
     assert listed == scoped

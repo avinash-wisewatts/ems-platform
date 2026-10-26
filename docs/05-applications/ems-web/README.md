@@ -22,12 +22,18 @@ SHA-labelled `ghcr.io/<repo>-web:<sha>` nginx image (`web/Dockerfile`).
   mounted read-only into the admin-portal container and served same-origin
   under `/app` by the existing FastAPI hook. Production serves no frontend
   (API-only, release plan D6).
-- **Implemented, not deployed (branch `feature/ems-web-container`,
-  2026-10-26):** the image runs as the dedicated `ems-web` container;
+- **Staging since 2026-10-26 (PR #156):** the image runs as the dedicated `ems-web` container;
   admin-portal proxies `/app/*` to it after authentication when the host
   sets `EMS_WEB_UPSTREAM`. Deployed and rolled back on its own
   (`deploy-web.yml` / `scripts/release/deploy_web.sh`, recreating only
   `ems-web`); the bind-mount hook remains the fallback.
+
+**Target (ADR-023, stages 1–2 implemented, not deployed):** a dedicated
+customer hostname served by an edge proxy: `/app` → `ems-web`, `/api/v1` and
+`/auth` → `customer-api`, so customer requests no longer pass through the
+Administration App. Stage 3 (pending) replaces the redirect to the
+Administration App's `/login` with the app's own sign-in page calling
+`POST /auth/login`.
 
 Either way `/app` is a delivery detail, not the application's architectural
 boundary — see
