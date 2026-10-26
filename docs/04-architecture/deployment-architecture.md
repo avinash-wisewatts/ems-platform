@@ -12,8 +12,9 @@ running services: `timescaledb`, `telegraf`, `grafana`, `live-telemetry`,
 variants of the same built application image (`app/Dockerfile`) — see
 [../06-platform/README.md](../06-platform/README.md). A sixth service,
 `ems-web` (the EMS Web App's own nginx container, see below), is defined in
-`compose.yaml` on the `feature/ems-web-container` branch — **implemented,
-not merged, not deployed** anywhere as of 2026-10-26.
+`compose.yaml` — merged (PR #156, `f9f241a`) and deployed to staging 2026-10-26; staging `/app` is proxied to `ems-web` since 08:00 UTC (web-only rollback/roll-forward verified, runs 40289406885 / 40289499596); logged-in browser acceptance pending; not on production. Two more services, `customer-api` and `edge`
+(ADR-023), are defined profile-gated on `feature/customer-api-separation` —
+implemented, not merged, not started anywhere.
 
 **Host topology** (read-only SSH inspection, 2026-10-26): staging and
 production are each a single AWS EC2 host in `ap-south-2`, project checkout
@@ -51,8 +52,7 @@ served same-origin under `/app` by the existing FastAPI hook. Production
 serves **no** frontend (its `web-spa` directory is empty, `/app` inert —
 verified 2026-10-26; production stays API-only per release plan D6).
 
-**Dedicated container (approved 2026-10-26 as "Option A"; implemented on
-`feature/ems-web-container`, not merged, not deployed):** the same `-web`
+**Dedicated container (approved 2026-10-26 as "Option A"; merged (PR #156, `f9f241a`) and deployed to staging 2026-10-26; staging `/app` is proxied to `ems-web` since 08:00 UTC (web-only rollback/roll-forward verified, runs 40289406885 / 40289499596); logged-in browser acceptance pending; not on production):** the same `-web`
 image runs as its own `ems-web` compose service (nginx, no host port,
 read-only root filesystem). When a host's root `.env` sets
 `EMS_WEB_UPSTREAM=http://ems-web:80`, `admin-portal` proxies `/app/*` to it
@@ -69,6 +69,19 @@ deliberately not chosen: it would move the public port binding and add a
 shared ingress before the planned TLS work. See
 [../05-applications/ems-web/README.md](../05-applications/ems-web/README.md)
 and [../operations/PHASE8_FRONTEND_DEPLOYMENT.md](../operations/PHASE8_FRONTEND_DEPLOYMENT.md).
+
+## Customer / staff separation (ADR-023)
+
+Target, superseding the "through admin-portal" path above: an `edge` Caddy
+proxy terminates HTTPS for a customer hostname (→ `ems-web`, `customer-api`
+for `/api/v1` + `/auth`, `live-telemetry` for `/api/live`; everything else
+404) and an IP-restricted staff hostname (→ `admin-portal`). `customer-api`
+(`src.customer_main`) serves the same `/api/v1` code with its own session
+cookie and secret and the least-privilege database role `ems_customer_api`
+(migration 313). Stages 1–2 implemented on `feature/customer-api-separation`,
+not merged, not started; activation steps, domains, TLS and staff-access
+inputs in [../10-operations/customer-staff-separation-runbook.md](../10-operations/customer-staff-separation-runbook.md).
+See [ADR-023](../00-governance/decisions/ADR-023-customer-staff-separation.md).
 
 ## What is unknown
 

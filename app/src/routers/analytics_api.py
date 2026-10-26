@@ -174,7 +174,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 from src.auth.authorization import ROLE_PERMISSIONS, PortalPermission, portal_role
 from src.auth.dependencies import get_authenticated_portal_user
 from src.auth.models import AuthenticatedPortalUser
-from src.config import get_settings
+from src.config import get_core_settings
 from src.analytics_trends_service import (
     AnalyticsCatalogResponse,
     AnalyticsSeriesResponse,
@@ -360,7 +360,7 @@ async def get_current_user(request: Request) -> CurrentUserResponse:
     # report.export is echoed here. Where Reports is not enabled
     # (EMS_REPORTS_ENABLED off -- production) its routes are not mounted, so
     # the permission is not advertised; the role grant itself is unchanged.
-    if not get_settings().reports_enabled:
+    if not get_core_settings().reports_enabled:
         granted = granted - {PortalPermission.REPORT_EXPORT}
     permissions = sorted(p.value for p in granted)
 

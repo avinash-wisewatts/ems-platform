@@ -12,12 +12,6 @@ import httpx
 import websockets
 from websockets.exceptions import InvalidHandshake, WebSocketException
 from fastapi import FastAPI, Form, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.exception_handlers import (
-    http_exception_handler as default_http_exception_handler,
-    request_validation_exception_handler as default_request_validation_handler,
-)
-from fastapi.exceptions import RequestValidationError
-from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
@@ -45,7 +39,9 @@ from src.auth.authorization import (
 from src.auth.access_scope import (
     normalize_portal_access_scope_submission,
 )
+from src.auth.audience import staff_audience
 from src.auth.middleware import PortalAuthenticationMiddleware
+from src.api_errors import register_flat_error_handlers
 from src.auth.session import SESSION_IDENTITY_KEY, deserialize_authenticated_user
 from src.analytics_api_service import portal_user_can_access_asset
 from src.context.dependencies import site_context
@@ -410,6 +406,10 @@ app = FastAPI(
 # will verify and populate the session before this gate reads it.
 app.add_middleware(
     PortalAuthenticationMiddleware,
+    # Staff-only Administration App (ADR-023): while EMS_ADMIN_STAFF_ONLY is
+    # on, a non-staff identity is signed out and handled as unauthenticated.
+    # Read per request, like the login check below.
+    audience=lambda identity: not settings.admin_staff_only or staff_audience(identity),
 )
 
 app.add_middleware(
@@ -608,47 +608,9 @@ async def handle_administration_context_error(
 
 
 # The /api/v1 JSON surface uses a flat top-level error contract
-# ({"error": "<code>", "detail": "<message>"}) consistent with the
-# PortalAuthenticationMiddleware 401. FastAPI's default HTTPException /
-# RequestValidationError handlers wrap the payload as {"detail": ...}; these
-# two handlers render the flat shape for /api/v1 paths only and delegate to
-# the framework defaults everywhere else, so no legacy/application route's
-# error contract changes.
-_API_V1_ERROR_PREFIX = "/api/v1/"
-
-
-@app.exception_handler(StarletteHTTPException)
-async def handle_http_exception(
-    request: Request,
-    exc: StarletteHTTPException,
-) -> Response:
-    if (
-        request.url.path.startswith(_API_V1_ERROR_PREFIX)
-        and isinstance(exc.detail, dict)
-        and "error" in exc.detail
-    ):
-        return JSONResponse(
-            exc.detail,
-            status_code=exc.status_code,
-            headers=getattr(exc, "headers", None),
-        )
-    return await default_http_exception_handler(request, exc)
-
-
-@app.exception_handler(RequestValidationError)
-async def handle_request_validation_error(
-    request: Request,
-    exc: RequestValidationError,
-) -> Response:
-    if request.url.path.startswith(_API_V1_ERROR_PREFIX):
-        return JSONResponse(
-            {
-                "error": "invalid_request",
-                "detail": "One or more request parameters are missing or malformed.",
-            },
-            status_code=422,
-        )
-    return await default_request_validation_handler(request, exc)
+# ({"error": "<code>", "detail": "<message>"}); see src.api_errors, shared
+# with the customer API so both serve identical /api/v1 error bodies.
+register_flat_error_handlers(app, ("/api/v1/",))
 
 
 async def list_sites_for_request(
@@ -753,9 +715,13 @@ async def login_submit(
     temporarily locked.
     """
 
+    # Staff-only Administration App (ADR-023): restrict who may sign in here.
+    # With the flag off the call is exactly the pre-ADR-023 one.
+    login_audience = {"audience": staff_audience} if settings.admin_staff_only else {}
     result = await authenticate_portal_user(
         username,
         password,
+        **login_audience,
     )
 
     if not result.authenticated or result.user is None:

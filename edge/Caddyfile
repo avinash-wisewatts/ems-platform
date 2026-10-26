@@ -1,0 +1,87 @@
+# ============================================================================
+# WiseWatts EMS -- edge proxy (ADR-023): the only public entry point.
+#
+#   https://{$EMS_CUSTOMER_HOST}  customers  -> ems-web (frontend),
+#                                                customer-api (/api/v1, /auth),
+#                                                live-telemetry (/api/live)
+#   https://{$EMS_STAFF_HOST}     WiseWatts staff only (IP allowlist)
+#                                             -> admin-portal
+#
+# Customer requests never reach admin-portal: the customer host routes only
+# the paths below and answers everything else with 404. The staff host
+# refuses every client address outside EMS_STAFF_ALLOWED_CIDRS.
+#
+# Configuration (root .env of the host; see compose.yaml service `edge`):
+#   EMS_CUSTOMER_HOST        customer hostname, e.g. app.<domain>
+#   EMS_STAFF_HOST           staff hostname, e.g. admin.<domain>
+#   EMS_STAFF_ALLOWED_CIDRS  space-separated client CIDRs allowed on the staff
+#                            host; default 127.0.0.1/32 (nobody external)
+#   EMS_EDGE_TLS             "internal" (default: Caddy's own CA, for local
+#                            and pre-DNS testing) or an ACME account e-mail
+#                            to obtain public Let's Encrypt certificates
+#                            (needs DNS pointing here and ports 80/443 open)
+#
+# remote_ip matches the TCP peer, which is the client because this proxy
+# terminates the public connection itself. If a load balancer is ever put in
+# front, switch to client_ip with trusted_proxies.
+# ============================================================================
+{
+	admin localhost:2019
+}
+
+(security_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+}
+
+{$EMS_CUSTOMER_HOST} {
+	tls {$EMS_EDGE_TLS:internal}
+	import security_headers
+	encode zstd gzip
+
+	# Customer API: sign-in / sign-out and the Analytics API (src.customer_main).
+	@customer_api path /api/v1/* /auth/*
+	handle @customer_api {
+		reverse_proxy customer-api:8070
+	}
+
+	# Live asset values (WebSocket). live-telemetry validates the session
+	# itself; it accepts the customer session from ADR-023 stage 3.
+	@live path /api/live/*
+	handle @live {
+		reverse_proxy live-telemetry:8090
+	}
+
+	# The EMS frontend (static bundle; every data call is authenticated by
+	# customer-api).
+	handle /app* {
+		reverse_proxy ems-web:80
+	}
+
+	# `*` is required: a first argument starting with / would be parsed as a
+	# path matcher, not the redirect target.
+	handle / {
+		redir * /app/ 302
+	}
+
+	# Nothing else exists on the customer host -- in particular no
+	# administration, onboarding, login-page, Grafana or API-docs route.
+	handle {
+		respond 404
+	}
+}
+
+{$EMS_STAFF_HOST} {
+	tls {$EMS_EDGE_TLS:internal}
+	import security_headers
+
+	@not_staff not remote_ip {$EMS_STAFF_ALLOWED_CIDRS:127.0.0.1/32}
+	respond @not_staff 403
+
+	reverse_proxy admin-portal:8080
+}

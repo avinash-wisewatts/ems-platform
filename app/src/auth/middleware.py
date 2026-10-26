@@ -4,6 +4,7 @@ from urllib.parse import quote
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from src.auth.audience import Audience
 from src.auth.authorization import (
     has_permission,
     required_permission_for_request,
@@ -38,8 +39,12 @@ class PortalAuthenticationMiddleware:
         "/api/v1/",
     )
 
-    def __init__(self, app: ASGIApp) -> None:
+    def __init__(self, app: ASGIApp, audience: Audience | None = None) -> None:
         self.app = app
+        # Optional restriction of which identities this process accepts
+        # (src.auth.audience); an identity outside it is signed out and
+        # treated exactly like an unauthenticated visitor.
+        self.audience = audience
 
     @classmethod
     def is_public_path(cls, path: str) -> bool:
@@ -147,6 +152,14 @@ class PortalAuthenticationMiddleware:
             identity = deserialize_authenticated_user(
                 session.get(SESSION_IDENTITY_KEY)
             )
+
+            if (
+                identity is not None
+                and self.audience is not None
+                and not self.audience(identity)
+            ):
+                session.clear()
+                identity = None
 
         if identity is None:
             if self.is_json_api_path(path):

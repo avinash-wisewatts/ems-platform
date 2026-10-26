@@ -304,3 +304,104 @@ services:
       timeout: 5s
       retries: 5
       start_period: 5s
+
+
+  customer-api:
+    # EMS customer API (ADR-023): the customer host's /api/v1 and /auth,
+    # separate from the Administration App process. Same built artifact as
+    # admin-portal / live-telemetry (app/Dockerfile), different entrypoint,
+    # its own image variable so it is deployed and rolled back on its own
+    # (scripts/release/deploy_customer_api.sh recreates ONLY this service).
+    #
+    # Profile `customer`: never started by a bare `docker compose up`, and
+    # never by deploy_release.sh (which names admin-portal / live-telemetry);
+    # a host that has not activated the customer API -- production today --
+    # is unaffected by this definition.
+    image: ${EMS_CUSTOMER_API_IMAGE:-ems-platform-prod-app:local}
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    profiles: ["customer"]
+
+    container_name: ems-customer-api
+    restart: unless-stopped
+
+    command: ["uvicorn", "src.customer_main:app", "--host", "0.0.0.0", "--port", "8070", "--proxy-headers", "--forwarded-allow-ips", "*"]
+
+    # Its own configuration only (app/customer-api.env.example): database
+    # login ems_customer_api (migration 313), its own session secret and
+    # cookie name. Never app/.env -- no Grafana or administration secrets.
+    env_file:
+      - path: ./app/customer-api.env
+        required: false
+
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+
+    # No `ports:` -- reachable only on the compose network, by the edge proxy.
+
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import json,urllib.request; data=json.load(urllib.request.urlopen('http://localhost:8070/health', timeout=3)); raise SystemExit(0 if data.get('status') == 'ok' and data.get('database', {}).get('status') == 'ok' else 1)"
+        ]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+
+  edge:
+    # Public entry point (ADR-023): HTTPS for the customer and staff
+    # hostnames, routing per edge/Caddyfile. Customer requests go to ems-web,
+    # customer-api and live-telemetry only; the staff host is IP-restricted
+    # and goes to admin-portal.
+    #
+    # Profile `edge`: never started implicitly. Starting it publishes ports
+    # 80/443 -- an externally visible change that is activated only by an
+    # explicitly approved operation, after DNS, the security group and the
+    # root .env (EMS_CUSTOMER_HOST, EMS_STAFF_HOST, EMS_STAFF_ALLOWED_CIDRS,
+    # EMS_EDGE_TLS) are in place.
+    image: caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    profiles: ["edge"]
+
+    container_name: ems-edge
+    restart: unless-stopped
+
+    environment:
+      EMS_CUSTOMER_HOST: ${EMS_CUSTOMER_HOST:-customer.invalid}
+      EMS_STAFF_HOST: ${EMS_STAFF_HOST:-staff.invalid}
+      EMS_STAFF_ALLOWED_CIDRS: ${EMS_STAFF_ALLOWED_CIDRS:-127.0.0.1/32}
+      EMS_EDGE_TLS: ${EMS_EDGE_TLS:-internal}
+
+    ports:
+      - "${EMS_EDGE_BIND_HOST:-0.0.0.0}:80:80"
+      - "${EMS_EDGE_BIND_HOST:-0.0.0.0}:443:443"
+
+    volumes:
+      - ./edge/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates and ACME account state; must survive recreation.
+      - edge-data:/data
+      - edge-config:/config
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:2019/config/ || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+
+volumes:
+  edge-data:
+  edge-config:

@@ -10,12 +10,11 @@ This document records the mechanism that is now wired into the repository.
 **Status (2026-10-26):** the bind-mounted bundle mechanism below is deployed
 on staging (5 `-web` deploys recorded 2026-10-24…25); production serves no
 frontend (API-only, release plan D6). The dedicated-container mode in the
-next section is **implemented on `feature/ems-web-container`, not merged, not
-deployed**.
+next section is **merged (PR #156, `f9f241a`) and deployed to staging 2026-10-26; staging `/app` is proxied to `ems-web` since 08:00 UTC (web-only rollback/roll-forward verified, runs 40289406885 / 40289499596); logged-in browser acceptance pending; not on production**.
 
 ---
 
-## Dedicated container mode — `ems-web` (implemented, not deployed)
+## Dedicated container mode — `ems-web` (staging since 2026-10-26)
 
 Approved 2026-10-26 ("Option A"; ADR-006 Amendment 1). The same `-web:<sha>`
 image runs as the `ems-web` compose service, and `admin-portal` proxies
@@ -47,7 +46,10 @@ EMS_WEB_UPSTREAM=http://ems-web:80
 
 `admin-portal` reads it at process start, so turning container mode on or
 off is a host `.env` edit plus one `admin-portal` recreate
-(`docker compose -f <path>/compose.yaml up -d --no-build --no-deps --force-recreate admin-portal`).
+(`APP_IMAGE=<running admin-portal image> docker compose -f <path>/compose.yaml up -d --no-build --no-deps --force-recreate admin-portal`
+-- `APP_IMAGE` must be pinned: the root `.env` has no `APP_IMAGE`, so a bare
+command resolves `ems-platform-prod-app:local`, which does not exist on the
+hosts).
 This is a one-time, separately authorized step per host; after it, frontend
 deploys never touch `admin-portal`.
 
@@ -244,7 +246,7 @@ Roll the frontend from `-web:<sha-B>` back to `-web:<sha-A>`:
   ```
   WEB_SPA_IMAGE=ghcr.io/<owner>/<repo>-web:<sha-A> PROJECT_PATH=<path> \
     scripts/release/deploy_web_bundle.sh
-  docker compose -f <path>/compose.yaml up -d --no-build --no-deps --force-recreate admin-portal
+  APP_IMAGE=<running admin-portal image> docker compose -f <path>/compose.yaml up -d --no-build --no-deps --force-recreate admin-portal
   ```
 - **Emergency (GHCR unreachable):** `mv ${EMS_WEB_SPA_PATH}.previous
   ${EMS_WEB_SPA_PATH}` and recreate `admin-portal`.

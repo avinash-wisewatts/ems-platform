@@ -18,7 +18,7 @@ set -uo pipefail
 #       - verify_energy_routing_identity.sh -- E6 (migration 215)
 #       - verify_environment_scope.sh -- with DEPLOY_ENVIRONMENT=production:
 #                                 no ledger row or object of a staging-only
-#                                 migration (309 / 310 / 312) and no Reports
+#                                 migration (309 / 310 / 312 / 313) and no Reports
 #                                 export route; passes elsewhere
 #
 #     ADVISORY (reported in full, never fails the pipeline):
@@ -108,7 +108,7 @@ echo "============================================================"
 echo "REQUIRED: Staging-only Objects Absent"
 echo "============================================================"
 # Production only (DEPLOY_ENVIRONMENT, set by deploy-production.yml): no
-# ledger row or object of a staging-only migration (309 / 310 / 312), and no
+# ledger row or object of a staging-only migration (309 / 310 / 312 / 313), and no
 # Reports export route. Passes without checking on any other environment.
 if ! "${VERIFY_DIR}/verify_environment_scope.sh"; then
     REQUIRED_FAILED=1

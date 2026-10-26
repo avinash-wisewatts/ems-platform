@@ -5,7 +5,7 @@ from psycopg import AsyncConnection
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
-from src.config import get_settings
+from src.config import get_core_settings
 
 
 # The pool must not be constructed during module import.
@@ -47,7 +47,7 @@ async def open_database_pool() -> None:
     if _pool is not None:
         return
 
-    settings = get_settings()
+    settings = get_core_settings()
 
     pool = AsyncConnectionPool(
         conninfo=settings.database_dsn,

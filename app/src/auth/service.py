@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from argon2 import PasswordHasher
@@ -52,12 +53,21 @@ def normalize_username(username: str) -> str:
 async def authenticate_portal_user(
     username: str,
     password: str,
+    *,
+    audience: Callable[[AuthenticatedPortalUser], bool] | None = None,
 ) -> AuthenticationResult:
     """
     Authenticate one portal user through the controlled database functions.
 
     The caller must always return a generic login failure message whenever
     authenticated is False.
+
+    audience, when given, restricts which correctly authenticated identities
+    this entry point accepts (src.auth.audience: staff on the Administration
+    App, customers on the customer API). An identity outside the audience
+    gets the same INVALID_CREDENTIALS result after full password
+    verification, and neither a success nor a failure is recorded -- so
+    trying the other host can neither sign in nor lock the account out.
     """
 
     normalized_username = normalize_username(username)
@@ -134,12 +144,21 @@ async def authenticate_portal_user(
             status=AuthenticationStatus.INVALID_CREDENTIALS,
         )
 
+    authenticated = safe_authenticated_user(user)
+
+    if audience is not None and not audience(authenticated):
+        return AuthenticationResult(
+            authenticated=False,
+            user=None,
+            status=AuthenticationStatus.INVALID_CREDENTIALS,
+        )
+
     await record_portal_login_success(
         user.portal_user_id
     )
 
     return AuthenticationResult(
         authenticated=True,
-        user=safe_authenticated_user(user),
+        user=authenticated,
         status=AuthenticationStatus.AUTHENTICATED,
     )
