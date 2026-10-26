@@ -160,3 +160,8 @@ def test_deploy_customer_api_workflow_is_customer_api_only_staging_only_and_dige
     assert "@${digest}" in text and "imagetools inspect" in text and "-app" in text
     for forbidden in ("deploy_release", "apply_migrations", "deploy_web", "git checkout", "PRODUCTION_", "--profile edge"):
         assert forbidden not in text, forbidden
+
+
+def test_hsts_max_age_is_configurable_with_a_one_year_default() -> None:
+    assert 'Strict-Transport-Security "max-age={$EMS_EDGE_HSTS_MAX_AGE:31536000}; includeSubDomains"' in _caddyfile()
+    assert _services()["edge"]["environment"]["EMS_EDGE_HSTS_MAX_AGE"] == "${EMS_EDGE_HSTS_MAX_AGE:-31536000}"

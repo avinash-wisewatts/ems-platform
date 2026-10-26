@@ -86,7 +86,8 @@ is not routed through the edge (no `EMS_STAFF_HOST`).
 office / VPN egress CIDRs) -- every other client gets 403 for every path.
 
 **Root `.env` (edge only)**: `EMS_CUSTOMER_HOST=<site address>`,
-`EMS_EDGE_TLS=acme_ip`, `EMS_CUSTOMER_ALLOWED_CIDRS=<approved CIDRs>`;
+`EMS_EDGE_TLS=acme_ip`, `EMS_CUSTOMER_ALLOWED_CIDRS=<approved CIDRs>`,
+`EMS_EDGE_HSTS_MAX_AGE=<short interim value, e.g. 86400>`;
 `EMS_STAFF_HOST` unset (defaults to `staff.invalid`, unreachable).
 
 **Rollback**: `docker compose -f /opt/ems-platform/compose.yaml --profile edge stop edge`

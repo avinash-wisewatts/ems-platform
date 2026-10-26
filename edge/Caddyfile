@@ -28,6 +28,9 @@
 #                                acme_ip   Let's Encrypt for an IP-address
 #                                          site address: 6-day "shortlived"
 #                                          profile, renewed automatically
+#   EMS_EDGE_HSTS_MAX_AGE      HSTS max-age in seconds (default one year);
+#                              a short value for interim setups, e.g. on an
+#                              IP address that may later serve something else
 #   Both ACME modes validate over ports 80 / 443 from the public internet
 #   (http-01 / tls-alpn-01), so those ports must be open to everyone at the
 #   firewall; access is then restricted here, by the allowlists, which do not
@@ -43,7 +46,7 @@
 
 (security_headers) {
 	header {
-		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		Strict-Transport-Security "max-age={$EMS_EDGE_HSTS_MAX_AGE:31536000}; includeSubDomains"
 		X-Content-Type-Options "nosniff"
 		X-Frame-Options "DENY"
 		Referrer-Policy "strict-origin-when-cross-origin"
