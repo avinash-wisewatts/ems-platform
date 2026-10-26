@@ -1,6 +1,6 @@
 # Production Release Plan: Migrations 266 → 301
 
-Status: **Release A deployed 2026-10-17 and accepted 2026-10-18** (section 6, "Release A acceptance"; 48-hour window closed 2026-10-19); **Release B1 (268, 269) deployed and accepted 2026-10-19** (section 2, "B1 execution record"); **Release B2 (14 migrations, 263–286) deployed 2026-10-20, D3 PASS** (section 2, "B2 execution record"); **Release C1 (15 migrations, through 291) deployed 2026-10-22 and accepted 2026-10-22 23:37 UTC** ("C1 acceptance"); **Release C2′ (292–295, 297, 298, `d52b049`) deployed 2026-10-23 05:23 UTC, run 39905366140, postcheck PASS; accepted 2026-10-25** ("C2′ acceptance"); **Release D (299–308, `7e3da57`) deployed 2026-10-23 13:00 UTC, run 39957525916, postcheck PASS; six migration-300 jobs kept on five-minute schedules (user decision); 24-hour acceptance pending** ("Release D execution record"); D1 / D4a / D4b / D8 / D9 decided 2026-10-17 (D8 condition confirmed), D3 decided 2026-10-19 for B1 and 2026-10-20 for B2, others open · Prepared: 2026-10-14 · Updated: 2026-10-25 · Owner: Engineering
+Status: **Release A deployed 2026-10-17 and accepted 2026-10-18** (section 6, "Release A acceptance"; 48-hour window closed 2026-10-19); **Release B1 (268, 269) deployed and accepted 2026-10-19** (section 2, "B1 execution record"); **Release B2 (14 migrations, 263–286) deployed 2026-10-20, D3 PASS** (section 2, "B2 execution record"); **Release C1 (15 migrations, through 291) deployed 2026-10-22 and accepted 2026-10-22 23:37 UTC** ("C1 acceptance"); **Release C2′ (292–295, 297, 298, `d52b049`) deployed 2026-10-23 05:23 UTC, run 39905366140, postcheck PASS; accepted 2026-10-25** ("C2′ acceptance"); **Release D (299–308, `7e3da57`) deployed 2026-10-23 13:00 UTC, run 39957525916, postcheck PASS; six migration-300 jobs kept on five-minute schedules (user decision); accepted 2026-10-26** ("Release D acceptance"); D1 / D4a / D4b / D8 / D9 decided 2026-10-17 (D8 condition confirmed), D3 decided 2026-10-19 for B1 and 2026-10-20 for B2, others open · Prepared: 2026-10-14 · Updated: 2026-10-26 · Owner: Engineering
 Only Releases A and B1 have been executed. Every other dispatch, precheck and operator
 step below needs its own explicit approval
 ([release-process.md](release-process.md#every-phase-requires-its-own-explicit-approval)).
@@ -1095,7 +1095,8 @@ budget), energy routing 0.31–0.74 s, environment routing 0.14–0.16 s,
 1-minute tier 329–397 s (staging 15-minute limits 330 / 450 / 540 s); demand
 on slot.
 
-**24-hour acceptance: pending.** Read-only script
+**24-hour acceptance: pending** (2026-10-23; decided 2026-10-26 on the fixed
+window, "Release D acceptance" below). Read-only script
 `docs/10-operations/prepared/release-d/post300_24h_acceptance.sql`, baseline
 2026-10-23 13:49:54 UTC (dry-run clean, 3.8 s), due at or after 2026-10-24
 13:50 UTC. Criteria (staging §10.13–10.14): +288 ± 1 runs per job, demand
@@ -1139,6 +1140,128 @@ rate [E], not measured on production since 303. Recommendation: after the
 migration (a no-op on staging, which already has 5 min), not a manual
 `alter_job`, so the change is version-controlled and the advisory WARNs
 clear.
+
+#### Release D acceptance (accepted 2026-10-26)
+
+**Accepted** (recorded at the user's instruction on 2026-10-26, from the
+evidence below). Basis: the fixed 24-hour production window run by
+`docs/10-operations/prepared/release-d/release_d_observation_procedure.md`
+with the tools and criteria at `e4b2222` (section 6 "Release D lag criteria",
+formal since 2026-10-25, and the criteria under "24-hour acceptance" in the
+execution record above). Every formal criterion passed; nothing was waived.
+Nothing was changed on production for the window: every access was
+read-only (`default_transaction_read_only=on`).
+
+**Window** [M]: w0 = **2026-10-25 13:30:02.625723 UTC** (database time at the
+baseline; the lag evaluator uses 13:30:02), w1 = **2026-10-26
+13:30:02.625723 UTC**, exactly 24 h. Preflight 2026-10-25 13:19–13:23 UTC
+PASS: no GitHub run active or queued since run 39957525916; checkout
+`7e3da57`, clean; image `…@sha256:85fdfb5c…`; containers healthy, `/health`
+200; ledger 180, head 308; failures (excl. 1114) 2847, failing only job 1061
+(paused); 0 job errors in the previous 6 h; unscheduled set 1053, 1061,
+1114–1120, 1123, 1124, 1132; no operator sessions, 0 lock waiters; NTP
+synchronized. Baseline: `release_d_window_baseline.sql` at w0,
+`failures0` = 2847. Acceptance SQL run at 2026-10-26 13:38:25 UTC (8 min after
+w1; within 48 h of w0, raw-message retention OK).
+
+**Sampling (P11)**: `run_readonly_job_sampler.sh` from 2026-10-25 13:28:03 to
+2026-10-26 13:37:13 UTC, 28,930 rows, ended normally (every segment
+confirmed `default_transaction_read_only` = `on`). **Coverage 2,874 / 2,880
+samples per stage = 99.8 %** (L0 ≥ 99 %). The 6 missing samples per stage are
+two ssh drops ("Connection reset by peer") from which the runner reconnected
+on its own: 2026-10-26 05:51:33–05:54:07 UTC (4 samples) and
+10:26:07–10:27:43 UTC (2 samples). The remote `psql` sessions of the dropped
+segments kept running read-only until their sample count and ended on their
+own (none left at 13:38 UTC; not terminated).
+
+**Lag evaluator** (`p11_lag_acceptance.py`, all three segments, no
+`gaps.csv`: no sample needed an exemption): **RESULT: PASS, exit 0**.
+
+| Stage | Coverage | Per-cycle peak (min–max) | Target / ceiling | Cycles above target | Excursions |
+|---|---|---|---|---|---|
+| normalized | 99.8 % | 216–308 s | 330 / 600 s | 0 | 0 |
+| energy_routing | 99.8 % | 423–481 s | 540 / 600 s | 0 | 0 |
+| environment_routing | 99.8 % | 444–481 s | 540 / 600 s | 0 | 0 |
+| one_minute_tier | 99.8 % | 514–524 s | 540 / 620 s | 0 | 0 |
+
+Run durations in the window (P11 `duration_s`, all runs Success): energy
+routing max 0.92 s, environment routing 0.58 s, normalization 3.82 s,
+1-minute tier 1.67 s, demand 4.64 s.
+
+**Acceptance SQL** (`release_d_acceptance_window.sql`, [w0, w1)):
+
+| Section | Evidence | Result |
+|---|---|---|
+| A cadence | Five-minute jobs 289 runs vs 289 expected at the check (normalization 290), demand 97 vs 96, raw receipt 1,448 vs 1,448, late sweep 25 vs 24; all ± 1 | PASS |
+| B job errors | 0 rows in `job_errors` in [w0, w1); 0 × 40P01; failures (excl. 1114) 2847 = `failures0`; the only job whose last run failed is 1061 (paused, as at w0) | PASS |
+| C demand | 95 interval ends, 5,320 rows; finalization p50 423 s, p99 424 s, max 425 s; 0 rows over 8 min; 0 missing buckets | PASS |
+| D non-VALID | All explained by missing source data (caveat below) | PASS (source gaps) |
+| E 1-minute tier | 288 publications, delay 4:00 (min = max); lag snapshot at the check information only (445 / 410 / 410 / 53 s) | PASS |
+| F energy windows | 287 / 288 five-minute windows with all 54 devices; 10-26 09:00 UTC has 47, the 7 missing devices all on the three `Unit 2` gateways, which sent no raw messages 08:59–09:03 UTC; the 08:55 and 09:05 windows have 54 | PASS (source gap) |
+
+Sections D and F are CHECK in the script's summary (listings to be read); the
+attribution above comes from bounded read-only queries over the window
+(per-minute raw messages per gateway, devices per energy window), kept with
+the evidence.
+
+| Criterion | Result |
+|---|---|
+| L0 coverage ≥ 99 % per stage | PASS (99.8 %) |
+| L1 per-cycle targets 330 / 540 / 540 s | PASS |
+| L2 absolute ceilings 600 / 600 / 620 s | PASS |
+| L3 excursions ≤ 10 samples, ≤ 3 per stage | PASS (0) |
+| L4 source gaps | PASS (none needed for lag) |
+| L5 complete 24-hour window | PASS |
+| A cadence | PASS |
+| B no job errors, no 40P01 | PASS |
+| C demand finalization, no missing bucket | PASS |
+| D non-VALID rows explained by source gaps | PASS (source gaps) |
+| E 1-minute publication delay 4–8 min | PASS |
+| F energy windows complete outside source gaps | PASS (source gap) |
+
+**Caveat: demand VALID share declined.** In the window, 94.40 % of demand rows
+were VALID (5,264 rows; 107 INCOMPLETE, 188 NO_DATA), against 95.83 % in the
+24 h before w0 (5,376 rows; 32 INCOMPLETE, 192 NO_DATA). Data completeness
+did not improve; it was lower in the window. The evidence attributes every
+non-VALID row to source data that did not arrive, not to Release D:
+
+- `SVSS Nivas` and `Vivekanandanagar Home`: NO_DATA in all 95 buckets; their
+  gateways sent no raw messages in the window (same state before w0, and in
+  the C2′ window).
+- `Unit 2` (`Eniscope_1/2/3_Meenaxy_Unit2`): INCOMPLETE in 6 buckets
+  (2026-10-25 13:30 and 2026-10-26 06:00, 06:15, 08:45, 09:00, 09:45 UTC),
+  each overlapping minutes in which the three `Unit 2` gateways sent no or
+  only partial raw messages: 13:22–13:29 silent and 13:30 partial; in the
+  others 1, 2, 1 (08:59), 4 (09:00–09:03) and 2 silent minutes. The 24 h
+  before w0 had 2 such buckets (13:15, 13:30, the same outage). The rise
+  from 32 to 107 INCOMPLETE rows is these additional `Unit 2` source gaps.
+
+**Not covered by this window.** The 7 failures that raised the total from
+2840 to 2847 (job 1061 ×3 and 1060 ×4, 2026-10-24; see "Not part of C2′"
+above) are before w0 and are part of the window's baseline. Job 1061 stays
+paused; its fix (migration 311) is not deployed to production. Each remains a
+separate decision, as do D7 (routing `max_runtime`) and the reconciler
+pauses.
+
+**Evidence** (local to the operator machine, not in the repository; sha256
+manifests alongside):
+`C:\Users\avina\AppData\Local\Temp\claude\C--Users-avina-Documents-WiseWatts-ems-platform\bf9ee322-9e09-4862-ad7a-d58342c541b5\scratchpad\release_d_window\`.
+Checksums verified 2026-10-26 (`sha256sum -c`, all OK):
+
+| File | sha256 |
+|---|---|
+| `WINDOW.txt` (window definition, baseline `-v` line) | `44c11611…` |
+| `baseline.out` | `e279a58d…` |
+| `acceptance.out` | `3011e5f6…` |
+| `lag_eval.out` | `4b41a6a7…` |
+| `p11/segments/segment-001.txt` | `947c0a54…` |
+| `p11/segments/segment-002.txt` | `ef0564ae…` |
+| `p11/segments/segment-003.txt` | `99a2bd47…` |
+| `p11/runner.log` | `4e822dd4…` |
+| `p11/samples.txt` (all segments combined) | `9b845cc1…` |
+| `durations.out` | `ad4e5936…` |
+| `drilldown.out`, `drilldown2.out`, `drilldown3.out` (D / F attribution) | `650b8807…`, `db1e3e95…`, `c5c0abcd…` |
+| Tool copies in `tools/`, identical to `e4b2222`: acceptance SQL, baseline SQL, evaluator, procedure, sampler script, sampler SQL | `c399883e…`, `436457b0…`, `0671ebc6…`, `854109b1…`, `70051b5d…`, `56de68ac…` |
 
 #### B1 approvals required (given 2026-10-19, see execution record)
 
@@ -1617,7 +1740,9 @@ the Release D 24-hour criteria ("Release D execution record"; that historical
 text is kept and marked superseded) and define "lag and routing within the
 Release D lag criteria (P11)" in the D row above. All other Release D criteria
 are unchanged. Release D is **not** accepted: acceptance still needs the fixed
-24-hour production window and the user's sign-off.
+24-hour production window and the user's sign-off. (Both done 2026-10-26:
+evaluator PASS on the fixed window, accepted by the user; "Release D
+acceptance", section 2.)
 
 **Why.** The 330 / 450 / 540 s figures come from the staging 15-minute
 validation (operations plan §10.13: expected checkpoint ages "≤ 5.5 min",
