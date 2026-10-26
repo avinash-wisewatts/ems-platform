@@ -171,9 +171,10 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
 
-from src.auth.authorization import ROLE_PERMISSIONS, portal_role
+from src.auth.authorization import ROLE_PERMISSIONS, PortalPermission, portal_role
 from src.auth.dependencies import get_authenticated_portal_user
 from src.auth.models import AuthenticatedPortalUser
+from src.config import get_settings
 from src.analytics_trends_service import (
     AnalyticsCatalogResponse,
     AnalyticsSeriesResponse,
@@ -354,9 +355,14 @@ async def get_current_user(request: Request) -> CurrentUserResponse:
     user = _require_portal_user(request)
 
     role = portal_role(user)
-    permissions = sorted(
-        p.value for p in (ROLE_PERMISSIONS.get(role, frozenset()) if role else frozenset())
-    )
+    granted = ROLE_PERMISSIONS.get(role, frozenset()) if role else frozenset()
+    # The SPA shows the Reports tab (and polls its job list) only when
+    # report.export is echoed here. Where Reports is not enabled
+    # (EMS_REPORTS_ENABLED off -- production) its routes are not mounted, so
+    # the permission is not advertised; the role grant itself is unchanged.
+    if not get_settings().reports_enabled:
+        granted = granted - {PortalPermission.REPORT_EXPORT}
+    permissions = sorted(p.value for p in granted)
 
     return CurrentUserResponse(
         portal_user_id=user.portal_user_id,

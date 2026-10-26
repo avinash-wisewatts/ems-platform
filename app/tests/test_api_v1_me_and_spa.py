@@ -57,7 +57,7 @@ def test_me_requires_authentication(portal_client) -> None:
     assert "location" not in {k.lower() for k in r.headers}
 
 
-def test_me_echoes_global_admin_identity_and_permissions(portal_client, monkeypatch) -> None:
+def test_me_echoes_global_admin_identity_and_permissions(portal_client, monkeypatch, reports_disabled) -> None:
     _login(portal_client, monkeypatch, role_code="ADMIN", scope="GLOBAL")
     r = portal_client.get("/api/v1/me")
     assert r.status_code == 200
@@ -69,17 +69,19 @@ def test_me_echoes_global_admin_identity_and_permissions(portal_client, monkeypa
     assert body["access_scope_mode"] == "GLOBAL"
     assert body["organization_id"] is None
     assert body["site_ids"] == []
-    # ADMIN holds every canonical permission.
+    # ADMIN holds every canonical permission -- except report.export, which
+    # is only advertised where Reports is enabled (off by default, as on
+    # production; see the reports_enabled cases below).
     assert set(body["permissions"]) == {
         "organization.manage", "user.manage", "site.manage", "location.manage",
         "asset.manage", "gateway.manage", "device.manage", "relationship.manage",
         "metering_policy.manage", "commissioning.execute", "alert.acknowledge",
-        "dashboard.view", "report.export", "audit.view",
+        "dashboard.view", "audit.view",
     }
     assert body["permissions"] == sorted(body["permissions"])
 
 
-def test_me_viewer_permissions_are_view_only(portal_client, monkeypatch) -> None:
+def test_me_viewer_permissions_are_view_only(portal_client, monkeypatch, reports_disabled) -> None:
     _login(portal_client, monkeypatch, role_code="VIEWER",
            scope="ORGANIZATION",
            organization_id="11111111-1111-4111-8111-111111111111")
@@ -89,7 +91,7 @@ def test_me_viewer_permissions_are_view_only(portal_client, monkeypatch) -> None
     assert body["role_code"] == "VIEWER"
     assert body["access_scope_mode"] == "ORGANIZATION"
     assert body["organization_id"] == "11111111-1111-4111-8111-111111111111"
-    assert set(body["permissions"]) == {"dashboard.view", "report.export"}
+    assert set(body["permissions"]) == {"dashboard.view"}
     # the shell's minimum permission is present for every role
     assert "dashboard.view" in body["permissions"]
 
@@ -106,6 +108,52 @@ def test_me_selected_sites_scope_reflects_site_ids(portal_client, monkeypatch) -
     assert body["access_scope_mode"] == "SELECTED_SITES"
     assert body["site_ids"] == ["22222222-2222-4222-8222-222222222222"]
     assert "dashboard.view" in body["permissions"]
+
+
+# The Reports flag is pinned explicitly per test: the CI test image runs with
+# EMS_REPORTS_ENABLED=true (app/Dockerfile.test), a bare local run with it off.
+@pytest.fixture
+def reports_enabled(monkeypatch):
+    from src.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "reports_enabled", True)
+
+
+@pytest.fixture
+def reports_disabled(monkeypatch):
+    from src.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "reports_enabled", False)
+
+
+@pytest.mark.parametrize("role_code", ["ADMIN", "OPERATOR", "VIEWER"])
+def test_me_advertises_report_export_only_where_reports_is_enabled(
+    portal_client, monkeypatch, reports_disabled, role_code
+) -> None:
+    # Default (production): the Reports routes are not mounted, so the SPA
+    # must not be told it may use them -- no Reports nav, no job polling.
+    _login(portal_client, monkeypatch, role_code=role_code)
+    body = portal_client.get("/api/v1/me").json()
+    assert "report.export" not in body["permissions"]
+    assert "dashboard.view" in body["permissions"]
+
+
+@pytest.mark.parametrize("role_code", ["ADMIN", "OPERATOR", "VIEWER"])
+def test_me_advertises_report_export_when_reports_is_enabled(
+    portal_client, monkeypatch, reports_enabled, role_code
+) -> None:
+    _login(portal_client, monkeypatch, role_code=role_code)
+    body = portal_client.get("/api/v1/me").json()
+    assert "report.export" in body["permissions"]
+    assert body["permissions"] == sorted(body["permissions"])
+
+
+def test_reports_gate_does_not_change_the_role_grant() -> None:
+    # Only the /me echo is filtered; server-side authorization is unchanged.
+    from src.auth.authorization import ROLE_PERMISSIONS, PortalPermission, PortalRole
+
+    for role in (PortalRole.ADMIN, PortalRole.OPERATOR, PortalRole.VIEWER):
+        assert PortalPermission.REPORT_EXPORT in ROLE_PERMISSIONS[role]
 
 
 def test_me_does_not_require_a_database_pool(portal_client, monkeypatch) -> None:

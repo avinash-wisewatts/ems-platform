@@ -29,6 +29,7 @@ tag*. Production never rebuilds from source.
 | `.github/workflows/deploy-staging.yml` | `push` to `staging` | Calls `ci.yml`, builds+pushes the immutable image, deploys via SSH, runs post-deploy verification. |
 | `.github/workflows/deploy-production.yml` | `workflow_dispatch` only, inputs `release_git_sha` + `confirm_release_git_sha` (double entry) + `promotion_mode` (`staging-head` default, or `staging-milestone`) + `expected_migrations` (see [Environment-scoped migrations](#environment-scoped-migrations)) | Deploys the image built for `release_git_sha` (derived from the SHA, digest-pinned; there is no independent image input) after it was proven on staging. Never auto-triggered. First run: 2026-08-29 (`33239331538`); most recent documented run: 2026-08-30 (`33304784449`, migrations 216–222). See [Promotion modes](#promotion-modes). |
 | `.github/workflows/rollback.yml` | `workflow_dispatch` only, inputs include `expected_migrations` (default `none`) | Redeploys a previously-built image tag to `staging` or `production` via the identical deploy path, after the same pending-migration precheck. |
+| `.github/workflows/deploy-web.yml` *(branch `feature/ems-web-container`, not merged)* | `workflow_dispatch` only, inputs `target_environment` (`staging` only) + `web_git_sha` | Web-only deploy **and** rollback of the `ems-web` container: checks the SHA is in `staging`'s history, resolves the `-web:<sha>` digest, runs `scripts/release/deploy_web.sh` (recreates only `ems-web`; no checkout, no migrations). Production is not a target (D6). |
 
 ## CI gates
 

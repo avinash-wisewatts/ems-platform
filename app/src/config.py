@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -27,6 +27,27 @@ class Settings(BaseSettings):
         default="ws://live-telemetry:8090",
         alias="EMS_LIVE_TELEMETRY_WS_BASE_URL",
     )
+
+    # Dedicated EMS Web App container (compose service `ems-web`). When set
+    # (e.g. http://ems-web:80), /app/* is served by proxying -- after the
+    # existing authentication/authorization middleware -- to that container
+    # instead of from the bind-mounted bundle at app/src/spa. Unset or empty
+    # (the default) keeps the bind-mounted bundle hook exactly as before,
+    # which is also the rollback fallback. See main.py's /app block.
+    web_upstream: str | None = Field(
+        default=None,
+        alias="EMS_WEB_UPSTREAM",
+    )
+
+    @field_validator("web_upstream")
+    @classmethod
+    def _normalize_web_upstream(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        value = value.strip().rstrip("/")
+        if not value.startswith(("http://", "https://")):
+            raise ValueError("EMS_WEB_UPSTREAM must be an http:// or https:// URL")
+        return value
 
     grafana_admin_user: str = Field(
         alias="EMS_GRAFANA_ADMIN_USER",

@@ -11,6 +11,19 @@ without affecting the Administration App, Grafana, the database, or the
 energy subsystem — see
 [../00-governance/decisions/ADR-006-ems-web-app-vs-admin-portal.md](../00-governance/decisions/ADR-006-ems-web-app-vs-admin-portal.md).
 
+**EMS Web App container (implemented on `feature/ems-web-container`, not
+deployed).** Rolling the `ems-web` container back is the same operation as
+deploying it: dispatch `.github/workflows/deploy-web.yml` (staging only)
+with the previous `-web` Git SHA, or on the host run
+`EMS_WEB_IMAGE=<previous ref@digest> PROJECT_PATH=<path> ENVIRONMENT_NAME=staging scripts/release/deploy_web.sh`.
+Only `ems-web` is recreated; no migration, no `admin-portal` restart. The
+previous reference is printed by the script and recorded in
+`<PROJECT_PATH>/.deploy-history/<env>-web-container.log`. An unhealthy new
+image is replaced by the previously running one automatically. Reverting
+from container mode to the bind-mounted bundle is a host `.env` change
+(unset `EMS_WEB_UPSTREAM`) plus an `admin-portal` recreate — see
+[../operations/PHASE8_FRONTEND_DEPLOYMENT.md](../operations/PHASE8_FRONTEND_DEPLOYMENT.md).
+
 A rollback declares `expected_migrations` (normally `none`) and passes the
 same pending-migration precheck as a production release before anything
 changes: the target commit's runner may not apply any migration other than

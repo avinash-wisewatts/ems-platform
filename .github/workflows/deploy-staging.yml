@@ -67,6 +67,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       image: ${{ steps.image.outputs.image }}
+      digest: ${{ steps.image.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
 
@@ -81,9 +82,21 @@ jobs:
         id: image
         run: |
           IMAGE="${REGISTRY}/${WEB_IMAGE_NAME}:${{ github.sha }}"
-          docker build --file web/Dockerfile --tag "${IMAGE}" ./web
+          docker build --file web/Dockerfile \
+            --build-arg GIT_SHA="${{ github.sha }}" \
+            --tag "${IMAGE}" ./web
           docker push "${IMAGE}"
+          # The registry digest of exactly what was just pushed, so the
+          # ems-web container is deployed by immutable digest
+          # (scripts/release/deploy_web.sh), not by a re-resolvable tag.
+          digest="$(docker image inspect --format '{{join .RepoDigests "\n"}}' "${IMAGE}" \
+            | grep -F "${REGISTRY}/${WEB_IMAGE_NAME}@" | head -n1 | cut -d@ -f2)"
+          if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Could not resolve the pushed digest for ${IMAGE}"
+            exit 1
+          fi
           echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
 
   deploy-staging:
     name: Deploy exact artifact to staging
@@ -97,7 +110,7 @@ jobs:
           host: ${{ secrets.STAGING_HOST }}
           username: ${{ secrets.STAGING_USER }}
           key: ${{ secrets.STAGING_SSH_KEY }}
-          envs: RELEASE_SHA,APP_IMAGE,WEB_IMAGE,REGISTRY_USERNAME,REGISTRY_PASSWORD
+          envs: RELEASE_SHA,APP_IMAGE,WEB_IMAGE,WEB_DIGEST,REGISTRY_USERNAME,REGISTRY_PASSWORD
           script: |
             set -euo pipefail
             export PROJECT_PATH="${{ secrets.STAGING_PROJECT_PATH }}"
@@ -118,11 +131,20 @@ jobs:
             WEB_SPA_IMAGE="${WEB_IMAGE}" \
               "${PROJECT_PATH}/scripts/release/deploy_web_bundle.sh"
 
+            # Dedicated EMS Web App container: the same -web artifact, run
+            # as the ems-web service by immutable digest. Recreates ONLY
+            # ems-web. It is served at /app only on a host whose root .env
+            # sets EMS_WEB_UPSTREAM; otherwise the bundle placed above keeps
+            # serving /app (and remains the rollback fallback either way).
+            EMS_WEB_IMAGE="${WEB_IMAGE}@${WEB_DIGEST}" \
+              "${PROJECT_PATH}/scripts/release/deploy_web.sh"
+
             "${PROJECT_PATH}/scripts/release/deploy_release.sh"
         env:
           RELEASE_SHA: ${{ github.sha }}
           APP_IMAGE: ${{ needs.build-and-push.outputs.image }}
           WEB_IMAGE: ${{ needs.build-and-push-web.outputs.image }}
+          WEB_DIGEST: ${{ needs.build-and-push-web.outputs.digest }}
           # Default: GHCR pull using the workflow's own token, scoped to
           # this run only. Set repository secrets REGISTRY_USERNAME /
           # REGISTRY_PASSWORD (e.g. a long-lived PAT with read:packages) to
