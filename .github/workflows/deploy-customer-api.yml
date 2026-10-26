@@ -1,0 +1,118 @@
+name: Deploy customer API (customer-api only)
+
+# Deploy AND rollback of the customer API container (compose service
+# `customer-api`, ADR-023). Runs scripts/release/deploy_customer_api.sh on
+# the target host, which recreates ONLY customer-api -- never admin-portal,
+# live-telemetry, ems-web, edge, timescaledb, telegraf or grafana -- and never
+# runs migrations, never moves the host's release checkout, never edits a .env.
+#
+# The customer API runs the same immutable -app:<sha> artifact as admin-portal
+# (different entrypoint). Roll forward and roll back are the same operation:
+# dispatch with the Git SHA to run. The image is resolved to its digest here
+# and deployed by digest. The host must already hold app/customer-api.env
+# (runbook docs/10-operations/customer-staff-separation-runbook.md).
+#
+# Starting customer-api is internal only: it publishes no port; nothing routes
+# to it until the edge proxy is started (a separately approved step).
+#
+# Production is deliberately NOT a target (ADR-023 stage 5 needs separate
+# approval); app/tests/test_customer_separation_release_contract.py enforces it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_environment:
+        description: "Environment to deploy the customer API container to"
+        required: true
+        type: choice
+        options:
+          - staging
+      app_git_sha:
+        description: "Full 40-character Git SHA of the -app image to run (a commit in staging's history that CI built)"
+        required: true
+
+concurrency:
+  group: deploy-customer-api-${{ inputs.target_environment }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  REGISTRY: ghcr.io
+  APP_IMAGE_NAME: ${{ github.repository }}-app
+
+jobs:
+  deploy-customer-api:
+    name: Deploy customer API container (${{ inputs.target_environment }})
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.target_environment }}
+    steps:
+      - name: Validate app_git_sha is a staging commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_GIT_SHA: ${{ inputs.app_git_sha }}
+        run: |
+          if [[ ! "${APP_GIT_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::app_git_sha must be a full 40-character lowercase Git SHA."
+            exit 1
+          fi
+          head="$(gh api "repos/${{ github.repository }}/git/ref/heads/staging" --jq '.object.sha')"
+          status="$(gh api "repos/${{ github.repository }}/compare/${APP_GIT_SHA}...${head}" --jq '.status')" || {
+            echo "::error::Could not compare ${APP_GIT_SHA} with staging HEAD (${head})."
+            exit 1
+          }
+          if [[ "${status}" != "ahead" && "${status}" != "identical" ]]; then
+            echo "::error::${APP_GIT_SHA} is not in staging's history (compare status '${status}')."
+            exit 1
+          fi
+          echo "${APP_GIT_SHA} is in staging's history (status '${status}' against ${head})."
+
+      - name: Resolve and pin the -app image digest
+        # Same-job step output (never a cross-job output) -- see
+        # deploy-production.yml "Resolve and pin the deployment image".
+        id: resolve-image
+        env:
+          APP_GIT_SHA: ${{ inputs.app_git_sha }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME || github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD || secrets.GITHUB_TOKEN }}
+        run: |
+          image="${REGISTRY}/${APP_IMAGE_NAME}:${APP_GIT_SHA}"
+          echo "${REGISTRY_PASSWORD}" | docker login "${REGISTRY}" \
+            --username "${REGISTRY_USERNAME}" \
+            --password-stdin
+          inspect_output="$(docker buildx imagetools inspect "${image}" 2>&1)" || {
+            echo "::error::Image not found in registry: ${image}"
+            echo "${inspect_output}"
+            exit 1
+          }
+          digest="$(echo "${inspect_output}" | awk '/^Digest:/{print $2; exit}')"
+          if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Could not resolve a digest for ${image}"
+            exit 1
+          fi
+          echo "image_with_digest=${image}@${digest}" >> "$GITHUB_OUTPUT"
+          echo "Resolved image: ${image}@${digest}"
+
+      - name: Deploy customer-api over SSH (customer-api only)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          envs: EMS_CUSTOMER_API_IMAGE,ENV_NAME_VALUE,REGISTRY_USERNAME,REGISTRY_PASSWORD
+          script: |
+            set -euo pipefail
+            export PROJECT_PATH="${{ secrets.STAGING_PROJECT_PATH }}"
+            export ENVIRONMENT_NAME="${ENV_NAME_VALUE}"
+            export EMS_CUSTOMER_API_IMAGE="${EMS_CUSTOMER_API_IMAGE}"
+            # No git fetch/checkout: the host keeps its current release
+            # checkout; deploy_customer_api.sh uses the compose.yaml already there.
+            "${PROJECT_PATH}/scripts/release/deploy_customer_api.sh"
+            docker inspect --format 'customer-api image={{.Config.Image}} health={{.State.Health.Status}}' ems-customer-api
+        env:
+          EMS_CUSTOMER_API_IMAGE: ${{ steps.resolve-image.outputs.image_with_digest }}
+          ENV_NAME_VALUE: ${{ inputs.target_environment }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME || github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD || secrets.GITHUB_TOKEN }}

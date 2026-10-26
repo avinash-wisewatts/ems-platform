@@ -31,11 +31,12 @@ tag*. Production never rebuilds from source.
 | `.github/workflows/rollback.yml` | `workflow_dispatch` only, inputs include `expected_migrations` (default `none`) | Redeploys a previously-built image tag to `staging` or `production` via the identical deploy path, after the same pending-migration precheck. |
 | `.github/workflows/deploy-web.yml` *(merged PR #156; used on staging 2026-10-26)* | `workflow_dispatch` only, inputs `target_environment` (`staging` only) + `web_git_sha` | Web-only deploy **and** rollback of the `ems-web` container: checks the SHA is in `staging`'s history, resolves the `-web:<sha>` digest, runs `scripts/release/deploy_web.sh` (recreates only `ems-web`; no checkout, no migrations). Production is not a target (D6). |
 
-`scripts/release/deploy_customer_api.sh` (ADR-023, branch
-`feature/customer-api-separation`, not merged) is the customer API's
-counterpart of `deploy_web.sh`: digest-pinned, recreates only `customer-api`,
-restores the previous image if the new one is unhealthy. It has no workflow
-yet; it is run on the host as an approved step
+`scripts/release/deploy_customer_api.sh` (ADR-023, merged PR #157) is the
+customer API's counterpart of `deploy_web.sh`: digest-pinned, recreates only
+`customer-api`, restores the previous image if the new one is unhealthy. It
+is run by `.github/workflows/deploy-customer-api.yml` (`workflow_dispatch`,
+`target_environment` = `staging` only, `app_git_sha`), because the GHCR
+packages are private and the hosts hold no registry login
 ([runbook](../10-operations/customer-staff-separation-runbook.md)). CI
 additionally validates `compose.yaml` with the `customer` and `edge`
 profiles and validates / format-checks `edge/Caddyfile` with the pinned
