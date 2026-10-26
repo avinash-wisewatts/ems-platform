@@ -74,6 +74,31 @@ APP_IMAGE=<running admin-portal image> docker compose -f /opt/ems-platform/compo
 ```
 then bind `ADMIN_PORTAL_BIND_HOST` / `GRAFANA_BIND_HOST` back to `127.0.0.1` (separate approval; staff then reach admin-portal only via the staff host / SSH tunnel).
 
+## 3a. Interim staging setup without a custom domain (2026-10-26)
+
+Custom domains are deferred. The customer application is reached on the
+staging host itself; the Administration App stays on `:8080`, unchanged, and
+is not routed through the edge (no `EMS_STAFF_HOST`).
+
+**Certificate options** (`EMS_EDGE_TLS`):
+
+| Mode | Site address | Browser | Notes |
+|---|---|---|---|
+| `acme_ip` (recommended) | the Elastic IP, e.g. `16.113.18.69` | Trusted, no warning | Let's Encrypt IP-address certificate (generally available since 2026-01-15), 6-day `shortlived` profile, renewed automatically by Caddy. Validation (http-01 on :80 / tls-alpn-01 on :443) needs those ports open to the whole internet; access is restricted by `EMS_CUSTOMER_ALLOWED_CIDRS`, which does not affect validation. If renewal fails the certificate expires within days -- monitor the edge logs. |
+| `internal` | the EC2 hostname or the IP | Warning ("not private" / untrusted issuer) | Caddy's own CA; testers would have to click through or install Caddy's root certificate. Encrypted, but users learn to ignore warnings (phishing / interception risk). |
+| `acme` | a hostname | Trusted | Not possible for `*.compute.amazonaws.com`: Let's Encrypt refuses those names by policy ("forbidden by policy"). For a future custom domain. |
+
+**Controlled access**: `EMS_CUSTOMER_ALLOWED_CIDRS` (space-separated, e.g. the
+office / VPN egress CIDRs) -- every other client gets 403 for every path.
+
+**Root `.env` (edge only)**: `EMS_CUSTOMER_HOST=<site address>`,
+`EMS_EDGE_TLS=acme_ip`, `EMS_CUSTOMER_ALLOWED_CIDRS=<approved CIDRs>`,
+`EMS_EDGE_HSTS_MAX_AGE=<short interim value, e.g. 86400>`;
+`EMS_STAFF_HOST` unset (defaults to `staff.invalid`, unreachable).
+
+**Rollback**: `docker compose -f /opt/ems-platform/compose.yaml --profile edge stop edge`
+(ports 80/443 stop answering; nothing else changes).
+
 ## 4. Verification checklist (staging)
 
 - `https://<customer host>/` → 302 `/app/`; `/app/`, deep links and hashed assets 200; HSTS present; no `Server` header.

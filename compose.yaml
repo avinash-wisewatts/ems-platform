@@ -370,8 +370,8 @@ services:
     # Profile `edge`: never started implicitly. Starting it publishes ports
     # 80/443 -- an externally visible change that is activated only by an
     # explicitly approved operation, after DNS, the security group and the
-    # root .env (EMS_CUSTOMER_HOST, EMS_STAFF_HOST, EMS_STAFF_ALLOWED_CIDRS,
-    # EMS_EDGE_TLS) are in place.
+    # root .env (EMS_CUSTOMER_HOST, EMS_STAFF_HOST, EMS_CUSTOMER_ALLOWED_CIDRS,
+    # EMS_STAFF_ALLOWED_CIDRS, EMS_EDGE_TLS) are in place.
     image: caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
     profiles: ["edge"]
 
@@ -382,7 +382,12 @@ services:
       EMS_CUSTOMER_HOST: ${EMS_CUSTOMER_HOST:-customer.invalid}
       EMS_STAFF_HOST: ${EMS_STAFF_HOST:-staff.invalid}
       EMS_STAFF_ALLOWED_CIDRS: ${EMS_STAFF_ALLOWED_CIDRS:-127.0.0.1/32}
+      # Controlled testing: restrict the customer host to these client CIDRs.
+      EMS_CUSTOMER_ALLOWED_CIDRS: ${EMS_CUSTOMER_ALLOWED_CIDRS:-0.0.0.0/0 ::/0}
+      # internal | acme | acme_ip (edge/Caddyfile tls_<mode> snippets).
       EMS_EDGE_TLS: ${EMS_EDGE_TLS:-internal}
+      # HSTS max-age (seconds); short for interim setups.
+      EMS_EDGE_HSTS_MAX_AGE: ${EMS_EDGE_HSTS_MAX_AGE:-31536000}
 
     ports:
       - "${EMS_EDGE_BIND_HOST:-0.0.0.0}:80:80"
