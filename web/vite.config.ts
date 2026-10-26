@@ -28,6 +28,9 @@ export default defineConfig(({ mode }) => {
         "/api": { target: devBackend, changeOrigin: false, ws: true },
         "/login": { target: devBackend, changeOrigin: false },
         "/logout": { target: devBackend, changeOrigin: false },
+        // Customer API sign-in (ADR-023): present when devBackend is a
+        // customer API; otherwise the sign-in page falls back to /login.
+        "/auth": { target: devBackend, changeOrigin: false },
       },
     },
     build: {

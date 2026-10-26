@@ -1,22 +1,12 @@
-import { useEffect } from "react";
-import { loginUrl } from "../api/client";
+import { Navigate } from "react-router-dom";
+import { currentAppPath, safeNextPath } from "../api/client";
 
 /**
- * Unauthenticated users are sent to the EXISTING server-rendered /login page.
- * There is no SPA login form and no parallel auth: the session cookie created
- * by /login is the same one this app reuses.
+ * Unauthenticated users go to the app's own sign-in page (routes/SignIn.tsx),
+ * which signs in through the customer API on the customer host and hands
+ * over to the Administration App's existing /login where the app is still
+ * served through it (ADR-023). The current location is the return path.
  */
 export function LoginRedirect() {
-  useEffect(() => {
-    window.location.assign(loginUrl("/app/"));
-  }, []);
-
-  return (
-    <div className="page page--message" data-testid="page-login-redirect">
-      <h1>Sign in required</h1>
-      <p>
-        Redirecting to sign in… If nothing happens, <a href={loginUrl("/app/")}>continue here</a>.
-      </p>
-    </div>
-  );
+  return <Navigate to={`/sign-in?next=${encodeURIComponent(safeNextPath(currentAppPath()))}`} replace />;
 }

@@ -3,7 +3,8 @@
 The customer API is a JSON-only surface, so every rejection is a flat JSON
 status ({"error": ..., "detail": ...}) -- never a redirect to an HTML page.
 
-- /health and POST /auth/login are the only unauthenticated paths.
+- /health, POST /auth/login and GET /auth/session are the only
+  unauthenticated paths.
 - Every state-changing request (anything but GET/HEAD/OPTIONS) must carry an
   Origin header naming the very host it was sent to (same-origin; the edge
   proxy passes the original Host through). This is the CSRF defence for the
@@ -31,7 +32,7 @@ from src.auth.authorization import has_permission, required_permission_for_reque
 from src.auth.session import SESSION_IDENTITY_KEY, deserialize_authenticated_user
 from src.config import CoreSettings
 
-PUBLIC_PATHS = frozenset({"/health", "/auth/login"})
+PUBLIC_PATHS = frozenset({"/health", "/auth/login", "/auth/session"})
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 

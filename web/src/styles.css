@@ -316,6 +316,14 @@ a { color: var(--ww-teal-600); }
 
 .page h1 { margin-top: 0; color: var(--ww-navy); }
 .page--message { max-width: 520px; }
+
+/* Sign-in page (ADR-023). */
+.sign-in { margin: 48px auto; }
+.sign-in__form { display: grid; gap: 14px; }
+.sign-in__field { display: grid; gap: 6px; font-size: 14px; color: var(--ww-navy); }
+.sign-in__field input { font: inherit; padding: 8px 10px; border: 1px solid #c9d3e0; border-radius: 6px; }
+.sign-in__field input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.sign-in__error { margin: 0; color: #b42318; }
 .hint { color: var(--muted); }
 
 .hierarchy-crumb { font-size: 13px; color: var(--muted); margin-bottom: 10px; }

@@ -3,9 +3,10 @@
  *
  * On mount it calls GET /api/v1/me (a session echo -- no second auth system).
  *   - 200  -> authenticated; identity + permissions available
- *   - 401  -> unauthenticated; the app routes the user to the existing
- *             server-rendered /login page (no SPA login form, no parallel
- *             auth). The session cookie is created there and reused here.
+ *   - 401  -> unauthenticated; the app routes the user to its sign-in page
+ *             (routes/SignIn.tsx): the customer API's /auth/login on the
+ *             customer host, the Administration App's /login elsewhere
+ *             (ADR-023). Either way the session is a server-signed cookie.
  *   - other -> a load error (network / backend down)
  *
  * There is no token handling and nothing sensitive is stored: /api/v1/me
@@ -15,7 +16,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { getCurrentUser } from "../api/endpoints";
-import { loginUrl } from "../api/client";
+import { browser, signInUrl } from "../api/client";
 import { UnauthenticatedError } from "../api/errors";
 import type { CurrentUser } from "../api/types";
 
@@ -26,7 +27,7 @@ export type SessionState = {
   user: CurrentUser | null;
   error: Error | null;
   reload: () => void;
-  /** Send the browser to the existing login page, preserving the return path. */
+  /** Send the browser to the sign-in page, preserving the return path. */
   goToLogin: () => void;
 };
 
@@ -46,7 +47,7 @@ export function SessionProvider({
   const [nonce, setNonce] = useState(0);
 
   const reload = useCallback(() => setNonce((n) => n + 1), []);
-  const goToLogin = useCallback(() => window.location.assign(loginUrl()), []);
+  const goToLogin = useCallback(() => browser.assign(signInUrl()), []);
 
   useEffect(() => {
     let active = true;

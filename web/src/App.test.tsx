@@ -202,15 +202,27 @@ describe("application shell -- foundation routing, auth and tenant context", () 
     expect(screen.getByTestId("state-loading")).toBeInTheDocument();
   });
 
-  it("redirects an unauthenticated user to the existing /login page (no SPA login form)", async () => {
+  // ADR-023: unauthenticated users go to the app's sign-in page, which on the
+  // Administration App path (no /auth/*) hands over to the existing /login.
+  it("on the Administration App path still sends an unauthenticated user to the existing /login", async () => {
     const assign = vi.fn();
     vi.stubGlobal("location", { ...window.location, assign, pathname: "/app/", search: "" });
+    stubFetch(() => ({ status: 0 })); // GET /auth/session: opaque redirect to /login
     renderWithProviders(<AppRoutes />, {
       session: () => Promise.reject(new UnauthenticatedError()),
       initialEntries: ["/"],
     });
-    await waitFor(() => expect(screen.getByTestId("page-login-redirect")).toBeInTheDocument());
-    expect(assign).toHaveBeenCalledWith(expect.stringContaining("/login?next_path="));
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/login?next_path=%2Fapp%2F"));
+    expect(screen.queryByTestId("page-sign-in")).toBeNull();
+  });
+
+  it("on the customer host shows the app's sign-in page to an unauthenticated user", async () => {
+    stubFetch((url) => (url === "/auth/session" ? { status: 200, jsonBody: { sign_in: "customer" } } : { status: 404 }));
+    renderWithProviders(<AppRoutes />, {
+      session: () => Promise.reject(new UnauthenticatedError()),
+      initialEntries: ["/features/energy"],
+    });
+    expect(await screen.findByTestId("page-sign-in")).toBeInTheDocument();
   });
 
   it("shows an error state (with retry) when the session bootstrap fails", async () => {

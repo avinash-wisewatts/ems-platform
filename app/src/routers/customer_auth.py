@@ -34,6 +34,19 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=1, max_length=1024)
 
 
+@router.get("/session")
+async def sign_in_mode() -> Response:
+    """Tell the EMS frontend that it may use its own sign-in page here.
+
+    Public and identity-free. Only the customer API serves it, so the
+    frontend can distinguish the customer host (sign in with POST
+    /auth/login) from the Administration App path during the transition,
+    where /auth/* does not exist and the server-rendered /login is used.
+    """
+
+    return JSONResponse({"sign_in": "customer"}, headers=NO_STORE)
+
+
 @router.post("/login", response_model=CurrentUserResponse)
 async def login(request: Request, body: LoginRequest) -> Response:
     """Verify credentials and establish the customer session."""
