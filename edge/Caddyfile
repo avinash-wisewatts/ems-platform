@@ -28,6 +28,9 @@
 #                                acme_ip   Let's Encrypt for an IP-address
 #                                          site address: 6-day "shortlived"
 #                                          profile, renewed automatically
+#   EMS_STAFF_EDGE_TLS         certificate mode of the staff host (same values);
+#                              default internal, so an unused staff host never
+#                              asks a public CA for a certificate
 #   EMS_EDGE_HSTS_MAX_AGE      HSTS max-age in seconds (default one year);
 #                              a short value for interim setups, e.g. on an
 #                              IP address that may later serve something else
@@ -42,6 +45,11 @@
 # ============================================================================
 {
 	admin localhost:2019
+	# Clients send no SNI when the URL is an IP address (RFC 6066), so without
+	# a default Caddy cannot pick a certificate and aborts the handshake
+	# (TLS alert 80) -- every browser fails on https://<ip>/. Use the customer
+	# site's certificate for such ClientHellos.
+	default_sni {$EMS_CUSTOMER_HOST:customer.invalid}
 }
 
 (security_headers) {
@@ -117,7 +125,7 @@
 }
 
 {$EMS_STAFF_HOST:staff.invalid} {
-	import tls_{$EMS_EDGE_TLS:internal}
+	import tls_{$EMS_STAFF_EDGE_TLS:internal}
 	import security_headers
 
 	@not_staff not remote_ip {$EMS_STAFF_ALLOWED_CIDRS:127.0.0.1/32}
