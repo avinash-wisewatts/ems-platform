@@ -111,7 +111,16 @@ def test_certificate_modes_are_selected_by_configuration() -> None:
     for mode in ("internal", "acme", "acme_ip"):
         assert f"(tls_{mode}) {{" in text
     assert "profile shortlived" in text.split("(tls_acme_ip) {", 1)[1].split("\n}\n", 1)[0]
-    assert text.count("import tls_{$EMS_EDGE_TLS:internal}") == 2
+    assert text.count("import tls_{$EMS_EDGE_TLS:internal}") == 1
+    assert "import tls_{$EMS_STAFF_EDGE_TLS:internal}" in _site_block("EMS_STAFF_HOST")
+    assert _services()["edge"]["environment"]["EMS_STAFF_EDGE_TLS"] == "${EMS_STAFF_EDGE_TLS:-internal}"
+
+
+def test_clients_without_sni_get_the_customer_certificate() -> None:
+    # Browsers send no SNI for https://<ip>/; without default_sni the handshake
+    # fails (found on staging 2026-10-27 with the Let's Encrypt IP certificate).
+    globals_block = _caddyfile().split("(security_headers)", 1)[0]
+    assert "default_sni {$EMS_CUSTOMER_HOST:customer.invalid}" in globals_block
 
 
 def test_staff_host_is_ip_restricted_and_the_only_way_to_admin_portal() -> None:

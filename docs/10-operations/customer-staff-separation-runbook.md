@@ -88,6 +88,15 @@ is not routed through the edge (no `EMS_STAFF_HOST`).
 | `internal` | the EC2 hostname or the IP | Warning ("not private" / untrusted issuer) | Caddy's own CA; testers would have to click through or install Caddy's root certificate. Encrypted, but users learn to ignore warnings (phishing / interception risk). |
 | `acme` | a hostname | Trusted | Not possible for `*.compute.amazonaws.com`: Let's Encrypt refuses those names by policy ("forbidden by policy"). For a future custom domain. |
 
+**No-SNI clients (found on staging 2026-10-27)**: browsers send no SNI for
+an `https://<ip>/` URL (RFC 6066). Without the Caddyfile's global
+`default_sni`, Caddy aborts such handshakes with TLS alert 80 even though the
+IP certificate was issued -- every browser fails. The first staging start
+(02:12–02:14 UTC) hit this and was rolled back. Check with
+`openssl s_client -connect <ip>:443 -noservername` (must complete) as well as
+with `-servername`. The unused staff block now uses `EMS_STAFF_EDGE_TLS`
+(default `internal`), so it never asks Let's Encrypt for `staff.invalid`.
+
 **Controlled access**: `EMS_CUSTOMER_ALLOWED_CIDRS` (space-separated, e.g. the
 office / VPN egress CIDRs) -- every other client gets 403 for every path.
 

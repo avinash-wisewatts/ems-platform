@@ -386,6 +386,8 @@ services:
       EMS_CUSTOMER_ALLOWED_CIDRS: ${EMS_CUSTOMER_ALLOWED_CIDRS:-0.0.0.0/0 ::/0}
       # internal | acme | acme_ip (edge/Caddyfile tls_<mode> snippets).
       EMS_EDGE_TLS: ${EMS_EDGE_TLS:-internal}
+      # Staff host certificate mode; internal unless a staff hostname is in use.
+      EMS_STAFF_EDGE_TLS: ${EMS_STAFF_EDGE_TLS:-internal}
       # HSTS max-age (seconds); short for interim setups.
       EMS_EDGE_HSTS_MAX_AGE: ${EMS_EDGE_HSTS_MAX_AGE:-31536000}
 
