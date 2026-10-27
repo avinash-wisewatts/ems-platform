@@ -1,7 +1,13 @@
-# Release D — fixed 24-hour production observation window (PREPARED, not started)
+# Release D — fixed 24-hour production observation window (COMPLETED; Release D accepted)
 
-Status: prepared 2026-10-25. **Not started; starting it needs explicit
-approval**, and so does every production access below. Everything here is
+Status: prepared 2026-10-25; **completed**. The window ran 2026-10-25
+13:30:02.625723 → 2026-10-26 13:30:02.625723 UTC with the tools at `e4b2222`
+(P11 coverage 99.8 % per stage, lag evaluator PASS, acceptance SQL PASS with
+sections D / F explained by source gaps), and the user accepted Release D on
+2026-10-26. Results, caveats and checksums: "Release D acceptance" in
+[production-release-plan-266-301.md](../../../09-release-and-deployment/production-release-plan-266-301.md).
+A new window would need its own explicit approval, as would every
+production access below. Everything here is
 read-only: catalog / statistics queries and bounded reads, with
 `default_transaction_read_only=on`, short statement and lock timeouts.
 
