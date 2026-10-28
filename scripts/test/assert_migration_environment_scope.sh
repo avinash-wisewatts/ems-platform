@@ -136,20 +136,22 @@ gate() {
         "${PROJECT_ROOT}/scripts/verify/verify_environment_scope.sh"
 }
 
-if gate production ems_test > "${work}/out" 2>&1; then fail "gate passed on a database that has 309 / 310 / 312 / 313"; fi
+if gate production ems_test > "${work}/out" 2>&1; then fail "gate passed on a database that has 309 / 310 / 312 / 313 / 314"; fi
 for expected in "[FAIL] 309_report_export_jobs is recorded in the production ledger." \
                 "[FAIL] 312_report_export_asset_selection_1m is recorded in the production ledger." \
                 "[FAIL] 310_preserved_rtdata_backfill is recorded in the production ledger." \
                 "[FAIL] table analytics.report_export_jobs (309_report_export_jobs) exists on production." \
                 "[FAIL] function analytics.get_portal_asset_measurements_1m (312_report_export_asset_selection_1m) exists on production." \
-                "[FAIL] table telemetry.preserved_rtdata_packets (310_preserved_rtdata_backfill) exists on production."                 "[FAIL] 313_customer_api_role is recorded in the production ledger."                 "[FAIL] role ems_customer_api (313_customer_api_role) exists on production."; do
+                "[FAIL] table telemetry.preserved_rtdata_packets (310_preserved_rtdata_backfill) exists on production."                 "[FAIL] 313_customer_api_role is recorded in the production ledger."                 "[FAIL] role ems_customer_api (313_customer_api_role) exists on production." \
+                "[FAIL] 314_customer_session_revocation is recorded in the production ledger." \
+                "[FAIL] table admin.portal_sessions (314_customer_session_revocation) exists on production."; do
     grep -qF "${expected}" "${work}/out" || { cat "${work}/out"; fail "gate output lacks: ${expected}"; }
 done
 echo "PASS: production gate fails on a database with the staging-only migrations and names them"
 
 gate production "${SCRATCH_DB}" > "${work}/out" 2>&1 || true
 for expected in "[PASS] 309_report_export_jobs: no ledger row." "[PASS] 310_preserved_rtdata_backfill: no ledger row." \
-                "[PASS] 312_report_export_asset_selection_1m: no ledger row." "[PASS] 313_customer_api_role: no ledger row."                 "[PASS] none of the staging-only objects exists."; do
+                "[PASS] 312_report_export_asset_selection_1m: no ledger row." "[PASS] 313_customer_api_role: no ledger row." "[PASS] 314_customer_session_revocation: no ledger row."                 "[PASS] none of the staging-only objects exists."; do
     grep -qF "${expected}" "${work}/out" || { cat "${work}/out"; fail "gate output lacks: ${expected}"; }
 done
 echo "PASS: production gate's database checks pass on a database without them"

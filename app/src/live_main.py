@@ -1,5 +1,6 @@
 import asyncio
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 import logging
 import secrets
 from typing import AsyncIterator
@@ -13,7 +14,12 @@ from psycopg_pool import AsyncConnectionPool, PoolTimeout
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.requests import HTTPConnection
 
-from src.auth.customer_session import read_customer_identity, same_origin
+from src.auth.customer_session import (
+    CUSTOMER_AUDIENCE,
+    read_customer_session,
+    same_origin,
+    session_token_hash,
+)
 from src.auth.models import AuthenticatedPortalUser
 from src.auth.session import SESSION_IDENTITY_KEY, deserialize_authenticated_user
 from src.live_config import get_live_settings
@@ -143,23 +149,35 @@ def grafana_stream_authorized(websocket: WebSocket) -> bool:
     return secrets.compare_digest(presented, settings.grafana_stream_token)
 
 
-def portal_identity(connection: HTTPConnection, *, websocket: bool) -> AuthenticatedPortalUser | None:
-    """The signed-in portal identity of a request or WebSocket, else None.
+@dataclass(frozen=True, slots=True)
+class LiveIdentity:
+    user: AuthenticatedPortalUser
+    # The server-side session token when signed in with the customer session.
+    customer_token: str | None = None
+
+
+def session_identity(connection: HTTPConnection, *, websocket: bool) -> LiveIdentity | None:
+    """The identity in a request's or WebSocket's signed session cookie, else None.
 
     The Administration App session (this app's SessionMiddleware) as before;
     otherwise, when configured, the customer API session (ADR-023): its own
-    cookie and secret, customer audience, and -- for a browser WebSocket --
-    an Origin naming the host it reached, so another site cannot open a live
-    stream with a customer's cookie. Asset access is still decided per
-    identity by admin.portal_user_can_access_asset.
+    cookie and secret, customer audience, a server-side session token, and --
+    for a browser WebSocket -- an Origin naming the host it reached, so
+    another site cannot open a live stream with a customer's cookie.
+
+    Signature and age only: a customer session must also pass
+    customer_session_user (portal_identity does both). Asset access is
+    still decided per identity by admin.portal_user_can_access_asset.
     """
 
     identity = deserialize_authenticated_user(
         connection.scope.get("session", {}).get(SESSION_IDENTITY_KEY)
     )
-    if identity is not None or not settings.customer_session_secret:
-        return identity
-    customer = read_customer_identity(
+    if identity is not None:
+        return LiveIdentity(identity)
+    if not settings.customer_session_secret:
+        return None
+    customer = read_customer_session(
         connection.headers.get("cookie"),
         secret=settings.customer_session_secret,
         cookie_name=settings.customer_session_cookie_name,
@@ -170,7 +188,37 @@ def portal_identity(connection: HTTPConnection, *, websocket: bool) -> Authentic
         return None
     if websocket and not same_origin(connection.headers.get("origin"), connection.headers.get("host")):
         return None
-    return customer
+    return LiveIdentity(customer.identity, customer.token)
+
+
+async def customer_session_user(token: str) -> int | None:
+    """The account of a live, unrevoked customer session (migration 314), else None."""
+
+    assert pool is not None
+    async with pool.connection() as connection:
+        async with connection.cursor() as cursor:
+            await cursor.execute(
+                "SELECT admin.get_portal_session_user(%s, %s) AS portal_user_id",
+                (session_token_hash(token), CUSTOMER_AUDIENCE),
+            )
+            row = await cursor.fetchone()
+            return row["portal_user_id"] if row else None
+
+
+async def portal_identity(connection: HTTPConnection, *, websocket: bool) -> LiveIdentity | None:
+    """session_identity, plus the server-side check of a customer session.
+
+    A customer session that was signed out, has expired, or whose account
+    was deactivated (or its password changed) is refused. Raises when the
+    database cannot be reached; the caller fails closed.
+    """
+
+    identity = session_identity(connection, websocket=websocket)
+    if identity is None or identity.customer_token is None:
+        return identity
+    if await customer_session_user(identity.customer_token) != identity.user.portal_user_id:
+        return None
+    return identity
 
 
 async def actor_can_access_asset(actor_id: int, asset_id: UUID) -> bool:
@@ -199,11 +247,13 @@ async def asset_ids_for_device(device_id: str) -> list[UUID]:
 async def publish_device_update(device_id: str) -> None:
     for asset_id in await asset_ids_for_device(device_id):
         for websocket in await hub.subscribers_for(asset_id):
-            identity = portal_identity(websocket, websocket=True)
+            # Signature and age only, per message; revocation of a customer
+            # session is checked by its own WebSocket (live_asset_websocket).
+            identity = session_identity(websocket, websocket=True)
             if identity is None:
                 await hub.remove(asset_id, websocket)
                 continue
-            rows = await fetch_asset_state(identity.portal_user_id, asset_id)
+            rows = await fetch_asset_state(identity.user.portal_user_id, asset_id)
             if not rows:
                 continue
             try:
@@ -384,12 +434,16 @@ async def health() -> JSONResponse:
 
 @app.get("/api/live/assets/{asset_id}")
 async def live_snapshot(request: Request, asset_id: UUID) -> JSONResponse:
-    identity = portal_identity(request, websocket=False)
+    try:
+        identity = await portal_identity(request, websocket=False)
+    except Exception:
+        logger.exception("Live snapshot session check failed")
+        return JSONResponse({"detail": "Session could not be verified"}, status_code=503)
     if identity is None:
         return JSONResponse({"detail": "Authentication required"}, status_code=401)
-    if not await actor_can_access_asset(identity.portal_user_id, asset_id):
+    if not await actor_can_access_asset(identity.user.portal_user_id, asset_id):
         return JSONResponse({"detail": "Asset not found or not accessible"}, status_code=404)
-    rows = await fetch_asset_state(identity.portal_user_id, asset_id)
+    rows = await fetch_asset_state(identity.user.portal_user_id, asset_id)
     return JSONResponse(jsonable_encoder({"type": "snapshot", "asset_id": str(asset_id), "points": rows}))
 
 
@@ -403,19 +457,45 @@ async def live_asset_websocket(websocket: WebSocket, asset_id: UUID) -> None:
     # matters on the customer host, where the edge routes browsers here
     # directly (ADR-023). Nothing is sent before the checks pass.
     await websocket.accept()
-    identity = portal_identity(websocket, websocket=True)
+    try:
+        identity = await portal_identity(websocket, websocket=True)
+    except Exception:
+        logger.exception("Live WebSocket session check failed")
+        await websocket.close(code=1011)
+        return
     if identity is None:
         await websocket.close(code=4401)
         return
-    if not await actor_can_access_asset(identity.portal_user_id, asset_id):
+    if not await actor_can_access_asset(identity.user.portal_user_id, asset_id):
         await websocket.close(code=4404)
         return
-    rows = await fetch_asset_state(identity.portal_user_id, asset_id)
+    rows = await fetch_asset_state(identity.user.portal_user_id, asset_id)
     await hub.add(asset_id, websocket)
     try:
         await websocket.send_json(jsonable_encoder({"type": "snapshot", "asset_id": str(asset_id), "points": rows}))
+        if identity.customer_token is None:
+            while True:
+                await websocket.receive_text()
+        # A customer stream re-checks its session periodically and is closed
+        # with 4401 (no reconnect; the frontend asks the customer to sign in)
+        # once it is signed out, expired, or its account deactivated.
         while True:
-            await websocket.receive_text()
+            try:
+                await asyncio.wait_for(
+                    websocket.receive_text(), timeout=settings.customer_session_recheck_seconds
+                )
+                continue
+            except asyncio.TimeoutError:
+                pass
+            try:
+                still_signed_in = await portal_identity(websocket, websocket=True) is not None
+            except Exception:
+                logger.exception("Live WebSocket session re-check failed")
+                await websocket.close(code=1011)
+                return
+            if not still_signed_in:
+                await websocket.close(code=4401)
+                return
     except WebSocketDisconnect:
         pass
     finally:

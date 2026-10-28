@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from src.config import CoreSettings
 
@@ -37,6 +37,16 @@ class CustomerSettings(CoreSettings):
         alias="EMS_CUSTOMER_ALLOW_STAFF",
     )
 
+    # Server-side sessions (migration 314): EMS_APP_SESSION_MAX_AGE_SECONDS
+    # is the idle lifetime (it slides with use, as the cookie does); this is
+    # the hard limit from sign-in, after which the customer signs in again.
+    session_absolute_max_age_seconds: int = Field(
+        default=604800,
+        ge=300,
+        le=2592000,
+        alias="EMS_CUSTOMER_SESSION_ABSOLUTE_MAX_AGE_SECONDS",
+    )
+
     # The Reports export worker stays in the admin portal until the customer
     # API takes over Reports traffic (ADR-023 stage 3); two workers would be
     # safe (jobs are claimed FOR UPDATE SKIP LOCKED) but are not wanted.
@@ -53,6 +63,15 @@ class CustomerSettings(CoreSettings):
                 "The customer API must not use the Administration App session cookie name."
             )
         return value
+
+    @model_validator(mode="after")
+    def _absolute_at_least_idle(self) -> "CustomerSettings":
+        if self.session_absolute_max_age_seconds < self.session_max_age_seconds:
+            raise ValueError(
+                "EMS_CUSTOMER_SESSION_ABSOLUTE_MAX_AGE_SECONDS must not be shorter than "
+                "EMS_APP_SESSION_MAX_AGE_SECONDS."
+            )
+        return self
 
 
 @lru_cache

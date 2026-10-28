@@ -4,13 +4,21 @@ The customer API is a JSON-only surface, so every rejection is a flat JSON
 status ({"error": ..., "detail": ...}) -- never a redirect to an HTML page.
 
 - /health, POST /auth/login and GET /auth/session are the only
-  unauthenticated paths.
+  unauthenticated paths. POST /auth/logout is also let through without a
+  session check: it only ever removes a session, and must clear the browser
+  even when the check below cannot run (idempotent: always 204 unless the
+  server-side revocation itself fails).
 - Every state-changing request (anything but GET/HEAD/OPTIONS) must carry an
   Origin header naming the very host it was sent to (same-origin; the edge
   proxy passes the original Host through). This is the CSRF defence for the
   cookie-authenticated JSON writes (/auth/login, /auth/logout, Reports).
 - A session identity outside the customer audience (src.auth.audience,
   per EMS_CUSTOMER_ALLOW_STAFF) is signed out and treated as unauthenticated.
+- The signed cookie alone is not enough (migration 314): its session token
+  must name a live server-side session of the same, still active account
+  (src.auth.server_session.touch_server_session), else the request is signed
+  out and unauthenticated. When that check cannot reach the database the
+  request is a 503 and the session is kept.
 - /api/v1/* requires the same permission the admin portal requires
   (src.auth.authorization.required_permission_for_request); /auth/* needs
   only an authenticated identity.
@@ -22,17 +30,22 @@ verified signed-session data before it runs.
 from __future__ import annotations
 
 import json
+import logging
 from urllib.parse import urlsplit
 
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from src.auth import server_session
 from src.auth.audience import customer_audience
 from src.auth.authorization import has_permission, required_permission_for_request
+from src.auth.customer_session import session_token
 from src.auth.session import SESSION_IDENTITY_KEY, deserialize_authenticated_user
 from src.config import CoreSettings
 
-PUBLIC_PATHS = frozenset({"/health", "/auth/login", "/auth/session"})
+logger = logging.getLogger(__name__)
+
+PUBLIC_PATHS = frozenset({"/health", "/auth/login", "/auth/session", "/auth/logout"})
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 
@@ -84,6 +97,26 @@ class CustomerAuthenticationMiddleware:
                 allow_staff=getattr(self.settings, "customer_allow_staff", False)
             )
             if identity is not None and not audience(identity):
+                session.clear()
+                identity = None
+
+        if identity is not None:
+            token = session_token(session)
+            try:
+                live_user_id = (
+                    await server_session.touch_server_session(
+                        token, idle_seconds=self.settings.session_max_age_seconds
+                    )
+                    if token is not None
+                    else None
+                )
+            except Exception:
+                logger.exception("Customer session check failed")
+                await self._json_error(
+                    send, 503, "service_unavailable", "The session could not be verified. Try again shortly."
+                )
+                return
+            if live_user_id != identity.portal_user_id:
                 session.clear()
                 identity = None
 
