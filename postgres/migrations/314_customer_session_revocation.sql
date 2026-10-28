@@ -30,7 +30,9 @@
 --
 -- Grants: create / touch / revoke to ems_customer_api (migration 313);
 -- get_portal_session_user to ems_app (live-telemetry's login). Nothing to
--- PUBLIC. No existing function, grant, table, job or row changes.
+-- PUBLIC. The table itself is granted to no role: the SELECT that
+-- ems_investigator's default privileges (staging) give a new admin table is
+-- revoked. No existing function, grant, table, job or row changes.
 --
 -- Scope: staging and test only (postgres/migration_environment_scope.csv),
 -- like migration 313: production has no customer API.
@@ -105,6 +107,18 @@ CREATE INDEX IF NOT EXISTS idx_portal_sessions_user_open
 
 ALTER TABLE admin.portal_sessions OWNER TO ems_admin;
 REVOKE ALL ON TABLE admin.portal_sessions FROM PUBLIC;
+
+-- Staging's read-only investigation role (ems_investigator) holds
+-- ALTER DEFAULT PRIVILEGES ... IN SCHEMA admin GRANT SELECT ON TABLES, so
+-- CREATE TABLE above granted it SELECT. Session rows are reached only
+-- through the functions below; the postcondition requires no direct grant.
+DO $investigator$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'ems_investigator') THEN
+        REVOKE ALL ON TABLE admin.portal_sessions FROM ems_investigator;
+    END IF;
+END
+$investigator$;
 
 COMMENT ON TABLE admin.portal_sessions IS
 'ADR-023 / migration 314: server-side customer sessions. session_token_hash is the SHA-256 of the random token held in the signed session cookie (the token itself is never stored). A session is valid while not revoked, before idle_expires_at and absolute_expires_at, and while its account is active. Read and written only through the admin.*_portal_session SECURITY DEFINER functions.';
