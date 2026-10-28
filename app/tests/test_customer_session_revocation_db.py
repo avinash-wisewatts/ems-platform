@@ -244,10 +244,27 @@ def test_dead_sessions_are_purged_at_the_next_sign_in(cur, seed) -> None:
 
 # --- privileges ------------------------------------------------------------------------------
 
-@pytest.mark.parametrize("role", [CUSTOMER_API, LIVE])
+@pytest.mark.parametrize("role", [CUSTOMER_API, LIVE, "ems_investigator"])
 def test_no_role_reads_or_writes_the_table_directly(cur, role) -> None:
     with pytest.raises(errors.InsufficientPrivilege):
         _as(cur, role, "SELECT count(*) FROM admin.portal_sessions")
+
+
+def test_table_acl_is_owner_only_despite_investigator_default_privileges(cur) -> None:
+    # The test database reproduces staging's ems_investigator default
+    # privileges (scripts/test/staging_role_parity.sql), which granted the
+    # new table SELECT and failed the first staging release of 314.
+    cur.execute(
+        "SELECT count(*) FROM pg_default_acl d CROSS JOIN LATERAL aclexplode(d.defaclacl) a "
+        "WHERE d.defaclnamespace = 'admin'::regnamespace AND d.defaclobjtype = 'r' "
+        "AND a.grantee = 'ems_investigator'::regrole AND a.privilege_type = 'SELECT'"
+    )
+    assert cur.fetchone()[0] == 1
+    cur.execute(
+        "SELECT array_agg(DISTINCT pg_get_userbyid(a.grantee)) FROM pg_class c CROSS JOIN LATERAL aclexplode(c.relacl) a "
+        "WHERE c.oid = 'admin.portal_sessions'::regclass"
+    )
+    assert cur.fetchone()[0] in (None, ["ems_admin"])
 
 
 @pytest.mark.parametrize("sql", [

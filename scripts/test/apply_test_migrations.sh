@@ -10,6 +10,12 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 # the active migration stream normally. No historical ledger simulation is
 # required. DEPLOY_ENVIRONMENT=test also applies the staging-scoped migrations
 # (postgres/migration_environment_scope.csv), so every migration is tested.
+
+# Staging's ems_investigator default privileges, before any migration runs
+# (scripts/test/staging_role_parity.sql).
+docker compose -f "${PROJECT_ROOT}/compose.test.yaml" exec -T timescaledb-test \
+    psql -X -q -U ems_admin -d ems_test < "${SCRIPT_DIR}/staging_role_parity.sql"
+
 DEPLOY_ENVIRONMENT="test" \
 COMPOSE_FILE="${PROJECT_ROOT}/compose.test.yaml" \
 DB_CONTAINER="timescaledb-test" \
