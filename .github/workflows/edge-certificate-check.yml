@@ -1,0 +1,54 @@
+# ============================================================================
+# Edge certificate check (staging customer endpoint, ADR-023)
+#
+# Read-only alert before the public certificate expires. Every 3 hours a
+# GitHub-hosted runner makes one TLS handshake to the staging customer
+# endpoint (scripts/verify/check_edge_certificate.sh) and fails when the
+# chain does not verify or fewer than 48 h of validity remain -- i.e. when
+# Caddy's automatic renewal has already failed (the 6-day Let's Encrypt IP
+# certificate is normally renewed about 3 days before expiry).
+#
+# A failed run is the alert: GitHub notifies by e-mail (per the recipient's
+# notification settings) the user who last changed this schedule. It also
+# fails if the endpoint stops answering on 443 from the internet, which
+# would also stop ACME validation.
+#
+# Nothing here touches the host, Caddy or the certificate; no secrets.
+# Staging only. Scheduled workflows run from the default branch (staging)
+# and GitHub disables them after 60 days without repository activity.
+# ============================================================================
+
+name: Edge certificate check
+
+on:
+  schedule:
+    - cron: "23 */3 * * *"
+  workflow_dispatch:
+    inputs:
+      min_hours:
+        description: "Fail when fewer than this many hours of validity remain"
+        required: false
+        default: "48"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: edge-certificate-check
+  cancel-in-progress: false
+
+jobs:
+  staging-customer-endpoint:
+    name: Staging customer endpoint certificate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      # The staging customer host (root .env EMS_CUSTOMER_HOST). A repository
+      # variable overrides it once a hostname replaces the interim IP.
+      EDGE_HOST: ${{ vars.STAGING_CUSTOMER_EDGE_HOST || '16.113.18.69' }}
+      MIN_HOURS: ${{ inputs.min_hours || '48' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check certificate validity and renewal
+        run: ./scripts/verify/check_edge_certificate.sh "${EDGE_HOST}" 443 "${MIN_HOURS}"

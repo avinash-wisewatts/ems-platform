@@ -38,6 +38,7 @@ COPY postgres/restructure_manifest.csv /workspace/postgres/restructure_manifest.
 COPY postgres/migration_environment_scope.csv /workspace/postgres/migration_environment_scope.csv
 COPY postgres/migration_environment_scope_objects.csv /workspace/postgres/migration_environment_scope_objects.csv
 COPY scripts/release /workspace/scripts/release
+COPY scripts/verify/check_edge_certificate.sh /workspace/scripts/verify/check_edge_certificate.sh
 # Release workflows, for the precheck / gate wiring contract
 # (app/tests/test_release_workflow_scope_contract.py).
 COPY .github/workflows /workspace/.github/workflows
