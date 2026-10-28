@@ -8,17 +8,26 @@ admin.* SECURITY DEFINER functions); only the audience differs. Every failure
 -- unknown user, wrong password, disabled, locked, or an identity outside the
 customer audience -- is the same generic 401.
 
+Sign-in also records a server-side session (migration 314,
+src.auth.server_session) whose random token is kept in the signed cookie;
+sign-out revokes it, so a copy of the cookie taken before sign-out is
+refused everywhere afterwards (customer API and live-telemetry).
+
 Same-origin (CSRF) and session handling are enforced by
 CustomerAuthenticationMiddleware / SessionMiddleware in src.customer_main.
 """
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Request, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from src.auth import server_session
 from src.auth.audience import customer_audience
+from src.auth.customer_session import SESSION_TOKEN_KEY, new_session_token, session_token
 from src.auth.dependencies import clear_authenticated_portal_user, set_authenticated_portal_user
 from src.auth.service import authenticate_portal_user
 from src.config import get_core_settings
@@ -27,6 +36,17 @@ from src.routers.analytics_api import CurrentUserResponse, get_current_user
 router = APIRouter(prefix="/auth", tags=["customer-auth"])
 
 NO_STORE = {"Cache-Control": "no-store"}
+INVALID_CREDENTIALS = {"error": "invalid_credentials", "detail": "Invalid username or password."}
+
+logger = logging.getLogger(__name__)
+
+
+def _service_unavailable() -> JSONResponse:
+    return JSONResponse(
+        {"error": "service_unavailable", "detail": "Sign-in is temporarily unavailable. Try again shortly."},
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        headers=NO_STORE,
+    )
 
 
 class LoginRequest(BaseModel):
@@ -63,20 +83,46 @@ async def login(request: Request, body: LoginRequest) -> Response:
     clear_authenticated_portal_user(request)
 
     if not result.authenticated or result.user is None:
-        return JSONResponse(
-            {"error": "invalid_credentials", "detail": "Invalid username or password."},
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            headers=NO_STORE,
+        return JSONResponse(INVALID_CREDENTIALS, status_code=status.HTTP_401_UNAUTHORIZED, headers=NO_STORE)
+
+    token = new_session_token()
+    try:
+        created = await server_session.create_server_session(
+            result.user.portal_user_id,
+            token,
+            idle_seconds=settings.session_max_age_seconds,
+            absolute_seconds=getattr(
+                settings, "session_absolute_max_age_seconds", settings.session_max_age_seconds
+            ),
         )
+    except Exception:
+        logger.exception("Customer session could not be created")
+        return _service_unavailable()
+    if not created:
+        # Deactivated between the credential check and here.
+        return JSONResponse(INVALID_CREDENTIALS, status_code=status.HTTP_401_UNAUTHORIZED, headers=NO_STORE)
 
     set_authenticated_portal_user(request, result.user)
+    request.session[SESSION_TOKEN_KEY] = token
     me = await get_current_user(request)
     return JSONResponse(me.model_dump(mode="json"), headers=NO_STORE)
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def logout(request: Request) -> Response:
-    """End the customer session."""
+    """End the customer session, server-side as well as in the browser."""
 
+    token = session_token(request.session)
+    # The browser's copy is cleared whatever happens next.
     clear_authenticated_portal_user(request)
+    if token is not None:
+        try:
+            await server_session.revoke_server_session(token, reason="LOGOUT")
+        except Exception:
+            logger.exception("Customer session could not be revoked")
+            return JSONResponse(
+                {"error": "service_unavailable", "detail": "Sign-out could not be completed. Try again shortly."},
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                headers=NO_STORE,
+            )
     return Response(status_code=status.HTTP_204_NO_CONTENT, headers=NO_STORE)

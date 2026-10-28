@@ -1,6 +1,6 @@
 # ADR-023: Separate the customer EMS application from the staff Administration App
 
-Status: Decided (user, 2026-10-26); stages 1–2 merged (PR #157, `5cd6a99`) and deployed to staging 2026-10-26 (migration 313 applied; customer-api credentials provisioned, service not yet started; edge not started); stage 3 implemented on `feature/customer-sign-in-stage3`, not merged; stages 4–5 not started.
+Status: Decided (user, 2026-10-26); stages 1–3 merged and deployed to staging (PRs #157–#161); staging customer endpoint live at `https://16.113.18.69/` since 2026-10-27 (interim IP address, Let's Encrypt IP certificate); the rest of stage 4 (staff-only Administration App, closing `:8080` / `:3000`) and stage 5 not started. Amendment 1 (server-side session revocation, migration 314) implemented, not merged.
 Date: 2026-10-26
 Decision owners: Product Owner; Architecture
 Related decisions: [ADR-006](ADR-006-ems-web-app-vs-admin-portal.md) (Amendment 1: dedicated `ems-web` container — the intermediate step this ADR completes), [ADR-007](ADR-007-analytics-api-boundary.md)
@@ -25,9 +25,9 @@ After ADR-006 Amendment 1, the EMS frontend runs in its own `ems-web` container,
 | Stage | Content | Status |
 |---|---|---|
 | 1 | Edge proxy definition (`edge`, profile-gated, not started) | On staging, not started |
-| 2 | `customer-api`, customer auth, migration 313, staff-only switch (off), deploy script | On staging: 313 applied, role login + `app/customer-api.env` provisioned; service start via `deploy-customer-api.yml` (PR #158) pending |
-| 3 | Frontend sign-in page (`/app/sign-in`, falls back to `/login` on the admin path) and `/auth` client; `GET /auth/session` probe; live-telemetry accepts the customer session (own secret, customer audience, same-origin WebSocket) | Implemented, not merged. Reports worker stays in admin-portal until stage 4 |
-| 4 | Activate routing (DNS, TLS, security group), `EMS_ADMIN_STAFF_ONLY=true`, remove `/app` and `/api/v1` from admin-portal, close `:8080` / `:3000` | Not started — approval per step |
+| 2 | `customer-api`, customer auth, migration 313, staff-only switch (off), deploy script | On staging: 313 applied; customer-api running since 2026-10-26 (`deploy-customer-api.yml`, PR #158) |
+| 3 | Frontend sign-in page (`/app/sign-in`, falls back to `/login` on the admin path) and `/auth` client; `GET /auth/session` probe; live-telemetry accepts the customer session (own secret, customer audience, same-origin WebSocket) | On staging (PR #159, 2026-10-26). Reports worker stays in admin-portal until stage 4 |
+| 4 | Activate routing (DNS, TLS, security group), `EMS_ADMIN_STAFF_ONLY=true`, remove `/app` and `/api/v1` from admin-portal, close `:8080` / `:3000` | Partly: edge serving the customer host on staging since 2026-10-27 (interim `https://16.113.18.69/`, PRs #160–#161); staff-only switch and port closure not started — approval per step |
 | 5 | Production | Not started — separate approval (release plan D6) |
 
 ## Alternatives considered
@@ -42,12 +42,33 @@ After ADR-006 Amendment 1, the EMS frontend runs in its own `ems-web` container,
 - The EMS frontend bundle is public on the customer host (all data still requires a customer session); previously `/app` itself required a session.
 - Until stage 3 is deployed (and live-telemetry has the customer session secret), the frontend would send customers to `/login`, which does not exist on the customer host — routing must not be activated before then.
 - Two processes serve `/api/v1` during the transition; they share code, and parity is tested.
-- Session revocation is unchanged (signed cookies, up to `EMS_APP_SESSION_MAX_AGE_SECONDS`); data access stops immediately for a deactivated user because the database checks `is_active`.
+- Customer sessions are revocable server-side (Amendment 1, migration 314): sign-out, deactivation and a password change end a session everywhere. Administration App sessions are still signed cookies only (unchanged; data access stops immediately for a deactivated user because the database checks `is_active`).
+
+## Amendment 1 (2026-10-28): server-side revocation of customer sessions
+
+**Context.** A customer session was only a signed cookie. `POST /auth/logout` cleared it in the browser, but a copy taken before sign-out (shared computer, proxy log, malware) stayed valid until `EMS_APP_SESSION_MAX_AGE_SECONDS` -- and Starlette re-signs the cookie on every response, so an active copy never expired. live-telemetry checked only the signature, and an open live WebSocket was never closed. A deactivated account lost data access (the database checks `is_active`) but kept its session and sockets, and re-activation would have revived old cookies.
+
+**Decision.**
+
+1. **A server-side session per sign-in** (`admin.portal_sessions`, migration 314). At sign-in the customer API generates a random 256-bit token, keeps it inside the signed `HttpOnly` cookie and stores only its SHA-256 in the database. The signed cookie alone is no longer sufficient.
+2. **Checked on every authenticated request** (`admin.touch_portal_session`, from `CustomerAuthenticationMiddleware`): the session must exist, be unrevoked, be within its idle expiry (`EMS_APP_SESSION_MAX_AGE_SECONDS`, sliding, written at most once a minute) and its absolute expiry (`EMS_CUSTOMER_SESSION_ABSOLUTE_MAX_AGE_SECONDS`, default 7 days), belong to the identity in the cookie, and the account must be active. Otherwise the request is signed out (401). If the database cannot be reached, the request fails closed with 503 and the browser session is kept.
+3. **Sign-out revokes** (`admin.revoke_portal_session`). `/auth/logout` is idempotent and does not depend on the session check, so it always clears the browser, even during a database outage (it then answers 503 and the server-side row expires on its own).
+4. **Deactivation and password change revoke every session** of the account (trigger `portal_users_revoke_sessions` on `admin.portal_users`), whichever code path makes the change; re-activation does not revive them.
+5. **live-telemetry** checks a customer session read-only (`admin.get_portal_session_user`, `ems_app`) at the WebSocket handshake and on the HTTP snapshot, and each open customer WebSocket re-checks every `EMS_CUSTOMER_SESSION_RECHECK_SECONDS` (default 30) and is closed with 4401 (the frontend stops reconnecting and asks for sign-in) once the session is signed out, expired or deactivated. A database error closes it with 1011 (the frontend reconnects with backoff). Administration App streams are unchanged.
+
+**Consequences.**
+
+- Revocation is immediate on the customer API and within `EMS_CUSTOMER_SESSION_RECHECK_SECONDS` on an already-open live stream; between those re-checks a revoked stream may still receive telemetry pushes for the assets it was authorised for.
+- Every customer request does one indexed primary-key lookup (and at most one small update per session per minute); every open customer stream one lookup per re-check interval. Sign-in, every customer request and live-stream checks depend on the database -- as all data reads already do.
+- Cookies issued before migration 314 carry no token: deploying signs every customer out once.
+- Rows stay small (one per sign-in); a user's revoked and expired rows are removed at that user's next sign-in. There is no scheduled purge.
+- Several concurrent sessions per account are allowed (one per device); sign-out ends only the current one. There is no "sign out everywhere" endpoint yet (a password change or deactivation does that).
+- Migration 314 is staging/test only, like 313.
 
 ## Implementation references
 
-`app/src/customer_main.py`, `customer_config.py`, `routers/customer_auth.py`, `auth/customer_middleware.py`, `auth/audience.py`, `api_errors.py`, `config.py` (`CoreSettings`), `postgres/migrations/313_customer_api_role.sql`, `edge/Caddyfile`, `compose.yaml` (`customer-api`, `edge`), `scripts/release/deploy_customer_api.sh`.
+`app/src/customer_main.py`, `customer_config.py`, `routers/customer_auth.py`, `auth/customer_middleware.py`, `auth/customer_session.py`, `auth/server_session.py`, `auth/audience.py`, `live_main.py`, `live_config.py`, `api_errors.py`, `config.py` (`CoreSettings`), `postgres/migrations/313_customer_api_role.sql`, `314_customer_session_revocation.sql`, `edge/Caddyfile`, `compose.yaml` (`customer-api`, `edge`), `scripts/release/deploy_customer_api.sh`.
 
 ## Validation references
 
-`app/tests/test_customer_api.py`, `test_customer_api_role_db.py`, `test_staff_only_admin.py`, `test_customer_separation_release_contract.py`; local end-to-end harness (edge TLS → customer-api → real Argon2 sign-in and database scoping through `ems_customer_api`), 53/53, 2026-10-26.
+`app/tests/test_customer_api.py`, `test_customer_api_role_db.py`, `test_customer_session_revocation_db.py`, `test_live_customer_session.py`, `test_staff_only_admin.py`, `test_customer_separation_release_contract.py`; local end-to-end harness (edge TLS → customer-api → real Argon2 sign-in and database scoping through `ems_customer_api`), 53/53, 2026-10-26.

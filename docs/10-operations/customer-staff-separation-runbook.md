@@ -113,6 +113,7 @@ office / VPN egress CIDRs) -- every other client gets 403 for every path.
 - `https://<customer host>/` → 302 `/app/`; `/app/`, deep links and hashed assets 200; HSTS present; no `Server` header.
 - `/login`, `/administration/*`, `/onboarding/*`, `/docs`, `/openapi.json`, `/health` on the customer host → 404.
 - Customer sign-in sets `ems_session` (`Secure`, `HttpOnly`, `SameSite=Lax`, no `Domain`); `/api/v1/sites` returns only the account's sites; cross-tenant site → 404; sign-out → subsequent 401.
+- Session revocation (migration 314, section 7): a cookie copied before sign-out → 401 afterwards; an open live WebSocket of that session closes with 4401 within `EMS_CUSTOMER_SESSION_RECHECK_SECONDS`.
 - Cross-origin `POST /auth/login` → 403.
 - Staff host from outside the allowlist → 403; from inside → admin `/login`.
 - admin-portal access log shows no `/api/v1` or `/auth` request originating from the customer host.
@@ -128,9 +129,40 @@ office / VPN egress CIDRs) -- every other client gets 403 for every path.
 | Role login enabled | `ALTER ROLE ems_customer_api NOLOGIN PASSWORD NULL` |
 | `EMS_ADMIN_STAFF_ONLY=true` | Remove it, recreate admin-portal (pinned `APP_IMAGE`) |
 | Migration 313 | `REVOKE ... FROM ems_customer_api; DROP ROLE ems_customer_api;` (only after customer-api is stopped) |
+| Migration 314 | Previous application image on customer-api **and** live-telemetry first (otherwise every customer request is 503), then drop the trigger, functions and table (migration header) |
 
 ## 6. Known residuals
 
 - `admin.list_accessible_asset_device_relationships` is `SECURITY DEFINER` and executable by `PUBLIC` (noted in migration 308); every role, including `ems_customer_api`, can call it. It is portal-scoped. Hardening it is a separate change.
 - Login lockout counters are shared by both hosts (one identity store).
+- Administration App sessions are still stateless signed cookies (no server-side revocation); migration 314 covers the customer host only.
 - Before any production rollout, verify the production Docker Compose version supports `env_file: required: false` (staging: v5.5.1).
+
+## 7. Server-side customer sessions (migration 314, ADR-023 Amendment 1)
+
+**What it does.** Customer sign-in stores the SHA-256 of a random session token in `admin.portal_sessions`; the token itself lives only in the signed `HttpOnly` cookie. Every customer API request and every customer live stream checks the row, so sign-out, deactivation and a password change end the session everywhere (open live WebSockets close with 4401 within `EMS_CUSTOMER_SESSION_RECHECK_SECONDS`, default 30 s).
+
+**Deployment order (staging).** Normal staging release: merging applies migration 314 and deploys live-telemetry with the new image (`deploy-staging.yml`); then run `deploy-customer-api.yml` with the same SHA straight away. In between, the old customer-api issues cookies without a token, which the new live-telemetry refuses: live values show "sign in again" until customer-api is updated. Existing customer sessions end once (cookies from before 314 carry no token). No configuration change is required; the new settings have defaults.
+
+**Settings.**
+
+| Variable | Service | Default | Meaning |
+|---|---|---|---|
+| `EMS_APP_SESSION_MAX_AGE_SECONDS` | customer-api | 28800 | Idle lifetime; slides with use (cookie and server row) |
+| `EMS_CUSTOMER_SESSION_ABSOLUTE_MAX_AGE_SECONDS` | customer-api | 604800 | Hard limit from sign-in; not shorter than the idle lifetime |
+| `EMS_CUSTOMER_SESSION_RECHECK_SECONDS` | live-telemetry | 30 | How often an open customer WebSocket re-checks its session |
+
+**Availability.** Customer sign-in and every customer request need the database (they already did for data). If the session check cannot reach it, requests answer 503 (`service_unavailable`) without signing anyone out; live streams close with 1011 and reconnect. Sign-out always clears the browser; if the revocation itself fails it answers 503 and the server row lapses at its idle expiry.
+
+**Operations (read-only checks; run as `ems_admin` on the host).**
+
+```sql
+-- open sessions per account (no token material: hashes only)
+SELECT portal_user_id, count(*) FILTER (WHERE revoked_at IS NULL AND idle_expires_at > now()) AS live,
+       count(*) AS rows, max(last_seen_at) AS last_seen
+FROM admin.portal_sessions GROUP BY 1 ORDER BY 1;
+-- recent revocations by reason
+SELECT revoked_reason, count(*) FROM admin.portal_sessions WHERE revoked_at > now() - interval '1 day' GROUP BY 1;
+```
+
+To end every session of one account immediately, deactivate it (or change its password) through the Administration App; the trigger revokes its sessions. Storage: one small row per sign-in; an account's dead rows are purged at its next sign-in (no scheduled job).

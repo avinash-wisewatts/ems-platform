@@ -72,6 +72,12 @@ class LiveSettings(BaseSettings):
         default=28800, ge=300, le=86400, alias="EMS_CUSTOMER_SESSION_MAX_AGE_SECONDS"
     )
     customer_allow_staff: bool = Field(default=False, alias="EMS_CUSTOMER_ALLOW_STAFF")
+    # How often an open customer WebSocket re-checks its server-side session
+    # (migration 314): a signed-out, expired or deactivated session is closed
+    # (4401) within this many seconds. One indexed lookup per stream.
+    customer_session_recheck_seconds: float = Field(
+        default=30, ge=1, le=300, alias="EMS_CUSTOMER_SESSION_RECHECK_SECONDS"
+    )
 
     # Bounds concurrent telemetry.ingest_live_rtdata() calls so an MQTT burst
     # (e.g. the retained-message flood on reconnect) cannot occupy every

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+from base64 import b64decode, b64encode
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -22,6 +23,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from src.auth.customer_session import session_token_hash
 from src.auth.models import AuthenticatedPortalUser
 from src.auth.security import AuthenticationStatus
 from src.auth.service import AuthenticationResult
@@ -52,6 +54,60 @@ def customer_module():
         yield customer_main
     finally:
         config._core_settings = None
+
+
+class FakeServerSessions:
+    """In-memory stand-in for admin.portal_sessions (migration 314).
+
+    Mirrors the database contract: only token hashes are kept; create fails
+    for an inactive account; touch returns the account of a live session or
+    None; deactivation revokes every open session of the account. The real
+    functions are tested in test_customer_session_revocation_db.py.
+    """
+
+    def __init__(self) -> None:
+        self.sessions: dict[bytes, dict] = {}
+        self.inactive: set[int] = set()
+        self.down = False
+
+    def _check(self) -> None:
+        if self.down:
+            raise ConnectionError("database unavailable")
+
+    async def create(self, portal_user_id, token, *, idle_seconds, absolute_seconds):
+        self._check()
+        if portal_user_id in self.inactive:
+            return False
+        self.sessions[session_token_hash(token)] = {"user": portal_user_id, "revoked": None, "expired": False}
+        return True
+
+    async def touch(self, token, *, idle_seconds):
+        self._check()
+        row = self.sessions.get(session_token_hash(token))
+        if row is None or row["revoked"] or row["expired"] or row["user"] in self.inactive:
+            return None
+        return row["user"]
+
+    async def revoke(self, token, *, reason="LOGOUT"):
+        self._check()
+        row = self.sessions.get(session_token_hash(token))
+        if row is not None and row["revoked"] is None:
+            row["revoked"] = reason
+
+    def deactivate(self, portal_user_id: int) -> None:
+        self.inactive.add(portal_user_id)
+        for row in self.sessions.values():
+            if row["user"] == portal_user_id and row["revoked"] is None:
+                row["revoked"] = "ACCOUNT_DEACTIVATED"
+
+
+@pytest.fixture(autouse=True)
+def server_sessions(monkeypatch) -> FakeServerSessions:
+    fake = FakeServerSessions()
+    monkeypatch.setattr("src.auth.server_session.create_server_session", fake.create)
+    monkeypatch.setattr("src.auth.server_session.touch_server_session", fake.touch)
+    monkeypatch.setattr("src.auth.server_session.revoke_server_session", fake.revoke)
+    return fake
 
 
 @pytest.fixture
@@ -213,6 +269,190 @@ def test_admin_session_cookie_is_not_accepted(customer_client, portal_client, mo
     assert admin_cookie
     customer_client.cookies.set("ems_admin_session", admin_cookie)
     assert customer_client.get("/api/v1/me").status_code == 401
+
+
+# --- server-side sessions: revocation (migration 314) ---------------------------------
+
+def _session_cookie(client) -> str:
+    value = client.cookies.get("ems_session")
+    assert value
+    return value
+
+
+def _replay(client, cookie: str):
+    client.cookies.clear()
+    client.cookies.set("ems_session", cookie)
+    return client.get("/api/v1/me")
+
+
+def _signed(customer_module, payload: dict) -> str:
+    import itsdangerous
+
+    return itsdangerous.TimestampSigner(customer_module.settings.session_secret).sign(
+        b64encode(json.dumps(payload).encode("utf-8"))
+    ).decode("utf-8")
+
+
+def _payload(cookie: str) -> dict:
+    return json.loads(b64decode(cookie.split(".")[0]))
+
+
+def test_logout_revokes_the_session_server_side(customer_client, monkeypatch, server_sessions) -> None:
+    assert _customer_login(customer_client, monkeypatch).status_code == 200
+    assert [r["revoked"] for r in server_sessions.sessions.values()] == [None]
+    assert customer_client.post("/auth/logout", headers=ORIGIN).status_code == 204
+    assert [r["revoked"] for r in server_sessions.sessions.values()] == ["LOGOUT"]
+
+
+def test_a_cookie_captured_before_logout_is_refused_after_it(customer_client, monkeypatch) -> None:
+    assert _customer_login(customer_client, monkeypatch).status_code == 200
+    captured = _session_cookie(customer_client)
+    assert _replay(customer_client, captured).status_code == 200      # valid before sign-out
+    assert customer_client.post("/auth/logout", headers=ORIGIN).status_code == 204
+    replayed = _replay(customer_client, captured)
+    assert replayed.status_code == 401
+    assert replayed.json() == {"error": "unauthenticated", "detail": "Authentication is required."}
+    customer_client.cookies.set("ems_session", captured)
+    assert customer_client.post("/auth/logout", headers=ORIGIN).status_code == 204   # idempotent, grants nothing
+    assert _replay(customer_client, captured).status_code == 401
+    customer_client.cookies.set("ems_session", captured)
+    assert customer_client.post(f"/api/v1/sites/{SITE_ID}/report-exports", json={},
+                                headers=ORIGIN).status_code == 401
+
+
+def test_signing_in_again_does_not_revive_a_signed_out_cookie(customer_client, monkeypatch) -> None:
+    assert _customer_login(customer_client, monkeypatch).status_code == 200
+    old = _session_cookie(customer_client)
+    assert customer_client.post("/auth/logout", headers=ORIGIN).status_code == 204
+    assert _customer_login(customer_client, monkeypatch).status_code == 200
+    new = _session_cookie(customer_client)
+    assert _payload(new)["session_token"] != _payload(old)["session_token"]
+    assert _replay(customer_client, new).status_code == 200
+    assert _replay(customer_client, old).status_code == 401
+
+
+def test_each_sign_in_is_its_own_session(customer_client, customer_module, monkeypatch) -> None:
+    other = TestClient(customer_module.app, follow_redirects=False)
+    assert _customer_login(customer_client, monkeypatch).status_code == 200
+    assert _customer_login(other, monkeypatch).status_code == 200
+    assert customer_client.post("/auth/logout", headers=ORIGIN).status_code == 204
+    assert other.get("/api/v1/me").status_code == 200               # another device stays signed in
+
+
+def test_only_the_token_hash_reaches_the_session_store(customer_client, monkeypatch, server_sessions) -> None:
+    assert _customer_login(customer_client, monkeypatch).status_code == 200
+    token = _payload(_session_cookie(customer_client))["session_token"]
+    assert len(token) >= 43                                          # 256 random bits
+    assert list(server_sessions.sessions) == [session_token_hash(token)]
+
+
+def test_an_expired_server_session_is_refused(customer_client, monkeypatch, server_sessions) -> None:
+    assert _customer_login(customer_client, monkeypatch).status_code == 200
+    captured = _session_cookie(customer_client)
+    for row in server_sessions.sessions.values():
+        row["expired"] = True                              # idle or absolute expiry in the database
+    assert customer_client.get("/api/v1/me").status_code == 401
+    assert _replay(customer_client, captured).status_code == 401
+
+
+def test_an_expired_cookie_signature_is_refused(customer_client, customer_module, monkeypatch) -> None:
+    import itsdangerous
+
+    assert _customer_login(customer_client, monkeypatch).status_code == 200
+    secret = customer_module.settings.session_secret
+    data = itsdangerous.TimestampSigner(secret).unsign(_session_cookie(customer_client))
+    max_age = customer_module.settings.session_max_age_seconds
+
+    class Old(itsdangerous.TimestampSigner):
+        def get_timestamp(self) -> int:
+            return int(datetime.now(timezone.utc).timestamp()) - max_age - 5
+
+    assert _replay(customer_client, Old(secret).sign(data).decode()).status_code == 401
+
+
+def test_deactivation_revokes_access_immediately(customer_client, monkeypatch, server_sessions) -> None:
+    assert _customer_login(customer_client, monkeypatch).status_code == 200
+    captured = _session_cookie(customer_client)
+    server_sessions.deactivate(CUSTOMER.portal_user_id)
+    assert customer_client.get("/api/v1/me").status_code == 401
+    assert _replay(customer_client, captured).status_code == 401
+    server_sessions.inactive.discard(CUSTOMER.portal_user_id)              # re-activated
+    assert _replay(customer_client, captured).status_code == 401           # old cookie stays dead
+
+
+def test_a_deactivated_account_cannot_sign_in(customer_client, monkeypatch, server_sessions) -> None:
+    server_sessions.inactive.add(CUSTOMER.portal_user_id)
+    response = _customer_login(customer_client, monkeypatch)
+    assert (response.status_code, response.json()) == (401, GENERIC_401)
+    assert customer_client.get("/api/v1/me").status_code == 401
+
+
+def test_a_signed_cookie_without_a_server_session_is_refused(customer_client, customer_module) -> None:
+    # Correctly signed, but from before migration 314 (no token), or naming
+    # a token that was never issued: the signature alone is not enough.
+    from src.auth.session import serialize_authenticated_user
+
+    identity = serialize_authenticated_user(CUSTOMER)
+    for extra in ({}, {"session_token": "never-issued-token-0123456789abcdefghijklmn"}, {"session_token": 7}):
+        cookie = _signed(customer_module, {"portal_identity": identity, **extra})
+        assert _replay(customer_client, cookie).status_code == 401
+
+
+def test_a_session_token_bound_to_another_account_is_refused(customer_client, customer_module,
+                                                             monkeypatch) -> None:
+    from src.auth.session import serialize_authenticated_user
+
+    assert _customer_login(customer_client, monkeypatch).status_code == 200
+    payload = _payload(_session_cookie(customer_client))
+    other = AuthenticatedPortalUser(portal_user_id=799, username="other@customer.example", display_name="Other",
+                                    role_code="VIEWER", organization_id=ORG_ID, access_scope_mode="ORGANIZATION")
+    payload["portal_identity"] = serialize_authenticated_user(other)
+    assert _replay(customer_client, _signed(customer_module, payload)).status_code == 401
+
+
+def test_session_store_outage_is_a_503_and_keeps_the_session(customer_client, monkeypatch, server_sessions) -> None:
+    assert _customer_login(customer_client, monkeypatch).status_code == 200
+    server_sessions.down = True
+    response = customer_client.get("/api/v1/me")
+    assert response.status_code == 503 and response.json()["error"] == "service_unavailable"
+    server_sessions.down = False
+    assert customer_client.get("/api/v1/me").status_code == 200
+
+
+def test_session_store_outage_at_sign_in_issues_no_session(customer_client, monkeypatch, server_sessions) -> None:
+    server_sessions.down = True
+    response = _customer_login(customer_client, monkeypatch)
+    assert response.status_code == 503 and response.json()["error"] == "service_unavailable"
+    server_sessions.down = False
+    assert customer_client.get("/api/v1/me").status_code == 401
+
+
+def test_session_store_outage_at_sign_out_still_clears_the_browser(customer_client, monkeypatch,
+                                                                    server_sessions) -> None:
+    assert _customer_login(customer_client, monkeypatch).status_code == 200
+    server_sessions.down = True
+    response = customer_client.post("/auth/logout", headers=ORIGIN)
+    assert response.status_code == 503 and response.headers["cache-control"] == "no-store"
+    server_sessions.down = False
+    assert customer_client.get("/api/v1/me").status_code == 401
+
+
+def test_session_cookie_protections_are_configured(customer_module) -> None:
+    from starlette.middleware.sessions import SessionMiddleware
+
+    (options,) = [m.kwargs for m in customer_module.app.user_middleware if m.cls is SessionMiddleware]
+    assert options["https_only"] is customer_module.settings.session_https_only
+    assert options["same_site"] == "lax" and options["session_cookie"] == "ems_session"
+
+
+def test_customer_settings_absolute_lifetime() -> None:
+    from pydantic import ValidationError
+
+    from src.customer_config import CustomerSettings
+
+    assert CustomerSettings().session_absolute_max_age_seconds == 604800
+    with pytest.raises(ValidationError):
+        CustomerSettings(EMS_APP_SESSION_MAX_AGE_SECONDS=28800, EMS_CUSTOMER_SESSION_ABSOLUTE_MAX_AGE_SECONDS=3600)
 
 
 # --- CSRF: state-changing requests must be same-origin -------------------------------

@@ -3,7 +3,7 @@ refuses a deploy unless the target runner would apply exactly the declared
 migrations and nothing scoped away from the environment.
 
 Pure file inputs: no database. The real repository manifest and scope file are
-used where it matters (309 / 310 / 312 / 313 staging-only; 311 the next production
+used where it matters (309 / 310 / 312 / 313 / 314 staging-only; 311 the next production
 migration after 308).
 """
 
@@ -99,7 +99,7 @@ def test_a_staging_only_migration_already_in_the_production_ledger_is_refused_up
 
 def test_staging_applies_staging_only_migrations(tmp_path):
     code, out = _run(tmp_path, environment="staging", ledger_ids=_ids_through("308_"),
-                     expected="309,310,312,311,313")
+                     expected="309,310,312,311,313,314")
     assert code == 0, out
 
 
@@ -125,6 +125,7 @@ def test_scope_file_contract():
         "310_preserved_rtdata_backfill": "staging|test",
         "312_report_export_asset_selection_1m": "staging|test",
         "313_customer_api_role": "staging|test",
+        "314_customer_session_revocation": "staging|test",
     }
     manifest_ids = set(_ids_through("~never~"))
     assert set(scoped) <= manifest_ids

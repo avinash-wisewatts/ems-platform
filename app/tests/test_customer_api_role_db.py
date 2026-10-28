@@ -38,6 +38,7 @@ CUSTOMER_CODE = [
     "report_export_service.py",
     "report_export_worker.py",
     "auth/repository.py",
+    "auth/server_session.py",
     "routers/analytics_api.py",
     "routers/report_exports.py",
     "routers/customer_auth.py",

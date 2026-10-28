@@ -3,3 +3,4 @@ migration_id,environments,reason
 310_preserved_rtdata_backfill,staging|test,One-time AirSense history recovery; production was recovered by a reviewed session script on 2026-10-24
 312_report_export_asset_selection_1m,staging|test,Reports export (ADR-014 Amendment 2) is not approved for production
 313_customer_api_role,staging|test,Customer API role (ADR-023) is not approved for production
+314_customer_session_revocation,staging|test,Customer API sessions (ADR-023) are not approved for production
