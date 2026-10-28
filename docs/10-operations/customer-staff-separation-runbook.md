@@ -84,7 +84,7 @@ is not routed through the edge (no `EMS_STAFF_HOST`).
 
 | Mode | Site address | Browser | Notes |
 |---|---|---|---|
-| `acme_ip` (recommended) | the Elastic IP, e.g. `16.113.18.69` | Trusted, no warning | Let's Encrypt IP-address certificate (generally available since 2026-01-15), 6-day `shortlived` profile, renewed automatically by Caddy. Validation (http-01 on :80 / tls-alpn-01 on :443) needs those ports open to the whole internet; access is restricted by `EMS_CUSTOMER_ALLOWED_CIDRS`, which does not affect validation. If renewal fails the certificate expires within days -- monitor the edge logs. |
+| `acme_ip` (recommended) | the Elastic IP, e.g. `16.113.18.69` | Trusted, no warning | Let's Encrypt IP-address certificate (generally available since 2026-01-15), 6-day `shortlived` profile, renewed automatically by Caddy. Validation (http-01 on :80 / tls-alpn-01 on :443) needs those ports open to the whole internet; access is restricted by `EMS_CUSTOMER_ALLOWED_CIDRS`, which does not affect validation. If renewal fails the certificate expires within days -- monitored by `edge-certificate-check.yml` (section 3b). |
 | `internal` | the EC2 hostname or the IP | Warning ("not private" / untrusted issuer) | Caddy's own CA; testers would have to click through or install Caddy's root certificate. Encrypted, but users learn to ignore warnings (phishing / interception risk). |
 | `acme` | a hostname | Trusted | Not possible for `*.compute.amazonaws.com`: Let's Encrypt refuses those names by policy ("forbidden by policy"). For a future custom domain. |
 
@@ -107,6 +107,23 @@ office / VPN egress CIDRs) -- every other client gets 403 for every path.
 
 **Rollback**: `docker compose -f /opt/ems-platform/compose.yaml --profile edge stop edge`
 (ports 80/443 stop answering; nothing else changes).
+
+## 3b. Certificate renewal and its monitoring (staging, verified read-only 2026-10-28)
+
+**How renewal works.** Caddy 2.10.2 (`ems-edge`) manages the customer certificate (Let's Encrypt `YE1`, IP SAN `16.113.18.69`, 6-day `shortlived` profile, ~160 h lifetime) in the `edge-data` volume (`/data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/16.113.18.69/`; account in `/data/caddy/acme/`). Its maintenance loop checks every 10 minutes and uses ACME Renewal Info (ARI): Let's Encrypt suggests a renewal window (for the certificate valid to 2026-11-02 17:14 UTC: 2026-10-30 08:08–11:18 UTC; Caddy picked 10:50 UTC), stored in the certificate's `.json` beside it. Without ARI it renews once a third of the lifetime remains (~53 h). Validation is http-01 on :80 or tls-alpn-01 on :443 from Let's Encrypt's validators, so **both ports must stay open to `0.0.0.0/0`** (the Caddy allowlist does not affect validation; a security-group restriction would). The internal `staff.invalid` certificate (local CA, 12 h) renews itself every ~8 h; its "stapling OCSP" warnings are expected.
+
+**What happens on failure.** Caddy logs `renewing certificate` / an `error` from `tls.renew` / `tls.obtain` and retries with backoff on every maintenance pass, keeping the current certificate in service. If no renewal succeeds before expiry, browsers refuse the site and, with HSTS (1 day on staging), offer no click-through. Nothing restarts or alerts on the host.
+
+**Alert.** `.github/workflows/edge-certificate-check.yml` runs every 3 hours on a GitHub-hosted runner: one TLS handshake to the customer endpoint (`scripts/verify/check_edge_certificate.sh`, no SNI, as browsers send for an IP URL), chain verified against the system trust store for the IP, and **fails when fewer than 48 h of validity remain** -- i.e. after both the ARI window and the fallback window have passed without a renewal, with two days still left to act. It also fails if :443 stops answering from the internet (which would also stop renewal). A failed run e-mails the user who last changed the schedule (GitHub notification settings). Manual run: Actions → *Edge certificate check* → Run workflow (optional `min_hours`), or locally `./scripts/verify/check_edge_certificate.sh 16.113.18.69`. GitHub disables scheduled workflows after 60 days without repository activity.
+
+**Read-only investigation on the host** (never restart or reload Caddy to test):
+
+```bash
+docker logs ems-edge --since 24h 2>&1 | grep -E 'tls\.(renew|obtain)|renewal info|"level":"error"'
+docker exec ems-edge cat /data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/16.113.18.69/16.113.18.69.json   # SANs + ARI window; no key material
+```
+
+Typical causes: :80/:443 not reachable from the internet (security group, `EMS_EDGE_BIND_HOST`), Let's Encrypt rate limits or outage, the IP no longer pointing at this host. Forcing a renewal or restarting `edge` is an operational change and needs approval.
 
 ## 4. Verification checklist (staging)
 
