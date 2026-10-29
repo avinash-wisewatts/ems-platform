@@ -8,12 +8,20 @@
 # Caddy's automatic renewal has already failed (the 6-day Let's Encrypt IP
 # certificate is normally renewed about 3 days before expiry).
 #
-# A failed run is the alert: GitHub notifies by e-mail (per the recipient's
-# notification settings) the user who last changed this schedule. It also
-# fails if the endpoint stops answering on 443 from the internet, which
-# would also stop ACME validation.
+# It also fails if the endpoint stops answering on 443 from the internet,
+# which would also stop ACME validation.
 #
-# Nothing here touches the host, Caddy or the certificate; no secrets.
+# Alert: a failed check opens (or comments on) one GitHub issue labelled
+# edge-certificate-alert, assigned to and @mentioning the recipient
+# (repository variable EDGE_CERT_ALERT_RECIPIENT, default avinash-wisewatts);
+# scripts/verify/edge_certificate_alert.sh. GitHub's own "run failed" e-mail
+# is not relied on: it depends on the personal notification settings of
+# whoever last changed the schedule or dispatched the run, and leaves no
+# record (a deliberate failing run on 2026-10-28 produced none). A later
+# passing check at the normal threshold closes the issue.
+#
+# Nothing here touches the host, Caddy or the certificate; no secrets
+# (only the workflow's own token, scoped to issues).
 # Staging only. Scheduled workflows run from the default branch (staging)
 # and GitHub disables them after 60 days without repository activity.
 # ============================================================================
@@ -32,6 +40,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 concurrency:
   group: edge-certificate-check
@@ -47,8 +56,29 @@ jobs:
       # variable overrides it once a hostname replaces the interim IP.
       EDGE_HOST: ${{ vars.STAGING_CUSTOMER_EDGE_HOST || '16.113.18.69' }}
       MIN_HOURS: ${{ inputs.min_hours || '48' }}
+      ALERT_RECIPIENT: ${{ vars.EDGE_CERT_ALERT_RECIPIENT || 'avinash-wisewatts' }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Check certificate validity and renewal
-        run: ./scripts/verify/check_edge_certificate.sh "${EDGE_HOST}" 443 "${MIN_HOURS}"
+        shell: bash
+        run: |
+          set -o pipefail
+          ./scripts/verify/check_edge_certificate.sh "${EDGE_HOST}" 443 "${MIN_HOURS}" | tee "${RUNNER_TEMP}/edge-certificate-check.log"
+
+      - name: Raise alert issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: ./scripts/verify/edge_certificate_alert.sh raise "${EDGE_HOST}" "${RUN_URL}" "${ALERT_RECIPIENT}" "${RUNNER_TEMP}/edge-certificate-check.log"
+
+      # Only a pass at the normal threshold (or stricter) clears an alert, so a
+      # manual run with a lowered min_hours cannot close a real one.
+      - name: Resolve alert issue
+        if: success() && fromJSON(env.MIN_HOURS) >= 48
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: ./scripts/verify/edge_certificate_alert.sh resolve "${EDGE_HOST}" "${RUN_URL}"
