@@ -25,9 +25,11 @@ SCRIPT = REPO / "scripts" / "verify" / "check_edge_certificate.sh"
 ALERT = REPO / "scripts" / "verify" / "edge_certificate_alert.sh"
 GAP = REPO / "scripts" / "verify" / "edge_certificate_schedule_gap.sh"
 
-# Records every call; answers only what the scripts read back.
+# Records every call on one line (bodies are multi-line); answers only what
+# the scripts read back.
 FAKE_GH = """#!/usr/bin/env bash
-echo "$*" >> "${FAKE_GH_LOG}"
+args="$*"
+echo "${args//$'\\n'/ }" >> "${FAKE_GH_LOG}"
 case "$1 $2" in
   "issue list") [[ -n "${FAKE_OPEN:-}" ]] && echo "${FAKE_OPEN}"; exit 0;;
   "issue create") echo "https://github.com/o/r/issues/99";;
