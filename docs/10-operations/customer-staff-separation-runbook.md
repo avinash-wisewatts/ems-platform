@@ -123,7 +123,17 @@ docker logs ems-edge --since 24h 2>&1 | grep -E 'tls\.(renew|obtain)|renewal inf
 docker exec ems-edge cat /data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/16.113.18.69/16.113.18.69.json   # SANs + ARI window; no key material
 ```
 
-Typical causes: :80/:443 not reachable from the internet (security group, `EMS_EDGE_BIND_HOST`), Let's Encrypt rate limits or outage, the IP no longer pointing at this host. Forcing a renewal or restarting `edge` is an operational change and needs approval.
+Typical causes: :80/:443 not reachable from the internet (security group, network ACL, `EMS_EDGE_BIND_HOST`), Let's Encrypt rate limits or outage, the IP no longer pointing at this host. Forcing a renewal or restarting `edge` is an operational change and needs approval.
+
+**Deployed and verified (2026-10-28).** PR #162 merged as `60a34a2`; workflow *Edge certificate check* active, schedule `23 */3 * * *` (UTC). Manual run `40698497854`: PASS (Let's Encrypt YE1, not after 2026-11-02 17:14:19 UTC, 123 h left). Deliberate failing run `40698516701` (`min_hours=200`, attempts 1 and 2, dispatched by `avinash-wisewatts`): the check failed as designed, but **no alert was delivered** -- no e-mail reached the recipient and the account's GitHub notification inbox showed no notification. The workflow had no alert step of its own and relied on GitHub's native "run failed" notification (personal *Actions* settings, no record of sending); replaced by an explicit alert issue (PR #166).
+
+**Manual recovery when the check fails** (renewal has not happened and < 48 h remain). Steps 1–3 are read-only; steps 4–5 change the live endpoint and each need explicit approval.
+
+1. Confirm: `./scripts/verify/check_edge_certificate.sh 16.113.18.69` from any machine; read the workflow log (issuer, not-after).
+2. Find the cause in Caddy's own words: the `docker logs ems-edge` filter above (`tls.renew` / `tls.obtain` errors name the failing challenge and the CA's reason), and the certificate `.json` (ARI window). Note the next retry time Caddy logs; it retries on its own.
+3. Check reachability: ports 80 and 443 must be open to `0.0.0.0/0` in the instance's security group **and** the subnet's network ACL (AWS Console, read-only); `docker ps` must show `ems-edge` publishing `0.0.0.0:80` and `0.0.0.0:443`; check Let's Encrypt's status page for an outage. Do not delete the `edge-data` volume: it holds the ACME account and the current certificate.
+4. Fix the cause (approved change: e.g. restore the inbound rule). Caddy normally renews on a later maintenance pass without a restart; confirm with the log (`certificate obtained successfully` / `renewed`) and a manual workflow run.
+5. Only if expiry is imminent and Caddy is still waiting out its retry backoff after the cause is fixed: an approved `docker compose -f /opt/ems-platform/compose.yaml --profile edge restart edge` (a few seconds without the customer endpoint; Caddy re-checks and renews managed certificates at start-up). Switching `EMS_EDGE_TLS` to `internal` is **not** a fallback for customers: browsers that saw the HSTS header refuse an untrusted certificate without a click-through until `EMS_EDGE_HSTS_MAX_AGE` (1 day on staging) has passed.
 
 ## 4. Verification checklist (staging)
 
@@ -183,3 +193,10 @@ SELECT revoked_reason, count(*) FROM admin.portal_sessions WHERE revoked_at > no
 ```
 
 To end every session of one account immediately, deactivate it (or change its password) through the Administration App; the trigger revokes its sessions. Storage: one small row per sign-in; an account's dead rows are purged at its next sign-in (no scheduled job).
+
+**Staging deployment and verification (2026-10-28).**
+
+- First release (`e271f59`, run `40689330235`) failed on 314's own postcondition (`admin.portal_sessions is granted to a role`): staging's out-of-band read-only role `ems_investigator` holds default `SELECT` on new `admin` tables. The migration rolled back (ledger stayed 185 / `313`); app containers were not recreated. Fix PR #164 (`9b3e85d`) revokes that grant in 314 and reproduces the role's default privileges in the test database (`scripts/test/staging_role_parity.sql`).
+- Release `9b3e85d` (run `40694827888`): `APPLIED 314_customer_session_revocation` at 13:28:31 UTC, ledger 186 / head `314`; table ACL owner-only; create/touch/revoke executable by `ems_customer_api` only, `get_portal_session_user` by `ems_app` only, nothing by PUBLIC; trigger enabled. `deploy-customer-api.yml` run `40697248703` with the same SHA (healthy after 10 s).
+- Through `https://16.113.18.69/` with the test accounts: every cookie issued before the release → 401 (the one-time sign-out of all customers); new sign-in → `Secure; HttpOnly; SameSite=Lax`, no `Domain`, one server row each; tenant isolation (no shared sites between organisations, another organisation's site → 404, selected-sites account a subset). Open live stream (58 points) + sign-out → stream closed 4401 after 30.0 s; replay of the captured cookie → read 401, write 401, WebSocket 4401. Idle expiry of a server row → 401. Password change → old sessions 401, open stream 4401, new credentials 200. Deactivation → 401 at once, rows `ACCOUNT_DEACTIVATED`, sign-in refused, open stream 4401; after re-activation the old cookie stays 401 and a new sign-in works. No errors in customer-api / live-telemetry logs; ingestion freshness about 2 s.
+- Database-outage handling (503 without sign-out; sign-out still clears the browser; streams close 1011) is covered by the automated tests and was not exercised on staging, to keep the customer endpoint up.

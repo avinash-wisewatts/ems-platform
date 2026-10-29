@@ -1,6 +1,6 @@
 # ADR-023: Separate the customer EMS application from the staff Administration App
 
-Status: Decided (user, 2026-10-26); stages 1–3 merged and deployed to staging (PRs #157–#161); staging customer endpoint live at `https://16.113.18.69/` since 2026-10-27 (interim IP address, Let's Encrypt IP certificate); the rest of stage 4 (staff-only Administration App, closing `:8080` / `:3000`) and stage 5 not started. Amendment 1 (server-side session revocation, migration 314) implemented, not merged.
+Status: Decided (user, 2026-10-26); stages 1–3 merged and deployed to staging (PRs #157–#161); staging customer endpoint live at `https://16.113.18.69/` since 2026-10-27 (interim IP address, Let's Encrypt IP certificate); the rest of stage 4 (staff-only Administration App, closing `:8080` / `:3000`) and stage 5 not started. Amendment 1 (server-side session revocation, migration 314) deployed to staging 2026-10-28 (PRs #163 + #164, `9b3e85d`; customer-api on the same SHA) and verified (runbook §7).
 Date: 2026-10-26
 Decision owners: Product Owner; Architecture
 Related decisions: [ADR-006](ADR-006-ems-web-app-vs-admin-portal.md) (Amendment 1: dedicated `ems-web` container — the intermediate step this ADR completes), [ADR-007](ADR-007-analytics-api-boundary.md)
