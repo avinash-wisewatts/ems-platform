@@ -39,6 +39,8 @@ COPY postgres/migration_environment_scope.csv /workspace/postgres/migration_envi
 COPY postgres/migration_environment_scope_objects.csv /workspace/postgres/migration_environment_scope_objects.csv
 COPY scripts/release /workspace/scripts/release
 COPY scripts/verify/check_edge_certificate.sh /workspace/scripts/verify/check_edge_certificate.sh
+COPY scripts/verify/edge_certificate_alert.sh /workspace/scripts/verify/edge_certificate_alert.sh
+COPY scripts/verify/edge_certificate_schedule_gap.sh /workspace/scripts/verify/edge_certificate_schedule_gap.sh
 # Release workflows, for the precheck / gate wiring contract
 # (app/tests/test_release_workflow_scope_contract.py).
 COPY .github/workflows /workspace/.github/workflows
