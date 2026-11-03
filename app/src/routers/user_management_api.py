@@ -14,6 +14,7 @@ migration 315) -- exposed as JSON for the SPA:
   POST   /api/admin/v1/users                  create
   PATCH  /api/admin/v1/users/{id}             details / role / access / status, one transaction
   POST   /api/admin/v1/users/{id}/password    administrator password reset
+  GET    /api/admin/v1/me                     the signed-in administrator (the staff console's session probe)
   POST   /api/admin/v1/me/password            change one's own password (current password required)
 
 Security model:
@@ -229,6 +230,17 @@ class ActorSummary(BaseModel):
     organization_id: str | None
 
 
+class AdminMeResponse(BaseModel):
+    portal_user_id: int
+    username: str
+    display_name: str
+    role_code: str
+    access_scope_mode: str
+    organization_id: str | None
+    is_staff: bool
+    permissions: list[str]
+
+
 class UserOptionsResponse(BaseModel):
     actor: ActorSummary
     roles: list[RoleOption]
@@ -429,6 +441,30 @@ async def _user_response(actor: AuthenticatedPortalUser, portal_user_id: int, *,
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
+
+@router.get("/me", response_model=AdminMeResponse)
+async def admin_me(request: Request, response: Response) -> AdminMeResponse:
+    """The signed-in administrator, for the staff console (/admin/*).
+
+    The staff console has no /api/v1 (ADR-023 stage 4 removes it from this
+    process), so this is its session and permission probe. user.manage is
+    required, like every /api/admin/v1 route.
+    """
+
+    actor = _actor(request)
+    response.headers.update(_NO_STORE)
+    role = portal_role(actor)
+    return AdminMeResponse(
+        portal_user_id=actor.portal_user_id,
+        username=actor.username,
+        display_name=actor.display_name,
+        role_code=actor.role_code,
+        access_scope_mode=actor.access_scope_mode or "",
+        organization_id=actor.organization_id,
+        is_staff=actor.access_scope_mode == "GLOBAL",
+        permissions=sorted(p.value for p in ROLE_PERMISSIONS[role]) if role else [],
+    )
 
 
 @router.get("/users/options", response_model=UserOptionsResponse)

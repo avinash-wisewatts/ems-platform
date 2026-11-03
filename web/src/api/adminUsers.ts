@@ -119,3 +119,19 @@ export function describeAccess(user: Pick<ManagedUser, "access_scope_mode" | "or
   const names = user.sites.map((s) => s.site_name ?? s.site_code ?? s.site_id);
   return names.length === 0 ? "No sites" : names.join(", ");
 }
+
+/** The signed-in administrator (GET /api/admin/v1/me) -- the staff console's session probe. */
+export type AdminMe = {
+  portal_user_id: number;
+  username: string;
+  display_name: string;
+  role_code: RoleCode;
+  access_scope_mode: AccessScopeMode;
+  organization_id: string | null;
+  is_staff: boolean;
+  permissions: string[];
+};
+
+export function getAdminMe(): Promise<AdminMe> {
+  return adminApiRequest("GET", "/me");
+}

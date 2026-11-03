@@ -972,3 +972,13 @@ summary.analytics-dq__heading { cursor: pointer; }
 .admin-temp-password__label { margin: 0 0 6px; font-weight: 600; color: var(--ww-navy); }
 .admin-temp-password__row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .admin-temp-password__value { font-size: 15px; padding: 4px 8px; background: #fff; border: 1px solid var(--line); border-radius: 6px; overflow-wrap: anywhere; user-select: all; }
+
+/* Staff user-administration console (/admin/*, ADR-023 Amendment 3). */
+.staff-console { min-height: 100vh; background: var(--bg, #f6f7f9); }
+.staff-console__header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; padding: 12px 24px; background: var(--ww-navy); color: #fff; }
+.staff-console__title { font-weight: 600; margin-right: auto; }
+.staff-console__nav a, .staff-console__user { color: #fff; }
+.staff-console__header button { background: transparent; color: #fff; border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 6px; padding: 4px 12px; cursor: pointer; }
+.staff-console__main { padding: 24px; max-width: 1280px; margin: 0 auto; }
+.staff-console--denied { padding: 48px 24px; max-width: 640px; margin: 0 auto; }
+@media (max-width: 640px) { .staff-console__header, .staff-console__main { padding: 12px 16px; } }

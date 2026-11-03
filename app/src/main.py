@@ -503,19 +503,8 @@ def _get_web_upstream_client() -> httpx.AsyncClient:
 if settings.web_upstream:
     _web_upstream = settings.web_upstream
 
-    @app.api_route("/app", methods=["GET", "HEAD"], include_in_schema=False)
-    @app.api_route("/app/{spa_path:path}", methods=["GET", "HEAD"], include_in_schema=False)
-    async def proxy_frontend_shell(
-        request: Request,
-        spa_path: str = "",
-    ) -> Response:
-        """Proxy /app/* to the dedicated ems-web container.
-
-        Authentication and DASHBOARD_VIEW are already enforced by
-        PortalAuthenticationMiddleware before this handler runs. ems-web
-        owns SPA fallback (client-side routes -> index.html) and the
-        immutable caching of hashed /app/assets/*.
-        """
+    async def _proxy_to_ems_web(request: Request, spa_path: str) -> Response:
+        """Forward one GET/HEAD to ems-web (no cookie or credential sent)."""
 
         if (
             "\\" in spa_path
@@ -560,6 +549,50 @@ if settings.web_upstream:
             status_code=upstream.status_code,
             headers=headers,
         )
+
+    @app.api_route("/app", methods=["GET", "HEAD"], include_in_schema=False)
+    @app.api_route("/app/{spa_path:path}", methods=["GET", "HEAD"], include_in_schema=False)
+    async def proxy_frontend_shell(
+        request: Request,
+        spa_path: str = "",
+    ) -> Response:
+        """Proxy /app/* to the dedicated ems-web container.
+
+        Authentication and DASHBOARD_VIEW are already enforced by
+        PortalAuthenticationMiddleware before this handler runs. ems-web
+        owns SPA fallback (client-side routes -> index.html) and the
+        immutable caching of hashed /app/assets/*.
+        """
+
+        return await _proxy_to_ems_web(request, spa_path)
+
+    # Staff user-administration console (ADR-023 Amendment 3): the ems-web
+    # staff bundle under /admin/* -- the route staff keep for Admin -> Users
+    # once stage 4 removes /app and /api/v1 from this process. The
+    # middleware has already required user.manage; this handler also
+    # requires GLOBAL scope (WiseWatts staff), so a tenant administrator is
+    # refused here even while EMS_ADMIN_STAFF_ONLY is off. The customer
+    # host's edge never routes /admin* (edge/Caddyfile: catch-all 404).
+    @app.api_route("/admin", methods=["GET", "HEAD"], include_in_schema=False)
+    @app.api_route("/admin/{staff_path:path}", methods=["GET", "HEAD"], include_in_schema=False)
+    async def proxy_staff_console(
+        request: Request,
+        staff_path: str = "",
+    ) -> Response:
+        """Proxy /admin/* (staff console) to ems-web, GLOBAL administrators only."""
+
+        user = get_authenticated_portal_user(request)
+        if user is None or user.access_scope_mode != "GLOBAL":
+            return Response(
+                content=b"The staff administration console is available to WiseWatts staff administrators only.",
+                status_code=403,
+                media_type="text/plain",
+                headers={"cache-control": "no-store"},
+            )
+        if request.url.path == "/admin":
+            return RedirectResponse("/admin/users", status_code=302, headers={"cache-control": "no-store"})
+
+        return await _proxy_to_ems_web(request, staff_path)
 
 elif (_spa_directory / "index.html").is_file():
     _spa_assets_directory = _spa_directory / "assets"
