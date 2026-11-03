@@ -92,6 +92,20 @@ fi
 check "missing hashed asset -> 404 (no SPA fallback for assets)" \
     "$([[ "$(code /app/assets/does-not-exist.js)" == "404" ]] && echo 1 || echo 0)"
 
+# Staff console (ADR-023 Amendment 3): /admin/ base, same contract as /app.
+for path in /admin/ /admin/users /admin/users/42; do
+    check "${path} -> 200 staff entry (text/html, no-store)" \
+        "$([[ "$(code "${path}")" == "200" && "$(header "${path}" content-type)" == text/html* && "$(header "${path}" cache-control)" == *no-store* ]] && echo 1 || echo 0)"
+done
+staff_html="$(curl -s "${base}/admin/users")"
+staff_js="$(grep -oE '/admin/assets/[^"]+\.js' <<<"${staff_html}" | sed -n 1p || true)"
+check "staff entry references a hashed /admin/assets/*.js bundle (${staff_js:-none})" \
+    "$([[ -n "${staff_js}" && "$(code "${staff_js}")" == "200" && "$(header "${staff_js}" cache-control)" == *immutable* ]] && echo 1 || echo 0)"
+check "staff entry is not the /app entry" \
+    "$([[ "${staff_html}" != "${entry_html}" ]] && echo 1 || echo 0)"
+check "missing staff asset -> 404" \
+    "$([[ "$(code /admin/assets/does-not-exist.js)" == "404" ]] && echo 1 || echo 0)"
+
 root_location="$(header / location)"
 check "/ redirects with a relative Location (${root_location:-none})" \
     "$([[ "$(code /)" == "302" && "${root_location}" == "/app/" ]] && echo 1 || echo 0)"

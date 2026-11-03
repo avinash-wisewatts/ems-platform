@@ -96,8 +96,19 @@ def required_permission_for_request(
         if (
             path.rstrip("/") == "/api/admin/v1/users"
             or path.startswith("/api/admin/v1/users/")
+            or path.rstrip("/") == "/api/admin/v1/me"
             or path.startswith("/api/admin/v1/me/")
         ):
+            return PortalPermission.USER_MANAGE
+        return None
+
+    # The staff user-administration console (ADR-023 Amendment 3): the
+    # ems-web staff bundle served by src.main at /admin/*. Reads require
+    # user.manage (src.main additionally requires GLOBAL, WiseWatts staff,
+    # scope); any other method is denied. Exact "/admin" or the "/admin/"
+    # prefix only -- never "/administration".
+    if path == "/admin" or path.startswith("/admin/"):
+        if normalized_method in {"GET", "HEAD"}:
             return PortalPermission.USER_MANAGE
         return None
 

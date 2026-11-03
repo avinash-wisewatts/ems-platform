@@ -46,6 +46,20 @@ only ADMIN may assign roles), scopes GLOBAL / ORGANIZATION / SELECTED_SITES,
 never granted wider than the actor's own. Initial administrator:
 `python -m src.provision_portal_admin`
 ([../../10-operations/portal-user-provisioning.md](../../10-operations/portal-user-provisioning.md)).
+`GET /api/admin/v1/me` is the staff console's session probe.
+
+## Staff console `/admin/*` (ADR-023 Amendment 3)
+
+The route where staff manage users once stage 4 removes `/app`. Implemented
+2026-11-03, not deployed.
+
+- **What:** the ems-web image's staff bundle (Admin → Users only),
+  proxied by `proxy_staff_console` in `src/main.py`. `GET`/`HEAD` only, and
+  only in `EMS_WEB_UPSTREAM` mode; the bundle-fallback mode serves no `/admin`.
+- **Access:** `user.manage` is required by the middleware, then GLOBAL
+  (staff) scope by the handler; tenant administrators get 403. `/admin`
+  redirects to `/admin/users`.
+- **Not affected:** `/administration/*` is a different route.
 
 ## Two-layer enforcement
 

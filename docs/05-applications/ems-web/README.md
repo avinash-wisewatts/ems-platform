@@ -57,6 +57,15 @@ Administration App process (the one that serves the user-management API), so
 it never appears on the customer host. Server-generated temporary passwords
 are shown once and kept only in page state.
 
+**Staff console (ADR-023 Amendment 3; implemented 2026-11-03, not
+deployed).** A second entry, built separately (`web/staff/index.html`,
+`src/staff/`, `vite.staff.config.ts`, base `/admin/`; `npm run build` builds
+both into `dist/` and `dist-staff/`). It renders the same Users pages at
+`/admin/users` with no `/api/v1` dependency (session probe:
+`GET /api/admin/v1/me`). The ems-web image serves it under `/admin/`; it is
+reached only through admin-portal on the staff host, which requires GLOBAL
+administrators. The customer host never routes `/admin*`.
+
 ## Data access
 
 Read-only, via the Analytics API only ([../analytics-api/README.md](../analytics-api/README.md)).

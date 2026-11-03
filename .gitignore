@@ -57,6 +57,7 @@ wisewatts_live_datasource_linux_amd64
 # Phase 8 web frontend (built artefacts + local caches; source is tracked)
 ###############################################################################
 web/dist/
+web/dist-staff/
 web/coverage/
 web/playwright-report/
 web/test-results/

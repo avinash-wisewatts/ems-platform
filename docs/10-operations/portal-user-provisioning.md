@@ -48,7 +48,9 @@ itself uses a pre-existing function).
    then copy it out (`docker cp`), read it, and delete both copies.
 3. Sign in at the **Administration App** `/login` (the account is staff, so
    `EMS_ADMIN_STAFF_ONLY` does not affect it), open `/app/`, then
-   Admin → Users → your own account → **Change my password**.
+   Admin → Users → your own account → **Change my password**. Where the
+   staff console is deployed (ADR-023 Amendment 3), `/admin/users` on the
+   Administration App is the same screen and remains after stage 4.
 
 There is no forced change at first sign-in (the portal does not support it);
 step 3 is the replacement. If the password is lost, another GLOBAL

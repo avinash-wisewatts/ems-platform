@@ -91,15 +91,36 @@ Status: implemented on branch `feature/web-admin-users` (migration 315), not mer
 
 **Consequences.**
 
-- Admin → Users works where the EMS Web App is served **through the Administration App** (`/app` on the staff path, `ems_admin_session`). Stage 4 of this ADR removes `/app` and `/api/v1` from admin-portal; before that step, a decision is needed on where staff reach Admin → Users afterwards (e.g. keep `/app` on the staff host, or move tenant-administrator user management to the customer API with its own reviewed grants). **Open — needs Product Owner / Architecture decision.**
+- Admin → Users works where the EMS Web App is served **through the Administration App** (`/app` on the staff path, `ems_admin_session`). Stage 4 of this ADR removes `/app` and `/api/v1` from admin-portal; where staff reach Admin → Users after that step is decided in Amendment 3 (staff console at `/admin/users`).
 - With `EMS_ADMIN_STAFF_ONLY` on, only GLOBAL (staff) administrators can use it; tenant (ORGANIZATION / SELECTED_SITES) administrators manage their users only while that switch is off. The database rules hold either way.
 - The Administration App's existing Users pages inherit the self-protection and the scope-containment fix (same functions).
 - No forced password change at first sign-in (not supported by the portal); the provisioned temporary password is changed through Admin → Users → own account → Change my password. Administration App sessions remain signed cookies carrying the identity, role and scope captured at sign-in (residual risk R2). Deactivation stops database-checked data access at once (the database checks `is_active`) but does not end the session; a **password reset does not end or restrict an already-open session at all**; a role or scope change applies at once to database-enforced checks (including every user-management function) but in-app permission gates use the sign-in role until the session ends. Follow-up: issue #172 (server-side Administration App session revocation).
 
+## Amendment 3 (2026-11-03): staff user administration at `/admin/users` (stage-4 route)
+
+Status: decided (user, 2026-11-03); implemented on branch `feature/staff-admin-users-route`, not merged, not deployed.
+
+**Context.** Stage 4 removes `/app` and `/api/v1` from admin-portal. Amendment 2's Admin → Users lives at `/app/admin/users`, so staff would lose it. The user chose a dedicated staff route, built and tested before `/app` is removed, that customer users cannot reach.
+
+**Decision.**
+
+1. **Staff console.** A second, minimal entry of the EMS Web App (`web/staff/index.html`, `web/src/staff/`, built by `vite.staff.config.ts` with base `/admin/`). It holds only the Admin → Users pages (the same components as `/app/admin/users`) and uses only the Administration App's endpoints: `GET /api/admin/v1/me` (new session probe), the existing `/api/admin/v1/users…`, `/login` and `/logout`. It has no `/api/v1` dependency, so it survives stage 4.
+2. **Served by admin-portal, from the ems-web image.** The ems-web image holds the bundle under `/admin/` (nginx `location /admin/`). admin-portal proxies `GET`/`HEAD` `/admin` and `/admin/*` to it, in `EMS_WEB_UPSTREAM` mode only, with the same no-credential forwarding as `/app`.
+3. **Access.**
+   - `PortalAuthenticationMiddleware` requires `user.manage` for reads. Unauthenticated visitors go to `/login`; non-administrators get `/forbidden`. Other methods are denied.
+   - The handler then requires GLOBAL scope (WiseWatts staff). A tenant administrator gets 403 whatever `EMS_ADMIN_STAFF_ONLY` is set to.
+   - The customer host never routes `/admin*` (edge catch-all 404). The staff host is IP-restricted.
+4. **Removal order.** `/app` (and `/app/admin/users`) stays in admin-portal until stage 4; the staff console is verified on staging first.
+
+**Consequences.**
+
+- After stage 4, tenant (ORGANIZATION / SELECTED_SITES) administrators have no self-service user management. Customer-side user management would need a separately reviewed customer-API design with its own grants. Not planned.
+- **Gap:** the bundle-fallback serving mode (`EMS_WEB_UPSTREAM` unset; the bundle tarball extracted into admin-portal) does not serve `/admin`. Production has not adopted the ems-web container (release plan D6), so production needs D6 or a fallback extension before it gets the staff console. `/administration/users` remains available everywhere.
+
 ## Implementation references
 
-`app/src/customer_main.py`, `customer_config.py`, `routers/customer_auth.py`, `auth/customer_middleware.py`, `auth/customer_session.py`, `auth/server_session.py`, `auth/audience.py`, `live_main.py`, `live_config.py`, `api_errors.py`, `config.py` (`CoreSettings`), `postgres/migrations/313_customer_api_role.sql`, `314_customer_session_revocation.sql`, `edge/Caddyfile`, `compose.yaml` (`customer-api`, `edge`), `scripts/release/deploy_customer_api.sh`. Amendment 2: `app/src/routers/user_management_api.py`, `user_management_service.py`, `user_account_policy.py`, `provision_portal_admin.py`, `auth/authorization.py` (`/api/admin/` permission map), `postgres/migrations/315_portal_user_management_hardening.sql`, `web/src/routes/admin/`, `web/src/api/adminUsers.ts`.
+`app/src/customer_main.py`, `customer_config.py`, `routers/customer_auth.py`, `auth/customer_middleware.py`, `auth/customer_session.py`, `auth/server_session.py`, `auth/audience.py`, `live_main.py`, `live_config.py`, `api_errors.py`, `config.py` (`CoreSettings`), `postgres/migrations/313_customer_api_role.sql`, `314_customer_session_revocation.sql`, `edge/Caddyfile`, `compose.yaml` (`customer-api`, `edge`), `scripts/release/deploy_customer_api.sh`. Amendment 2: `app/src/routers/user_management_api.py`, `user_management_service.py`, `user_account_policy.py`, `provision_portal_admin.py`, `auth/authorization.py` (`/api/admin/` permission map), `postgres/migrations/315_portal_user_management_hardening.sql`, `web/src/routes/admin/`, `web/src/api/adminUsers.ts`. Amendment 3: `web/staff/index.html`, `web/src/staff/`, `web/vite.staff.config.ts`, `web/Dockerfile`, `web/nginx.conf`, `app/src/main.py` (`proxy_staff_console`), `auth/authorization.py` (`/admin` rule), `routers/user_management_api.py` (`GET /me`).
 
 ## Validation references
 
-`app/tests/test_customer_api.py`, `test_customer_api_role_db.py`, `test_customer_session_revocation_db.py`, `test_live_customer_session.py`, `test_staff_only_admin.py`, `test_customer_separation_release_contract.py`; local end-to-end harness (edge TLS → customer-api → real Argon2 sign-in and database scoping through `ems_customer_api`), 53/53, 2026-10-26. Amendment 2: `app/tests/test_user_management_api.py`, `test_user_management_db.py`, `test_provision_portal_admin.py`, `web/src/routes/admin/AdminUsers.test.tsx`.
+`app/tests/test_customer_api.py`, `test_customer_api_role_db.py`, `test_customer_session_revocation_db.py`, `test_live_customer_session.py`, `test_staff_only_admin.py`, `test_customer_separation_release_contract.py`; local end-to-end harness (edge TLS → customer-api → real Argon2 sign-in and database scoping through `ems_customer_api`), 53/53, 2026-10-26. Amendment 2: `app/tests/test_user_management_api.py`, `test_user_management_db.py`, `test_provision_portal_admin.py`, `web/src/routes/admin/AdminUsers.test.tsx`. Amendment 3: `app/tests/test_staff_admin_console.py`, `web/src/staff/StaffConsole.test.tsx`, `scripts/test/assert_ems_web_container.sh` (staff bundle checks).

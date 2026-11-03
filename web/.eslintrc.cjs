@@ -9,7 +9,7 @@ module.exports = {
     "eslint:recommended",
     "plugin:@typescript-eslint/recommended",
   ],
-  ignorePatterns: ["dist", "coverage", "node_modules", "playwright-report", "test-results"],
+  ignorePatterns: ["dist", "dist-staff", "coverage", "node_modules", "playwright-report", "test-results"],
   rules: {
     "react-hooks/rules-of-hooks": "error",
     "react-hooks/exhaustive-deps": "warn",

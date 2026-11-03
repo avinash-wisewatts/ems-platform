@@ -21,7 +21,8 @@ WORKDIR /web
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
 
-COPY tsconfig.json vite.config.ts index.html vitest.setup.ts ./
+COPY tsconfig.json vite.config.ts vite.staff.config.ts index.html vitest.setup.ts ./
+COPY staff ./staff
 COPY src ./src
 
 # Type-check + lint + unit tests are gates in CI (see ci.yml). The image build
@@ -34,6 +35,10 @@ FROM nginx:1.27-alpine AS runtime
 # SPA fallback + long-cache for hashed assets, all under /app/.
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /web/dist /usr/share/nginx/html/app
+# Staff user-administration console (ADR-023 Amendment 3), /admin/ base.
+# Reached only through the admin-portal /admin proxy (staff host); not part of
+# the bundle tarball below, so the bundle-fallback mode does not serve it.
+COPY --from=build /web/dist-staff /usr/share/nginx/html/admin
 
 # A tarball of just the bundle, for the "extract into the admin-portal
 # container" deployment path (docker create + docker cp, or an init copy).

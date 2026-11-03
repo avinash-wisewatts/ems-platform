@@ -22,5 +22,5 @@
     "types": ["vite/client", "vitest/globals", "@testing-library/jest-dom"]
   },
   "//": "playwright.config.ts + e2e/** are transpiled by the Playwright runner, not tsc.",
-  "include": ["src", "vitest.setup.ts", "vite.config.ts"]
+  "include": ["src", "vitest.setup.ts", "vite.config.ts", "vite.staff.config.ts"]
 }
