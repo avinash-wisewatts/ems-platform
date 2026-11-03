@@ -3,8 +3,8 @@ refuses a deploy unless the target runner would apply exactly the declared
 migrations and nothing scoped away from the environment.
 
 Pure file inputs: no database. The real repository manifest and scope file are
-used where it matters (309 / 310 / 312 / 313 / 314 / 315 staging-only; 311 the next production
-migration after 308).
+used where it matters (309 / 310 / 312 / 313 / 314 staging-only; 311 and 315 the next
+production migrations after 308).
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ def _ids_through(last: str) -> list[str]:
 
 
 def _run(tmp_path, *, environment="production", manifest=MANIFEST, scope=SCOPE, scope_aware="yes",
-         deny=SCOPE, ledger_ids=(), expected="311"):
+         deny=SCOPE, ledger_ids=(), expected="311,315"):
     ledger = tmp_path / "ledger.txt"
     ledger.write_text("\n".join(ledger_ids) + "\n", encoding="utf-8")
     result = subprocess.run(
@@ -47,10 +47,18 @@ def _run(tmp_path, *, environment="production", manifest=MANIFEST, scope=SCOPE, 
 PRODUCTION_LEDGER = _ids_through("308_")          # production today: head 308
 
 
-def test_production_today_applies_exactly_311(tmp_path):
+def test_production_today_applies_exactly_311_and_315(tmp_path):
     code, out = _run(tmp_path, ledger_ids=PRODUCTION_LEDGER)
     assert code == 0, out
-    assert "Would apply (1): 311_recovery_lookup_event_time_bound" in out
+    assert "Would apply (2): 311_recovery_lookup_event_time_bound 315_portal_user_management_hardening" in out
+
+
+def test_production_release_must_declare_315(tmp_path):
+    # 315 is production-scoped (cross-tenant user-management fix): a release
+    # that declares only 311 is refused because 315 would also apply.
+    code, out = _run(tmp_path, ledger_ids=PRODUCTION_LEDGER, expected="311")
+    assert code == 1, out
+    assert "315_portal_user_management_hardening" in out
 
 
 def test_an_undeclared_pending_migration_is_refused(tmp_path):
@@ -126,7 +134,6 @@ def test_scope_file_contract():
         "312_report_export_asset_selection_1m": "staging|test",
         "313_customer_api_role": "staging|test",
         "314_customer_session_revocation": "staging|test",
-        "315_portal_user_management_hardening": "staging|test",
     }
     manifest_ids = set(_ids_through("~never~"))
     assert set(scoped) <= manifest_ids

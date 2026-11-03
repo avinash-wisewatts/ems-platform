@@ -70,7 +70,7 @@ the only way to end every session.
 |---|---|---|
 | Local development | not created by this change | — |
 | Staging | not created | Read-only check 2026-11-03: `admin_user` absent; one active ADMIN/GLOBAL. Needs the 315 deployment + approval. |
-| Production | not created | Migration 315 is staging/test only; separate approval. |
+| Production | not created | Migration 315 is production-scoped (it applies with the next production release); creating the account there needs separate approval. |
 
 ## Production rule until migration 315 is applied there
 
