@@ -60,8 +60,10 @@
 -- administrator demoting or deactivating themselves was previously possible
 -- and could leave a tenant without an administrator.
 --
--- Scope: staging and test (postgres/migration_environment_scope.csv);
--- production needs a separate approval.
+-- Environments: decided by postgres/migration_environment_scope.csv, not by
+-- this file, so widening it to production never changes this file's checksum.
+-- No dependency on the staging-only migrations 309-314: the ems_customer_api
+-- check below is skipped where that role does not exist.
 --
 -- Rollback: previous application image first, then re-create the three
 -- replaced functions from postgres/migrations/001_ems_platform_baseline_20260807.sql
