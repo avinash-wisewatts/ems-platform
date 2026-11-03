@@ -16,6 +16,7 @@ export type NavIconKey =
   | "alerts"
   | "reports"
   | "settings"
+  | "users"
   | "archive";
 
 const PATHS: Record<NavIconKey, ReactNode> = {
@@ -63,6 +64,13 @@ const PATHS: Record<NavIconKey, ReactNode> = {
     <>
       <circle cx="12" cy="12" r="3" />
       <path d="M12 3v2M12 19v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M3 12h2M19 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4" />
+    </>
+  ),
+  users: (
+    <>
+      <circle cx="9" cy="8" r="3.5" />
+      <path d="M2.5 20a6.5 6.5 0 0 1 13 0" />
+      <path d="M16 4.6a3.5 3.5 0 0 1 0 6.8M18 14.2a6.5 6.5 0 0 1 3.5 5.8" />
     </>
   ),
   archive: (

@@ -129,6 +129,18 @@ export const SHELL_PRIMARY_NAV: readonly NavItem[] = [
   { key: "settings", label: "Settings", to: "/features/settings", requiresAnyOf: ["dashboard.view"] },
 ];
 
+/**
+ * Admin section of the sidebar (below the primary navigation). "Users" is the
+ * Administration App's own user management (Admin -> Users,
+ * routes/admin/UsersPage.tsx) and needs user.manage. GET /api/v1/me
+ * advertises user.manage only where the user-management API is actually
+ * served (the Administration App), so the section is never shown where it
+ * could only fail. Visibility is UX only; the server enforces every rule.
+ */
+export const ADMIN_NAV: readonly NavItem[] = [
+  { key: "admin-users", label: "Users", to: "/admin/users", requiresAnyOf: ["user.manage"] },
+];
+
 export type NavSection = {
   /** undefined for the trailing, not-yet-grouped items (e.g. "features"). */
   group: NavGroup | undefined;

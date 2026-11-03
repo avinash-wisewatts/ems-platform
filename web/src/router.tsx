@@ -25,6 +25,9 @@ import { SitePerformanceReport } from "./routes/reports/SitePerformanceReport";
 import { AlertsArea } from "./routes/alerts/AlertsArea";
 import { AnalyticsPage } from "./routes/analytics/AnalyticsPage";
 import { ReportsPage } from "./routes/reportExports/ReportsPage";
+import { RequirePermission } from "./auth/RequirePermission";
+import { UsersPage } from "./routes/admin/UsersPage";
+import { UserDetailPage } from "./routes/admin/UserDetailPage";
 
 /**
  * Foundation routes:
@@ -38,6 +41,10 @@ import { ReportsPage } from "./routes/reportExports/ReportsPage";
  *                the primary nav entry directly below Alerts
  *   /home        Site Overview & Attention (MVP-3) -- unchanged; reachable
  *                from the sidebar's Archive section, not the new primary nav
+ *   /admin/users Admin -> Users: the Administration App's user management
+ *                (needs user.manage; served by the Administration App only)
+ *   /admin/users/:portalUserId  one user: details, role, access, status,
+ *                password reset (or "Change my password" on one's own)
  *   /features/*  honest placeholder namespace for later-phase features
  *   *            not found
  *
@@ -192,6 +199,26 @@ export function AppRoutes() {
         element={
           <ShellGate>
             <AnalyticsPage />
+          </ShellGate>
+        }
+      />
+      <Route
+        path="/admin/users"
+        element={
+          <ShellGate>
+            <RequirePermission anyOf={["user.manage"]}>
+              <UsersPage />
+            </RequirePermission>
+          </ShellGate>
+        }
+      />
+      <Route
+        path="/admin/users/:portalUserId"
+        element={
+          <ShellGate>
+            <RequirePermission anyOf={["user.manage"]}>
+              <UserDetailPage />
+            </RequirePermission>
           </ShellGate>
         }
       />

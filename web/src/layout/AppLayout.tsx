@@ -9,6 +9,7 @@ import { hasPermission } from "../auth/permissions";
 import { ReportExportNotifications } from "../reportExports/ReportExportNotifications";
 import { ReportExportsProvider, useReportExports } from "../reportExports/ReportExportsProvider";
 import {
+  ADMIN_NAV,
   NAV_GROUP_LABELS,
   PRIMARY_NAV,
   SECONDARY_NAV,
@@ -465,6 +466,7 @@ function AppShell({ children }: { children: ReactNode }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   useEffect(() => setDrawerOpen(false), [narrow, location.pathname]);
   const shellNav = visibleNav(SHELL_PRIMARY_NAV, permissions);
+  const adminNav = visibleNav(ADMIN_NAV, permissions);
 
   const menuRef = useRef<HTMLButtonElement | null>(null);
   const toggleRef = useRef<HTMLButtonElement | null>(null);
@@ -599,6 +601,24 @@ function AppShell({ children }: { children: ReactNode }) {
               ))}
             </ul>
           </nav>
+
+          {adminNav.length > 0 ? (
+            <nav className="app-shell__primary-nav app-shell__admin-nav" aria-label="Admin" data-testid="shell-nav-admin">
+              <p className="app-shell__admin-nav-heading">
+                <span className="app-shell__nav-label">Admin</span>
+              </p>
+              <ul>
+                {adminNav.map((item) => (
+                  <li key={item.key}>
+                    <NavLink to={item.to} data-testid={`shell-nav-${item.key}`}>
+                      <NavIcon icon="users" />
+                      <span className="app-shell__nav-label">{item.label}</span>
+                    </NavLink>
+                  </li>
+                ))}
+              </ul>
+            </nav>
+          ) : null}
 
           <div className="app-shell__archive-wrapper">
             <ArchiveNav permissions={permissions} activeAlertCount={activeAlertCount} />
