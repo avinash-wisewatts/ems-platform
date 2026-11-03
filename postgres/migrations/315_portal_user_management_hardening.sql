@@ -28,10 +28,17 @@
 --       an administrator sets a new (temporary) Argon2id hash for another
 --       user inside their scope, clearing the failed-login lockout; audited
 --       USER_PASSWORD_RESET. Never for oneself (use the own-password change,
---       which requires the current password in the application).
+--       which requires the current password in the application). Another
+--       ADMIN's password only by a WiseWatts staff (GLOBAL) administrator.
 --   admin.change_own_portal_user_password       (new)
 --       an active user replaces their own hash after the application has
 --       verified the current password; audited USER_PASSWORD_CHANGED
+--
+-- Concurrency: every actor/target function locks both portal_users rows (in
+-- id order) BEFORE the scope check, so a concurrent role / scope / status
+-- change cannot slip between the check and the update (the check then reads
+-- committed, locked state), and two administrators acting on each other
+-- cannot deadlock.
 --
 -- Every function: SECURITY DEFINER, pinned search_path, owner ems_admin, no
 -- PUBLIC EXECUTE, EXECUTE to ems_app (the Administration App) only -- never
@@ -90,6 +97,15 @@ BEGIN
         RAISE EXCEPTION 'Portal users cannot change their own role.'
             USING ERRCODE = '42501';
     END IF;
+
+    -- Lock the actor and target rows first (in id order, so two
+    -- administrators acting on each other cannot deadlock): the scope check
+    -- below then sees committed state that cannot change before the update.
+    PERFORM 1
+       FROM admin.portal_users
+      WHERE portal_user_id IN (p_actor_portal_user_id, p_target_portal_user_id)
+      ORDER BY portal_user_id
+        FOR UPDATE;
 
     IF NOT admin.portal_user_scope_contains_user(
         p_actor_portal_user_id, p_target_portal_user_id
@@ -153,6 +169,15 @@ BEGIN
             USING ERRCODE = '42501';
     END IF;
 
+    -- Lock the actor and target rows first (in id order, so two
+    -- administrators acting on each other cannot deadlock): the scope check
+    -- below then sees committed state that cannot change before the update.
+    PERFORM 1
+       FROM admin.portal_users
+      WHERE portal_user_id IN (p_actor_portal_user_id, p_target_portal_user_id)
+      ORDER BY portal_user_id
+        FOR UPDATE;
+
     IF NOT admin.portal_user_scope_contains_user(
         p_actor_portal_user_id, p_target_portal_user_id
     ) THEN
@@ -214,6 +239,15 @@ BEGIN
         RAISE EXCEPTION 'Portal users cannot change their own access scope.'
             USING ERRCODE = '42501';
     END IF;
+
+    -- Lock the actor and target rows first (in id order, so two
+    -- administrators acting on each other cannot deadlock): the scope check
+    -- below then sees committed state that cannot change before the update.
+    PERFORM 1
+       FROM admin.portal_users
+      WHERE portal_user_id IN (p_actor_portal_user_id, p_target_portal_user_id)
+      ORDER BY portal_user_id
+        FOR UPDATE;
 
     SELECT * INTO v_actor
       FROM admin.portal_users
@@ -357,6 +391,15 @@ BEGIN
         RAISE EXCEPTION 'Full name is required.' USING ERRCODE = '22023';
     END IF;
 
+    -- Lock the actor and target rows first (in id order, so two
+    -- administrators acting on each other cannot deadlock): the scope check
+    -- below then sees committed state that cannot change before the update.
+    PERFORM 1
+       FROM admin.portal_users
+      WHERE portal_user_id IN (p_actor_portal_user_id, p_target_portal_user_id)
+      ORDER BY portal_user_id
+        FOR UPDATE;
+
     -- An administrator may edit their own details (a GLOBAL / ORGANIZATION
     -- scope contains itself); role, scope and status stay self-protected.
     IF NOT admin.portal_user_scope_contains_user(
@@ -417,6 +460,7 @@ SET search_path TO pg_catalog, admin
 AS $function$
 DECLARE
     v_org UUID;
+    v_target_role TEXT;
 BEGIN
     IF p_password_hash IS NULL OR p_password_hash NOT LIKE '$argon2id$%' THEN
         RAISE EXCEPTION 'A password hash in Argon2id format is required.' USING ERRCODE = '22023';
@@ -427,6 +471,15 @@ BEGIN
             USING ERRCODE = '42501';
     END IF;
 
+    -- Lock the actor and target rows first (in id order, so two
+    -- administrators acting on each other cannot deadlock): the scope check
+    -- below then sees committed state that cannot change before the update.
+    PERFORM 1
+       FROM admin.portal_users
+      WHERE portal_user_id IN (p_actor_portal_user_id, p_target_portal_user_id)
+      ORDER BY portal_user_id
+        FOR UPDATE;
+
     IF NOT admin.portal_user_scope_contains_user(
         p_actor_portal_user_id, p_target_portal_user_id
     ) THEN
@@ -434,13 +487,28 @@ BEGIN
             USING ERRCODE = '42501';
     END IF;
 
-    SELECT organization_id INTO v_org
+    SELECT organization_id, role_code INTO v_org, v_target_role
       FROM admin.portal_users
      WHERE portal_user_id = p_target_portal_user_id
        FOR UPDATE;
 
     IF NOT FOUND THEN
         RAISE EXCEPTION 'Target portal user was not found.' USING ERRCODE = '22023';
+    END IF;
+
+    -- Another administrator's password: WiseWatts staff (active GLOBAL
+    -- ADMIN) only. A tenant administrator resetting a peer administrator
+    -- would take over an account of equal standing in their organization.
+    IF v_target_role = 'ADMIN' AND NOT EXISTS (
+        SELECT 1
+          FROM admin.portal_users actor
+         WHERE actor.portal_user_id = p_actor_portal_user_id
+           AND actor.is_active
+           AND actor.role_code = 'ADMIN'
+           AND actor.access_scope_mode = 'GLOBAL'
+    ) THEN
+        RAISE EXCEPTION 'Only WiseWatts staff administrators can reset another administrator''s password.'
+            USING ERRCODE = '42501';
     END IF;
 
     UPDATE admin.portal_users

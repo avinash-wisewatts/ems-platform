@@ -25,7 +25,11 @@ Guarantees:
   left with a password nobody received.
 
 Requires migration 315 only for the follow-up password change (the creation
-itself uses a pre-existing function).
+itself uses a pre-existing function). The password file is created
+exclusively, never through a symlink, and the password is written through
+that same open handle; the path is never reopened. If the account is not
+created, the empty file is removed, and only if it is still the file this
+run created.
 
 ## Procedure (each environment needs explicit approval — it creates a live account)
 
@@ -67,3 +71,19 @@ the only way to end every session.
 | Local development | not created by this change | — |
 | Staging | not created | Read-only check 2026-11-03: `admin_user` absent; one active ADMIN/GLOBAL. Needs the 315 deployment + approval. |
 | Production | not created | Migration 315 is staging/test only; separate approval. |
+
+## Production rule until migration 315 is applied there
+
+The cross-tenant scope move that 315 closes can be exploited only by an
+active **ORGANIZATION or SELECTED_SITES ADMIN**. The read-only check of
+2026-11-03 found none on production: exactly one portal account, an active
+GLOBAL ADMIN, and no cross-organization or out-of-GLOBAL scope changes in
+`admin.portal_user_audit`.
+
+- **Do not create, promote or re-scope any account to an ORGANIZATION or
+  SELECTED_SITES ADMIN on production before 315 is applied there.** OPERATOR
+  and VIEWER accounts at any scope are not affected.
+- Before the release that applies 315, re-run the read-only exposure query
+  `scripts/verify/portal_user_scope_exposure.sql`; expect no non-GLOBAL ADMIN in
+  check 1 and zero rows in check 2.
+- After it, verify the ledger row and the function grants, read-only.

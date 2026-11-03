@@ -91,12 +91,15 @@ def required_permission_for_request(
 
     # The Administration App's user-management JSON API (EMS Web App
     # Admin -> Users, src.routers.user_management_api): user.manage for every
-    # method, reads included. Anything else under /api/admin/ is denied.
+    # method, reads included. Changing one's OWN password is open to every
+    # signed-in role (dashboard.view; the route requires the current password
+    # and refuses a locked account). Anything else under /api/admin/ is denied.
     if path.startswith("/api/admin/"):
+        if path.rstrip("/") == "/api/admin/v1/me/password":
+            return PortalPermission.DASHBOARD_VIEW
         if (
             path.rstrip("/") == "/api/admin/v1/users"
             or path.startswith("/api/admin/v1/users/")
-            or path.startswith("/api/admin/v1/me/")
         ):
             return PortalPermission.USER_MANAGE
         return None

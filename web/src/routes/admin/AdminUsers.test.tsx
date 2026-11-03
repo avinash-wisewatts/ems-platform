@@ -375,3 +375,52 @@ describe("User detail", () => {
     expect(await screen.findByTestId("user-access-notice")).toHaveTextContent("wider than your own");
   });
 });
+
+describe("Resetting another administrator's password", () => {
+  const PEER_ADMIN = user(20, { display_name: "Peer Admin", role_code: "ADMIN", role_label: "Administrator" });
+  const tenantOptions: UserManagementOptions = {
+    ...OPTIONS,
+    actor: { portal_user_id: 5, role_code: "ADMIN", access_scope_mode: "ORGANIZATION", organization_id: ORG_A },
+  };
+
+  it("is not offered to a tenant administrator, and no reset request is sent", async () => {
+    const { calls } = stubAdminApi({
+      "GET /api/admin/v1/users/options": () => ({ jsonBody: tenantOptions }),
+      "GET /api/admin/v1/users/20": () => ({ jsonBody: { user: PEER_ADMIN, temporary_password: null } }),
+    });
+    renderPage("/admin/users/20");
+    expect(await screen.findByTestId("reset-password-staff-only")).toHaveTextContent("WiseWatts staff administrators");
+    expect(screen.queryByTestId("user-reset-submit")).not.toBeInTheDocument();
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+  });
+
+  it("is offered to a WiseWatts staff administrator", async () => {
+    stubAdminApi({
+      "GET /api/admin/v1/users/20": () => ({ jsonBody: { user: PEER_ADMIN, temporary_password: null } }),
+    });
+    renderPage("/admin/users/20");
+    expect(await screen.findByTestId("user-reset-submit")).toBeInTheDocument();
+    expect(screen.queryByTestId("reset-password-staff-only")).not.toBeInTheDocument();
+  });
+
+  it("a tenant administrator can still reset a non-administrator", async () => {
+    stubAdminApi({ "GET /api/admin/v1/users/options": () => ({ jsonBody: tenantOptions }) });
+    renderPage("/admin/users/10");
+    expect(await screen.findByTestId("user-reset-submit")).toBeInTheDocument();
+  });
+});
+
+describe("Passwords never reach browser storage", () => {
+  it("a generated temporary password is kept only in page state", async () => {
+    window.localStorage.clear();
+    window.sessionStorage.clear();
+    stubAdminApi({
+      "POST /api/admin/v1/users/10/password": () => ({ jsonBody: { portal_user_id: 10, temporary_password: "Reset-Pass-Word-99" } }),
+    });
+    renderPage("/admin/users/10");
+    fireEvent.click(await screen.findByTestId("user-reset-submit"));
+    expect(await screen.findByTestId("temporary-password-value")).toHaveTextContent("Reset-Pass-Word-99");
+    const stored = JSON.stringify({ ...window.localStorage }) + JSON.stringify({ ...window.sessionStorage });
+    expect(stored).not.toContain("Reset-Pass-Word-99");
+  });
+});

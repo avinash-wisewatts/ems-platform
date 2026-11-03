@@ -18,6 +18,7 @@ import {
   visibleNav,
 } from "./navigation";
 import { NavIcon, type NavIconKey } from "./NavIcon";
+import { ownPasswordChangeAvailable } from "../routes/account/ChangePasswordPage";
 import { DATE_TIME_FORMAT } from "../time/format";
 import { COMPACT_SCREEN_QUERY, NARROW_SCREEN_QUERY, useMediaQuery } from "./useMediaQuery";
 
@@ -391,7 +392,20 @@ function UserMenu() {
   const { user } = useSession();
   const now = useNow();
   const [open, setOpen] = useState(false);
+  const [canChangePassword, setCanChangePassword] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
+
+  // Probed only when the menu is first opened (not on every page load).
+  useEffect(() => {
+    if (!open) return;
+    let active = true;
+    void ownPasswordChangeAvailable().then((value) => {
+      if (active) setCanChangePassword(value);
+    });
+    return () => {
+      active = false;
+    };
+  }, [open]);
 
   useEffect(() => {
     function onClickAway(e: MouseEvent) {
@@ -428,6 +442,11 @@ function UserMenu() {
           <p className="user-menu__role" data-testid="identity-role">
             {user?.role_code ?? ""}
           </p>
+          {canChangePassword ? (
+            <NavLink to="/account/password" role="menuitem" onClick={() => setOpen(false)} data-testid="change-password-link">
+              Change password
+            </NavLink>
+          ) : null}
           <button type="button" onClick={() => void logout()} data-testid="logout">
             Sign out
           </button>

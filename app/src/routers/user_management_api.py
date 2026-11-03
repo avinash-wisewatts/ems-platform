@@ -14,13 +14,17 @@ migration 315) -- exposed as JSON for the SPA:
   POST   /api/admin/v1/users                  create
   PATCH  /api/admin/v1/users/{id}             details / role / access / status, one transaction
   POST   /api/admin/v1/users/{id}/password    administrator password reset
-  POST   /api/admin/v1/me/password            change one's own password (current password required)
+  POST   /api/admin/v1/me/password            change one's own password (any signed-in role;
+                                               current password required, refused while locked)
 
 Security model:
 - Authentication: the Administration App's signed ems_admin_session cookie
   (PortalAuthenticationMiddleware). No other session or token.
 - Authorization: PortalAuthenticationMiddleware requires user.manage for every
-  /api/admin/v1/users* and /api/admin/v1/me/* request; this module re-checks it.
+  /api/admin/v1/users* request; this module re-checks it. /api/admin/v1/me/password
+  is open to every signed-in role (dashboard.view): it changes only the
+  caller's own password, after verifying the current one, never while the
+  account is locked.
   The database functions are authoritative: they re-derive the actor's role and
   scope from portal_user_id, refuse targets outside it
   (admin.portal_user_scope_contains_user), refuse self role / scope / status
@@ -59,7 +63,12 @@ from src.auth.repository import (
     get_portal_user_for_authentication,
     record_portal_login_failure,
 )
-from src.auth.security import hash_portal_password, verify_portal_password
+from src.auth.security import (
+    AuthenticationStatus,
+    hash_portal_password,
+    portal_account_status,
+    verify_portal_password,
+)
 from src.onboarding.repository import list_accessible_sites, list_organizations
 from src.user_account_policy import (
     AccountPolicyError,
@@ -253,6 +262,13 @@ def _actor(request: Request) -> AuthenticatedPortalUser:
         raise _error(401, "unauthenticated", "Authentication is required.")
     if not has_permission(user, PortalPermission.USER_MANAGE):
         raise _error(403, "forbidden", "You do not have permission to manage users.")
+    return user
+
+
+def _signed_in(request: Request) -> AuthenticatedPortalUser:
+    user = get_authenticated_portal_user(request)
+    if user is None:
+        raise _error(401, "unauthenticated", "Authentication is required.")
     return user
 
 
@@ -622,6 +638,14 @@ async def reset_user_password(
         raise _error(403, "forbidden", "Use Change my password to change your own password.")
 
     target = await _manageable_row(actor, portal_user_id)
+    # UX pre-check of the database rule (admin.reset_managed_portal_user_password):
+    # another ADMIN's password is reset only by WiseWatts staff (GLOBAL).
+    if target["role_code"] == PortalRole.ADMIN.value and actor.access_scope_mode != "GLOBAL":
+        raise _error(
+            403,
+            "forbidden",
+            "Only WiseWatts staff administrators can reset another administrator's password.",
+        )
 
     generated: str | None = None
     if body.password is None or body.password == "":
@@ -647,7 +671,7 @@ async def reset_user_password(
 
 @router.post("/me/password", status_code=204)
 async def change_my_password(body: OwnPasswordChangeRequest, request: Request) -> Response:
-    actor = _actor(request)
+    actor = _signed_in(request)
     _require_same_origin(request)
 
     try:
@@ -660,6 +684,14 @@ async def change_my_password(body: OwnPasswordChangeRequest, request: Request) -
     record = await get_portal_user_for_authentication(actor.username)
     if record is None or record.portal_user_id != actor.portal_user_id or not record.is_active:
         raise _error(403, "forbidden", "Your account cannot change its password.")
+    # The sign-in lockout applies here too, before the current password is
+    # checked: a locked account cannot keep guessing through this endpoint.
+    if portal_account_status(record) is AuthenticationStatus.ACCOUNT_LOCKED:
+        raise _error(
+            403,
+            "account_locked",
+            "Your account is temporarily locked after failed password attempts. Try again later.",
+        )
     if not verify_portal_password(record.password_hash, body.current_password):
         # Counts towards the sign-in lockout, so this cannot be used to guess passwords.
         await record_portal_login_failure(record.portal_user_id)

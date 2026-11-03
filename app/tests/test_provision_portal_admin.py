@@ -179,3 +179,76 @@ def test_database_refusal_discards_the_prepared_file(monkeypatch, tmp_path) -> N
     target = tmp_path / "pw.txt"
     assert _run(password_file=str(target), err=io.StringIO()) == provisioning.EXIT_EXISTS
     assert not target.exists()
+
+
+# --- the password is written through the handle that created the file ---------------------------
+
+
+def test_the_path_is_never_reopened_after_the_exclusive_create(monkeypatch, tmp_path) -> None:
+    Fakes(monkeypatch, {"owner@wisewatts.test": _record("owner@wisewatts.test")})
+    target = tmp_path / "pw.txt"
+    real_open = open
+
+    def guarded_open(file, *args, **kwargs):
+        if str(file) == str(target):
+            raise AssertionError("the password file was reopened by path")
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", guarded_open)
+    assert _run(password_file=str(target), out=io.StringIO(), err=io.StringIO()) == provisioning.EXIT_CREATED
+    monkeypatch.setattr("builtins.open", real_open)
+    validate_password(target.read_text(encoding="utf-8").strip())
+
+
+def test_a_file_swapped_in_after_preparation_never_receives_the_password(monkeypatch, tmp_path) -> None:
+    fakes = Fakes(monkeypatch, {"owner@wisewatts.test": _record("owner@wisewatts.test")})
+    target = tmp_path / "pw.txt"
+    moved = tmp_path / "original.txt"
+    real_create = fakes.create
+
+    async def create_then_swap(**kwargs):
+        # Between preparation and delivery someone renames the prepared file
+        # and puts another file at the path.
+        os.replace(target, moved)
+        target.write_text("decoy\n", encoding="utf-8")
+        return await real_create(**kwargs)
+
+    monkeypatch.setattr(provisioning, "create_managed_user", create_then_swap)
+    assert _run(password_file=str(target), out=io.StringIO(), err=io.StringIO()) == provisioning.EXIT_CREATED
+    assert target.read_text(encoding="utf-8") == "decoy\n"
+    validate_password(moved.read_text(encoding="utf-8").strip())
+
+
+def test_discard_removes_only_the_file_this_run_created(monkeypatch, tmp_path) -> None:
+    fakes = Fakes(monkeypatch, {"owner@wisewatts.test": _record("owner@wisewatts.test")})
+    target = tmp_path / "pw.txt"
+
+    async def swap_then_fail(**kwargs):
+        os.replace(target, tmp_path / "original.txt")
+        target.write_text("someone else's file\n", encoding="utf-8")
+        raise FakeDatabaseError("P0001")
+
+    monkeypatch.setattr(provisioning, "create_managed_user", swap_then_fail)
+    assert _run(password_file=str(target), err=io.StringIO()) == provisioning.EXIT_DATABASE
+    assert target.read_text(encoding="utf-8") == "someone else's file\n"
+    assert fakes.created == []
+
+
+def test_an_unexpected_failure_leaves_no_empty_password_file(monkeypatch, tmp_path) -> None:
+    fakes = Fakes(monkeypatch, {"owner@wisewatts.test": _record("owner@wisewatts.test")})
+    fakes.fail = ConnectionError("database connection lost")
+    target = tmp_path / "pw.txt"
+    with pytest.raises(ConnectionError):
+        _run(password_file=str(target), err=io.StringIO())
+    assert not target.exists()
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink") or os.name != "posix", reason="POSIX symlinks")
+def test_a_symlink_at_the_password_path_is_refused(monkeypatch, tmp_path) -> None:
+    fakes = Fakes(monkeypatch, {"owner@wisewatts.test": _record("owner@wisewatts.test")})
+    elsewhere = tmp_path / "elsewhere.txt"
+    target = tmp_path / "pw.txt"
+    os.symlink(elsewhere, target)
+    assert _run(password_file=str(target), err=io.StringIO()) == provisioning.EXIT_DESTINATION
+    assert not elsewhere.exists()
+    assert fakes.created == []

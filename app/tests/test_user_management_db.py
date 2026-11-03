@@ -24,6 +24,8 @@ import asyncio
 import io
 import os
 import secrets
+import threading
+import time
 
 import psycopg
 import pytest
@@ -51,6 +53,7 @@ USERS = {
     # key: (username, role, scope, org, sites)
     "global_admin": ("um315.global@test", "ADMIN", "GLOBAL", None, ()),
     "org_a_admin": ("um315.orga.admin@test", "ADMIN", "ORGANIZATION", ORG_A, ()),
+    "org_a_admin_2": ("um315.orga.admin2@test", "ADMIN", "ORGANIZATION", ORG_A, ()),
     "sites_a_admin": ("um315.sitesa.admin@test", "ADMIN", "SELECTED_SITES", ORG_A, (SITE_A1,)),
     "org_a_viewer": ("um315.orga.viewer@test", "VIEWER", "ORGANIZATION", ORG_A, ()),
     "org_b_viewer": ("um315.orgb.viewer@test", "VIEWER", "ORGANIZATION", ORG_B, ()),
@@ -373,3 +376,198 @@ def test_initial_administrator_provisioning_end_to_end(seed, tmp_path) -> None:
     with psycopg.connect(CONNINFO) as conn, conn.cursor() as cur:
         cur.execute("SELECT password_hash FROM admin.portal_users WHERE username = %s", (username,))
         assert cur.fetchone()[0] == stored_hash
+
+
+# --- another administrator's password: WiseWatts staff only -----------------------------------
+
+
+def _peer_admin(cur, *, scope: str = "ORGANIZATION", sites: tuple[str, ...] = ()) -> int:
+    """An extra ADMIN in organization A, inside this test's (rolled-back) transaction."""
+
+    cur.execute(
+        """
+        INSERT INTO admin.portal_users
+            (username, display_name, email, password_hash, role_code, organization_id, access_scope_mode, created_by)
+        VALUES (%s, 'peer admin', NULL, %s, 'ADMIN', %s, %s, 'user-management-315-test')
+        RETURNING portal_user_id
+        """,
+        (f"um315.peer.{secrets.token_hex(4)}@test", HASH, ORG_A, scope),
+    )
+    peer = cur.fetchone()[0]
+    for site in sites:
+        cur.execute(
+            "INSERT INTO admin.portal_user_site_access (portal_user_id, site_id, created_by_portal_user_id) VALUES (%s, %s, %s)",
+            (peer, site, peer),
+        )
+    return peer
+
+
+def test_tenant_admin_cannot_reset_a_peer_administrators_password(cur, seed) -> None:
+    peer = _peer_admin(cur)
+    before = _user(cur, peer)["hash"]
+    message = _refused(
+        cur, "SELECT admin.reset_managed_portal_user_password(%s, %s, %s)", (seed["org_a_admin"], peer, hash_portal_password("Peer-Reset-315!"))
+    )
+    assert "staff administrators" in message
+    assert _user(cur, peer)["hash"] == before
+    assert _audit(cur, peer) == []
+
+
+def test_selected_sites_admin_cannot_reset_a_peer_administrators_password(cur, seed) -> None:
+    peer = _peer_admin(cur, scope="SELECTED_SITES", sites=(SITE_A1,))
+    _refused(
+        cur, "SELECT admin.reset_managed_portal_user_password(%s, %s, %s)", (seed["sites_a_admin"], peer, hash_portal_password("Peer-Reset-315!"))
+    )
+
+
+def test_staff_admin_resets_another_administrators_password(cur, seed) -> None:
+    peer = _peer_admin(cur)
+    _as_app(cur, "SELECT admin.reset_managed_portal_user_password(%s, %s, %s)", (seed["global_admin"], peer, hash_portal_password("Peer-Reset-315!")))
+    assert verify_portal_password(_user(cur, peer)["hash"], "Peer-Reset-315!")
+    [(event, actor, _payload)] = _audit(cur, peer)
+    assert (event, actor) == ("USER_PASSWORD_RESET", seed["global_admin"])
+
+
+def test_tenant_admin_still_resets_non_administrators(cur, seed) -> None:
+    _as_app(
+        cur,
+        "SELECT admin.reset_managed_portal_user_password(%s, %s, %s)",
+        (seed["org_a_admin"], seed["org_a_viewer"], hash_portal_password("Viewer-Reset-315!")),
+    )
+
+
+def test_no_hash_or_password_material_ever_reaches_the_audit_trail(cur, seed) -> None:
+    actor, target = seed["global_admin"], seed["org_a_viewer"]
+    reset_hash = hash_portal_password("Audit-Check-Reset-1")
+    own_hash = hash_portal_password("Audit-Check-Own-22")
+    _as_app(cur, "SELECT admin.reset_managed_portal_user_password(%s, %s, %s)", (actor, target, reset_hash))
+    _as_app(cur, "SELECT admin.change_own_portal_user_password(%s, %s)", (target, own_hash))
+    _as_app(cur, "SELECT admin.update_managed_portal_user_details(%s, %s, 'Audit Check', NULL)", (actor, target))
+    cur.execute(
+        "SELECT event_payload::text, coalesce(previous_role_code, ''), coalesce(new_role_code, '') "
+        "FROM admin.portal_user_audit WHERE target_portal_user_id = %s",
+        (target,),
+    )
+    for row in cur.fetchall():
+        text = " ".join(row)
+        assert "argon2" not in text and "$" not in text
+        assert "Audit-Check" not in text
+
+
+# --- concurrency: the scope check runs on locked, committed state -------------------------------
+
+
+def _wait_until_blocked(pid: int, timeout: float = 10.0) -> None:
+    deadline = time.monotonic() + timeout
+    with psycopg.connect(CONNINFO, autocommit=True) as observer, observer.cursor() as watch:
+        while time.monotonic() < deadline:
+            watch.execute("SELECT wait_event_type FROM pg_stat_activity WHERE pid = %s", (pid,))
+            row = watch.fetchone()
+            if row and row[0] == "Lock":
+                return
+            time.sleep(0.05)
+    raise AssertionError("the second administrator's call never waited on the row lock")
+
+
+def _restore_scope(portal_user_id: int, org: str) -> None:
+    with psycopg.connect(CONNINFO) as conn, conn.cursor() as c:
+        c.execute("DELETE FROM admin.portal_user_site_access WHERE portal_user_id = %s", (portal_user_id,))
+        c.execute(
+            "UPDATE admin.portal_users SET organization_id = %s, access_scope_mode = 'ORGANIZATION', role_code = 'VIEWER' "
+            "WHERE portal_user_id = %s",
+            (org, portal_user_id),
+        )
+        conn.commit()
+
+
+def test_a_concurrent_move_out_of_the_tenant_cannot_be_overridden(seed) -> None:
+    """Staff move org A's viewer to org B while org A's admin edits the same user.
+
+    The tenant admin's call waits for the row lock and then re-checks scope on
+    the committed state: the user is now in org B, so it is refused (before
+    315's ordering it passed the check on the old state and then wrote).
+    """
+
+    target = seed["org_a_viewer"]
+    outcome: dict[str, object] = {}
+    try:
+        with psycopg.connect(CONNINFO) as staff, staff.cursor() as s:
+            s.execute(f"SET LOCAL ROLE {APP}")
+            s.execute(
+                "SELECT admin.set_managed_portal_user_access_scope(%s, %s, 'ORGANIZATION', %s, ARRAY[]::uuid[])",
+                (seed["global_admin"], target, ORG_B),
+            )
+
+            tenant = psycopg.connect(CONNINFO)
+            tenant_pid = tenant.info.backend_pid
+
+            def tenant_edit() -> None:
+                try:
+                    with tenant.cursor() as t:
+                        t.execute("SET statement_timeout = '20s'")
+                        t.execute(f"SET ROLE {APP}")
+                        t.execute(
+                            "SELECT admin.set_managed_portal_user_access_scope(%s, %s, 'ORGANIZATION', %s, ARRAY[]::uuid[])",
+                            (seed["org_a_admin"], target, ORG_A),
+                        )
+                    tenant.commit()
+                    outcome["result"] = "changed"
+                except errors.Error as exc:
+                    tenant.rollback()
+                    outcome["result"] = exc.sqlstate
+
+            worker = threading.Thread(target=tenant_edit)
+            worker.start()
+            _wait_until_blocked(tenant_pid)
+            staff.commit()
+            worker.join(timeout=30)
+            tenant.close()
+
+        assert outcome.get("result") == "42501"
+        with psycopg.connect(CONNINFO) as conn, conn.cursor() as c:
+            c.execute("SELECT organization_id::text FROM admin.portal_users WHERE portal_user_id = %s", (target,))
+            assert c.fetchone()[0] == ORG_B
+    finally:
+        _restore_scope(target, ORG_A)
+
+
+def test_two_administrators_acting_on_each_other_do_not_deadlock(seed) -> None:
+    """Both calls lock the same two rows in id order: they serialize, never 40P01."""
+
+    first, second = seed["org_a_admin"], seed["org_a_admin_2"]
+    results: dict[str, object] = {}
+    try:
+        with psycopg.connect(CONNINFO) as a, a.cursor() as ca:
+            ca.execute(f"SET LOCAL ROLE {APP}")
+            ca.execute("SELECT admin.update_managed_portal_user_details(%s, %s, 'renamed by first', NULL)", (first, second))
+
+            b = psycopg.connect(CONNINFO)
+            b_pid = b.info.backend_pid
+
+            def other_direction() -> None:
+                try:
+                    with b.cursor() as cb:
+                        cb.execute("SET statement_timeout = '20s'")
+                        cb.execute(f"SET ROLE {APP}")
+                        cb.execute(
+                            "SELECT admin.update_managed_portal_user_details(%s, %s, 'renamed by second', NULL)",
+                            (second, first),
+                        )
+                    b.commit()
+                    results["b"] = "ok"
+                except errors.Error as exc:
+                    b.rollback()
+                    results["b"] = exc.sqlstate
+
+            worker = threading.Thread(target=other_direction)
+            worker.start()
+            _wait_until_blocked(b_pid)
+            a.commit()
+            worker.join(timeout=30)
+            b.close()
+        assert results.get("b") == "ok"
+    finally:
+        with psycopg.connect(CONNINFO) as conn, conn.cursor() as c:
+            c.execute("UPDATE admin.portal_users SET display_name = 'org_a_admin' WHERE portal_user_id = %s", (first,))
+            c.execute("UPDATE admin.portal_users SET display_name = 'org_a_admin_2' WHERE portal_user_id = %s", (second,))
+            conn.commit()

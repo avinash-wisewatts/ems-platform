@@ -67,10 +67,17 @@ EXIT_DESTINATION = 5
 
 @dataclass
 class PasswordDestination:
-    """Where the one-time password goes: an exclusive new file or the terminal."""
+    """Where the one-time password goes: an exclusive new file or the terminal.
+
+    The file is created exclusively (O_EXCL, never following a symlink, owner
+    read/write only) BEFORE the account is created, and the password is
+    written through that same open handle -- the path is never reopened, so
+    nothing can be swapped in between.
+    """
 
     path: str | None
     stream: TextIO
+    handle: TextIO | None = None
 
     @classmethod
     def prepare(cls, path: str | None, stream: TextIO) -> "PasswordDestination":
@@ -80,28 +87,45 @@ class PasswordDestination:
                     "Refusing to print a password to a non-interactive output; use --password-file."
                 )
             return cls(path=None, stream=stream)
-        # O_EXCL: never overwrite an existing file; 0o600: owner only.
-        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        os.close(descriptor)
-        return cls(path=path, stream=stream)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags, 0o600)
+        try:
+            handle = os.fdopen(descriptor, "w", encoding="utf-8")
+        except BaseException:
+            os.close(descriptor)
+            raise
+        return cls(path=path, stream=stream, handle=handle)
 
     def deliver(self, username: str, password: str) -> None:
-        if self.path is None:
+        if self.handle is None:
             self.stream.write(
                 "\nOne-time initial password for "
                 f"{username} (shown once, not stored anywhere):\n\n    {password}\n\n"
             )
             self.stream.flush()
             return
-        with open(self.path, "w", encoding="utf-8") as handle:
-            handle.write(f"{password}\n")
+        with self.handle:
+            self.handle.write(f"{password}\n")
+            self.handle.flush()
+            os.fsync(self.handle.fileno())
+        self.handle = None
 
     def discard(self) -> None:
-        if self.path is not None:
-            try:
+        """Close and remove the (still empty) file this run created."""
+
+        if self.handle is None or self.path is None:
+            return
+        try:
+            created = os.fstat(self.handle.fileno())
+            self.handle.close()
+            current = os.lstat(self.path)
+            # Remove only the file this run created, never a replacement.
+            if (current.st_dev, current.st_ino) == (created.st_dev, created.st_ino):
                 os.remove(self.path)
-            except FileNotFoundError:
-                pass
+        except FileNotFoundError:
+            pass
+        finally:
+            self.handle = None
 
 
 async def provision(
@@ -166,6 +190,11 @@ async def provision(
             return EXIT_EXISTS
         err.write("The database refused to create the account. Nothing was changed.\n")
         return EXIT_DATABASE
+    except BaseException:
+        # Anything else (connection lost, interrupted): leave no empty
+        # password file behind.
+        destination.discard()
+        raise
 
     destination.deliver(username, password)
     out.write(

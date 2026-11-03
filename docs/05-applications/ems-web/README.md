@@ -55,7 +55,16 @@ password reset, and "Change my password" on one's own account. Shown only
 when `GET /api/v1/me` lists `user.manage`, which `/me` advertises only in the
 Administration App process (the one that serves the user-management API), so
 it never appears on the customer host. Server-generated temporary passwords
-are shown once and kept only in page state.
+are shown once and kept only in page state; nothing is written to browser
+storage. A tenant administrator is not offered a password reset for another
+administrator (staff only, enforced by the database).
+
+**Change password (`/account/password`).** Every signed-in role (ADMIN,
+OPERATOR, VIEWER) changes their own password from the user menu. It needs the
+current password and is refused while the account is locked. It is shown only
+where the Administration App serves the SPA: `GET /auth/session` does not report
+a customer sign-in. It is never shown on the customer host, which has no
+`/api/admin` route.
 
 ## Data access
 

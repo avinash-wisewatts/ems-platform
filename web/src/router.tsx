@@ -28,6 +28,7 @@ import { ReportsPage } from "./routes/reportExports/ReportsPage";
 import { RequirePermission } from "./auth/RequirePermission";
 import { UsersPage } from "./routes/admin/UsersPage";
 import { UserDetailPage } from "./routes/admin/UserDetailPage";
+import { ChangePasswordPage } from "./routes/account/ChangePasswordPage";
 
 /**
  * Foundation routes:
@@ -219,6 +220,14 @@ export function AppRoutes() {
             <RequirePermission anyOf={["user.manage"]}>
               <UserDetailPage />
             </RequirePermission>
+          </ShellGate>
+        }
+      />
+      <Route
+        path="/account/password"
+        element={
+          <ShellGate>
+            <ChangePasswordPage />
           </ShellGate>
         }
       />

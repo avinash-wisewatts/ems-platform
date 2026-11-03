@@ -85,7 +85,23 @@ Status: implemented on branch `feature/web-admin-users` (migration 315), not mer
 
 1. **One user-management implementation, exposed as JSON by the Administration App only.** `src.routers.user_management_api` (`/api/admin/v1/users…`, `/api/admin/v1/me/password`) is mounted in `src.main`, authenticated by `ems_admin_session` and gated on `user.manage` by `PortalAuthenticationMiddleware`; it calls the same controlled functions as the server-rendered `/administration/users` pages (`admin.*_managed_portal_user*`). It is never mounted in `customer-api`, never under `/api/v1`, and the edge's customer host does not route `/api/admin/*` (404).
 2. **Visibility follows availability.** `GET /api/v1/me` advertises `user.manage` only in a process that mounts the router (as it already does for `report.export`), so on the customer host the SPA shows no Admin section; the role grant is unchanged.
-3. **Database-enforced rules (migration 315).** No actor may change their own role, access scope or status or reset their own password; an access-scope change now also requires the target to be inside the actor's current scope (closing a cross-tenant move by an ORGANIZATION administrator); new audited functions for details edit (`USER_DETAILS_CHANGED`), administrator password reset (`USER_PASSWORD_RESET`, Argon2id only, clears lockout) and own-password change after current-password verification (`USER_PASSWORD_CHANGED`). EXECUTE `ems_app` only — never `ems_customer_api` or PUBLIC.
+3. **Database-enforced rules (migration 315).**
+   - No actor may change their own role, access scope or status, or reset their own password.
+   - An access-scope change requires the target to be inside the actor's current scope. This closes the cross-tenant move by an ORGANIZATION administrator.
+   - Every actor/target function locks both user rows, in id order, before the scope check. A concurrent change therefore cannot slip between check and update, and two administrators acting on each other cannot deadlock.
+   - Another ADMIN's password can be reset only by a WiseWatts staff (active GLOBAL) administrator. A tenant administrator cannot take over a peer administrator's account.
+   - New audited functions:
+     - details edit (`USER_DETAILS_CHANGED`);
+     - administrator password reset (`USER_PASSWORD_RESET`; Argon2id only; clears the lockout);
+     - own-password change after the current password is verified (`USER_PASSWORD_CHANGED`).
+   - No password or hash is written to the audit trail.
+   - EXECUTE `ems_app` only — never `ems_customer_api` or PUBLIC.
+
+   **Own password, every role.** `POST /api/admin/v1/me/password` is open to every signed-in role (`dashboard.view`), not only `user.manage`:
+   - It changes only the caller's own password.
+   - It requires the current password; a wrong one counts towards the sign-in lockout.
+   - It is refused while the account is locked, before the password is checked.
+   - The EMS Web App offers it at `/account/password` (user menu → Change password) on the Administration App path only, never on the customer host.
 4. **CSRF.** State-changing `/api/admin/v1` requests require an `Origin` naming the host and a JSON body.
 5. **Initial administrator.** `python -m src.provision_portal_admin` creates an ADMIN / GLOBAL account through `admin.create_managed_portal_user` on behalf of an existing active GLOBAL administrator (audited), never modifies an existing account, and hands a generated password over once (new owner-only file or interactive terminal). Runbook: [../../10-operations/portal-user-provisioning.md](../../10-operations/portal-user-provisioning.md).
 

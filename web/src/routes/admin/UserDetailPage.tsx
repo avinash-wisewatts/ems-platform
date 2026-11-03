@@ -229,6 +229,22 @@ function StatusSection({ user, onSaved }: { user: ManagedUser; onSaved: (u: Mana
 }
 
 function ResetPasswordSection({ user, options }: { user: ManagedUser; options: UserManagementOptions }) {
+  // Another administrator's password: WiseWatts staff (GLOBAL) only -- the
+  // database refuses it for tenant administrators.
+  if (user.role_code === "ADMIN" && options.actor.access_scope_mode !== "GLOBAL") {
+    return (
+      <section className="admin-card" aria-label="Reset password" data-testid="reset-password-staff-only">
+        <h2 className="admin-card__title">Reset password</h2>
+        <p className="admin-header__subtitle">
+          Only WiseWatts staff administrators can reset another administrator&apos;s password.
+        </p>
+      </section>
+    );
+  }
+  return <ResetPasswordForm user={user} options={options} />;
+}
+
+function ResetPasswordForm({ user, options }: { user: ManagedUser; options: UserManagementOptions }) {
   const [mode, setMode] = useState<"generate" | "set">("generate");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -294,7 +310,15 @@ function ResetPasswordSection({ user, options }: { user: ManagedUser; options: U
   );
 }
 
-function ChangeOwnPasswordSection({ options }: { options: UserManagementOptions }) {
+/** Mirrors the server's password policy minimum (app/src/user_account_policy.py); the server enforces it. */
+export const DEFAULT_MIN_PASSWORD_LENGTH = 12;
+
+/**
+ * Change one's own password (POST /api/admin/v1/me/password): current
+ * password required; refused while the account is locked. Used on an
+ * administrator's own user page and on /account/password for every role.
+ */
+export function ChangeOwnPasswordSection({ minLength = DEFAULT_MIN_PASSWORD_LENGTH }: { minLength?: number }) {
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -304,8 +328,8 @@ function ChangeOwnPasswordSection({ options }: { options: UserManagementOptions 
   async function change(event: FormEvent) {
     event.preventDefault();
     if (!current) return setNotice({ tone: "error", text: "Enter your current password." });
-    if (next.length < options.password_policy.min_length)
-      return setNotice({ tone: "error", text: `Passwords must contain at least ${options.password_policy.min_length} characters.` });
+    if (next.length < minLength)
+      return setNotice({ tone: "error", text: `Passwords must contain at least ${minLength} characters.` });
     if (next !== confirm) return setNotice({ tone: "error", text: "The new passwords do not match." });
     setSaving(true);
     try {
@@ -332,7 +356,7 @@ function ChangeOwnPasswordSection({ options }: { options: UserManagementOptions 
         <label className="admin-field" htmlFor="own-new">
           <span className="admin-field__label">New password</span>
           <input id="own-new" type="password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} data-testid="own-new" />
-          <span className="admin-field__hint">At least {options.password_policy.min_length} characters.</span>
+          <span className="admin-field__hint">At least {minLength} characters.</span>
         </label>
         <label className="admin-field" htmlFor="own-confirm">
           <span className="admin-field__label">Confirm new password</span>
@@ -418,7 +442,7 @@ export function UserDetailPage() {
           <DetailsSection user={user} onSaved={setUser} />
           <AccessSection user={user} options={options} onSaved={setUser} />
           <StatusSection user={user} onSaved={setUser} />
-          {user.is_self ? <ChangeOwnPasswordSection options={options} /> : <ResetPasswordSection user={user} options={options} />}
+          {user.is_self ? <ChangeOwnPasswordSection minLength={options.password_policy.min_length} /> : <ResetPasswordSection user={user} options={options} />}
         </>
       ) : null}
     </section>

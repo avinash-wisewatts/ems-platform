@@ -10,7 +10,7 @@ test_user_management_db.py.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
@@ -173,9 +173,9 @@ def test_unauthenticated_request_gets_json_401_not_a_login_redirect(portal_clien
 @pytest.mark.parametrize(
     "method,path",
     [("GET", "/users"), ("GET", "/users/options"), ("GET", "/users/710"), ("POST", "/users"),
-     ("PATCH", "/users/710"), ("POST", "/users/710/password"), ("POST", "/me/password")],
+     ("PATCH", "/users/710"), ("POST", "/users/710/password")],
 )
-def test_non_administrators_are_refused_every_route(portal_client, monkeypatch, store, actor, method, path) -> None:
+def test_non_administrators_are_refused_every_user_management_route(portal_client, monkeypatch, store, actor, method, path) -> None:
     sign_in(portal_client, monkeypatch, actor)
     response = portal_client.request(method, f"{API}{path}", json={}, headers=ORIGIN)
     assert response.status_code == 403
@@ -485,13 +485,44 @@ def test_password_reset_with_chosen_password_is_policy_checked(portal_client, mo
     assert response.status_code == 200 and response.json()["temporary_password"] is None
 
 
-def _record(identity: AuthenticatedPortalUser, password: str, *, active: bool = True) -> PortalUserAuthenticationRecord:
+def _record(
+    identity: AuthenticatedPortalUser,
+    password: str,
+    *,
+    active: bool = True,
+    locked_until: datetime | None = None,
+) -> PortalUserAuthenticationRecord:
     return PortalUserAuthenticationRecord(
         portal_user_id=identity.portal_user_id, username=identity.username, display_name=identity.display_name,
         password_hash=hash_portal_password(password), role_code=identity.role_code, is_active=active,
-        failed_login_count=0, locked_until=None, organization_id=identity.organization_id,
+        failed_login_count=5 if locked_until else 0, locked_until=locked_until, organization_id=identity.organization_id,
         access_scope_mode=identity.access_scope_mode, site_ids=identity.site_ids,
     )
+
+
+def _own_password_harness(monkeypatch, record: PortalUserAuthenticationRecord) -> dict[str, list]:
+    seen: dict[str, list] = {"failures": [], "verified": []}
+
+    async def lookup(username: str):
+        return record if username == record.username else None
+
+    async def failure(portal_user_id: int) -> None:
+        seen["failures"].append(portal_user_id)
+
+    from src.auth import security
+
+    def verify(password_hash: str, password: str) -> bool:
+        seen["verified"].append(True)
+        return security.verify_portal_password(password_hash, password)
+
+    module = "src.routers.user_management_api"
+    monkeypatch.setattr(f"{module}.get_portal_user_for_authentication", lookup)
+    monkeypatch.setattr(f"{module}.record_portal_login_failure", failure)
+    monkeypatch.setattr(f"{module}.verify_portal_password", verify)
+    return seen
+
+
+GOOD_CHANGE = {"current_password": "Current-Password-1", "new_password": "Brand-New-Pass-22"}
 
 
 def test_own_password_change_requires_the_current_password(portal_client, monkeypatch, store) -> None:
@@ -544,3 +575,140 @@ def test_user_management_routes_are_not_under_the_analytics_api() -> None:
     for route in analytics_router.routes:
         assert "users" not in getattr(route, "path", "")
         assert not (set(getattr(route, "methods", set())) & {"PATCH", "PUT", "DELETE"})
+
+
+# --- own password: every role, current password, lockout -----------------------------------
+
+
+@pytest.mark.parametrize("actor", ["operator", "viewer", "org_admin", "global_admin"])
+def test_every_signed_in_role_can_change_its_own_password(portal_client, monkeypatch, store, actor) -> None:
+    identity = sign_in(portal_client, monkeypatch, actor)
+    _own_password_harness(monkeypatch, _record(identity, "Current-Password-1"))
+
+    response = portal_client.post(f"{API}/me/password", json=GOOD_CHANGE, headers=ORIGIN)
+
+    assert response.status_code == 204
+    [changed] = store.of("change_own")
+    assert changed["portal_user_id"] == identity.portal_user_id
+    assert changed["password_hash"].startswith("$argon2id$")
+
+
+@pytest.mark.parametrize("actor", ["operator", "viewer"])
+def test_non_administrator_own_change_still_requires_the_current_password(portal_client, monkeypatch, store, actor) -> None:
+    identity = sign_in(portal_client, monkeypatch, actor)
+    seen = _own_password_harness(monkeypatch, _record(identity, "Current-Password-1"))
+
+    wrong = portal_client.post(
+        f"{API}/me/password", json={"current_password": "Wrong-Password-1", "new_password": "Brand-New-Pass-22"}, headers=ORIGIN
+    )
+
+    assert wrong.status_code == 400 and wrong.json()["error"] == "invalid_current_password"
+    assert seen["failures"] == [identity.portal_user_id]
+    assert store.of("change_own") == []
+
+
+@pytest.mark.parametrize("actor", ["operator", "viewer", "global_admin"])
+def test_own_password_change_is_refused_while_the_account_is_locked(portal_client, monkeypatch, store, actor) -> None:
+    identity = sign_in(portal_client, monkeypatch, actor)
+    locked = _record(identity, "Current-Password-1", locked_until=datetime.now(timezone.utc) + timedelta(minutes=10))
+    seen = _own_password_harness(monkeypatch, locked)
+
+    # Even the CORRECT current password is refused, and the password is not
+    # checked at all (no guessing oracle), and no further failure is recorded.
+    for body in (GOOD_CHANGE, {"current_password": "Wrong-Password-1", "new_password": "Brand-New-Pass-22"}):
+        response = portal_client.post(f"{API}/me/password", json=body, headers=ORIGIN)
+        assert response.status_code == 403
+        assert response.json()["error"] == "account_locked"
+
+    assert seen["verified"] == []
+    assert seen["failures"] == []
+    assert store.of("change_own") == []
+
+
+def test_an_expired_lock_no_longer_blocks_the_change(portal_client, monkeypatch, store) -> None:
+    identity = sign_in(portal_client, monkeypatch, "viewer")
+    expired = _record(identity, "Current-Password-1", locked_until=datetime.now(timezone.utc) - timedelta(minutes=1))
+    _own_password_harness(monkeypatch, expired)
+
+    assert portal_client.post(f"{API}/me/password", json=GOOD_CHANGE, headers=ORIGIN).status_code == 204
+
+
+def test_own_password_change_requires_a_session_and_same_origin(portal_client, monkeypatch, store) -> None:
+    assert portal_client.post(f"{API}/me/password", json=GOOD_CHANGE, headers=ORIGIN).status_code == 401
+
+    identity = sign_in(portal_client, monkeypatch, "viewer")
+    _own_password_harness(monkeypatch, _record(identity, "Current-Password-1"))
+    cross = portal_client.post(f"{API}/me/password", json=GOOD_CHANGE, headers={"Origin": "https://evil.example"})
+    assert cross.status_code == 403
+    assert store.of("change_own") == []
+
+
+def test_own_password_change_does_not_open_any_other_admin_route_to_non_administrators(portal_client, monkeypatch, store) -> None:
+    sign_in(portal_client, monkeypatch, "viewer")
+    for path in ("/me", "/me/other", "/users/704/password"):
+        response = portal_client.post(f"{API}{path}", json=GOOD_CHANGE, headers=ORIGIN)
+        assert response.status_code in {403, 404, 405}, path
+    assert store.of("change_own") == [] and store.of("reset") == []
+
+
+# --- another administrator's password: WiseWatts staff only --------------------------------
+
+
+def _with_peer_admin(store: FakeUserStore) -> int:
+    store.rows.append(_row(712, role_code="ADMIN"))
+    return 712
+
+
+@pytest.mark.parametrize("actor", ["org_admin", "sites_admin"])
+def test_tenant_administrators_cannot_reset_another_administrators_password(portal_client, monkeypatch, store, actor) -> None:
+    target = _with_peer_admin(store)
+    sign_in(portal_client, monkeypatch, actor)
+
+    response = portal_client.post(f"{API}/users/{target}/password", json={}, headers=ORIGIN)
+
+    assert response.status_code == 403
+    assert "staff administrators" in response.json()["detail"]
+    assert store.of("reset") == []
+
+
+def test_staff_administrators_can_reset_another_administrators_password(portal_client, monkeypatch, store) -> None:
+    target = _with_peer_admin(store)
+    sign_in(portal_client, monkeypatch, "global_admin")
+
+    response = portal_client.post(f"{API}/users/{target}/password", json={}, headers=ORIGIN)
+
+    assert response.status_code == 200
+    [reset] = store.of("reset")
+    assert reset["target_portal_user_id"] == target
+
+
+def test_tenant_administrators_still_reset_non_administrators(portal_client, monkeypatch, store) -> None:
+    sign_in(portal_client, monkeypatch, "org_admin")
+    assert portal_client.post(f"{API}/users/710/password", json={}, headers=ORIGIN).status_code == 200
+
+
+def test_database_refusal_of_an_administrator_reset_is_a_403_with_its_message(portal_client, monkeypatch, store) -> None:
+    sign_in(portal_client, monkeypatch, "global_admin")
+    store.fail_with = FakeDatabaseError(
+        "42501", "Only WiseWatts staff administrators can reset another administrator's password."
+    )
+    response = portal_client.post(f"{API}/users/710/password", json={}, headers=ORIGIN)
+    assert response.status_code == 403
+    assert response.json()["detail"].startswith("Only WiseWatts staff administrators")
+
+
+@pytest.mark.parametrize(
+    "method,path,expected",
+    [
+        ("POST", "/api/admin/v1/me/password", "dashboard.view"),
+        ("POST", "/api/admin/v1/me/password/", "dashboard.view"),
+        ("POST", "/api/admin/v1/me/other", None),
+        ("GET", "/api/admin/v1/me", None),
+        ("POST", "/api/admin/v1/users/7/password", "user.manage"),
+    ],
+)
+def test_own_password_is_the_only_admin_api_path_open_to_every_role(method, path, expected) -> None:
+    from src.auth.authorization import required_permission_for_request
+
+    permission = required_permission_for_request(method, path)
+    assert (permission.value if permission else None) == expected
