@@ -58,6 +58,8 @@ There is no forced change at first sign-in (the portal does not support it);
 step 3 is the replacement. If the password is lost, another GLOBAL
 administrator resets it in Admin → Users (a user cannot reset their own).
 
+Manual browser checks after a deployment: [admin-users-browser-checklist.md](admin-users-browser-checklist.md).
+
 **Session limitation (ADR-023 R2, issue #172).** A password reset does not end
 sessions that are already signed in. If a password may have been exposed,
 deactivate the account first; that stops its data access at once. Then reset
