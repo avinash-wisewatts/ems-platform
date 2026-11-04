@@ -17,17 +17,21 @@ migrations (`postgres/migration_environment_scope.csv`) are skipped on
 production; production releases first pass the pending-migration precheck
 (`expected_migrations`). See [ci-cd.md](ci-cd.md#environment-scoped-migrations).
 
-**Next production release: migration 315.** 315 (user-management hardening) is not
-staging-only, because it closes a cross-tenant scope move that exists on
-production today. From production head 308, the release must declare
-`expected_migrations=311,315`; the precheck refuses `311` alone.
+**Next production release: migrations 311, 315 and 316.** 315 (user-management
+hardening) is not staging-only, because it closes a cross-tenant scope move
+that exists on production today. 316 removes `ems_readonly`'s EXECUTE on the
+portal-user functions, a grant only production has. From production head 308,
+the release must declare `expected_migrations=311,315,316`; the precheck
+refuses `311` or `311,315`. Checklist and blockers:
+[production-release-311-315-316.md](production-release-311-315-316.md).
 
 - **Before the release:** re-run
   `scripts/verify/portal_user_scope_exposure.sql` (read-only). Until then, no
   ORGANIZATION or SELECTED_SITES ADMIN may be created on production
   ([../10-operations/portal-user-provisioning.md](../10-operations/portal-user-provisioning.md)).
-- **After the release (read-only):** expect a 315 ledger row; the three new
-  `admin.*` functions are SECURITY DEFINER with EXECUTE for `ems_app` only.
+- **After the release (read-only):** expect 311, 315 and 316 ledger rows; the
+  three new `admin.*` functions are SECURITY DEFINER with EXECUTE for `ems_app`
+  only; `ems_readonly` cannot execute any of the 14 functions 316 lists.
 
 315 has no dependency on 309–314: a production-mode apply to a scratch
 database (canonical deploy, then `DEPLOY_ENVIRONMENT=production`) applied
