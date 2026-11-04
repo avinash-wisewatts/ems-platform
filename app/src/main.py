@@ -8,7 +8,6 @@ from typing import Annotated, AsyncIterator
 from urllib.parse import quote
 from uuid import UUID
 
-import httpx
 import websockets
 from websockets.exceptions import InvalidHandshake, WebSocketException
 from fastapi import FastAPI, Form, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -106,12 +105,28 @@ from src.organization_workspace_service import (
     update_organization_workspace,
 )
 from src.user_management_service import (
+    apply_managed_user_changes,
     change_managed_user_role,
     create_managed_user,
+    list_managed_user_audit,
     list_manageable_users,
+    reset_managed_user_password,
     set_managed_user_access_scope,
     set_managed_user_active,
 )
+from src.user_account_policy import (
+    PASSWORD_MAX_LENGTH,
+    PASSWORD_MIN_LENGTH,
+    AccountPolicyError,
+    generate_temporary_password,
+    normalize_display_name,
+    normalize_email,
+    normalize_username,
+    validate_password,
+)
+from src.own_password import OwnPasswordChangeError, change_own_password_verified
+from src.auth.customer_session import same_origin
+from src.admin_request_guards import AdministrationRequestGuard, is_app_path
 from src.onboarding.forms import OnboardingValidationError
 from src.onboarding.repository import (
     list_asset_types,
@@ -391,8 +406,6 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     finally:
         if report_export_worker is not None:
             await report_export_worker.stop()
-        if _web_upstream_client is not None:
-            await _web_upstream_client.aclose()
         await close_database_pool()
 
 
@@ -420,6 +433,14 @@ app.add_middleware(
     max_age=settings.session_max_age_seconds,
     same_site="lax",
     https_only=settings.session_https_only,
+)
+
+# Outermost: cross-origin refusal for the user-management forms, and no /app
+# on this process while the dedicated ems-web container serves the customer
+# host (src.admin_request_guards).
+app.add_middleware(
+    AdministrationRequestGuard,
+    serve_app=not settings.web_upstream,
 )
 
 app.mount(
@@ -459,109 +480,19 @@ app.state.user_management_api = True
 # and the SPA reuses the resulting session cookie. No second auth system, no
 # CORS, no new cookie.
 #
-# Dedicated-container mode (EMS_WEB_UPSTREAM set): the same /app URL space is
-# instead proxied to the `ems-web` container (web/Dockerfile's nginx image),
-# so the frontend is deployed, restarted and rolled back by recreating only
-# that container (scripts/release/deploy_web.sh). Requests still pass the
-# same PortalAuthenticationMiddleware first (unauthenticated -> /login,
-# DASHBOARD_VIEW required); only GET/HEAD are forwarded, and no cookie or
-# other credential is sent upstream -- ems-web serves static files only.
-# When EMS_WEB_UPSTREAM is unset the bind-mounted bundle hook below applies
-# exactly as before; it is the rollback fallback.
+# Dedicated-container mode (EMS_WEB_UPSTREAM set -- staging, ADR-023): the
+# EMS Web App is the `ems-web` container, reached ONLY on the customer host
+# through the edge proxy. admin-portal serves no /app at all then:
+# AdministrationRequestGuard (src.admin_request_guards) answers /app and /app/*
+# with 404 before authentication, and no bundle fallback is registered. Staff
+# manage users in this application's /administration/users pages instead.
+# When EMS_WEB_UPSTREAM is unset (production today) the bind-mounted bundle
+# hook below applies exactly as before.
 # ---------------------------------------------------------------------------
 _spa_directory = base_directory / "spa"
 
-# Request headers forwarded to ems-web (conditional-GET support only) and
-# response headers returned from it. Everything else -- Cookie, Authorization,
-# Set-Cookie, hop-by-hop and encoding headers -- is deliberately dropped.
-_WEB_UPSTREAM_REQUEST_HEADERS = ("accept", "if-none-match", "if-modified-since")
-_WEB_UPSTREAM_RESPONSE_HEADERS = (
-    "content-type",
-    "cache-control",
-    "etag",
-    "last-modified",
-    "expires",
-    "x-robots-tag",
-)
-_web_upstream_client: httpx.AsyncClient | None = None
 
-
-def _get_web_upstream_client() -> httpx.AsyncClient:
-    """Return the shared HTTP client used to reach the ems-web container."""
-
-    global _web_upstream_client
-
-    if _web_upstream_client is None:
-        _web_upstream_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(10.0, connect=3.0),
-            follow_redirects=False,
-        )
-
-    return _web_upstream_client
-
-
-if settings.web_upstream:
-    _web_upstream = settings.web_upstream
-
-    @app.api_route("/app", methods=["GET", "HEAD"], include_in_schema=False)
-    @app.api_route("/app/{spa_path:path}", methods=["GET", "HEAD"], include_in_schema=False)
-    async def proxy_frontend_shell(
-        request: Request,
-        spa_path: str = "",
-    ) -> Response:
-        """Proxy /app/* to the dedicated ems-web container.
-
-        Authentication and DASHBOARD_VIEW are already enforced by
-        PortalAuthenticationMiddleware before this handler runs. ems-web
-        owns SPA fallback (client-side routes -> index.html) and the
-        immutable caching of hashed /app/assets/*.
-        """
-
-        if (
-            "\\" in spa_path
-            or "\x00" in spa_path
-            or any(segment in {".", ".."} for segment in spa_path.split("/"))
-        ):
-            return Response(status_code=404, headers={"cache-control": "no-store"})
-
-        upstream_url = _web_upstream + quote(request.url.path, safe="/")
-        if request.url.query:
-            upstream_url += "?" + request.url.query
-
-        try:
-            upstream = await _get_web_upstream_client().request(
-                request.method,
-                upstream_url,
-                headers={
-                    name: request.headers[name]
-                    for name in _WEB_UPSTREAM_REQUEST_HEADERS
-                    if name in request.headers
-                },
-            )
-        except httpx.HTTPError:
-            return Response(
-                content=b"The EMS web application is temporarily unavailable.",
-                status_code=502,
-                media_type="text/plain",
-                headers={"cache-control": "no-store"},
-            )
-
-        headers = {
-            name: upstream.headers[name]
-            for name in _WEB_UPSTREAM_RESPONSE_HEADERS
-            if name in upstream.headers
-        }
-        location = upstream.headers.get("location")
-        if location and location.startswith("/") and not location.startswith("//"):
-            headers["location"] = location
-
-        return Response(
-            content=b"" if request.method == "HEAD" else upstream.content,
-            status_code=upstream.status_code,
-            headers=headers,
-        )
-
-elif (_spa_directory / "index.html").is_file():
+if not settings.web_upstream and (_spa_directory / "index.html").is_file():
     _spa_assets_directory = _spa_directory / "assets"
 
     if _spa_assets_directory.is_dir():
@@ -648,6 +579,9 @@ def safe_login_redirect_path(next_path: str | None) -> str:
         or "\n" in next_path
         or "\\r" in next_path
         or "\\n" in next_path
+        # No /app on this process in dedicated-container mode (ADR-023):
+        # never send a signed-in user to a 404.
+        or (settings.web_upstream and is_app_path(next_path.split("?", 1)[0]))
     ):
         return "/onboarding/organization"
 
@@ -859,8 +793,13 @@ async def render_user_administration(
     result: dict | None = None,
     error: str | None = None,
     status_code: int = 200,
+    temporary_password: str | None = None,
 ) -> HTMLResponse:
-    """Render organization-scoped portal user management."""
+    """Render organization-scoped portal user management.
+
+    ``temporary_password`` is a server-generated password shown exactly once,
+    in the response that created it (Cache-Control: no-store).
+    """
 
     user = require_authenticated_portal_user(request)
 
@@ -897,9 +836,14 @@ async def render_user_administration(
             "form_data": form_data or {},
             "result": result,
             "error": error,
+            "temporary_password": temporary_password,
             "active_navigation_key": "users",
         },
         status_code=status_code,
+        # Every /administration page is already no-store
+        # (add_sensitive_page_cache_headers); explicit for the one response
+        # that carries a temporary password.
+        **({"headers": {"Cache-Control": "no-store"}} if temporary_password else {}),
     )
 
 
@@ -951,19 +895,357 @@ async def _manageable_user_or_none(request: Request, portal_user_id: int):
     return next((item for item in users if int(item["portal_user_id"]) == portal_user_id), None)
 
 
+AUDIT_EVENT_LABELS = {
+    "USER_CREATED": "Account created",
+    "USER_ROLE_CHANGED": "Role changed",
+    "USER_SCOPE_CHANGED": "Access scope changed",
+    "USER_STATUS_CHANGED": "Account status changed",
+    "USER_DETAILS_CHANGED": "Name or e-mail changed",
+    "USER_PASSWORD_RESET": "Password reset by an administrator",
+    "USER_PASSWORD_CHANGED": "Password changed by the user",
+}
+
+
+def user_administration_database_message(exc: DatabaseError, *, fallback: str) -> str:
+    """A safe, user-facing message for a refusal from the user-management functions.
+
+    Same mapping as the JSON API: the functions' own refusals (42501 / 22023 /
+    P0001) are written for users; unique violations get a fixed text; anything
+    else gets the fallback, so no SQL or other tenant's identifier is shown.
+    """
+
+    sqlstate = getattr(exc, "sqlstate", None)
+    diag = getattr(exc, "diag", None)
+    message = (getattr(diag, "message_primary", None) or "").strip()
+    constraint = getattr(diag, "constraint_name", None) or ""
+    if sqlstate == "23505":
+        if "email" in constraint:
+            return "A user with this email address already exists."
+        return "A user with this username already exists."
+    if sqlstate in {"42501", "22023", "P0001"} and message:
+        return message
+    return user_facing_database_error(exc, fallback=fallback)
+
+
+_AUDIT_FIELD_LABELS = {
+    "role_code": "Role",
+    "access_scope_mode": "Access scope",
+    "is_active": "Active",
+    "display_name": "Name",
+    "email": "E-mail",
+    "organization_id": "Organization",
+    "site_ids": "Sites",
+}
+
+
+def _audit_value(value) -> str:
+    return "-" if value in (None, "") else str(value)
+
+
+def audit_change_lines(event: dict) -> list[str]:
+    """Readable "Field: before -> after" lines for one audit row.
+
+    Only the documented previous_* / new_* pairs and flags are shown; the
+    payload already comes redacted (and, for tenant administrators, without
+    organization / site ids) from admin.list_manageable_portal_user_audit.
+    """
+
+    lines: list[str] = []
+    previous_role, new_role = event.get("previous_role_code"), event.get("new_role_code")
+    if new_role and previous_role and previous_role != new_role:
+        lines.append(f"Role: {previous_role} -> {new_role}")
+    payload = event.get("event_payload") or {}
+    if isinstance(payload, dict):
+        for field, label in _AUDIT_FIELD_LABELS.items():
+            before_key, after_key = f"previous_{field}", f"new_{field}"
+            if before_key not in payload and after_key not in payload:
+                continue
+            before, after = payload.get(before_key), payload.get(after_key)
+            if field == "site_ids":
+                before, after = f"{len(before or [])} site(s)", f"{len(after or [])} site(s)"
+            if before != after:
+                lines.append(f"{label}: {_audit_value(before)} -> {_audit_value(after)}")
+        if payload.get("lockout_cleared"):
+            lines.append("Failed-sign-in lockout cleared")
+    return lines
+
+
+def _can_reset_password(actor, target: dict) -> bool:
+    # UX pre-check of admin.reset_managed_portal_user_password: never one's
+    # own (use Change my password), and another ADMIN only by WiseWatts staff.
+    if int(target["portal_user_id"]) == actor.portal_user_id:
+        return False
+    return target["role_code"] != "ADMIN" or actor.access_scope_mode == "GLOBAL"
+
+
+async def render_user_detail(
+    request: Request,
+    portal_user_id: int,
+    *,
+    notice: str | None = None,
+    error: str | None = None,
+    temporary_password: str | None = None,
+    status_code: int = 200,
+) -> Response:
+    """One managed user: identity, access, account actions and audit history."""
+
+    actor = require_authenticated_portal_user(request)
+    portal_user = await _manageable_user_or_none(request, portal_user_id)
+    if portal_user is None:
+        return RedirectResponse(url="/administration/users", status_code=303)
+
+    audit_events: list[dict] | None
+    try:
+        audit_events = await list_managed_user_audit(
+            actor_portal_user_id=actor.portal_user_id,
+            target_portal_user_id=portal_user_id,
+            limit=50,
+        )
+    except DatabaseError:
+        # e.g. migration 319 not yet applied: the rest of the page still works.
+        audit_events = None
+
+    organization_names: dict[str, str] = {}
+    if actor.access_scope_mode == "GLOBAL":
+        organization_names = {str(o["id"]): o["organization_name"] for o in await list_organizations()}
+    site_names = {str(site["id"]): site["site_name"] for site in await list_sites_for_request(request)}
+
+    return templates.TemplateResponse(
+        request=request,
+        name="user_detail.html",
+        context={
+            "environment": settings.app_env,
+            "portal_user": portal_user,
+            "is_self": int(portal_user["portal_user_id"]) == actor.portal_user_id,
+            "can_reset_password": _can_reset_password(actor, portal_user),
+            "audit_events": (
+                None
+                if audit_events is None
+                else [{**event, "change_lines": audit_change_lines(event)} for event in audit_events]
+            ),
+            "audit_event_labels": AUDIT_EVENT_LABELS,
+            "organization_name": organization_names.get(str(portal_user.get("organization_id") or "")),
+            "assigned_site_names": [
+                site_names.get(str(site_id), "Site outside your access")
+                for site_id in (portal_user.get("site_ids") or [])
+            ],
+            "password_min_length": PASSWORD_MIN_LENGTH,
+            "password_max_length": PASSWORD_MAX_LENGTH,
+            "notice": notice,
+            "error": error,
+            "temporary_password": temporary_password,
+            "active_navigation_key": "users",
+        },
+        status_code=status_code,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @app.get(
     "/administration/users/{portal_user_id}",
     response_class=HTMLResponse,
     include_in_schema=False,
 )
 async def user_access_detail(request: Request, portal_user_id: int) -> Response:
-    portal_user = await _manageable_user_or_none(request, portal_user_id)
-    if portal_user is None:
+    return await render_user_detail(request, portal_user_id)
+
+
+@app.post(
+    "/administration/users/{portal_user_id}/details",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def change_user_details_administration(
+    request: Request,
+    portal_user_id: int,
+    display_name: Annotated[str, Form()],
+    email: Annotated[str, Form()],
+) -> Response:
+    """Change a managed user's display name and e-mail (audited, migration 315)."""
+
+    actor = require_authenticated_portal_user(request)
+    current = await _manageable_user_or_none(request, portal_user_id)
+    if current is None:
         return RedirectResponse(url="/administration/users", status_code=303)
+
+    try:
+        new_display_name = normalize_display_name(display_name)
+        new_email = normalize_email(email)
+    except AccountPolicyError as exc:
+        return await render_user_detail(request, portal_user_id, error=str(exc), status_code=400)
+
+    if new_display_name == current["display_name"] and new_email == (current.get("email") or None):
+        return await render_user_detail(request, portal_user_id, notice="No changes to save.")
+
+    try:
+        await apply_managed_user_changes(
+            actor_portal_user_id=actor.portal_user_id,
+            target_portal_user_id=portal_user_id,
+            details=(new_display_name, new_email),
+            role_code=None,
+            access_scope=None,
+            is_active=None,
+        )
+    except DatabaseError as exc:
+        return await render_user_detail(
+            request,
+            portal_user_id,
+            error=user_administration_database_message(exc, fallback="The database rejected the change."),
+            status_code=409,
+        )
+
+    return await render_user_detail(request, portal_user_id, notice="Name and e-mail saved.")
+
+
+@app.post(
+    "/administration/users/{portal_user_id}/password",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def reset_user_password_administration(
+    request: Request,
+    portal_user_id: int,
+    password_mode: Annotated[str, Form()] = "generate",
+    password: Annotated[str, Form()] = "",
+    password_confirm: Annotated[str, Form()] = "",
+) -> Response:
+    """Administrator password reset of another user (audited, clears lockout).
+
+    Generated (shown once, no-store) or chosen. Never one's own password
+    (Change my password), and another ADMIN's only by WiseWatts staff; the
+    database function enforces both and the scope.
+    """
+
+    actor = require_authenticated_portal_user(request)
+    target = await _manageable_user_or_none(request, portal_user_id)
+    if target is None:
+        return RedirectResponse(url="/administration/users", status_code=303)
+
+    if int(target["portal_user_id"]) == actor.portal_user_id:
+        return await render_user_detail(
+            request,
+            portal_user_id,
+            error="Use Change my password to change your own password.",
+            status_code=403,
+        )
+    if not _can_reset_password(actor, target):
+        return await render_user_detail(
+            request,
+            portal_user_id,
+            error="Only WiseWatts staff administrators can reset another administrator's password.",
+            status_code=403,
+        )
+
+    mode = (password_mode or "generate").strip().lower()
+    generated: str | None = None
+    if mode == "generate":
+        generated = generate_temporary_password()
+        new_password = generated
+    elif mode == "set":
+        try:
+            new_password = validate_password(password, username=target["username"])
+        except AccountPolicyError as exc:
+            return await render_user_detail(request, portal_user_id, error=str(exc), status_code=400)
+        if password != password_confirm:
+            return await render_user_detail(
+                request, portal_user_id, error="The passwords do not match.", status_code=400
+            )
+    else:
+        return await render_user_detail(
+            request, portal_user_id, error="Choose how the new password is set.", status_code=400
+        )
+
+    try:
+        await reset_managed_user_password(
+            actor_portal_user_id=actor.portal_user_id,
+            target_portal_user_id=portal_user_id,
+            password_hash=hash_portal_password(new_password),
+        )
+    except DatabaseError as exc:
+        return await render_user_detail(
+            request,
+            portal_user_id,
+            error=user_administration_database_message(exc, fallback="The database rejected the password reset."),
+            status_code=409,
+        )
+
+    return await render_user_detail(
+        request,
+        portal_user_id,
+        notice=(
+            "Password reset. Any failed-sign-in lockout was cleared. Sessions that are already "
+            "signed in are not ended (issue #172): deactivate the account first if it may be compromised."
+        ),
+        temporary_password=generated,
+    )
+
+
+async def render_own_password_page(
+    request: Request,
+    *,
+    error: str | None = None,
+    notice: str | None = None,
+    status_code: int = 200,
+) -> HTMLResponse:
+    require_authenticated_portal_user(request)
     return templates.TemplateResponse(
         request=request,
-        name="user_detail.html",
-        context={"environment": settings.app_env, "portal_user": portal_user, "active_navigation_key": "users"},
+        name="account_password.html",
+        context={
+            "environment": settings.app_env,
+            "page_title": "Change my password",
+            "error": error,
+            "notice": notice,
+            "password_min_length": PASSWORD_MIN_LENGTH,
+            "password_max_length": PASSWORD_MAX_LENGTH,
+            "active_navigation_key": "account",
+        },
+        status_code=status_code,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.get(
+    "/administration/account/password",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def own_password_page(request: Request) -> HTMLResponse:
+    """Change my password: any signed-in role."""
+
+    return await render_own_password_page(request)
+
+
+@app.post(
+    "/administration/account/password",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def own_password_submit(
+    request: Request,
+    current_password: Annotated[str, Form()] = "",
+    new_password: Annotated[str, Form()] = "",
+    new_password_confirm: Annotated[str, Form()] = "",
+) -> HTMLResponse:
+    """Change one's own password (current password required; refused while locked)."""
+
+    actor = require_authenticated_portal_user(request)
+    if new_password != new_password_confirm:
+        return await render_own_password_page(request, error="The new passwords do not match.", status_code=400)
+    try:
+        await change_own_password_verified(
+            actor,
+            current_password=current_password,
+            new_password=new_password,
+        )
+    except OwnPasswordChangeError as exc:
+        return await render_own_password_page(request, error=exc.message, status_code=exc.status_code)
+    return await render_own_password_page(
+        request,
+        notice=(
+            "Your password was changed. Other signed-in sessions are not ended (issue #172); "
+            "sign out on other devices yourself."
+        ),
     )
 
 
@@ -1009,13 +1291,20 @@ async def create_user_administration(
     display_name: Annotated[str, Form()],
     username: Annotated[str, Form()],
     email: Annotated[str, Form()],
-    password: Annotated[str, Form()],
     role_code: Annotated[str, Form()],
     access_scope_mode: Annotated[str, Form()],
+    password: Annotated[str, Form()] = "",
+    password_mode: Annotated[str, Form()] = "",
     organization_id: Annotated[str, Form()] = "",
     site_ids: Annotated[list[str], Form()] = [],
 ) -> HTMLResponse:
-    """Create a portal user within the actor's authorized scope."""
+    """Create a portal user within the actor's authorized scope.
+
+    password_mode "generate" (the form's default) creates a random temporary
+    password shown once on the result page; "set" (or a password with no
+    mode, the earlier form) uses the administrator's password. Both follow
+    the shared account policy (src.user_account_policy), as the JSON API does.
+    """
 
     user = require_authenticated_portal_user(request)
 
@@ -1027,34 +1316,39 @@ async def create_user_administration(
         "access_scope_mode": access_scope_mode,
         "organization_id": organization_id,
         "site_ids": site_ids,
+        "password_mode": password_mode,
     }
 
+    async def refuse(message: str, status_code: int = 400) -> HTMLResponse:
+        return await render_user_administration(
+            request,
+            form_data=submitted_form_data,
+            error=message,
+            status_code=status_code,
+        )
+
     if role_code not in user_manager_assignable_roles(user.role_code):
-        return await render_user_administration(
-            request,
-            form_data=submitted_form_data,
-            error=(
-                f"{user.role_code} cannot assign the requested "
-                f"{role_code} role."
-            ),
-            status_code=400,
-        )
+        return await refuse(f"{user.role_code} cannot assign the requested {role_code} role.")
 
-    if not display_name.strip() or not username.strip():
-        return await render_user_administration(
-            request,
-            form_data=submitted_form_data,
-            error="Display name and username are required.",
-            status_code=400,
-        )
+    try:
+        normalized_username = normalize_username(username)
+        normalized_display_name = normalize_display_name(display_name)
+        normalized_email = normalize_email(email)
+    except AccountPolicyError as exc:
+        return await refuse(str(exc))
 
-    if len(password) < 12:
-        return await render_user_administration(
-            request,
-            form_data=submitted_form_data,
-            error="Temporary passwords must contain at least 12 characters.",
-            status_code=400,
-        )
+    mode = (password_mode or ("set" if password else "generate")).strip().lower()
+    if mode not in {"generate", "set"}:
+        return await refuse("Choose how the initial password is set.")
+    generated: str | None = None
+    if mode == "generate":
+        generated = generate_temporary_password()
+        initial_password = generated
+    else:
+        try:
+            initial_password = validate_password(password, username=normalized_username)
+        except AccountPolicyError as exc:
+            return await refuse(str(exc))
 
     try:
         normalized_scope, normalized_site_ids = (
@@ -1064,12 +1358,7 @@ async def create_user_administration(
             )
         )
     except ValueError as exc:
-        return await render_user_administration(
-            request,
-            form_data=submitted_form_data,
-            error=str(exc),
-            status_code=400,
-        )
+        return await refuse(str(exc))
 
     target_organization_id = (
         None
@@ -1081,53 +1370,28 @@ async def create_user_administration(
         )
     )
 
-    if (
-        normalized_scope.value != "GLOBAL"
-        and not target_organization_id
-    ):
-        return await render_user_administration(
-            request,
-            form_data=submitted_form_data,
-            error=(
-                "ORGANIZATION and SELECTED_SITES scopes require "
-                "an organization."
-            ),
-            status_code=400,
-        )
+    if normalized_scope.value != "GLOBAL" and not target_organization_id:
+        return await refuse("ORGANIZATION and SELECTED_SITES scopes require an organization.")
 
-    if (
-        user.access_scope_mode != "GLOBAL"
-        and normalized_scope.value == "GLOBAL"
-    ):
-        return await render_user_administration(
-            request,
-            form_data=submitted_form_data,
-            error=(
-                "Only a GLOBAL administrator may create a "
-                "GLOBAL-scoped user."
-            ),
-            status_code=400,
-        )
+    if user.access_scope_mode != "GLOBAL" and normalized_scope.value == "GLOBAL":
+        return await refuse("Only a GLOBAL administrator may create a GLOBAL-scoped user.")
 
     try:
         portal_user_id = await create_managed_user(
             actor_portal_user_id=user.portal_user_id,
-            username=username.strip(),
-            display_name=display_name.strip(),
-            email=email.strip(),
-            password_hash=hash_portal_password(password),
+            username=normalized_username,
+            display_name=normalized_display_name,
+            email=normalized_email,
+            password_hash=hash_portal_password(initial_password),
             role_code=role_code,
             access_scope_mode=normalized_scope.value,
             organization_id=target_organization_id,
             site_ids=normalized_site_ids,
         )
     except DatabaseError as exc:
-        return await render_user_administration(
-            request,
-            form_data=submitted_form_data,
-            error=user_facing_database_error(
-                exc,
-                fallback="The database rejected the user request.",
+        return await refuse(
+            user_administration_database_message(
+                exc, fallback="The database rejected the user request."
             ),
             status_code=409,
         )
@@ -1136,11 +1400,13 @@ async def create_user_administration(
         request,
         result={
             "portal_user_id": portal_user_id,
-            "display_name": display_name.strip(),
-            "username": username.strip(),
+            "display_name": normalized_display_name,
+            "username": normalized_username,
             "role_code": role_code,
+            "action": "created",
         },
         status_code=201,
+        temporary_password=generated,
     )
 
 
@@ -1177,7 +1443,7 @@ async def change_user_role_administration(
     except DatabaseError as exc:
         return await render_user_administration(
             request,
-            error=user_facing_database_error(
+            error=user_administration_database_message(
                 exc,
                 fallback="The database rejected the role change.",
             ),
@@ -1270,7 +1536,7 @@ async def change_user_scope_administration(
     except DatabaseError as exc:
         return await render_user_administration(
             request,
-            error=user_facing_database_error(
+            error=user_administration_database_message(
                 exc,
                 fallback=(
                     "The database rejected the access-scope change."
@@ -1321,7 +1587,7 @@ async def change_user_status_administration(
     except DatabaseError as exc:
         return await render_user_administration(
             request,
-            error=user_facing_database_error(
+            error=user_administration_database_message(
                 exc,
                 fallback="The database rejected the status change.",
             ),

@@ -31,7 +31,19 @@
 
     {% if result %}
     <div class="success-message" role="status">
+        {% if result.action == "created" %}
+        User <a href="/administration/users/{{ result.portal_user_id }}">{{ result.username }}</a> was created.
+        {% else %}
         The user-management action completed successfully.
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {% if temporary_password %}
+    <div class="success-message temporary-password-notice" role="status" data-temporary-password>
+        <p><strong>Temporary password for {{ result.username if result else "the new user" }} (shown only once):</strong></p>
+        <p><code>{{ temporary_password }}</code></p>
+        <p>Give it to the user over a separate, secure channel. It is not stored in readable form and cannot be shown again. They should change it after signing in (Change my password).</p>
     </div>
     {% endif %}
 
@@ -52,6 +64,18 @@
                     {% endfor %}
                 </select>
             </label>
+            {% if organizations %}
+            <label>
+                Organization
+                <select data-user-organization>
+                    <option value="">All organizations</option>
+                    <option value="__global">WiseWatts staff (no organization)</option>
+                    {% for organization in organizations %}
+                    <option value="{{ organization.id }}">{{ organization.organization_name }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            {% endif %}
             <label>
                 Status
                 <select data-user-status>
@@ -90,6 +114,7 @@
                         data-search-text="{{ portal_user.display_name }} {{ portal_user.email }} {{ portal_user.username }}"
                         data-role="{{ portal_user.role_code }}"
                         data-status="{% if portal_user.is_active %}ACTIVE{% else %}INACTIVE{% endif %}"
+                        data-organization="{{ portal_user.organization_id or '__global' }}"
                     >
                         <td>
                             <div class="user-identity-cell">
@@ -148,6 +173,7 @@
     const query = document.querySelector('[data-user-search]');
     const role = document.querySelector('[data-user-role]');
     const status = document.querySelector('[data-user-status]');
+    const organization = document.querySelector('[data-user-organization]');
     const rows = [...document.querySelectorAll('[data-user-row]')];
     const empty = document.querySelector('[data-user-empty]');
 
@@ -161,7 +187,8 @@
             const matches =
                 (!searchValue || (row.dataset.searchText || '').toLowerCase().includes(searchValue)) &&
                 (!role.value || row.dataset.role === role.value) &&
-                (!status.value || row.dataset.status === status.value);
+                (!status.value || row.dataset.status === status.value) &&
+                (!organization || !organization.value || row.dataset.organization === organization.value);
 
             row.hidden = !matches;
             if (matches) visibleCount += 1;
@@ -173,6 +200,7 @@
     query.addEventListener('input', filterRows);
     role.addEventListener('change', filterRows);
     status.addEventListener('change', filterRows);
+    if (organization) organization.addEventListener('change', filterRows);
 })();
 </script>
 {% endblock %}

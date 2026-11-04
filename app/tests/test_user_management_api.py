@@ -139,7 +139,10 @@ def store(monkeypatch) -> FakeUserStore:
     monkeypatch.setattr(f"{module}.create_managed_user_with_status", fake.create)
     monkeypatch.setattr(f"{module}.apply_managed_user_changes", fake.apply)
     monkeypatch.setattr(f"{module}.reset_managed_user_password", fake.reset)
-    monkeypatch.setattr(f"{module}.change_own_password", fake.change_own)
+    # Own-password changes run through the shared src.own_password helper.
+    monkeypatch.setattr("src.own_password.change_own_password", fake.change_own)
+    monkeypatch.setattr("src.own_password.DatabaseError", FakeDatabaseError)
+    monkeypatch.setattr("src.own_password.hash_portal_password", lambda password: f"$argon2id$fake${len(password)}")
     monkeypatch.setattr(f"{module}.list_organizations", fake.organizations)
     monkeypatch.setattr(f"{module}.list_accessible_sites", fake.sites)
     monkeypatch.setattr(f"{module}.DatabaseError", FakeDatabaseError)
@@ -515,7 +518,8 @@ def _own_password_harness(monkeypatch, record: PortalUserAuthenticationRecord) -
         seen["verified"].append(True)
         return security.verify_portal_password(password_hash, password)
 
-    module = "src.routers.user_management_api"
+    # The own-password rules live in the shared src.own_password helper.
+    module = "src.own_password"
     monkeypatch.setattr(f"{module}.get_portal_user_for_authentication", lookup)
     monkeypatch.setattr(f"{module}.record_portal_login_failure", failure)
     monkeypatch.setattr(f"{module}.verify_portal_password", verify)
@@ -536,8 +540,8 @@ def test_own_password_change_requires_the_current_password(portal_client, monkey
     async def failure(portal_user_id: int) -> None:
         failures.append(portal_user_id)
 
-    monkeypatch.setattr("src.routers.user_management_api.get_portal_user_for_authentication", lookup)
-    monkeypatch.setattr("src.routers.user_management_api.record_portal_login_failure", failure)
+    monkeypatch.setattr("src.own_password.get_portal_user_for_authentication", lookup)
+    monkeypatch.setattr("src.own_password.record_portal_login_failure", failure)
 
     wrong = portal_client.post(
         f"{API}/me/password", json={"current_password": "Wrong-Password-1", "new_password": "Brand-New-Pass-22"}, headers=ORIGIN

@@ -492,6 +492,26 @@ def test_staff_can_sign_in_when_allowed_and_are_signed_out_when_disallowed(custo
     assert customer_client.get("/api/v1/me").status_code == 401           # the session was cleared
 
 
+def test_allowed_staff_get_read_only_customer_access_and_no_administration(customer_client, customer_module,
+                                                                           monkeypatch) -> None:
+    # Staging (ADR-023): EMS_CUSTOMER_ALLOW_STAFF=true lets a GLOBAL ADMIN use
+    # the customer web app. It stays read-only there: no user.manage is
+    # advertised (so the SPA shows no Admin section) and every administration
+    # path is absent -- user management happens in the Administration App only.
+    monkeypatch.setattr(customer_module.settings, "customer_allow_staff", True)
+    assert _customer_login(customer_client, monkeypatch, user=STAFF).status_code == 200
+    me = customer_client.get("/api/v1/me")
+    assert me.status_code == 200
+    assert me.json()["role_code"] == "ADMIN" and me.json()["access_scope_mode"] == "GLOBAL"
+    assert "user.manage" not in me.json()["permissions"]
+    for method, path in (("GET", "/api/admin/v1/users"), ("POST", "/api/admin/v1/users"),
+                         ("POST", "/api/admin/v1/me/password"), ("GET", "/administration/users"),
+                         ("GET", "/administration/users/1"), ("POST", "/administration/users/1/password"),
+                         ("GET", "/administration/account/password"), ("GET", "/login")):
+        response = customer_client.request(method, path, headers=ORIGIN)
+        assert response.status_code == 404, (method, path, response.status_code)
+
+
 # --- parity with the admin portal ---------------------------------------------------
 
 def _alert_row() -> dict:

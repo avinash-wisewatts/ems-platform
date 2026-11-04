@@ -17,13 +17,14 @@ migrations (`postgres/migration_environment_scope.csv`) are skipped on
 production; production releases first pass the pending-migration precheck
 (`expected_migrations`). See [ci-cd.md](ci-cd.md#environment-scoped-migrations).
 
-**Next production release: migrations 311 and 315-318.** 315 (user-management
+**Next production release: migrations 311 and 315-319.** 315 (user-management
 hardening) is not staging-only, because it closes a cross-tenant scope move
 that exists on production today. 316 and 317 remove `ems_readonly`'s EXECUTE on
 every `admin` function and all its access to `admin.portal_users`, and 318 its
 EXECUTE on the ten write-capable routines outside `admin` -- grants only
-production has. From production head 308, the release must declare
-`expected_migrations=311,315,316,317,318`; the precheck refuses any subset.
+production has. 319 adds the Administration App's read-only, actor-scoped
+user audit-history function (ADR-023 Amendment 3). From production head 308, the release must declare
+`expected_migrations=311,315,316,317,318,319`; the precheck refuses any subset.
 Checklist and blockers:
 [production-release-311-315-to-318.md](production-release-311-315-to-318.md).
 
@@ -31,7 +32,7 @@ Checklist and blockers:
   `scripts/verify/portal_user_scope_exposure.sql` (read-only). Until then, no
   ORGANIZATION or SELECTED_SITES ADMIN may be created on production
   ([../10-operations/portal-user-provisioning.md](../10-operations/portal-user-provisioning.md)).
-- **After the release (read-only):** expect 311 and 315-318 ledger rows; the
+- **After the release (read-only):** expect 311 and 315-319 ledger rows; the
   three new `admin.*` functions are SECURITY DEFINER with EXECUTE for `ems_app`
   only; `ems_readonly` executes no `admin` function except the PUBLIC one,
   none of the ten write-capable routines, and cannot read `admin.portal_users`.

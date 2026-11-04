@@ -84,7 +84,9 @@ This makes the frontend restartable and rollbackable by recreating only
 touching the Administration App process. Same origin, URL, cookie and
 permissions; no second auth system. The bind-mounted bundle hook stays as
 the fallback. Status: **merged (PR #156, `f9f241a`) and deployed to staging 2026-10-26; staging `/app` is proxied to `ems-web` since 08:00 UTC (web-only rollback/roll-forward verified, runs 40289406885 / 40289499596); logged-in browser acceptance pending; not on production**; production remains API-only (release
-plan D6). Superseded as the target by
+plan D6). **Since ADR-023 Amendment 3 (2026-11-04) the proxy is removed:**
+with `EMS_WEB_UPSTREAM` set, admin-portal answers `/app` with 404 and the
+frontend is served only on the customer host. Superseded as the target by
 [ADR-023](ADR-023-customer-staff-separation.md), which removes the
 Administration App from the customer request path entirely.
 Alternative rejected: a front reverse proxy with `auth_request` (moves the

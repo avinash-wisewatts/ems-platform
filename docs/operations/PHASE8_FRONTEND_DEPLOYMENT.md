@@ -37,6 +37,11 @@ browser ── :8080 ── admin-portal ──(session + DASHBOARD_VIEW)──�
 | `ems-web` down | `/app/*` → 502 (`no-store`); `/login`, `/api/v1/*`, admin routes unaffected; recovers when `ems-web` is back |
 | Hardening | No host port, no env file/secrets, read-only root fs (tmpfs for nginx paths), `no-new-privileges`, `server_tokens off`, `absolute_redirect off` |
 
+**ADR-023 Amendment 3 (2026-11-04):** the proxy described in this section is removed.
+With `EMS_WEB_UPSTREAM` set, admin-portal serves **no** `/app` (404 before
+authentication); `ems-web` is reached only through the edge's customer host.
+The variable now means "the dedicated container serves the web app".
+
 **Switch.** `EMS_WEB_UPSTREAM` in the host **root** `.env` (compose passes it
 to `admin-portal`; empty by default):
 

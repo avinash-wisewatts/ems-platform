@@ -1,1 +1,106 @@
-{% extends "base.html" %}{% block title %}{{ portal_user.display_name }} | WiseWatts EMS{% endblock %}{% block breadcrumb %}<nav class="breadcrumb"><a href="/administration/users">User management</a><span>/</span><span class="breadcrumb-current">{{ portal_user.display_name }}</span></nav>{% endblock %}{% block content %}<section class="administration-page"><header class="entity-identity-header"><div><p class="eyebrow">USER ACCESS</p><h2>{{ portal_user.display_name }}</h2><p>{{ portal_user.email or portal_user.username }}</p></div><div class="identity-actions"><span class="status-pill{% if portal_user.is_active %} is-positive{% endif %}">{% if portal_user.is_active %}ACTIVE{% else %}INACTIVE{% endif %}</span><a class="button-link" href="/administration/users/{{ portal_user.portal_user_id }}/edit">Edit access</a></div></header><div class="profile-grid"><section class="form-card"><h3>Identity</h3><dl class="definition-grid"><div><dt>Display name</dt><dd>{{ portal_user.display_name }}</dd></div><div><dt>Email</dt><dd>{{ portal_user.email or '—' }}</dd></div><div><dt>Username</dt><dd>{{ portal_user.username }}</dd></div><div><dt>User ID</dt><dd>{{ portal_user.portal_user_id }}</dd></div></dl></section><section class="form-card"><h3>Organization access</h3><dl class="definition-grid"><div><dt>Role</dt><dd>{{ portal_user.role_code }}</dd></div><div><dt>Scope</dt><dd>{{ portal_user.access_scope_mode or 'ORGANIZATION' }}</dd></div><div><dt>Assigned sites</dt><dd>{{ portal_user.site_ids|length if portal_user.site_ids else 0 }}</dd></div></dl></section></div></section>{% endblock %}
+{% extends "base.html" %}
+{% block title %}{{ portal_user.display_name }} | WiseWatts EMS{% endblock %}
+{% block breadcrumb %}<nav class="breadcrumb"><a href="/administration/users">User management</a><span>/</span><span class="breadcrumb-current">{{ portal_user.display_name }}</span></nav>{% endblock %}
+{% block content %}
+<section class="administration-page user-detail-page">
+    <header class="entity-identity-header">
+        <div>
+            <p class="eyebrow">USER ACCESS</p>
+            <h2>{{ portal_user.display_name }}</h2>
+            <p>{{ portal_user.email or portal_user.username }}</p>
+        </div>
+        <div class="identity-actions">
+            <span class="status-pill{% if portal_user.is_active %} is-positive{% endif %}" data-user-status>{% if portal_user.is_active %}ACTIVE{% else %}INACTIVE{% endif %}</span>
+            {% if is_self %}
+            <a class="button-link" href="/administration/account/password">Change my password</a>
+            {% else %}
+            <a class="button-link" href="/administration/users/{{ portal_user.portal_user_id }}/edit">Edit access</a>
+            {% endif %}
+        </div>
+    </header>
+
+    {% if error %}<div class="form-error" role="alert" data-user-detail-error>{{ error }}</div>{% endif %}
+    {% if notice %}<div class="success-message" role="status" data-user-detail-notice>{{ notice }}</div>{% endif %}
+    {% if temporary_password %}
+    <div class="success-message temporary-password-notice" role="status" data-temporary-password>
+        <p><strong>Temporary password (shown only once):</strong></p>
+        <p><code>{{ temporary_password }}</code></p>
+        <p>Give it to {{ portal_user.display_name }} over a separate, secure channel. It is not stored in readable form and cannot be shown again. They should change it after signing in (Change my password).</p>
+    </div>
+    {% endif %}
+
+    <div class="profile-grid">
+        <section class="form-card">
+            <h3>Identity</h3>
+            <dl class="definition-grid">
+                <div><dt>Username</dt><dd>{{ portal_user.username }}</dd></div>
+                <div><dt>User ID</dt><dd>{{ portal_user.portal_user_id }}</dd></div>
+                <div><dt>Created</dt><dd>{{ portal_user.created_at|date_time if portal_user.created_at else '—' }}</dd></div>
+                <div><dt>Last changed</dt><dd>{{ portal_user.updated_at|date_time if portal_user.updated_at else '—' }}</dd></div>
+            </dl>
+            <form method="post" action="/administration/users/{{ portal_user.portal_user_id }}/details" class="form-grid" data-user-details-form novalidate>
+                <label>Display name<input name="display_name" required maxlength="200" value="{{ portal_user.display_name }}"></label>
+                <label>Email<input name="email" type="email" required maxlength="254" value="{{ portal_user.email or '' }}"></label>
+                <div class="form-actions"><button type="submit">Save name and e-mail</button></div>
+            </form>
+        </section>
+
+        <section class="form-card">
+            <h3>Organization access</h3>
+            <dl class="definition-grid">
+                <div><dt>Role</dt><dd>{% if portal_user.role_code == "ADMIN" %}Administrator{% elif portal_user.role_code == "OPERATOR" %}Operator{% else %}Viewer{% endif %} ({{ portal_user.role_code }})</dd></div>
+                <div><dt>Scope</dt><dd>{% if portal_user.access_scope_mode == "GLOBAL" %}All organizations (WiseWatts staff){% elif portal_user.access_scope_mode == "SELECTED_SITES" %}Selected sites{% else %}Whole organization{% endif %}</dd></div>
+                {% if organization_name %}<div><dt>Organization</dt><dd>{{ organization_name }}</dd></div>{% endif %}
+                <div><dt>Assigned sites</dt><dd>{% if assigned_site_names %}{{ assigned_site_names|join(', ') }}{% else %}—{% endif %}</dd></div>
+            </dl>
+        </section>
+    </div>
+
+    <section class="form-card" data-reset-password-section>
+        <h3>Reset password</h3>
+        {% if is_self %}
+        <p>You cannot reset your own password here. Use <a href="/administration/account/password">Change my password</a>.</p>
+        {% elif not can_reset_password %}
+        <p>Only WiseWatts staff administrators can reset another administrator's password.</p>
+        {% else %}
+        <p>Sets a new password and clears any failed-sign-in lockout. Sessions that are already signed in are not ended (issue #172): if the account may be compromised, deactivate it first.</p>
+        <form method="post" action="/administration/users/{{ portal_user.portal_user_id }}/password" class="form-grid" data-reset-password-form novalidate>
+            <fieldset>
+                <legend>New password</legend>
+                <label><input type="radio" name="password_mode" value="generate" checked> Generate a temporary password (shown once)</label>
+                <label><input type="radio" name="password_mode" value="set"> Set a password</label>
+            </fieldset>
+            <label>Password<span class="field-help">Only for "Set a password": {{ password_min_length }}–{{ password_max_length }} characters, not the username.</span><input name="password" type="password" autocomplete="new-password" maxlength="{{ password_max_length }}"></label>
+            <label>Confirm password<input name="password_confirm" type="password" autocomplete="new-password" maxlength="{{ password_max_length }}"></label>
+            <div class="form-actions"><button type="submit">Reset password</button></div>
+        </form>
+        {% endif %}
+    </section>
+
+    <section class="form-card" data-audit-history>
+        <h3>Change history</h3>
+        {% if audit_events is none %}
+        <p>The change history is not available yet.</p>
+        {% elif not audit_events %}
+        <p>No recorded changes for this user.</p>
+        {% else %}
+        <div class="table-scroll">
+            <table class="user-table audit-table">
+                <thead><tr><th scope="col">When</th><th scope="col">Change</th><th scope="col">By</th><th scope="col">Details</th></tr></thead>
+                <tbody>
+                {% for event in audit_events %}
+                <tr data-audit-row data-audit-event="{{ event.event_type }}">
+                    <td>{{ event.created_at|date_time }}</td>
+                    <td>{{ audit_event_labels.get(event.event_type, event.event_type) }}</td>
+                    <td>{% if event.actor_display_name %}{{ event.actor_display_name }}{% elif event.actor_is_staff %}WiseWatts staff{% else %}Another administrator{% endif %}</td>
+                    <td>{% if event.change_lines %}{{ event.change_lines|join('; ') }}{% else %}—{% endif %}</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <p class="field-help">Newest first, up to 50 entries. Passwords are never recorded.</p>
+        {% endif %}
+    </section>
+</section>
+{% endblock %}

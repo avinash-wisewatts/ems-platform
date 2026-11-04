@@ -26,6 +26,38 @@ async def list_manageable_users(
             raise
 
 
+async def list_managed_user_audit(
+    *,
+    actor_portal_user_id: int,
+    target_portal_user_id: int,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """One user's audit history, newest first (migration 319).
+
+    The database function applies the actor's scope: no rows for a target
+    outside it, organization-only rows (without organization / site ids) for
+    a non-GLOBAL actor, redacted payloads.
+    """
+
+    async with database_connection() as connection:
+        try:
+            async with connection.cursor() as cursor:
+                await cursor.execute(
+                    """
+                    SELECT *
+                    FROM admin.list_manageable_portal_user_audit(%s, %s, %s)
+                    """,
+                    (actor_portal_user_id, target_portal_user_id, limit),
+                )
+                rows = await cursor.fetchall()
+
+            await connection.rollback()
+            return list(rows)
+        except Exception:
+            await connection.rollback()
+            raise
+
+
 async def create_managed_user(
     *,
     actor_portal_user_id: int,

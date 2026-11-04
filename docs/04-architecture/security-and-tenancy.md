@@ -36,6 +36,7 @@ carries this scoping — there is no separate "tenant" table distinct from
 | Role | Privileges | Observed behavior |
 |---|---|---|
 | `ems_readonly` | `SELECT` only (the operators' investigation login). On production it also held pre-baseline EXECUTE on `admin` functions and SELECT on `admin.portal_users` incl. `password_hash`, removed by migrations 316 / 317 (2026-11): it has no access to `admin.portal_users` and executes no `admin` function except the PUBLIC one; 318 removed its EXECUTE on the ten write-capable SECURITY DEFINER routines outside `admin`. | Could query `metadata`/`config` table contents, but **could not see any rows in `information_schema.triggers`** for tables it otherwise had full `SELECT` access to — a genuine, unexplained visibility gap, not a write-privilege difference. |
+| `ems_app` (user management) | EXECUTE on the controlled `admin.*_managed_portal_user*` functions and, from migration 319, `admin.list_manageable_portal_user_audit` (actor-scoped audit history: tenant administrators see only their own organization's rows, without organization / site ids). No direct SELECT on `admin.portal_users` or `admin.portal_user_audit`. | Administration App only; the customer API (`ems_customer_api`) has none of these. |
 | `ems_admin` | Full DDL/DML owner-level access | `information_schema.triggers`, `pg_trigger`, `pg_proc`, `pg_get_functiondef()` all fully visible — revealed 12 active triggers `ems_readonly` could not enumerate. |
 
 **Practical implication**: any read-only investigation or tooling that

@@ -63,8 +63,14 @@ forwarded to `ems-web`. Web-only deploy and rollback
 (`scripts/release/deploy_web.sh`, `.github/workflows/deploy-web.yml`)
 recreate **only** `ems-web`. With `EMS_WEB_UPSTREAM` unset the bind-mounted
 bundle hook applies exactly as before and is the rollback fallback.
-Trade-off: `/app` traffic still traverses `admin-portal` at runtime (it is
-the auth gate and the origin). A front reverse proxy (Option B) was
+**Superseded on staging by ADR-023 Amendment 3 (2026-11-04):** with `EMS_WEB_UPSTREAM`
+set, admin-portal no longer proxies `/app` at all — `/app` and `/app/*` are a
+plain 404 there (before authentication), and the EMS Web App is reached only
+on the customer host through the edge (`/app` → `ems-web`, `/auth` and
+`/api/v1` → `customer-api`). Staff manage users in the Administration App's
+`/administration/users` pages. Without `EMS_WEB_UPSTREAM` (production) the
+bundle hook is unchanged. Historical trade-off of the proxy mode: `/app`
+traffic traversed `admin-portal` at runtime (it was the auth gate and the origin). A front reverse proxy (Option B) was
 deliberately not chosen: it would move the public port binding and add a
 shared ingress before the planned TLS work. See
 [../05-applications/ems-web/README.md](../05-applications/ems-web/README.md)

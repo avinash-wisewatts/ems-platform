@@ -19,8 +19,10 @@ with the previous `-web` Git SHA, or on the host run
 Only `ems-web` is recreated; no migration, no `admin-portal` restart. The
 previous reference is printed by the script and recorded in
 `<PROJECT_PATH>/.deploy-history/<env>-web-container.log`. An unhealthy new
-image is replaced by the previously running one automatically. Reverting
-from container mode to the bind-mounted bundle is a host `.env` change
+image is replaced by the previously running one automatically. Since ADR-023 Amendment 3 admin-portal serves no `/app` in container
+mode (staging: the web app is on the customer host only). Reverting
+from container mode to the bind-mounted bundle (which also brings `/app`
+back on `:8080`) is a host `.env` change
 (unset `EMS_WEB_UPSTREAM`) plus an `admin-portal` recreate with `APP_IMAGE`
 pinned to its running image (the root `.env` has no `APP_IMAGE`; a bare
 `docker compose up` would resolve `ems-platform-prod-app:local`) — see

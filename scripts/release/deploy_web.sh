@@ -6,8 +6,8 @@ set -Eeuo pipefail
 #
 # Runs ONE already-built, immutably-tagged web frontend artifact
 # (ghcr.io/<owner>/<repo>-web:<git-sha>[@sha256:...]) as the `ems-web`
-# compose service. The admin-portal proxies the authenticated /app/* URL
-# space to it when the host root .env sets EMS_WEB_UPSTREAM (see
+# compose service, reached on the customer host through the edge proxy. With
+# EMS_WEB_UPSTREAM set, admin-portal serves no /app at all (ADR-023 Amendment 3;
 # compose.yaml / app/src/main.py).
 #
 # BUILD ONCE -> TEST -> PROMOTE THE SAME ARTIFACT  (frontend container).

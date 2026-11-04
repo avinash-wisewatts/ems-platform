@@ -128,6 +128,25 @@ def required_permission_for_request(
     ):
         return PortalPermission.DASHBOARD_VIEW
 
+    # Changing one's OWN password in the Administration App
+    # (/administration/account/password): every signed-in role; the route
+    # requires the current password and refuses a locked account.
+    if path.rstrip("/") == "/administration/account/password" and normalized_method in {
+        "GET",
+        "HEAD",
+        "POST",
+    }:
+        return PortalPermission.DASHBOARD_VIEW
+
+    # User management pages: user.manage for reads as well as writes (the
+    # database refuses a non-ADMIN actor anyway; this makes it a clean
+    # /forbidden instead of a failed page).
+    if normalized_method in {"GET", "HEAD", "OPTIONS"} and (
+        path.rstrip("/") == "/administration/users"
+        or path.startswith("/administration/users/")
+    ):
+        return PortalPermission.USER_MANAGE
+
     if normalized_method in {"GET", "HEAD", "OPTIONS"}:
         return PortalPermission.DASHBOARD_VIEW
 

@@ -462,8 +462,10 @@ def test_platform_admin_page_uses_global_organization_context(
 
     assert response.status_code == 200
     assert "User management" in response.text
+    # No create form on the list page (it is on /administration/users/new);
+    # the organization names appear only in the list's organization filter.
     assert 'name="organization_id"' not in response.text
-    assert "Test Organization" not in response.text
+    assert "data-user-organization" in response.text
     assert "/administration/users/new" in response.text
 
 
