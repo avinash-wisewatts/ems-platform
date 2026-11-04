@@ -41,6 +41,18 @@ effect, or a database restore. This is a stated, deliberate choice — an
 incorrect reverse migration is considered more dangerous than no rollback
 mechanism, not an oversight.
 
+**Migration 315 stays applied (decision 2026-11-04).** 315 holds security
+rules (no self-change of role, scope or status; the target of a scope change
+must be inside the actor's scope; only staff reset another administrator's
+password). It has no reverse migration on purpose: reverting it would reopen a
+cross-tenant hole, and the previous application images run on it unchanged
+(same function signatures, owner and grants). Recovery from a bad release is
+an **application image rollback only**, with `expected_migrations=none`; see
+[production-release-311-315.md](production-release-311-315.md#rollback-application-image-only--315-stays-applied).
+A defect in 315 itself is fixed by a new forward migration. 315 must never be
+put back into `postgres/migration_environment_scope.csv`: production's ledger
+would then hold a "scoped-away" migration and every precheck would refuse.
+
 ## Backup/recovery — status largely unknown
 
 See [../10-operations/backups-and-recovery.md](../10-operations/backups-and-recovery.md).

@@ -17,6 +17,22 @@ migrations (`postgres/migration_environment_scope.csv`) are skipped on
 production; production releases first pass the pending-migration precheck
 (`expected_migrations`). See [ci-cd.md](ci-cd.md#environment-scoped-migrations).
 
+**Next production release: migration 315.** 315 (user-management hardening) is not
+staging-only, because it closes a cross-tenant scope move that exists on
+production today. From production head 308, the release must declare
+`expected_migrations=311,315`; the precheck refuses `311` alone.
+
+- **Before the release:** re-run
+  `scripts/verify/portal_user_scope_exposure.sql` (read-only). Until then, no
+  ORGANIZATION or SELECTED_SITES ADMIN may be created on production
+  ([../10-operations/portal-user-provisioning.md](../10-operations/portal-user-provisioning.md)).
+- **After the release (read-only):** expect a 315 ledger row; the three new
+  `admin.*` functions are SECURITY DEFINER with EXECUTE for `ems_app` only.
+
+315 has no dependency on 309–314: a production-mode apply to a scratch
+database (canonical deploy, then `DEPLOY_ENVIRONMENT=production`) applied
+311 and 315 and skipped 309, 310 and 312–314.
+
 ## One-time, separately-authorized exceptions
 
 Some configuration changes require a `timescaledb` recreate (a `postmaster`

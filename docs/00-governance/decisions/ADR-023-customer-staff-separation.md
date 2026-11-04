@@ -105,6 +105,8 @@ Status: implemented on branch `feature/web-admin-users` (migration 315), not mer
 4. **CSRF.** State-changing `/api/admin/v1` requests require an `Origin` naming the host and a JSON body.
 5. **Initial administrator.** `python -m src.provision_portal_admin` creates an ADMIN / GLOBAL account through `admin.create_managed_portal_user` on behalf of an existing active GLOBAL administrator (audited), never modifies an existing account, and hands a generated password over once (new owner-only file or interactive terminal). Runbook: [../../10-operations/portal-user-provisioning.md](../../10-operations/portal-user-provisioning.md).
 
+**Production scope of migration 315 (2026-11-04).** 315 is production-scoped (removed from `postgres/migration_environment_scope.csv`). Its database rules close a cross-tenant scope move that exists on production today, independently of the EMS Web App screen. The read-only exposure check of 2026-11-03 found no ORGANIZATION or SELECTED_SITES ADMIN on production and no such change in the audit trail. No tenant-level ADMIN may be created there before 315 is applied.
+
 **Consequences.**
 
 - Admin → Users works where the EMS Web App is served **through the Administration App** (`/app` on the staff path, `ems_admin_session`). Stage 4 of this ADR removes `/app` and `/api/v1` from admin-portal; before that step, a decision is needed on where staff reach Admin → Users afterwards (e.g. keep `/app` on the staff host, or move tenant-administrator user management to the customer API with its own reviewed grants). **Open — needs Product Owner / Architecture decision.**
