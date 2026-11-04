@@ -13,5 +13,5 @@ platform manual chapters 17–18 (archived) and `docs/operations/CICD_PIPELINE.m
 | [release-process.md](release-process.md) | The staging → production promotion procedure and authorization model. |
 | [deployment-process.md](deployment-process.md) | What `deploy_release.sh` actually does, service by service. |
 | [production-release-plan-266-301.md](production-release-plan-266-301.md) | Proposed production releases A/B/C for migrations 266–301: gates, prechecks, stop conditions, open product-owner decisions. |
-| [production-release-311-315-316.md](production-release-311-315-316.md) | Prepared (blocked) production release of migrations 311, 315 and 316: blockers, privilege exposure, expected migrations, pre/post checks, 311 risks, image-only rollback with 315 and 316 retained. |
+| [production-release-311-315-316-317.md](production-release-311-315-316-317.md) | Prepared (blocked) production release of migrations 311, 315, 316 and 317: blockers, privilege exposure, expected migrations, pre/post checks, 311 risks, image-only rollback with 315-317 retained. |
 | [rollback.md](rollback.md) | Application rollback (implemented) vs. database rollback (deliberately not implemented). |

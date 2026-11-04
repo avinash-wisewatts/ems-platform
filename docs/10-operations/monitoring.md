@@ -25,7 +25,7 @@ docker run --rm \
   sh -c "tr -d '\r' < /tmp/pgpass.conf | sed 's/^127\.0\.0\.1:15432:/host.docker.internal:15432:/' > /root/.pgpass && chmod 600 /root/.pgpass && PGPASSFILE=/root/.pgpass psql \"host=host.docker.internal port=15432 dbname=ems user=<role> sslmode=prefer\" -c \"<query>\""
 ```
 
-**Production** (direct host, read-only role only):
+**Production** (direct host, read-only role only; since migration 317 `ems_readonly` cannot read `admin.portal_users` or execute `admin` functions, so portal-user checks such as `scripts/verify/portal_user_scope_exposure.sql` run as `ems_admin` through the approved operator path):
 
 ```bash
 docker run --rm \

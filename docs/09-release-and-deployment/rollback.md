@@ -48,11 +48,12 @@ password). It has no reverse migration on purpose: reverting it would reopen a
 cross-tenant hole, and the previous application images run on it unchanged
 (same function signatures, owner and grants). Recovery from a bad release is
 an **application image rollback only**, with `expected_migrations=none`; see
-[production-release-311-315-316.md](production-release-311-315-316.md#rollback-application-image-only--315-and-316-stay-applied).
-The same applies to **316** (`ems_readonly` loses EXECUTE on the portal-user
-functions): reverting it would let any `ems_readonly` login manage portal
-users again, and the previous images connect as `ems_app`, so they run on it.
-A defect in 315 or 316 is fixed by a new forward migration. Neither 315 nor 316 may ever be
+[production-release-311-315-316-317.md](production-release-311-315-316-317.md#rollback-application-image-only--315-316-and-317-stay-applied).
+The same applies to **316 and 317** (`ems_readonly` loses EXECUTE on every
+`admin` function and all access to `admin.portal_users`): reverting them would
+let any `ems_readonly` login manage portal users, onboard or read password
+hashes again, and the previous images connect as `ems_app`, so they run on them.
+A defect in 315, 316 or 317 is fixed by a new forward migration. None of them may ever be
 put back into `postgres/migration_environment_scope.csv`: production's ledger
 would then hold a "scoped-away" migration and every precheck would refuse.
 
