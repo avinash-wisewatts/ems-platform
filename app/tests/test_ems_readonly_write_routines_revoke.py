@@ -205,6 +205,16 @@ def test_precheck_refuses_an_unreviewed_write_routine(tx):
         _apply(tx)
 
 
+def test_precheck_refuses_a_role_membership(tx):
+    # An inherited grant would escape the explicit-ACL checks: stop instead.
+    _production_state(tx)
+    tx.execute("CREATE ROLE migration_318_inherited NOLOGIN")
+    tx.execute(f"GRANT EXECUTE ON PROCEDURE {UNREVIEWED} TO migration_318_inherited")
+    tx.execute("GRANT migration_318_inherited TO ems_readonly")
+    with pytest.raises(psycopg.errors.RaiseException, match="member of role"):
+        _apply(tx)
+
+
 def test_precheck_requires_317(tx):
     tx.execute("GRANT USAGE ON SCHEMA admin TO ems_readonly")
     tx.execute("GRANT EXECUTE ON FUNCTION admin.list_accessible_sites(bigint) TO ems_readonly")

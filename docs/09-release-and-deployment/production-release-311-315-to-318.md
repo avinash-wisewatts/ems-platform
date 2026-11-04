@@ -10,7 +10,7 @@ read-only checks, rollback) needs its own explicit approval. Owner: Engineering.
 |---|---|---|
 | B1 | Fresh production backup completed and checksummed | **Open.** `safe_production_backup.sh` refused (free 29 GiB < database 36 GiB; no file written). Revised script (v2) proposed and tested, not approved: [../10-operations/backups-and-recovery.md](../10-operations/backups-and-recovery.md#proposed-one-time-guard-change-not-approved). |
 | B2 | Production privilege exposure understood and addressed | **In progress.** Inventoried (read-only, below). 316 + 317 address `admin`; 318 the ten write-capable routines outside `admin`. Remaining sensitive *read* access: assessment below; no change without operational evidence. |
-| B3 | 311 and 315–318 validated on staging | 311 (2026-10-25), 315 and 316 (2026-11-04) done; 317 (#176) and 318 pending review, merge and staging deployment. |
+| B3 | 311 and 315–318 validated on staging | 311 (2026-10-25), 315, 316 and 317 (2026-11-04) done. 317 (#176, `b35a565`) reached staging through `rollback.yml` run 41821740458 (same image, `expected_migrations=317`) after a GitHub Git Operations incident broke run 41815489014, so `b35a565` has no successful `deploy-staging.yml` run and is not promotable. 318 (#177) pending merge and staging deployment; its prechecks evaluated read-only on staging pass (below). |
 | B4 | Production prechecks re-run immediately before dispatch, and release approval | Open. |
 
 ## What the release is
@@ -64,8 +64,25 @@ read-only checks, rollback) needs its own explicit approval. Owner: Engineering.
   the trigger functions `config.ensure_asset_demand_policy_for_site`,
   `telemetry.capture_telegraf_mqtt_insert`, `telemetry.set_energy_measurement_asset_id`.
   Its precheck stops the migration if production has any *other*
-  write-capable SECURITY DEFINER routine executable by `ems_readonly`.
+  write-capable SECURITY DEFINER routine executable by `ems_readonly`, or if
+  `ems_readonly` has become a member of any role (inherited EXECUTE would
+  escape the explicit-ACL checks).
 - `ems_readonly` has no INSERT / UPDATE / DELETE / TRUNCATE anywhere.
+
+### Migration 318: expected effect per environment
+
+| | Staging (read-only evaluation, 2026-11-04, ledger head 317) | Production (inventory, read-only, 2026-11-04) |
+|---|---|---|
+| The ten targets | present; SECURITY DEFINER, VOLATILE, owner `ems_admin`; explicit ACLs | same (inventory section 7) |
+| `ems_readonly` EXECUTE on them | none (no explicit entry, not via PUBLIC) | all ten, explicit, **none via PUBLIC** |
+| Other volatile SECURITY DEFINER routines with an explicit `ems_readonly` grant | 0 | 0 (exactly these ten listed) |
+| `ems_readonly` role memberships | none | none |
+| `ems_app` on `ingest_live_rtdata` | yes | yes (used by live-telemetry) |
+| **Change 318 makes** | **none** — every REVOKE is a no-op; only the ledger row is added | **exactly ten ACL entries removed** (`ems_readonly=X/ems_admin` on each target); every other routine, relation, column and schema ACL identical |
+
+If production has drifted since the inventory, 318 stops before revoking
+anything (precheck) or rolls back (postcondition), and the release stops with
+the reason in the deploy log; nothing is left half-applied.
 
 ### Remaining sensitive read access — assessment (no change proposed yet)
 
@@ -107,7 +124,7 @@ view. Options, each needing approval: (a) a read-only check whether
 | Locks | Function replacement (315) and GRANT / REVOKE (316–318) update catalog rows only; no table rewrite, no data change; sub-second. |
 | Application | `ems_app` keeps every function it calls (each migration asserts it); the previous image runs on all of them (rollback below). |
 | Unreviewed drift | 316–318 each assert full before / after ACL snapshots; 318's precheck stops on an unreviewed write-capable routine. A failed postcondition rolls the migration back and the release stops. |
-| Operators using `ems_readonly` | Lose `portal_users`, every `admin` function and the ten write routines; keep all SELECT and read functions. Portal-user checks run as `ems_admin` through the approved operator path. |
+| Operators using `ems_readonly` | Lose `portal_users`, every `admin` function and the ten write routines; keep all SELECT and read functions. Portal-user checks, and any manual tier refresh (normally done by the jobs as their owner), run as `ems_admin` through the approved operator path; never re-grant to `ems_readonly`. |
 
 ## Before dispatch (read-only unless stated; each run needs approval)
 
@@ -121,8 +138,9 @@ view. Options, each needing approval: (a) a read-only check whether
    names as above; `staging` HEAD = the release commit; 0 lock waiters / long
    transactions; disk; failures and failing jobs recorded as the baseline.
 3. **Privilege baseline** (read-only): `ems_readonly` executable `admin`
-   functions (98) and the ten routines; no other write-capable routine
-   executable by it (318 would stop otherwise).
+   functions (98) and the ten routines (none via PUBLIC); no other
+   write-capable routine executable by it and no role membership (318 would
+   stop otherwise).
 4. **Backup** (B1): completed, checksummed, `pg_restore --list` verified.
 5. **Window**: a weekday 07:30–09:00 UTC (13:00–14:30 IST), clear of the F1
    policy runs (05:13 / 17:13 UTC) and the nightly reconcile (23:00 UTC); the

@@ -28,7 +28,8 @@
 -- admin and the system / extension schemas that ems_readonly can execute
 -- through an explicit grant must be one of these ten; anything else is
 -- unreviewed drift and stops the migration rather than being left behind or
--- revoked blindly.
+-- revoked blindly. ems_readonly must also be a member of no role, so that
+-- no inherited EXECUTE escapes these explicit-ACL checks.
 --
 -- Only ems_readonly's EXECUTE on these ten changes. Every other privilege of
 -- every role on every routine, relation, column and schema is kept and
@@ -85,6 +86,17 @@ BEGIN
                     CROSS JOIN LATERAL aclexplode(p.proacl) AS a
                     WHERE n.nspname = 'admin' AND a.grantee = 'ems_readonly'::regrole) THEN
             RAISE EXCEPTION 'Migration 318 precondition failed: migration 317 is not applied';
+        END IF;
+
+        -- Its privileges are its own (production inventory: no memberships).
+        -- A role membership could hand it EXECUTE that the explicit-ACL check
+        -- below cannot see; review that first rather than proceed.
+        SELECT string_agg(pg_get_userbyid(m.roleid), ', ' ORDER BY 1)
+          INTO v_bad
+          FROM pg_auth_members AS m
+         WHERE m.member = 'ems_readonly'::regrole;
+        IF v_bad IS NOT NULL THEN
+            RAISE EXCEPTION 'Migration 318 precondition failed: ems_readonly is a member of role(s) %; review the privileges it inherits first', v_bad;
         END IF;
 
         -- Catalog-driven: no unreviewed write-capable routine outside admin.
