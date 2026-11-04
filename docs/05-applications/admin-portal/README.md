@@ -28,6 +28,28 @@ hashing) is documented only at the level of "these responsibilities are
 separated into distinct files," never with implementation specifics that
 would risk exposing a security control's internals.
 
+## User-management JSON API (EMS Web App Admin → Users)
+
+`app/src/routers/user_management_api.py`, mounted only here (ADR-023
+Amendment 2; implemented 2026-11-03, not deployed). `GET/POST
+/api/admin/v1/users`, `GET/PATCH /api/admin/v1/users/{id}`, `POST
+/api/admin/v1/users/{id}/password`, `GET /api/admin/v1/users/options`, `POST
+/api/admin/v1/me/password`. `ems_admin_session`; `user.manage` for every
+`/api/admin/v1/users*` request; `/api/admin/v1/me/password` is open to every
+signed-in role (own password only, current password required, refused while
+locked); anything else under `/api/admin/` is denied; same-origin `Origin` + JSON body on writes;
+`Cache-Control: no-store`. It reuses the Users pages' controlled functions
+and audit (`admin.portal_user_audit`); migration 315 adds the
+self-protection, target scope containment and the details / password-reset /
+own-password functions, which the server-rendered Users pages inherit. The
+functions lock the actor and target rows before the scope check. Another
+ADMIN's password can be reset only by a GLOBAL (staff) administrator. Roles
+are the existing ADMIN / OPERATOR / VIEWER (only ADMIN holds `user.manage`;
+only ADMIN may assign roles), scopes GLOBAL / ORGANIZATION / SELECTED_SITES,
+never granted wider than the actor's own. Initial administrator:
+`python -m src.provision_portal_admin`
+([../../10-operations/portal-user-provisioning.md](../../10-operations/portal-user-provisioning.md)).
+
 ## Two-layer enforcement
 
 - **Application layer** (`admin.*` PL/pgSQL functions, `SECURITY DEFINER`):

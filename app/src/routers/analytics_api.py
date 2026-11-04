@@ -362,6 +362,13 @@ async def get_current_user(request: Request) -> CurrentUserResponse:
     # the permission is not advertised; the role grant itself is unchanged.
     if not get_core_settings().reports_enabled:
         granted = granted - {PortalPermission.REPORT_EXPORT}
+    # Same rule for the SPA's Admin -> Users section: user.manage is
+    # advertised only by the process that mounts the user-management API
+    # (the Administration App, src.main). The customer API never does
+    # (ADR-023), so a tenant administrator signed in there sees no Admin
+    # section that could only fail; the role grant itself is unchanged.
+    if not getattr(request.app.state, "user_management_api", False):
+        granted = granted - {PortalPermission.USER_MANAGE}
     permissions = sorted(p.value for p in granted)
 
     return CurrentUserResponse(

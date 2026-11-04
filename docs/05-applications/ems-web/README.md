@@ -46,13 +46,35 @@ advertises it only where `EMS_REPORTS_ENABLED` is on (staging), since the
 Reports routes are not mounted elsewhere; the role grant and server-side
 authorization are unchanged.
 
+**Admin → Users (ADR-023 Amendment 2; implemented 2026-11-03, not
+deployed).** An Admin section below the primary navigation with Users
+(`/admin/users`, `/admin/users/:id`): list with search and role /
+organization / status filters, create, edit details, role and access
+(organization / selected sites), activate / deactivate, administrator
+password reset, and "Change my password" on one's own account. Shown only
+when `GET /api/v1/me` lists `user.manage`, which `/me` advertises only in the
+Administration App process (the one that serves the user-management API), so
+it never appears on the customer host. Server-generated temporary passwords
+are shown once and kept only in page state; nothing is written to browser
+storage. A tenant administrator is not offered a password reset for another
+administrator (staff only, enforced by the database).
+
+**Change password (`/account/password`).** Every signed-in role (ADMIN,
+OPERATOR, VIEWER) changes their own password from the user menu. It needs the
+current password and is refused while the account is locked. It is shown only
+where the Administration App serves the SPA: `GET /auth/session` does not report
+a customer sign-in. It is never shown on the customer host, which has no
+`/api/admin` route.
+
 ## Data access
 
 Read-only, via the Analytics API only ([../analytics-api/README.md](../analytics-api/README.md)).
 The one exception (2026-10-24): the Reports tab creates and retries the
 user's own export jobs through the Analytics API
 ([../../07-features/export/README.md](../../07-features/export/README.md)) —
-no EMS data is written.
+no EMS data is written. The second exception (Admin → Users) is not the
+Analytics API at all: it calls the Administration App's own
+user-management API (`/api/admin/v1`, below) with the same session.
 No direct DB/TimescaleDB/Grafana access, no query builder, no dynamic SQL.
 
 ## Authentication

@@ -37,6 +37,7 @@ class PortalAuthenticationMiddleware:
     # browser redirect to the HTML login / forbidden page.
     JSON_API_PATH_PREFIXES = (
         "/api/v1/",
+        "/api/admin/",
     )
 
     def __init__(self, app: ASGIApp, audience: Audience | None = None) -> None:

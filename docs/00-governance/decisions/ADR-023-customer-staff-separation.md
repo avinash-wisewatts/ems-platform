@@ -1,6 +1,6 @@
 # ADR-023: Separate the customer EMS application from the staff Administration App
 
-Status: Decided (user, 2026-10-26); stages 1–3 merged and deployed to staging (PRs #157–#161); staging customer endpoint live at `https://16.113.18.69/` since 2026-10-27 (interim IP address, Let's Encrypt IP certificate); the rest of stage 4 (staff-only Administration App, closing `:8080` / `:3000`) and stage 5 not started. Amendment 1 (server-side session revocation, migration 314) deployed to staging 2026-10-28 (PRs #163 + #164, `9b3e85d`; customer-api on the same SHA) and verified (runbook §7).
+Status: Decided (user, 2026-10-26); stages 1–3 merged and deployed to staging (PRs #157–#161); staging customer endpoint live at `https://16.113.18.69/` since 2026-10-27 (interim IP address, Let's Encrypt IP certificate); the rest of stage 4 (staff-only Administration App, closing `:8080` / `:3000`) and stage 5 not started. Amendment 1 (server-side session revocation, migration 314) deployed to staging 2026-10-28 (PRs #163 + #164, `9b3e85d`; customer-api on the same SHA) and verified (runbook §7). Amendment 2 (EMS Web App Admin → Users, migration 315) implemented 2026-11-03, not merged, not deployed.
 Date: 2026-10-26
 Decision owners: Product Owner; Architecture
 Related decisions: [ADR-006](ADR-006-ems-web-app-vs-admin-portal.md) (Amendment 1: dedicated `ems-web` container — the intermediate step this ADR completes), [ADR-007](ADR-007-analytics-api-boundary.md)
@@ -75,10 +75,47 @@ After ADR-006 Amendment 1, the EMS frontend runs in its own `ems-web` container,
 
 These are recorded, not accepted indefinitely: each is a scoped follow-up, independent of the network-exposure decisions (both endpoints stay publicly reachable for now by user decision, 2026-10-29).
 
+## Amendment 2 (2026-11-03): Admin → Users in the EMS Web App is served by the Administration App only
+
+Status: implemented on branch `feature/web-admin-users` (migration 315), not merged, not deployed.
+
+**Context.** The EMS Web App needed an Admin → Users section equivalent to the Administration App's Users pages, using the same identities, roles and audit, with no second user model or authentication. The customer API (this ADR, decision 2/5) holds no administration and its database role has no administration grants; the Analytics API is read-only (ADR-007).
+
+**Decision.**
+
+1. **One user-management implementation, exposed as JSON by the Administration App only.** `src.routers.user_management_api` (`/api/admin/v1/users…`, `/api/admin/v1/me/password`) is mounted in `src.main`, authenticated by `ems_admin_session` and gated on `user.manage` by `PortalAuthenticationMiddleware`; it calls the same controlled functions as the server-rendered `/administration/users` pages (`admin.*_managed_portal_user*`). It is never mounted in `customer-api`, never under `/api/v1`, and the edge's customer host does not route `/api/admin/*` (404).
+2. **Visibility follows availability.** `GET /api/v1/me` advertises `user.manage` only in a process that mounts the router (as it already does for `report.export`), so on the customer host the SPA shows no Admin section; the role grant is unchanged.
+3. **Database-enforced rules (migration 315).**
+   - No actor may change their own role, access scope or status, or reset their own password.
+   - An access-scope change requires the target to be inside the actor's current scope. This closes the cross-tenant move by an ORGANIZATION administrator.
+   - Every actor/target function locks both user rows, in id order, before the scope check. A concurrent change therefore cannot slip between check and update, and two administrators acting on each other cannot deadlock.
+   - Another ADMIN's password can be reset only by a WiseWatts staff (active GLOBAL) administrator. A tenant administrator cannot take over a peer administrator's account.
+   - New audited functions:
+     - details edit (`USER_DETAILS_CHANGED`);
+     - administrator password reset (`USER_PASSWORD_RESET`; Argon2id only; clears the lockout);
+     - own-password change after the current password is verified (`USER_PASSWORD_CHANGED`).
+   - No password or hash is written to the audit trail.
+   - EXECUTE `ems_app` only — never `ems_customer_api` or PUBLIC.
+
+   **Own password, every role.** `POST /api/admin/v1/me/password` is open to every signed-in role (`dashboard.view`), not only `user.manage`:
+   - It changes only the caller's own password.
+   - It requires the current password; a wrong one counts towards the sign-in lockout.
+   - It is refused while the account is locked, before the password is checked.
+   - The EMS Web App offers it at `/account/password` (user menu → Change password) on the Administration App path only, never on the customer host.
+4. **CSRF.** State-changing `/api/admin/v1` requests require an `Origin` naming the host and a JSON body.
+5. **Initial administrator.** `python -m src.provision_portal_admin` creates an ADMIN / GLOBAL account through `admin.create_managed_portal_user` on behalf of an existing active GLOBAL administrator (audited), never modifies an existing account, and hands a generated password over once (new owner-only file or interactive terminal). Runbook: [../../10-operations/portal-user-provisioning.md](../../10-operations/portal-user-provisioning.md).
+
+**Consequences.**
+
+- Admin → Users works where the EMS Web App is served **through the Administration App** (`/app` on the staff path, `ems_admin_session`). Stage 4 of this ADR removes `/app` and `/api/v1` from admin-portal; before that step, a decision is needed on where staff reach Admin → Users afterwards (e.g. keep `/app` on the staff host, or move tenant-administrator user management to the customer API with its own reviewed grants). **Open — needs Product Owner / Architecture decision.**
+- With `EMS_ADMIN_STAFF_ONLY` on, only GLOBAL (staff) administrators can use it; tenant (ORGANIZATION / SELECTED_SITES) administrators manage their users only while that switch is off. The database rules hold either way.
+- The Administration App's existing Users pages inherit the self-protection and the scope-containment fix (same functions).
+- No forced password change at first sign-in (not supported by the portal); the provisioned temporary password is changed through Admin → Users → own account → Change my password. Administration App sessions remain signed cookies carrying the identity, role and scope captured at sign-in (residual risk R2). Deactivation stops database-checked data access at once (the database checks `is_active`) but does not end the session; a **password reset does not end or restrict an already-open session at all**; a role or scope change applies at once to database-enforced checks (including every user-management function) but in-app permission gates use the sign-in role until the session ends. Follow-up: issue #172 (server-side Administration App session revocation).
+
 ## Implementation references
 
-`app/src/customer_main.py`, `customer_config.py`, `routers/customer_auth.py`, `auth/customer_middleware.py`, `auth/customer_session.py`, `auth/server_session.py`, `auth/audience.py`, `live_main.py`, `live_config.py`, `api_errors.py`, `config.py` (`CoreSettings`), `postgres/migrations/313_customer_api_role.sql`, `314_customer_session_revocation.sql`, `edge/Caddyfile`, `compose.yaml` (`customer-api`, `edge`), `scripts/release/deploy_customer_api.sh`.
+`app/src/customer_main.py`, `customer_config.py`, `routers/customer_auth.py`, `auth/customer_middleware.py`, `auth/customer_session.py`, `auth/server_session.py`, `auth/audience.py`, `live_main.py`, `live_config.py`, `api_errors.py`, `config.py` (`CoreSettings`), `postgres/migrations/313_customer_api_role.sql`, `314_customer_session_revocation.sql`, `edge/Caddyfile`, `compose.yaml` (`customer-api`, `edge`), `scripts/release/deploy_customer_api.sh`. Amendment 2: `app/src/routers/user_management_api.py`, `user_management_service.py`, `user_account_policy.py`, `provision_portal_admin.py`, `auth/authorization.py` (`/api/admin/` permission map), `postgres/migrations/315_portal_user_management_hardening.sql`, `web/src/routes/admin/`, `web/src/api/adminUsers.ts`.
 
 ## Validation references
 
-`app/tests/test_customer_api.py`, `test_customer_api_role_db.py`, `test_customer_session_revocation_db.py`, `test_live_customer_session.py`, `test_staff_only_admin.py`, `test_customer_separation_release_contract.py`; local end-to-end harness (edge TLS → customer-api → real Argon2 sign-in and database scoping through `ems_customer_api`), 53/53, 2026-10-26.
+`app/tests/test_customer_api.py`, `test_customer_api_role_db.py`, `test_customer_session_revocation_db.py`, `test_live_customer_session.py`, `test_staff_only_admin.py`, `test_customer_separation_release_contract.py`; local end-to-end harness (edge TLS → customer-api → real Argon2 sign-in and database scoping through `ems_customer_api`), 53/53, 2026-10-26. Amendment 2: `app/tests/test_user_management_api.py`, `test_user_management_db.py`, `test_provision_portal_admin.py`, `web/src/routes/admin/AdminUsers.test.tsx`.

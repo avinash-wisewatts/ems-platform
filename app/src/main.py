@@ -55,6 +55,7 @@ from src.context.service import (
 from src.routers.context import router as context_router
 from src.routers.analytics_api import router as analytics_api_router
 from src.routers.report_exports import router as report_exports_router
+from src.routers.user_management_api import router as user_management_api_router
 from src.report_export_worker import ReportExportWorker
 from src.auth.security import hash_portal_password
 from src.auth.service import authenticate_portal_user
@@ -432,6 +433,12 @@ app.include_router(analytics_api_router)
 # Reports export routes exist only where Reports is enabled (staging-only).
 if settings.reports_enabled:
     app.include_router(report_exports_router)
+# EMS Web App Admin -> Users: the Administration App's own user management as
+# JSON (ems_admin_session, user.manage, migration 315). Only this process
+# mounts it -- never the customer API (ADR-023) -- and GET /api/v1/me
+# advertises user.manage only where this flag is set.
+app.include_router(user_management_api_router)
+app.state.user_management_api = True
 
 
 # ---------------------------------------------------------------------------
@@ -610,7 +617,7 @@ async def handle_administration_context_error(
 # The /api/v1 JSON surface uses a flat top-level error contract
 # ({"error": "<code>", "detail": "<message>"}); see src.api_errors, shared
 # with the customer API so both serve identical /api/v1 error bodies.
-register_flat_error_handlers(app, ("/api/v1/",))
+register_flat_error_handlers(app, ("/api/v1/", "/api/admin/"))
 
 
 async def list_sites_for_request(

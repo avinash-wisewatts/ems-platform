@@ -121,6 +121,46 @@ export async function apiPostJson<T>(path: string, body: unknown, init?: Request
   }
 }
 
+/**
+ * The Administration App's user-management JSON API (Admin -> Users), served
+ * only by the Administration App under /api/admin/v1 -- never by the
+ * read-only /api/v1 Analytics API or the customer API. Same session cookie;
+ * the browser adds the same-origin Origin header the server requires on
+ * writes. Returns undefined for 204.
+ */
+export const ADMIN_API_BASE = "/api/admin/v1";
+
+export async function adminApiRequest<T>(
+  method: "GET" | "POST" | "PATCH",
+  path: string,
+  body?: unknown,
+): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(`${ADMIN_API_BASE}${path}`, {
+      method,
+      credentials: "same-origin",
+      headers:
+        body === undefined
+          ? { Accept: "application/json" }
+          : { Accept: "application/json", "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      cache: "no-store",
+    });
+  } catch (cause) {
+    throw new NetworkError(cause instanceof Error ? cause.message : "Request failed");
+  }
+  if (!response.ok) {
+    throw await toTypedError(response);
+  }
+  if (response.status === 204) return undefined as T;
+  try {
+    return (await response.json()) as T;
+  } catch {
+    throw new NetworkError("The response was not valid JSON", response.status);
+  }
+}
+
 /** GET a file (e.g. a ZIP). The file name comes from Content-Disposition. */
 export async function apiGetFile(
   path: string,
