@@ -23,7 +23,7 @@ Everything below that changes an environment is a **separately approved step**. 
 | Staff hostname, e.g. `admin-staging.<domain>`, `admin.<domain>` | DNS, TLS, `EMS_STAFF_HOST` | `staff.invalid` |
 | TLS: Caddy + Let's Encrypt (recommended) or AWS ALB + ACM | `EMS_EDGE_TLS` (ACME account e-mail) | `internal` (Caddy's own CA; browsers warn) |
 | Staff access restriction: office/VPN CIDRs | `EMS_STAFF_ALLOWED_CIDRS` | `127.0.0.1/32` (nobody) |
-| May staff sign in to the customer app? | `EMS_CUSTOMER_ALLOW_STAFF` | `false` |
+| May staff sign in to the customer app? | `EMS_CUSTOMER_ALLOW_STAFF` (`app/customer-api.env` **and** `app/live-telemetry.env`; both must agree) | `false`; **staging `true` since 2026-11-04 15:15 UTC** (ADR-023 Amendment 3; backups `*.bak-20261104T-allowstaff`; customer-api and live-telemetry recreated on their running images) |
 | Test customer account(s) on staging | stage 3 validation | none exist on staging today |
 
 ## 3. Staging activation steps (each requires explicit approval)

@@ -22,9 +22,10 @@ SHA-labelled `ghcr.io/<repo>-web:<sha>` nginx image (`web/Dockerfile`).
   mounted read-only into the admin-portal container and served same-origin
   under `/app` by the existing FastAPI hook. Production serves no frontend
   (API-only, release plan D6).
-- **Staging since 2026-10-26 (PR #156):** the image runs as the dedicated `ems-web` container;
-  admin-portal proxies `/app/*` to it after authentication when the host
-  sets `EMS_WEB_UPSTREAM`. Deployed and rolled back on its own
+- **Staging since 2026-10-26 (PR #156):** the image runs as the dedicated `ems-web` container,
+  reached on the customer host through the edge. Until
+  ADR-023 Amendment 3 admin-portal also proxied `/app/*` to it on `:8080`; that forwarding is
+  removed (admin-portal answers `/app` with 404 when the host sets `EMS_WEB_UPSTREAM`). Deployed and rolled back on its own
   (`deploy-web.yml` / `scripts/release/deploy_web.sh`, recreating only
   `ems-web`); the bind-mount hook remains the fallback.
 
@@ -54,7 +55,11 @@ organization / status filters, create, edit details, role and access
 password reset, and "Change my password" on one's own account. Shown only
 when `GET /api/v1/me` lists `user.manage`, which `/me` advertises only in the
 Administration App process (the one that serves the user-management API), so
-it never appears on the customer host. Server-generated temporary passwords
+it never appears on the customer host. Since ADR-023 Amendment 3 the EMS Web App is served on staging only on the customer host, so this
+screen is not reachable there; staff use the Administration App's
+`/administration/users` pages, which have the complete workflow. The screen
+remains for the bundle-served `/app` (production) where the Administration App
+serves the SPA. Server-generated temporary passwords
 are shown once and kept only in page state; nothing is written to browser
 storage. A tenant administrator is not offered a password reset for another
 administrator (staff only, enforced by the database).

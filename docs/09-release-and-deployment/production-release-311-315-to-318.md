@@ -1,4 +1,6 @@
-# Production release: migrations 311 and 315–318 — checklist
+# Production release: migrations 311 and 315–319 — checklist
+
+(File name kept for links. 319 — the Administration App's read-only audit-history function, ADR-023 Amendment 3 — joined the release on 2026-11-04.)
 
 Status: PREPARED 2026-11-04, **not approved, not run, BLOCKED** (see below).
 Every step that touches production (dispatch, the backup, any SQL beyond the
@@ -17,14 +19,14 @@ read-only checks, rollback) needs its own explicit approval. Owner: Engineering.
 
 | Item | Value |
 |---|---|
-| Release commit | the `staging` commit that contains 318, **after** its `deploy-staging.yml` run succeeded. Earlier candidates (`3dad83a`, `a6df50c`) are superseded. |
-| Workflow | `deploy-production.yml`, `promotion_mode=staging-head`, `release_git_sha` = `confirm_release_git_sha` = that commit, **`expected_migrations=311,315,316,317,318`** (the precheck refuses any subset) |
+| Release commit | the `staging` commit that contains 319, **after** its `deploy-staging.yml` run succeeded. Earlier candidates (`3dad83a`, `a6df50c`, `cf5338b`) are superseded. |
+| Workflow | `deploy-production.yml`, `promotion_mode=staging-head`, `release_git_sha` = `confirm_release_git_sha` = that commit, **`expected_migrations=311,315,316,317,318,319`** (the precheck refuses any subset) |
 | Current production (read-only, 2026-11-04) | `7e3da57`, image `ems-platform-app:7e3da57…@sha256:85fdfb5c347b657d7bc5d1a571941eb580fb2197d6b1aefe8c61e416bb7da8ca`, both services healthy; ledger 180 rows, head 308, fingerprint `e5ca12cf82fec87113098e76ab914f12`, nothing from 309 on |
-| Content | the 22 `staging` commits after `7e3da57` (Reports 309/312, 310 backfill, 311, env-scoped migrations, ems-web container, customer API 313/314, edge, certificate checks) + #171 (Admin → Users, 315) + #174 (315 production-scoped) + #175 (316) + #176 (317) + 318 |
+| Content | the 22 `staging` commits after `7e3da57` (Reports 309/312, 310 backfill, 311, env-scoped migrations, ems-web container, customer API 313/314, edge, certificate checks) + #171 (Admin → Users, 315) + #174 (315 production-scoped) + #175 (316) + #176 (317) + #177 (318) + the Administration App user-management workflow and 319 |
 | Services recreated | `admin-portal` and `live-telemetry` only (`deploy_release.sh`). `ems-web`, `customer-api` and `edge` are never created; the bind-mounted `/app` bundle is not updated, so the Admin → Users **screen** does not appear on production (blocked on D6). |
-| Migrations | 311, 315, 316, 317 and 318 apply; 309, 310, 312, 313, 314 `SKIP-ENV` |
+| Migrations | 311, 315, 316, 317, 318 and 319 apply; 309, 310, 312, 313, 314 `SKIP-ENV` |
 | Inert on production | Reports, customer sessions, the web-container switch and the staff-only audience: `EMS_REPORTS_ENABLED`, `EMS_CUSTOMER_SESSION_SECRET`, `EMS_WEB_UPSTREAM`, `EMS_ADMIN_STAFF_ONLY` are all absent on production (key names checked 2026-11-04) and default off. |
-| Goes live | `/api/admin/v1/*` (needs a staff session, `user.manage` except own password, same-origin JSON writes), 315's database rules, and 316–318's removal of `ems_readonly`'s write-capable and `admin` function grants and `admin.portal_users` access |
+| Goes live | `/api/admin/v1/*` (needs a staff session, `user.manage` except own password, same-origin JSON writes), 315's database rules, and 316–318's removal of `ems_readonly`'s write-capable and `admin` function grants and `admin.portal_users` access; the complete `/administration/users` workflow (details edit, password reset, own password, audit history via 319). `/app` stays served from the bundle on production: its no-`/app` rule applies only with `EMS_WEB_UPSTREAM` set. |
 
 ### Behaviour change on production
 
@@ -117,6 +119,10 @@ view. Options, each needing approval: (a) a read-only check whether
 | First-deploy transition | Production runs `7e3da57`'s `deploy_release.sh` path the first time; the runner falls back to `ENVIRONMENT_NAME=production` for the scope (proven by staging's transition, run 40188640925). |
 | Reversal | `postgres/maintenance/311_recovery_lookup_event_time_bound_rollback.sql`: guarded, restores 305's body exactly, no ledger change, tested in CI. Separate approval. |
 
+## Migration 319
+
+Read-only: one new SECURITY DEFINER function, no table, row, role or job change; catalog only, sub-second. Preconditions: `admin.portal_users`, `admin.portal_user_audit`, `admin.portal_user_scope_contains_user`, `admin.redact_audit_json`, role `ems_app` (all present on production per the baseline). No reverse migration is needed: if it is ever dropped, the Users pages show the history as unavailable.
+
 ## Migrations 315–318 risks
 
 | Risk | Assessment / mitigation |
@@ -147,13 +153,15 @@ view. Options, each needing approval: (a) a read-only check whether
    backup (~50–60 min) finished first; no operator session in the
    Administration App. Deploy plus checks ~5–10 min.
 6. **Dispatch** (approval). The workflow refuses unless the host's runner would
-   apply exactly 311, 315, 316, 317 and 318 and no staging-only migration.
+   apply exactly 311, 315, 316, 317, 318 and 319 and no staging-only migration.
 
 ## After the release (read-only)
 
-- Ledger: 311, 315, 316, 317 and 318 once each, checksums = repository files
-  (311 `f6a0cb25…`, 315 `ec3e95e1…`, 316 `dbb40118…`, 317 `80c399fa…`, 318 =
-  staging's); prior 180 rows unchanged; no 309 / 310 / 312 / 313 / 314 row.
+- Ledger: 311, 315, 316, 317, 318 and 319 once each, checksums = repository files
+  (311 `f6a0cb25…`, 315 `ec3e95e1…`, 316 `dbb40118…`, 317 `80c399fa…`, 318
+  `68b3f080…`, 319 = staging's); prior 180 rows unchanged; no 309 / 310 / 312 / 313 / 314 row.
+- 319: `admin.list_manageable_portal_user_audit` SECURITY DEFINER, STABLE, owner `ems_admin`,
+  EXECUTE `ems_app` only; `ems_app` has no SELECT on `admin.portal_user_audit`.
 - 315 functions: owner `ems_admin`, SECURITY DEFINER,
   `search_path=pg_catalog, admin[, metadata]`; body md5s equal staging's.
 - 316–318: `ems_readonly` executes no `admin` function except the PUBLIC one

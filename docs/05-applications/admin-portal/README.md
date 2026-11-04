@@ -28,6 +28,21 @@ hashing) is documented only at the level of "these responsibilities are
 separated into distinct files," never with implementation specifics that
 would risk exposing a security control's internals.
 
+## User management pages (`/administration/users`) — the staff workflow
+
+ADR-023 Amendment 3: the server-rendered pages are the complete user-management UI
+(list with search / role / status / organization filters; detail with
+organization and site names and **change history** (migration 319); create
+with a generated (shown once) or chosen password under the shared account
+policy; edit name and e-mail; role, scope and status; administrator password
+reset; **Change my password** at `/administration/account/password` for every
+role). All of it calls the same controlled database functions as the JSON
+API below. `user.manage` is required for reads and writes of
+`/administration/users*`; cross-origin form posts are refused
+(`src.admin_request_guards`); temporary passwords appear only in `no-store`
+responses. With `EMS_WEB_UPSTREAM` set (staging) this process serves no
+`/app` at all (404 before authentication).
+
 ## User-management JSON API (EMS Web App Admin → Users)
 
 `app/src/routers/user_management_api.py`, mounted only here (ADR-023

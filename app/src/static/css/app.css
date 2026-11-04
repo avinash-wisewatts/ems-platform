@@ -1278,6 +1278,28 @@ body {
     margin: 0;
 }
 
+.portal-account-link {
+    padding: 0.55rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--text);
+    font-size: 0.75rem;
+    font-weight: 750;
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+.portal-account-link:hover {
+    border-color: var(--primary);
+}
+
+.temporary-password-notice code {
+    font-size: 1rem;
+    user-select: all;
+    word-break: break-all;
+}
+
 .portal-logout-button {
     padding: 0.55rem 0.75rem;
     border: 1px solid var(--border);

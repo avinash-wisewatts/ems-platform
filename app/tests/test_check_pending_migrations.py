@@ -3,7 +3,7 @@ refuses a deploy unless the target runner would apply exactly the declared
 migrations and nothing scoped away from the environment.
 
 Pure file inputs: no database. The real repository manifest and scope file are
-used where it matters (309 / 310 / 312 / 313 / 314 staging-only; 311 and 315-318 the next
+used where it matters (309 / 310 / 312 / 313 / 314 staging-only; 311 and 315-319 the next
 production migrations after 308).
 """
 
@@ -32,7 +32,7 @@ def _ids_through(last: str) -> list[str]:
 
 
 def _run(tmp_path, *, environment="production", manifest=MANIFEST, scope=SCOPE, scope_aware="yes",
-         deny=SCOPE, ledger_ids=(), expected="311,315,316,317,318"):
+         deny=SCOPE, ledger_ids=(), expected="311,315,316,317,318,319"):
     ledger = tmp_path / "ledger.txt"
     ledger.write_text("\n".join(ledger_ids) + "\n", encoding="utf-8")
     result = subprocess.run(
@@ -47,12 +47,12 @@ def _run(tmp_path, *, environment="production", manifest=MANIFEST, scope=SCOPE, 
 PRODUCTION_LEDGER = _ids_through("308_")          # production today: head 308
 
 
-def test_production_today_applies_exactly_311_315_316_317_and_318(tmp_path):
+def test_production_today_applies_exactly_311_and_315_to_319(tmp_path):
     code, out = _run(tmp_path, ledger_ids=PRODUCTION_LEDGER)
     assert code == 0, out
-    assert ("Would apply (5): 311_recovery_lookup_event_time_bound 315_portal_user_management_hardening"
+    assert ("Would apply (6): 311_recovery_lookup_event_time_bound 315_portal_user_management_hardening"
             " 316_portal_user_functions_revoke_ems_readonly 317_ems_readonly_admin_least_privilege"
-            " 318_ems_readonly_write_routines_revoke") in out
+            " 318_ems_readonly_write_routines_revoke 319_portal_user_audit_history_read") in out
 
 
 def test_production_release_must_declare_315(tmp_path):
@@ -66,7 +66,7 @@ def test_production_release_must_declare_315(tmp_path):
 def test_production_release_must_declare_316(tmp_path):
     # 316 (ems_readonly loses EXECUTE on the portal-user functions) is
     # production-scoped: declaring only 311 and 315 is refused.
-    code, out = _run(tmp_path, ledger_ids=PRODUCTION_LEDGER, expected="311,315,317,318")
+    code, out = _run(tmp_path, ledger_ids=PRODUCTION_LEDGER, expected="311,315,317,318,319")
     assert code == 1, out
     assert "316_portal_user_functions_revoke_ems_readonly would be applied but was not declared" in out
 
@@ -74,17 +74,25 @@ def test_production_release_must_declare_316(tmp_path):
 def test_production_release_must_declare_317(tmp_path):
     # 317 (ems_readonly least privilege on admin) is production-scoped:
     # declaring only 311, 315 and 316 is refused.
-    code, out = _run(tmp_path, ledger_ids=PRODUCTION_LEDGER, expected="311,315,316,318")
+    code, out = _run(tmp_path, ledger_ids=PRODUCTION_LEDGER, expected="311,315,316,318,319")
     assert code == 1, out
     assert "317_ems_readonly_admin_least_privilege would be applied but was not declared" in out
 
 
 def test_production_release_must_declare_318(tmp_path):
     # 318 (ems_readonly loses the write-capable routines outside admin) is
-    # production-scoped: declaring only 311 and 315-317 is refused.
-    code, out = _run(tmp_path, ledger_ids=PRODUCTION_LEDGER, expected="311,315,316,317")
+    # production-scoped: declaring only 311 and 315-317 (and 319) is refused.
+    code, out = _run(tmp_path, ledger_ids=PRODUCTION_LEDGER, expected="311,315,316,317,319")
     assert code == 1, out
     assert "318_ems_readonly_write_routines_revoke would be applied but was not declared" in out
+
+
+def test_production_release_must_declare_319(tmp_path):
+    # 319 (Administration App user audit history read function) is
+    # production-applicable: the earlier 311,315-318 release set is refused.
+    code, out = _run(tmp_path, ledger_ids=PRODUCTION_LEDGER, expected="311,315,316,317,318")
+    assert code == 1, out
+    assert "319_portal_user_audit_history_read would be applied but was not declared" in out
 
 
 def test_an_undeclared_pending_migration_is_refused(tmp_path):
@@ -123,9 +131,9 @@ def test_rollback_to_an_older_production_commit_with_nothing_pending_is_allowed(
     assert code == 0, out
 
 
-def test_rollback_to_7e3da57_after_the_311_and_315_to_318_release_is_allowed(tmp_path):
+def test_rollback_to_7e3da57_after_the_311_and_315_to_319_release_is_allowed(tmp_path):
     # The documented recovery: image rollback to production's previous commit
-    # (manifest ends at 308) while 311 and 315-318 stay applied. Their ledger
+    # (manifest ends at 308) while 311 and 315-319 stay applied. Their ledger
     # rows are not scoped away, so the precheck allows it with nothing pending.
     manifest = tmp_path / "manifest_308.csv"
     lines = MANIFEST.read_text(encoding="utf-8").splitlines()
@@ -135,7 +143,8 @@ def test_rollback_to_7e3da57_after_the_311_and_315_to_318_release_is_allowed(tmp
                                          "315_portal_user_management_hardening",
                                          "316_portal_user_functions_revoke_ems_readonly",
                                          "317_ems_readonly_admin_least_privilege",
-                                         "318_ems_readonly_write_routines_revoke"]
+                                         "318_ems_readonly_write_routines_revoke",
+                                         "319_portal_user_audit_history_read"]
     code, out = _run(tmp_path, manifest=manifest, scope="none", scope_aware="no",
                      ledger_ids=after_release, expected="none")
     assert code == 0, out
@@ -151,7 +160,7 @@ def test_a_staging_only_migration_already_in_the_production_ledger_is_refused_up
 
 def test_staging_applies_staging_only_migrations(tmp_path):
     code, out = _run(tmp_path, environment="staging", ledger_ids=_ids_through("308_"),
-                     expected="309,310,312,311,313,314,315,316,317,318")
+                     expected="309,310,312,311,313,314,315,316,317,318,319")
     assert code == 0, out
 
 

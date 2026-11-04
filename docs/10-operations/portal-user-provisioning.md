@@ -51,12 +51,15 @@ run created.
    To use a file instead, add `--password-file /tmp/admin_user_password.txt`,
    then copy it out (`docker cp`), read it, and delete both copies.
 3. Sign in at the **Administration App** `/login` (the account is staff, so
-   `EMS_ADMIN_STAFF_ONLY` does not affect it), open `/app/`, then
-   Admin → Users → your own account → **Change my password**.
+   `EMS_ADMIN_STAFF_ONLY` does not affect it), then **Change my password**
+   (header link, `/administration/account/password`). On a host where the
+   Administration App still serves the EMS Web App bundle, Admin → Users →
+   your own account → Change my password works too.
 
 There is no forced change at first sign-in (the portal does not support it);
 step 3 is the replacement. If the password is lost, another GLOBAL
-administrator resets it in Admin → Users (a user cannot reset their own).
+administrator resets it in the Administration App (`/administration/users` →
+the user → Reset password; a user cannot reset their own).
 
 Manual browser checks after a deployment: [admin-users-browser-checklist.md](admin-users-browser-checklist.md).
 

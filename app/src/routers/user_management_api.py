@@ -59,17 +59,9 @@ from src.auth.authorization import (
 from src.auth.customer_session import same_origin
 from src.auth.dependencies import get_authenticated_portal_user
 from src.auth.models import AuthenticatedPortalUser
-from src.auth.repository import (
-    get_portal_user_for_authentication,
-    record_portal_login_failure,
-)
-from src.auth.security import (
-    AuthenticationStatus,
-    hash_portal_password,
-    portal_account_status,
-    verify_portal_password,
-)
+from src.auth.security import hash_portal_password
 from src.onboarding.repository import list_accessible_sites, list_organizations
+from src.own_password import OwnPasswordChangeError, change_own_password_verified
 from src.user_account_policy import (
     AccountPolicyError,
     generate_temporary_password,
@@ -81,7 +73,6 @@ from src.user_account_policy import (
 )
 from src.user_management_service import (
     apply_managed_user_changes,
-    change_own_password,
     create_managed_user_with_status,
     list_manageable_users,
     reset_managed_user_password,
@@ -675,34 +666,12 @@ async def change_my_password(body: OwnPasswordChangeRequest, request: Request) -
     _require_same_origin(request)
 
     try:
-        new_password = validate_password(body.new_password, username=actor.username)
-    except AccountPolicyError as exc:
-        raise _policy_error(exc) from exc
-    if new_password == body.current_password:
-        raise _error(400, "invalid_request", "The new password must differ from the current one.")
-
-    record = await get_portal_user_for_authentication(actor.username)
-    if record is None or record.portal_user_id != actor.portal_user_id or not record.is_active:
-        raise _error(403, "forbidden", "Your account cannot change its password.")
-    # The sign-in lockout applies here too, before the current password is
-    # checked: a locked account cannot keep guessing through this endpoint.
-    if portal_account_status(record) is AuthenticationStatus.ACCOUNT_LOCKED:
-        raise _error(
-            403,
-            "account_locked",
-            "Your account is temporarily locked after failed password attempts. Try again later.",
+        await change_own_password_verified(
+            actor,
+            current_password=body.current_password,
+            new_password=body.new_password,
         )
-    if not verify_portal_password(record.password_hash, body.current_password):
-        # Counts towards the sign-in lockout, so this cannot be used to guess passwords.
-        await record_portal_login_failure(record.portal_user_id)
-        raise _error(400, "invalid_current_password", "The current password is incorrect.")
-
-    try:
-        await change_own_password(
-            portal_user_id=actor.portal_user_id,
-            password_hash=hash_portal_password(new_password),
-        )
-    except DatabaseError as exc:
-        raise _database_error(exc, fallback="The database rejected the password change.") from exc
+    except OwnPasswordChangeError as exc:
+        raise _error(exc.status_code, exc.code, exc.message) from exc
 
     return Response(status_code=204, headers=_NO_STORE)
