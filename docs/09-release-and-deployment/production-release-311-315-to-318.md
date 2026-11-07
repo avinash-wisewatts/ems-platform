@@ -2,15 +2,31 @@
 
 (File name kept for links. 319 — the Administration App's read-only audit-history function, ADR-023 Amendment 3 — joined the release on 2026-11-04.)
 
-Status: PREPARED 2026-11-04, **not approved, not run, BLOCKED** (see below).
+Status: PREPARED 2026-11-04; **release approved by the product owner 2026-11-07 for immediate deployment, fresh backup waived** (see below).
 Every step that touches production (dispatch, the backup, any SQL beyond the
 read-only checks, rollback) needs its own explicit approval. Owner: Engineering.
+
+## Backup waiver and risk acceptance (2026-11-07)
+
+The release owner (Avinash Raavi) authorized this release on 7 November 2026
+without a fresh production backup, and explicitly accepted the recovery risks,
+having acknowledged in writing that application rollback does not reverse
+database migrations or recover damaged data. This clears blocker B1 by waiver;
+no backup was taken. No cleanup or deletion was authorized.
+
+The most recent dump on the host is `prod_snapshot_20261023T0814Z.dump`
+(6,845 MB, ledger 170 / head 298, pre-Release-D, never test-restored): it does
+not contain anything written since 2026-10-23.
+
+The approved release timing moved from the Friday 2026-11-13 07:30–09:00 UTC
+window to immediately on Saturday 2026-11-07, also by the release owner. The
+owner confirmed no active external users of the Administration App.
 
 ## Release blockers (all must be cleared)
 
 | # | Blocker | State 2026-11-04 |
 |---|---|---|
-| B1 | Fresh production backup completed and checksummed | **Open.** `safe_production_backup.sh` refused (free 29 GiB < database 36 GiB; no file written). Revised script (v2) proposed and tested, not approved: [../10-operations/backups-and-recovery.md](../10-operations/backups-and-recovery.md#proposed-one-time-guard-change-not-approved). |
+| B1 | Fresh production backup completed and checksummed | **Waived 2026-11-07 by the release owner (see above).** Previously: `safe_production_backup.sh` refused (free 29 GiB < database 36 GiB; no file written). Revised script (v2) proposed and tested, not approved: [../10-operations/backups-and-recovery.md](../10-operations/backups-and-recovery.md#proposed-one-time-guard-change-not-approved). |
 | B2 | Production privilege exposure understood and addressed | **In progress.** Inventoried (read-only, below). 316 + 317 address `admin`; 318 the ten write-capable routines outside `admin`. Remaining sensitive *read* access: assessment below; no change without operational evidence. |
 | B3 | 311 and 315–318 validated on staging | 311 (2026-10-25), 315, 316 and 317 (2026-11-04) done. 317 (#176, `b35a565`) reached staging through `rollback.yml` run 41821740458 (same image, `expected_migrations=317`) after a GitHub Git Operations incident broke run 41815489014, so `b35a565` has no successful `deploy-staging.yml` run and is not promotable. 318 (#177) pending merge and staging deployment; its prechecks evaluated read-only on staging pass (below). |
 | B4 | Production prechecks re-run immediately before dispatch, and release approval | Open. |
