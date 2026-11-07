@@ -2,9 +2,33 @@
 
 (File name kept for links. 319 — the Administration App's read-only audit-history function, ADR-023 Amendment 3 — joined the release on 2026-11-04.)
 
-Status: PREPARED 2026-11-04; **release approved by the release owner 2026-11-07 for immediate deployment, fresh backup waived** (see below).
+Status: **DEPLOYED to production 2026-11-07 06:44 UTC** (run 42348245270), fresh backup waived (see below). Signed-in Administration App checks are still owed by the operator.
 Every step that touches production (dispatch, the backup, any SQL beyond the
 read-only checks, rollback) needs its own explicit approval. Owner: Engineering.
+
+## Release result (2026-11-07)
+
+| Item | Result |
+|---|---|
+| Run | `deploy-production.yml` [42348245270](https://github.com/avinash-wisewatts/ems-platform/actions/runs/42348245270), `staging-head`, dispatched 06:43:16 UTC, success at 06:46:27 UTC |
+| Commit and image | `8abd023ed1df83b56d46a0e3f93f15bfc5458f8a`, `sha256:aea259402f8481a4bb88d2355b33baf80539d4dc310a1e37eaad03d8fbd77860`; equal to staging's running image and to the GHCR tag before dispatch |
+| Previous image | `7e3da57…@sha256:85fdfb5c…` (rollback target; rollback not used) |
+| Precheck | 65/65 at 06:42 UTC: ledger 180 rows, every checksum equal to the release commit; 311 precondition; one active GLOBAL ADMIN; 98/110 and the ten writers; 12 unscheduled jobs; no job error since the 2026-11-05 baseline; 34 GB free; no Administration App request in 30 minutes |
+| Migrations | 311, 315, 316, 317, 318, 319 applied once each in order, 06:44:39–06:44:42 UTC, 441 ms in total; 309, 310, 312, 313, 314 `SKIP-ENV`; ledger 186 rows, every checksum equal to the release commit, prior 180 unchanged |
+| Permissions | `ems_readonly`: 98 → 1 `admin` function (the PUBLIC one), ten writers → 0, no privilege on `admin.portal_users`, other table privileges unchanged. `ems_app`: every function asserted, no SELECT on `admin.portal_user_audit`. 315 and 319 function bodies equal staging's |
+| Services | `admin-portal`, `live-telemetry` recreated 06:44:48 UTC on the pinned digest, healthy, 0 restarts. `timescaledb`, `telegraf`, `grafana` not restarted. `ems-web`, `customer-api`, `edge` not created |
+| Gates | REQUIRED post-deploy gates passed. Advisory results equal the Release D run's, plus job 1061's known 10-24 failed last run |
+| Postcheck | 71/71 at 06:49 UTC. Signed-out `/api/admin/v1/*` 401, `/administration*` 303 to `/login`, `/health` 200; no traceback or 5xx; jobs fingerprint, relation ACLs and account rows unchanged; 58 of 58 devices fresh |
+| Incidents | None. Rollback not used |
+
+`EMS_WEB_UPSTREAM` is now set **but empty** in `admin-portal`: `compose.yaml` at
+this release passes `${EMS_WEB_UPSTREAM:-}`, and `config.py` normalizes empty to
+unset, so the bundle path is unchanged. A presence check reports it as set; check
+for a non-empty value instead.
+
+**Not yet verified:** signed-in `/administration/users` and sign-in itself, which
+need the operator's credentials
+([../10-operations/admin-users-browser-checklist.md](../10-operations/admin-users-browser-checklist.md)).
 
 ## Backup waiver and risk acceptance (2026-11-07)
 
