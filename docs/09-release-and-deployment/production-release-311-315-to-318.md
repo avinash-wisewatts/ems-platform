@@ -2,7 +2,7 @@
 
 (File name kept for links. 319 — the Administration App's read-only audit-history function, ADR-023 Amendment 3 — joined the release on 2026-11-04.)
 
-Status: PREPARED 2026-11-04; **release approved by the product owner 2026-11-07 for immediate deployment, fresh backup waived** (see below).
+Status: PREPARED 2026-11-04; **release approved by the release owner 2026-11-07 for immediate deployment, fresh backup waived** (see below).
 Every step that touches production (dispatch, the backup, any SQL beyond the
 read-only checks, rollback) needs its own explicit approval. Owner: Engineering.
 
