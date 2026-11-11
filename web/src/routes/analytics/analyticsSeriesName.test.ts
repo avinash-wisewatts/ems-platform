@@ -113,7 +113,9 @@ describe("the same measurement on different assets never reads the same in Stati
 
   it("Statistics rows are distinct", () => {
     const names = buildStatistics(response).rows.map((r) => r.name);
-    expect(names).toEqual(expected);
+    // Statistics groups by data point and orders assets by name (2026-10-10).
+    expect(names).toEqual(["Power-AHU 2", "Power-Chiller 1", "Reactive Power-Q1-AHU 2", "Reactive Power-Q1-Chiller 1"]);
+    expect([...names].sort()).toEqual([...expected].sort());
     expect(new Set(names).size).toBe(names.length);
   });
   it("Data quality entries are distinct (charted series)", () => {

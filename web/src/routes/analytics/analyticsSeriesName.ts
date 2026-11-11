@@ -55,7 +55,8 @@ const PHASE_NUMBER: Readonly<Record<string, string>> = {
 
 const SEPARATOR = "-";
 const FALLBACK_ASSET = "Asset";
-const FALLBACK_DATA_POINT = "Data point";
+/** Generic word for a data point without a label (never its registry code). */
+export const FALLBACK_DATA_POINT = "Data point";
 
 /** The catalogue's asset name, if the catalogue still lists the asset. */
 export function catalogAssetName(catalog: AnalyticsCatalogResponse | null | undefined, assetId: string): string | null {

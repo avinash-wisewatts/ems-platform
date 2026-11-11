@@ -13,13 +13,14 @@
  * - Card title "<N assets | asset name>, <range> – <resolution>, <phase>".
  */
 import type { AnalyticsCatalogResponse, AnalyticsSeriesResponse } from "../../api/types";
-import type { ChartBucket, ChartSeries } from "../../components/ChartFrame";
+import type { ChartBucket, ChartSeries, SeriesStyle } from "../../components/ChartFrame";
 import { addDays, localDateKey, localMidnightUtc, type CalendarRange } from "../../time/calendarRanges";
 import { formatSiteLocalDateTime } from "../../time/siteLocalTicks";
 import { formatDateKey } from "./AnalyticsDateRange";
 import { bucketQualityNotes } from "./analyticsDataQualityModel";
 import { RESOLUTION_OPTIONS, type AnalyticsDraft } from "./analyticsQuery";
 import { chartSeriesName } from "./analyticsSeriesName";
+import { seriesKey } from "./analyticsSeriesStyles";
 import type { AppliedQuery } from "./useAnalyticsState";
 
 export type AnalyticsChartModel = {
@@ -31,12 +32,14 @@ export type AnalyticsChartModel = {
 export { chartSeriesName, seriesName } from "./analyticsSeriesName";
 
 /** The applied response as chart buckets and series (OK series only), each
- *  bucket carrying its Data quality lines for the tooltip (D22, DQ9). */
+ *  bucket carrying its Data quality lines for the tooltip (D22, DQ9) and,
+ *  when given, its page-wide colour (analyticsSeriesStyles.ts). */
 export function buildChartModel(
   response: AnalyticsSeriesResponse | null,
   range: CalendarRange,
   catalog?: AnalyticsCatalogResponse | null,
   timeZone?: string | null,
+  styles?: ReadonlyMap<string, SeriesStyle>,
 ): AnalyticsChartModel {
   const drawn = (response?.series ?? []).filter((s) => s.status === "OK");
   const ends = new Map<number, number>();
@@ -46,8 +49,10 @@ export function buildChartModel(
   const buckets = [...ends.entries()].sort((a, b) => a[0] - b[0]).map(([start, end]) => ({ start, end }));
   const series = drawn.map<ChartSeries>((s) => {
     const byStart = new Map(s.points.map((p) => [Date.parse(p.bucket_start), p]));
+    const key = seriesKey(s);
     return {
-      key: `${s.asset_id}:${s.data_point}:${s.qualifier}`,
+      key,
+      style: styles?.get(key),
       name: chartSeriesName(s, catalog),
       unit: s.unit,
       kind: s.chart_kind,
