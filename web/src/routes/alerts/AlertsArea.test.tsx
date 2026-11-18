@@ -1,304 +1,265 @@
 import { describe, expect, it } from "vitest";
-import { screen, waitFor, fireEvent, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { AlertsArea } from "./AlertsArea";
-import { renderWithProviders, stubFetch, SITES_ONE } from "../../test-utils";
+import { ADMIN_USER, VIEWER_USER, renderWithProviders, stubFetch, SITES_ONE } from "../../test-utils";
+import type { CurrentUser } from "../../api/types";
 
 const SITE_ID = SITES_ONE.sites[0]!.site_id;
-const CONDITION_KEY = `ENERGY_ATTENTION:PERCENT_DEVIATION_FROM_TYPICAL_REFERENCE:15:SITE:${SITE_ID}`;
+const RULE_ID = "55555555-5555-4555-8555-555555555555";
+const ALERT_ID = "77777777-7777-4777-8777-777777777777";
+const ASSET_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+
+const OPERATOR_USER: CurrentUser = {
+  ...VIEWER_USER,
+  portal_user_id: 4,
+  role_code: "OPERATOR",
+  permissions: ["dashboard.view", "alert.acknowledge"],
+};
 
 function alertFixture(overrides: Record<string, unknown> = {}) {
   return {
-    alert_id: "33333333-3333-4333-8333-333333333333",
+    alert_id: ALERT_ID,
     site_id: SITE_ID,
-    space_id: null,
-    asset_id: null,
-    condition_key: CONDITION_KEY,
-    metric: "ENERGY_CONSUMPTION",
+    rule_id: RULE_ID,
+    rule_name: "Chiller overload",
+    rule_deleted: false,
+    asset: { asset_id: ASSET_ID, name: "Chiller 1" },
+    parameter: { code: "ACTIVE_POWER", name: "Active Power", qualifier: "TOTAL", unit: "kW" },
+    condition: { comparator: "GT", threshold: 50, tolerance: null, comparison_mode: "FIXED" },
     state: "ACTIVE",
-    triggered_at: "2026-09-14T10:00:00Z",
-    trigger_value: 123.4,
+    triggered_at: "2026-11-18T06:00:00Z",
+    trigger_value: 61,
+    latest_value: 63,
+    latest_value_at: "2026-11-18T06:10:00Z",
+    data_unavailable: false,
     resolved_at: null,
     resolved_value: null,
     ended_at: null,
-    ended_reason: null,
     ended_reason_code: null,
-    data_unavailable: false,
+    acknowledgement: null,
     previous_occurrence_count: 0,
     most_recent_previous_occurrence_at: null,
     ...overrides,
   };
 }
 
-describe("AlertsArea (MVP-7, ADR-016/ADR-017)", () => {
-  it("renders the Active tab by default and lists returned alerts", async () => {
-    stubFetch((url) => {
-      if (url.includes(`/api/v1/sites/${SITE_ID}/alerts`) && url.includes("state=ACTIVE")) {
-        return { jsonBody: { site_id: SITE_ID, alerts: [alertFixture()] } };
-      }
-      return { status: 404, jsonBody: { error: "not_found", detail: "unexpected" } };
-    });
+function ruleFixture(overrides: Record<string, unknown> = {}) {
+  return {
+    rule_id: RULE_ID,
+    site_id: SITE_ID,
+    name: "Chiller overload",
+    asset: { asset_id: ASSET_ID, name: "Chiller 1" },
+    parameter: { code: "ACTIVE_POWER", name: "Active Power", qualifier: "TOTAL", unit: "kW" },
+    condition: { comparator: "GT", threshold: 50, tolerance: null, comparison_mode: "FIXED" },
+    schedule: { start_time: "22:00", end_time: "06:00", weekdays: ["MON", "TUE"], every_day: false, timezone: "Asia/Kolkata" },
+    reminder_minutes: null,
+    delivery: { email: { requested: false, status: "COMING_SOON" }, whatsapp: { requested: false, status: "COMING_SOON" } },
+    enabled: true,
+    version: 3,
+    active_alert_id: null,
+    created_at: "2026-11-18T06:00:00Z",
+    updated_at: "2026-11-18T06:00:00Z",
+    ...overrides,
+  };
+}
 
-    renderWithProviders(<AlertsArea />, { sites: () => Promise.resolve(SITES_ONE) });
+const PARAMETERS = {
+  site_id: SITE_ID,
+  parameters: [
+    { asset: { asset_id: ASSET_ID, name: "Chiller 1" }, parameter: { code: "ACTIVE_POWER", name: "Active Power", qualifier: "TOTAL", unit: "kW" } },
+    { asset: { asset_id: ASSET_ID, name: "Chiller 1" }, parameter: { code: "FREQUENCY", name: "Frequency", qualifier: null, unit: "Hz" } },
+  ],
+};
 
-    await waitFor(() => expect(screen.getByTestId("alert-list")).toBeTruthy());
+type Call = { url: string; method: string; body: unknown };
+
+function backend(extra?: (call: Call) => { status?: number; jsonBody?: unknown } | undefined) {
+  const calls: Call[] = [];
+  const mock = stubFetch((url, init) => {
+    const call = { url, method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : undefined };
+    calls.push(call);
+    const custom = extra?.(call);
+    if (custom) return custom;
+    if (url.includes("/acknowledge")) {
+      return { jsonBody: alertFixture({ acknowledgement: { acknowledged_at: "2026-11-18T06:20:00Z", acknowledged_by: "Omar" } }) };
+    }
+    if (url.includes(`/sites/${SITE_ID}/alerts`)) {
+      const history = url.includes("state=RESOLVED");
+      return {
+        jsonBody: {
+          site_id: SITE_ID,
+          next_before: null,
+          alerts: history
+            ? [alertFixture({ state: "RESOLVED", resolved_at: "2026-11-18T07:00:00Z", resolved_value: 20, rule_deleted: true, rule_name: "Old rule" })]
+            : [alertFixture()],
+        },
+      };
+    }
+    if (url.includes(`/alerts/${ALERT_ID}`)) return { jsonBody: alertFixture() };
+    if (url.includes("/alert-rules/parameters")) return { jsonBody: PARAMETERS };
+    if (url.includes(`/sites/${SITE_ID}/alert-rules`) && call.method === "GET") {
+      return { jsonBody: { site_id: SITE_ID, max_active_rules: 25, rules: [ruleFixture()] } };
+    }
+    if (call.method === "DELETE") return { status: 204 };
+    return { jsonBody: ruleFixture() };
+  });
+  return { calls, mock };
+}
+
+function render(user: CurrentUser, path = "/features/alerts") {
+  return renderWithProviders(<AlertsArea />, {
+    session: () => Promise.resolve(user),
+    sites: () => Promise.resolve(SITES_ONE),
+    initialEntries: [path],
+  });
+}
+
+describe("AlertsArea (ADR-024)", () => {
+  it("opens on Active Alerts with Name, Asset, Status and Action columns", async () => {
+    backend();
+    render(ADMIN_USER);
+    const table = await screen.findByTestId("alerts-table-active");
     expect(screen.getByTestId("alerts-tab-active")).toHaveAttribute("aria-selected", "true");
-    // Scoped to the list item -- the Condition/Metric filter (ADR-016 decision
-    // 48) also renders this same label as its one real option.
-    const { getByText } = within(screen.getByTestId("alert-list"));
-    expect(getByText("Energy consumption deviation")).toBeTruthy();
+    expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Name", "Asset", "Status", "Action"]);
+    expect(within(table).getByText("Chiller overload")).toBeTruthy();
+    expect(within(table).getByText("Chiller 1")).toBeTruthy();
   });
 
-  it("shows a good empty state, not an error, when there are no active alerts", async () => {
-    stubFetch(() => ({ jsonBody: { site_id: SITE_ID, alerts: [] } }));
-
-    renderWithProviders(<AlertsArea />, { sites: () => Promise.resolve(SITES_ONE) });
-
-    await waitFor(() => expect(screen.getByTestId("state-empty")).toBeTruthy());
-    expect(screen.queryByTestId("alert-list")).toBeNull();
+  it("lets an operator acknowledge; the alert stays Active", async () => {
+    const { calls } = backend();
+    render(OPERATOR_USER);
+    fireEvent.click(await screen.findByTestId(`acknowledge-${ALERT_ID}`));
+    await screen.findByTestId("alert-acknowledged");
+    expect(calls.some((c) => c.method === "POST" && c.url.endsWith(`/alerts/${ALERT_ID}/acknowledge`))).toBe(true);
+    const row = screen.getByTestId(`alert-row-${ALERT_ID}`);
+    expect(within(row).getByText("Active")).toBeTruthy();
+    expect(within(row).getByText("Acknowledged by Omar")).toBeTruthy();
   });
 
-  it("switching tabs requests the new state and clears the prior selection", async () => {
-    stubFetch((url) => {
-      if (url.includes("state=ACTIVE")) {
-        return { jsonBody: { site_id: SITE_ID, alerts: [alertFixture()] } };
-      }
-      if (url.includes("state=RESOLVED")) {
-        return {
-          jsonBody: {
-            site_id: SITE_ID,
-            alerts: [
-              alertFixture({
-                alert_id: "44444444-4444-4444-8444-444444444444",
-                state: "RESOLVED",
-                resolved_at: "2026-09-14T11:00:00Z",
-                resolved_value: 90.1,
-              }),
-            ],
-          },
-        };
-      }
-      return { jsonBody: { site_id: SITE_ID, alerts: [] } };
-    });
-
-    renderWithProviders(<AlertsArea />, { sites: () => Promise.resolve(SITES_ONE) });
-    await waitFor(() => expect(screen.getByTestId("alert-list")).toBeTruthy());
-
-    fireEvent.click(screen.getByTestId("alerts-tab-resolved"));
-
-    await waitFor(() => expect(screen.getByTestId("alerts-tab-resolved")).toHaveAttribute("aria-selected", "true"));
-    expect(screen.queryByTestId("alert-detail")).toBeNull();
+  it("gives a viewer no Acknowledge action", async () => {
+    backend();
+    render(VIEWER_USER);
+    await screen.findByTestId("alerts-table-active");
+    expect(screen.queryByTestId(`acknowledge-${ALERT_ID}`)).toBeNull();
+    expect(screen.getByText("Not acknowledged")).toBeTruthy();
   });
 
-  it("Ended alerts show their reason and never present resolved fields", async () => {
-    stubFetch((url) => {
-      if (url.includes("state=ENDED")) {
-        return {
-          jsonBody: {
-            site_id: SITE_ID,
-            alerts: [
-              alertFixture({
-                state: "ENDED",
-                ended_at: "2026-09-14T12:00:00Z",
-                ended_reason: "Attention condition configuration changed",
-              }),
-            ],
-          },
-        };
-      }
-      return { jsonBody: { site_id: SITE_ID, alerts: [] } };
-    });
-
-    renderWithProviders(<AlertsArea />, { sites: () => Promise.resolve(SITES_ONE) });
-    fireEvent.click(await screen.findByTestId("alerts-tab-ended"));
-
-    await waitFor(() => expect(screen.getByTestId("alert-list")).toBeTruthy());
-    const item = screen.getByTestId(`alert-item-33333333-3333-4333-8333-333333333333`);
-    expect(item.textContent).toContain("Ended");
-  });
-
-  it("selecting an alert fetches and shows its detail, including derived recurrence", async () => {
-    stubFetch((url) => {
-      if (url.includes(`/api/v1/sites/${SITE_ID}/alerts`)) {
-        return { jsonBody: { site_id: SITE_ID, alerts: [alertFixture({ previous_occurrence_count: 2, most_recent_previous_occurrence_at: "2026-09-10T00:00:00Z" })] } };
-      }
-      if (url.includes("/api/v1/alerts/33333333-3333-4333-8333-333333333333")) {
-        return { jsonBody: alertFixture({ previous_occurrence_count: 2, most_recent_previous_occurrence_at: "2026-09-10T00:00:00Z" }) };
-      }
-      return { status: 404, jsonBody: { error: "not_found", detail: "unexpected" } };
-    });
-
-    renderWithProviders(<AlertsArea />, { sites: () => Promise.resolve(SITES_ONE) });
-    await waitFor(() => expect(screen.getByTestId("alert-list")).toBeTruthy());
-
-    fireEvent.click(screen.getByTestId("alert-item-33333333-3333-4333-8333-333333333333"));
-
-    await waitFor(() => expect(screen.getByTestId("alert-detail")).toBeTruthy());
-    expect(screen.getByTestId("alert-recurrence")).toHaveTextContent("Previous occurrences: 2");
-    // ADR-016 decision 48: hierarchy context and threshold/reference are
-    // required detail fields.
-    const detail = screen.getByTestId("alert-detail");
-    expect(within(detail).getByTestId("hierarchy-crumb")).toHaveTextContent("Alpha One");
-    expect(detail.textContent).toContain("Threshold/reference");
-    expect(detail.textContent).toContain("15% deviation from typical historical consumption");
-  });
-
-  it("Resolved detail shows resolution value before resolved time (ADR-016 decision 48 order)", async () => {
-    stubFetch((url) => {
-      if (url.includes(`/api/v1/sites/${SITE_ID}/alerts`)) {
-        return {
-          jsonBody: {
-            site_id: SITE_ID,
-            alerts: [
-              alertFixture({
-                state: "RESOLVED",
-                resolved_at: "2026-09-14T11:00:00Z",
-                resolved_value: 90.1,
-              }),
-            ],
-          },
-        };
-      }
-      if (url.includes("/api/v1/alerts/33333333-3333-4333-8333-333333333333")) {
-        return {
-          jsonBody: alertFixture({
-            state: "RESOLVED",
-            resolved_at: "2026-09-14T11:00:00Z",
-            resolved_value: 90.1,
-          }),
-        };
-      }
-      return { status: 404, jsonBody: { error: "not_found", detail: "unexpected" } };
-    });
-
-    renderWithProviders(<AlertsArea />, { sites: () => Promise.resolve(SITES_ONE) });
-    fireEvent.click(await screen.findByTestId("alerts-tab-resolved"));
-    await waitFor(() => expect(screen.getByTestId("alert-list")).toBeTruthy());
-    fireEvent.click(screen.getByTestId("alert-item-33333333-3333-4333-8333-333333333333"));
-
-    await waitFor(() => expect(screen.getByTestId("alert-detail")).toBeTruthy());
-    const labels = within(screen.getByTestId("alert-detail"))
-      .getAllByRole("term")
-      .map((dt) => dt.textContent);
-    expect(labels.indexOf("Resolution value")).toBeLessThan(labels.indexOf("Resolved"));
-  });
-
-  it("Condition/Metric and date-range filters apply and clear (ADR-016 decision 48)", async () => {
-    const requestedUrls: string[] = [];
-    stubFetch((url) => {
-      requestedUrls.push(url);
-      return { jsonBody: { site_id: SITE_ID, alerts: [alertFixture()] } };
-    });
-
-    renderWithProviders(<AlertsArea />, { sites: () => Promise.resolve(SITES_ONE) });
-    await waitFor(() => expect(screen.getByTestId("alert-list")).toBeTruthy());
-
-    fireEvent.change(screen.getByTestId("alerts-filter-condition"), { target: { value: CONDITION_KEY } });
-    fireEvent.change(screen.getByTestId("alerts-filter-from"), { target: { value: "2026-01-01" } });
-    fireEvent.change(screen.getByTestId("alerts-filter-to"), { target: { value: "2026-02-01" } });
-    fireEvent.click(screen.getByTestId("alerts-apply-filters"));
-
-    await waitFor(() =>
-      expect(requestedUrls.some((u) => u.includes(`condition_key=${encodeURIComponent(CONDITION_KEY)}`))).toBe(true),
+  it("shows detail with data-unavailable and a WiseWatts Support acknowledgement", async () => {
+    backend((c) =>
+      c.url.endsWith(`/alerts/${ALERT_ID}`)
+        ? {
+            jsonBody: alertFixture({
+              data_unavailable: true,
+              acknowledgement: { acknowledged_at: "2026-11-18T06:20:00Z", acknowledged_by: "WiseWatts Support" },
+            }),
+          }
+        : undefined,
     );
-    expect(requestedUrls.some((u) => u.includes("from=2026-01-01") && u.includes("to=2026-02-01"))).toBe(true);
-
-    fireEvent.click(screen.getByTestId("alerts-clear-filters"));
-
-    await waitFor(() =>
-      expect(requestedUrls[requestedUrls.length - 1]).not.toContain(
-        `condition_key=${encodeURIComponent(CONDITION_KEY)}`,
-      ),
-    );
+    render(VIEWER_USER);
+    fireEvent.click(await screen.findByText("Chiller overload"));
+    const detail = await screen.findByTestId("alert-detail");
+    await waitFor(() => expect(within(detail).getByTestId("alert-detail-latest").textContent).toBe("Unable to evaluate — data unavailable"));
+    expect(within(detail).getByTestId("alert-detail-status").textContent).toBe("Active — data unavailable");
+    expect(within(detail).getByTestId("alert-detail-ack").textContent).toContain("Acknowledged by WiseWatts Support");
+    expect(within(detail).getByText("Greater than 50 kW")).toBeTruthy();
   });
 
-  it("Active alert with data_unavailable shows the required unavailable messaging (ADR-016 section 4, migration 242)", async () => {
-    stubFetch((url) => {
-      if (url.includes(`/api/v1/sites/${SITE_ID}/alerts`)) {
-        return { jsonBody: { site_id: SITE_ID, alerts: [alertFixture({ data_unavailable: true })] } };
-      }
-      if (url.includes("/api/v1/alerts/33333333-3333-4333-8333-333333333333")) {
-        return { jsonBody: alertFixture({ data_unavailable: true }) };
-      }
-      return { status: 404, jsonBody: { error: "not_found", detail: "unexpected" } };
+  it("shows rules read-only to a viewer", async () => {
+    backend();
+    render(VIEWER_USER, "/features/alerts?tab=rules");
+    const table = await screen.findByTestId("alert-rules-table");
+    expect(within(table).getByText("Mon, Tue, 22:00–06:00")).toBeTruthy();
+    expect(screen.getByTestId(`rule-toggle-${RULE_ID}`)).toBeDisabled();
+    expect(screen.queryByTestId("create-alert")).toBeNull();
+    expect(screen.queryByTestId(`rule-edit-${RULE_ID}`)).toBeNull();
+    expect(screen.queryByTestId(`rule-delete-${RULE_ID}`)).toBeNull();
+  });
+
+  it("gives an operator no rule configuration", async () => {
+    backend();
+    render(OPERATOR_USER, "/features/alerts?tab=rules");
+    await screen.findByTestId("alert-rules-table");
+    expect(screen.queryByTestId("create-alert")).toBeNull();
+    expect(screen.getByTestId(`rule-toggle-${RULE_ID}`)).toBeDisabled();
+  });
+
+  it("lets an administrator disable a rule", async () => {
+    const { calls } = backend();
+    render(ADMIN_USER, "/features/alerts?tab=rules");
+    const toggle = await screen.findByTestId(`rule-toggle-${RULE_ID}`);
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(toggle);
+    await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url.endsWith(`/alert-rules/${RULE_ID}/disable`))).toBe(true));
+  });
+
+  it("creates an equal-to rule only with an explicit tolerance; delivery is Coming Soon", async () => {
+    const { calls } = backend();
+    render(ADMIN_USER, "/features/alerts?tab=rules");
+    fireEvent.click(await screen.findByTestId("create-alert"));
+    const form = await screen.findByTestId("alert-rule-form");
+    expect(within(form).getAllByText("Coming Soon").length).toBeGreaterThanOrEqual(3);
+    expect(within(form).getByTestId("rule-delivery-note").textContent).toContain("not sent yet");
+    fireEvent.change(within(form).getByTestId("rule-name"), { target: { value: "Grid frequency" } });
+    fireEvent.change(within(form).getByTestId("rule-asset"), { target: { value: ASSET_ID } });
+    fireEvent.change(within(form).getByTestId("rule-parameter"), { target: { value: "FREQUENCY|" } });
+    fireEvent.change(within(form).getByTestId("rule-comparator"), { target: { value: "EQ" } });
+    fireEvent.change(within(form).getByTestId("rule-threshold"), { target: { value: "50" } });
+    fireEvent.click(within(form).getByTestId("rule-save"));
+    expect((await within(form).findByTestId("rule-form-error")).textContent).toBe("Equal to needs a tolerance.");
+    expect(calls.some((c) => c.method === "POST" && c.url.endsWith(`/sites/${SITE_ID}/alert-rules`))).toBe(false);
+    fireEvent.change(within(form).getByTestId("rule-tolerance"), { target: { value: "0.1" } });
+    fireEvent.click(within(form).getByTestId("rule-email"));
+    fireEvent.change(within(form).getByTestId("rule-reminder"), { target: { value: "15" } });
+    fireEvent.click(within(form).getByTestId("rule-save"));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url.endsWith(`/sites/${SITE_ID}/alert-rules`))).toBe(true));
+    const post = calls.find((c) => c.method === "POST" && c.url.endsWith(`/sites/${SITE_ID}/alert-rules`))!;
+    expect(post.body).toEqual({
+      name: "Grid frequency",
+      asset_id: ASSET_ID,
+      parameter_code: "FREQUENCY",
+      qualifier: null,
+      comparator: "EQ",
+      threshold: 50,
+      tolerance: 0.1,
+      schedule: { start_time: "00:00", end_time: "23:59", weekdays: ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"] },
+      reminder_minutes: 15,
+      delivery: { email: true, whatsapp: false },
+      enabled: true,
     });
-
-    renderWithProviders(<AlertsArea />, { sites: () => Promise.resolve(SITES_ONE) });
-    await waitFor(() => expect(screen.getByTestId("alert-list")).toBeTruthy());
-    fireEvent.click(screen.getByTestId("alert-item-33333333-3333-4333-8333-333333333333"));
-
-    await waitFor(() => expect(screen.getByTestId("alert-detail")).toBeTruthy());
-    expect(screen.getByTestId("alert-data-unavailable")).toHaveTextContent(
-      "Unable to evaluate — data unavailable",
-    );
-    expect(screen.getByTestId("alert-latest-value")).toHaveTextContent("Data unavailable");
   });
 
-  it("Active alert without data_unavailable shows neither unavailable string (regression guard)", async () => {
-    stubFetch((url) => {
-      if (url.includes(`/api/v1/sites/${SITE_ID}/alerts`)) {
-        return { jsonBody: { site_id: SITE_ID, alerts: [alertFixture()] } };
-      }
-      if (url.includes("/api/v1/alerts/33333333-3333-4333-8333-333333333333")) {
-        return { jsonBody: alertFixture() };
-      }
-      return { status: 404, jsonBody: { error: "not_found", detail: "unexpected" } };
-    });
+  it("edits with the rule version and deletes after confirmation", async () => {
+    const { calls } = backend();
+    render(ADMIN_USER, "/features/alerts?tab=rules");
+    fireEvent.click(await screen.findByTestId(`rule-edit-${RULE_ID}`));
+    const form = await screen.findByTestId("alert-rule-form");
+    fireEvent.change(within(form).getByTestId("rule-threshold"), { target: { value: "55" } });
+    fireEvent.click(within(form).getByTestId("rule-save"));
+    await waitFor(() => expect(calls.some((c) => c.method === "PATCH")).toBe(true));
+    const patch = calls.find((c) => c.method === "PATCH")! as Call & { body: { version: number; threshold: number } };
+    expect(patch.body.version).toBe(3);
+    expect(patch.body.threshold).toBe(55);
 
-    renderWithProviders(<AlertsArea />, { sites: () => Promise.resolve(SITES_ONE) });
-    await waitFor(() => expect(screen.getByTestId("alert-list")).toBeTruthy());
-    fireEvent.click(screen.getByTestId("alert-item-33333333-3333-4333-8333-333333333333"));
-
-    await waitFor(() => expect(screen.getByTestId("alert-detail")).toBeTruthy());
-    expect(screen.queryByTestId("alert-data-unavailable")).toBeNull();
-    expect(screen.queryByTestId("alert-latest-value")).toBeNull();
+    fireEvent.click(await screen.findByTestId(`rule-delete-${RULE_ID}`));
+    expect(calls.some((c) => c.method === "DELETE")).toBe(false);
+    fireEvent.click(await screen.findByTestId("delete-confirm-button"));
+    await waitFor(() => expect(calls.some((c) => c.method === "DELETE" && c.url.endsWith(`/alert-rules/${RULE_ID}`))).toBe(true));
   });
 
-  it("Ended alert with ended_reason_code=DATA_UNAVAILABLE shows the mapped label, distinct from a configuration-change ending", async () => {
-    stubFetch((url) => {
-      if (url.includes("state=ENDED") && !url.includes("/api/v1/alerts/")) {
-        return {
-          jsonBody: {
-            site_id: SITE_ID,
-            alerts: [
-              alertFixture({
-                state: "ENDED",
-                ended_at: "2026-09-15T12:00:00Z",
-                ended_reason: "Data was unavailable while this alert was active",
-                ended_reason_code: "DATA_UNAVAILABLE",
-              }),
-            ],
-          },
-        };
-      }
-      if (url.includes("/api/v1/alerts/33333333-3333-4333-8333-333333333333")) {
-        return {
-          jsonBody: alertFixture({
-            state: "ENDED",
-            ended_at: "2026-09-15T12:00:00Z",
-            ended_reason: "Data was unavailable while this alert was active",
-            ended_reason_code: "DATA_UNAVAILABLE",
-          }),
-        };
-      }
-      return { jsonBody: { site_id: SITE_ID, alerts: [] } };
-    });
-
-    renderWithProviders(<AlertsArea />, { sites: () => Promise.resolve(SITES_ONE) });
-    fireEvent.click(await screen.findByTestId("alerts-tab-ended"));
-    await waitFor(() => expect(screen.getByTestId("alert-list")).toBeTruthy());
-    fireEvent.click(screen.getByTestId("alert-item-33333333-3333-4333-8333-333333333333"));
-
-    await waitFor(() => expect(screen.getByTestId("alert-detail")).toBeTruthy());
-    const detail = screen.getByTestId("alert-detail");
-    expect(detail.textContent).toContain("Data was unavailable while this alert was active");
+  it("History lists Resolved/Ended alerts, including those of deleted rules", async () => {
+    const { calls } = backend();
+    render(VIEWER_USER, "/features/alerts?tab=history");
+    const table = await screen.findByTestId("alerts-table-history");
+    expect(within(table).getByText("Old rule")).toBeTruthy();
+    expect(within(table).getByText("Resolved")).toBeTruthy();
+    const req = calls.find((c) => c.url.includes(`/sites/${SITE_ID}/alerts`))!;
+    expect(req.url).toContain("state=RESOLVED");
+    expect(req.url).toContain("state=ENDED");
   });
 
-  it("never exposes internal identifiers in the rendered list or detail", async () => {
-    stubFetch(() => ({ jsonBody: { site_id: SITE_ID, alerts: [alertFixture()] } }));
-    renderWithProviders(<AlertsArea />, { sites: () => Promise.resolve(SITES_ONE) });
-
-    await waitFor(() => expect(screen.getByTestId("alert-list")).toBeTruthy());
-    const html = screen.getByTestId("alerts-area").innerHTML;
-    expect(html).not.toMatch(/device_id|gateway_id|logical_point_id/);
+  it("shows a good empty state when nothing is active", async () => {
+    stubFetch(() => ({ jsonBody: { site_id: SITE_ID, alerts: [], next_before: null } }));
+    render(VIEWER_USER);
+    expect(await screen.findByText("No active alerts")).toBeTruthy();
   });
 });

@@ -451,30 +451,45 @@ export type SiteTelemetryFreshnessResponse = {
   power_quality: DomainFreshness;
 };
 
-// ---- GET /api/v1/sites/{site_id}/alerts, GET /api/v1/alerts/{alert_id} (MVP-7) --
-// In-product only, ADR-016/ADR-017. No analytical deep links, no internal
-// identifiers (device_id/point_id), no customer-facing severity taxonomy.
-// previous_occurrence_count / most_recent_previous_occurrence_at are
-// derived server-side at read time -- never fetched separately.
+// ---- Alerts (ADR-024) -----------------------------------------------------
+// Customer-configurable alert rules, Active Alerts, Resolved/Ended history and
+// acknowledgement -- app/src/alert_rules_service.py, field for field. In-product
+// only: email / WhatsApp are stored preferences with status COMING_SOON and are
+// never sent. An acknowledgement by WiseWatts staff reads "WiseWatts Support".
 
 export type AlertState = "ACTIVE" | "RESOLVED" | "ENDED";
+export type AlertComparator = "GT" | "LT" | "EQ";
+export type Weekday = "MON" | "TUE" | "WED" | "THU" | "FRI" | "SAT" | "SUN";
+
+export type AlertAssetRef = { asset_id: string; name: string };
+export type AlertParameterRef = { code: string; name: string; qualifier: string | null; unit: string | null };
+export type AlertCondition = {
+  comparator: AlertComparator;
+  threshold: number;
+  tolerance: number | null;
+  comparison_mode: string;
+};
 
 export type Alert = {
   alert_id: string;
   site_id: string;
-  space_id: string | null;
-  asset_id: string | null;
-  condition_key: string;
-  metric: string;
+  rule_id: string;
+  rule_name: string;
+  rule_deleted: boolean;
+  asset: AlertAssetRef;
+  parameter: AlertParameterRef;
+  condition: AlertCondition;
   state: AlertState;
   triggered_at: string;
   trigger_value: number;
+  latest_value: number | null;
+  latest_value_at: string | null;
+  data_unavailable: boolean;
   resolved_at: string | null;
   resolved_value: number | null;
   ended_at: string | null;
-  ended_reason: string | null;
-  ended_reason_code: "CONFIGURATION_CHANGED" | "DATA_UNAVAILABLE" | null;
-  data_unavailable: boolean;
+  ended_reason_code: string | null;
+  acknowledgement: { acknowledged_at: string; acknowledged_by: string } | null;
   previous_occurrence_count: number;
   most_recent_previous_occurrence_at: string | null;
 };
@@ -482,6 +497,53 @@ export type Alert = {
 export type AlertListResponse = {
   site_id: string;
   alerts: Alert[];
+  next_before: string | null;
+};
+
+export type AlertDeliveryChannel = { requested: boolean; status: "COMING_SOON" };
+
+export type AlertRule = {
+  rule_id: string;
+  site_id: string;
+  name: string;
+  asset: AlertAssetRef;
+  parameter: AlertParameterRef;
+  condition: AlertCondition;
+  schedule: { start_time: string; end_time: string; weekdays: Weekday[]; every_day: boolean; timezone: string | null };
+  reminder_minutes: 15 | 30 | null;
+  delivery: { email: AlertDeliveryChannel; whatsapp: AlertDeliveryChannel };
+  enabled: boolean;
+  version: number;
+  active_alert_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AlertRulesResponse = {
+  site_id: string;
+  max_active_rules: number;
+  rules: AlertRule[];
+};
+
+export type AlertRuleParameterOption = { asset: AlertAssetRef; parameter: AlertParameterRef };
+
+export type AlertRuleParametersResponse = {
+  site_id: string;
+  parameters: AlertRuleParameterOption[];
+};
+
+/** Body of POST .../alert-rules (enabled) and PATCH /alert-rules/{id} (version). */
+export type AlertRuleInput = {
+  name: string;
+  asset_id: string;
+  parameter_code: string;
+  qualifier: string | null;
+  comparator: AlertComparator;
+  threshold: number;
+  tolerance: number | null;
+  schedule: { start_time: string; end_time: string; weekdays: Weekday[] };
+  reminder_minutes: 15 | 30 | null;
+  delivery: { email: boolean; whatsapp: boolean };
 };
 
 // ---- Analytics v1 (ADR-022) -------------------------------------------------

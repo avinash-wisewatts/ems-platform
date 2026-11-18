@@ -1,6 +1,23 @@
 # Alerts — Phase 1 technical design (Step 0)
 
-Status: PROPOSED for review · Not implemented · Written 2026-11-18 · Owner: Engineering
+Status: APPROVED 2026-11-18 (Q1–Q8 as recommended, with the refinements in the Phase 1 brief) · IMPLEMENTED on `feature/alerts-rules` (migrations 320–326) · Owner: Engineering
+
+> **Implementation note (2026-11-18) — telemetry source changed after
+> validation (§2.1).** The approval made *W* = 5 minutes "subject to
+> validation against actual reporting intervals". A read-only staging check
+> (2026-11-18 11:35 IST, 3,152 bound points) showed 60-second reporting
+> (median gap 60 s, worst 116 s) but a newest `normalized_points` sample up
+> to ~295 s old at p95 — normalisation runs in 5-minute batches (migration
+> 300) — so *W* = 5 minutes on that table would flap alerts to "data
+> unavailable". The live-value cache `telemetry.device_live_point_state`
+> covers all bound points with a 9-second median age (2.6 s receive lag),
+> already in canonical units. The evaluator (migration 325) therefore reads
+> the live-value cache with *W* = 5 minutes. `normalized_points` stays the
+> intended source for the later mean-over-time increment. Other deviations
+> from this document: none of substance — Q1–Q8 implemented as approved
+> (reminder choices None / 15 / 30; staff acknowledgements shown as
+> "WiseWatts Support"; cumulative counters excluded from all comparators;
+> names unique among non-deleted rules, reusable after soft delete).
 Decision record: [ADR-024](../../00-governance/decisions/ADR-024-customer-configurable-alert-rules.md) ·
 Plan: [phase-1-implementation-plan.md](phase-1-implementation-plan.md) ·
 Requirements: `EMS-REQ-082`, `EMS-REQ-140`–`EMS-REQ-152`
@@ -117,7 +134,7 @@ seeded once **[V]**) and added to `PortalPermission`.
 
 ## 2. Evaluator design
 
-### 2.1 Telemetry source — recommendation: `telemetry.normalized_points`, bounded window
+### 2.1 Telemetry source — implemented: `telemetry.device_live_point_state` (see the implementation note); originally proposed: `telemetry.normalized_points`, bounded window
 
 Resolution of a rule to telemetry **[V]**: rule (asset, `parameter_code`,
 qualifier) → `metadata.asset_points` binding whose `effective_range`

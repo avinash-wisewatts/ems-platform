@@ -290,13 +290,22 @@ def _float(value: Any) -> float | None:
     return None if value is None else float(value)
 
 
-def rule_args(body: AlertRuleIn) -> dict[str, Any]:
-    """The definition in the migration 323 argument order (after the id args)."""
+def check_rule(body: AlertRuleIn) -> None:
+    """API-side checks that give a precise error before any database call
+    (the database re-validates everything)."""
 
     if body.reminder_minutes not in REMINDER_CHOICES:
         raise AlertRuleError("invalid_reminder")
     if not body.schedule.weekdays:
         raise AlertRuleError("invalid_weekdays")
+    if body.schedule.start_time == body.schedule.end_time:
+        raise AlertRuleError("invalid_schedule")
+
+
+def rule_args(body: AlertRuleIn) -> dict[str, Any]:
+    """The definition in the migration 323 argument order (after the id args)."""
+
+    check_rule(body)
     return {
         "name": body.name,
         "asset_id": str(body.asset_id),

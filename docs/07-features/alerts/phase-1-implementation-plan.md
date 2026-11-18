@@ -1,6 +1,6 @@
 # Alerts — Phase 1 implementation plan (customer-configurable rules, ADR-024)
 
-Status: PROPOSED · Step 0 design proposed for review ([phase-1-technical-design.md](phase-1-technical-design.md)), no implementation started · Written 2026-11-18 · Owner: Engineering
+Status: IN PROGRESS — Step 0 design approved; steps 1–6 implemented on the integration branch `feature/alerts-rules` (one coordinated merge to `staging`, design Q1); staging release and acceptance pending at the time of this note · Written 2026-11-18 · Owner: Engineering
 Decision record: [ADR-024](../../00-governance/decisions/ADR-024-customer-configurable-alert-rules.md) ·
 Requirements: [functional-requirements.md §Alerts](../../02-requirements/functional-requirements.md#alerts)
 (`EMS-REQ-082`, `EMS-REQ-140`–`EMS-REQ-152`) · Feature: [README.md](README.md)

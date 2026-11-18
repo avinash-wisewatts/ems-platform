@@ -37,7 +37,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 
 from src.alert_rules_service import (
     ALERT_STATES,
@@ -55,6 +55,7 @@ from src.alert_rules_service import (
     acknowledge_alert,
     build_alert,
     build_rule,
+    check_rule,
     create_rule,
     delete_rule,
     fetch_alert,
@@ -114,6 +115,28 @@ def _require_same_origin(request: Request, *, json_body: bool) -> None:
             raise _error(
                 status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "unsupported_media_type", "Send the request as application/json."
             )
+
+
+def _same_origin_json(request: Request) -> None:
+    """Route dependency: resolved before the body is parsed, so a cross-site
+    or non-JSON write is refused (403 / 415) whatever its body contains."""
+
+    _require_same_origin(request, json_body=True)
+
+
+def _same_origin_no_body(request: Request) -> None:
+    _require_same_origin(request, json_body=False)
+
+
+_JSON_WRITE = [Depends(_same_origin_json)]
+_BODYLESS_WRITE = [Depends(_same_origin_no_body)]
+
+
+def _check(body) -> None:
+    try:
+        check_rule(body)
+    except AlertRuleError as exc:
+        raise _error(exc.status, exc.code, exc.detail)
 
 
 def _raise_for(exc: AlertRuleError, kind: str) -> HTTPException:
@@ -190,6 +213,7 @@ async def get_alert(request: Request, alert_id: UUID) -> Alert:
     summary="Acknowledge an Active alert -- never resolves it (ADR-024 §7)",
     operation_id="acknowledgeAlert",
     responses=_WRITE_RESPONSES,
+    dependencies=_BODYLESS_WRITE,
 )
 async def post_acknowledge(request: Request, alert_id: UUID) -> Alert:
     user = _require(request, PortalPermission.ALERT_ACKNOWLEDGE)
@@ -277,10 +301,11 @@ async def get_rule(request: Request, rule_id: UUID) -> AlertRule:
     summary="Create an alert rule (site administrators, WiseWatts admin staff)",
     operation_id="createAlertRule",
     responses=_WRITE_RESPONSES,
+    dependencies=_JSON_WRITE,
 )
 async def post_rule(request: Request, site_id: UUID, body: AlertRuleCreate) -> AlertRule:
     user = _require(request, PortalPermission.ALERT_CONFIGURE)
-    _require_same_origin(request, json_body=True)
+    _check(body)
     try:
         row = await create_rule(user.portal_user_id, site_id, body)
     except AlertRuleError as exc:
@@ -294,10 +319,11 @@ async def post_rule(request: Request, site_id: UUID, body: AlertRuleCreate) -> A
     summary="Edit an alert rule -- ends its Active alert (CONFIGURATION_CHANGED)",
     operation_id="updateAlertRule",
     responses=_WRITE_RESPONSES,
+    dependencies=_JSON_WRITE,
 )
 async def patch_rule(request: Request, rule_id: UUID, body: AlertRuleUpdate) -> AlertRule:
     user = _require(request, PortalPermission.ALERT_CONFIGURE)
-    _require_same_origin(request, json_body=True)
+    _check(body)
     try:
         await update_rule(user.portal_user_id, rule_id, body)
     except AlertRuleError as exc:
@@ -321,6 +347,7 @@ async def _toggle(request: Request, rule_id: UUID, enabled: bool) -> AlertRule:
     summary="Enable an alert rule",
     operation_id="enableAlertRule",
     responses=_WRITE_RESPONSES,
+    dependencies=_BODYLESS_WRITE,
 )
 async def post_enable(request: Request, rule_id: UUID) -> AlertRule:
     return await _toggle(request, rule_id, True)
@@ -332,6 +359,7 @@ async def post_enable(request: Request, rule_id: UUID) -> AlertRule:
     summary="Disable an alert rule -- ends its Active alert",
     operation_id="disableAlertRule",
     responses=_WRITE_RESPONSES,
+    dependencies=_BODYLESS_WRITE,
 )
 async def post_disable(request: Request, rule_id: UUID) -> AlertRule:
     return await _toggle(request, rule_id, False)
@@ -343,6 +371,7 @@ async def post_disable(request: Request, rule_id: UUID) -> AlertRule:
     summary="Delete an alert rule (soft) -- its alert history is kept",
     operation_id="deleteAlertRule",
     responses=_WRITE_RESPONSES,
+    dependencies=_BODYLESS_WRITE,
 )
 async def delete_rule_route(request: Request, rule_id: UUID) -> Response:
     user = _require(request, PortalPermission.ALERT_CONFIGURE)

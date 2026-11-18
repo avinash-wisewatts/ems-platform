@@ -122,6 +122,38 @@ export async function apiPostJson<T>(path: string, body: unknown, init?: Request
 }
 
 /**
+ * A same-origin /api/v1 write with an optional JSON body (ADR-024 alert rules
+ * and acknowledgement). The browser adds the Origin header the server checks.
+ * Returns undefined for 204.
+ */
+export async function apiWrite<T>(method: "POST" | "PATCH" | "DELETE", path: string, body?: unknown): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(buildUrl(path), {
+      method,
+      credentials: "same-origin",
+      headers:
+        body === undefined
+          ? { Accept: "application/json" }
+          : { Accept: "application/json", "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      cache: "no-store",
+    });
+  } catch (cause) {
+    throw new NetworkError(cause instanceof Error ? cause.message : "Request failed");
+  }
+  if (!response.ok) {
+    throw await toTypedError(response);
+  }
+  if (response.status === 204) return undefined as T;
+  try {
+    return (await response.json()) as T;
+  } catch {
+    throw new NetworkError("The response was not valid JSON", response.status);
+  }
+}
+
+/**
  * The Administration App's user-management JSON API (Admin -> Users), served
  * only by the Administration App under /api/admin/v1 -- never by the
  * read-only /api/v1 Analytics API or the customer API. Same session cookie;
