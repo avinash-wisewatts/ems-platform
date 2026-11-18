@@ -4,7 +4,7 @@ Pins the migration file (schedule-only: alter_job on six jobs, no DDL/DML,
 no procedure change), its manifest registration, and the installed schedule:
 every target every 5 minutes on a fixed UTC grid at its phase, the stage
 ordering the dependencies need, and every job that must stay as it is
-(demand 1078, raw receipt state 1076, alerts 1127, the 5-minute tier 1080
+(demand 1078, raw receipt state 1076, the alert-rule evaluator (formerly alerts 1127), the 5-minute tier 1080
 and its 15-minute consumer 1099).
 
 Batch equivalence is proven in test_pipeline_five_minute_batch_equivalence.py;
@@ -175,12 +175,16 @@ def test_jobs_that_must_stay_every_minute(conn, predicate):
     assert str(interval) == "0:01:00"
 
 
-def test_alert_evaluation_stays_every_minute_when_registered(conn):
+def test_alert_rule_evaluation_stays_every_minute(conn):
+    # ADR-024 (migration 325) replaced the MVP-7 job 1127 (retired by
+    # migration 320). The rule evaluator is registered by its migration; its
+    # 1-minute resolution and 3-minute gap tolerance assume a 1-minute cadence.
     rows = conn.execute(
         "SELECT schedule_interval FROM timescaledb_information.jobs "
-        "WHERE proc_schema = 'analytics' AND proc_name = 'run_alert_evaluation_job'"
+        "WHERE proc_schema = 'analytics' AND proc_name = 'run_alert_rule_evaluation_job'"
     ).fetchall()
-    if not rows:
-        pytest.skip("alert evaluation job is registered by a separate manual step")
-    # Its 3-minute gap tolerance (evaluate_alerts) assumes a 1-minute cadence.
     assert [str(r[0]) for r in rows] == ["0:01:00"]
+    assert conn.execute(
+        "SELECT count(*) FROM timescaledb_information.jobs "
+        "WHERE proc_schema = 'analytics' AND proc_name = 'run_alert_evaluation_job'"
+    ).fetchone() == (0,)

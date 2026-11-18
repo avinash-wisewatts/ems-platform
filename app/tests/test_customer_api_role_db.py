@@ -40,6 +40,8 @@ CUSTOMER_CODE = [
     "auth/repository.py",
     "auth/server_session.py",
     "routers/analytics_api.py",
+    "alert_rules_service.py",
+    "routers/alerts_api.py",
     "routers/report_exports.py",
     "routers/customer_auth.py",
     "customer_main.py",

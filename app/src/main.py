@@ -53,6 +53,7 @@ from src.context.service import (
 )
 from src.routers.context import router as context_router
 from src.routers.analytics_api import router as analytics_api_router
+from src.routers.alerts_api import router as alerts_api_router
 from src.routers.report_exports import router as report_exports_router
 from src.routers.user_management_api import router as user_management_api_router
 from src.report_export_worker import ReportExportWorker
@@ -451,6 +452,8 @@ app.mount(
 
 app.include_router(context_router)
 app.include_router(analytics_api_router)
+# Alerts (ADR-024): rule configuration, Active Alerts, history, acknowledgement.
+app.include_router(alerts_api_router)
 # Reports export routes exist only where Reports is enabled (staging-only).
 if settings.reports_enabled:
     app.include_router(report_exports_router)

@@ -11,9 +11,9 @@
 #   - Normalization routing job
 #   - Energy-domain routing job
 #   - Environment-domain routing job
-#   - MVP-7 alert evaluation job (ADR-016/ADR-017) -- registered by a
-#     separate, explicitly authorized manual step, not deploy-automatic;
-#     absence is reported here, not treated as a deployment regression
+#   - Alert-rule evaluation job (ADR-024, migration 325) -- registered by
+#     its migration; the retired MVP-7 job (run_alert_evaluation_job,
+#     removed by migration 320) must be absent
 #   - Compression policies
 #   - Retention policies
 #   - Continuous aggregate refresh policies
@@ -237,29 +237,56 @@ check_single_job \
 
 
 # ----------------------------------------------------------------------------
-# 2b. MVP-7 alert evaluation job (ADR-016/ADR-017)
+# 2b. Alert-rule evaluation job (ADR-024, migration 325)
 #
-# Unlike the routing jobs above, this job has no "overlap" config (there is
-# no late-data window concept for alert evaluation), so expect_overlap is
-# passed as false. This job is registered by a separate, explicitly
-# authorized manual step (postgres/jobs/238_alert_evaluation_job.sql;
-# scripts/apply_migrations.sh does not read job-category files) -- its
-# absence on a given deployment is expected and reported here, not a
-# deployment regression by itself. See docs/07-features/alerts/README.md.
+# Registered by migration 325 (every minute, 5-minute max runtime, 3 retries
+# every minute). No "overlap" config, so expect_overlap is false. The retired
+# MVP-7 job (analytics.run_alert_evaluation_job, removed by migration 320)
+# must not exist, and the evaluator should have logged a run in the last 3
+# minutes (analytics.alert_evaluation_runs) -- a stalled evaluator warns.
 # ----------------------------------------------------------------------------
 
-print_section "MVP-7 Alert Evaluation Job (ADR-016/ADR-017)"
+print_section "Alert-Rule Evaluation Job (ADR-024)"
 
 check_procedure \
-    "analytics.run_alert_evaluation_job(integer,jsonb)" \
-    "Alert evaluation job" \
+    "analytics.run_alert_rule_evaluation_job(integer,jsonb)" \
+    "Alert-rule evaluation job" \
     "analytics"
 
 check_single_job \
-    "run_alert_evaluation_job" \
-    "Alert evaluation job" \
+    "run_alert_rule_evaluation_job" \
+    "Alert-rule evaluation job" \
     "analytics" \
     "false"
+
+legacy_alert_jobs="$(
+    psql_query "
+        SELECT COUNT(*)
+        FROM timescaledb_information.jobs
+        WHERE proc_schema = 'analytics'
+          AND proc_name = 'run_alert_evaluation_job';
+    "
+)"
+
+if [[ "${legacy_alert_jobs}" == "0" ]]; then
+    pass "Retired MVP-7 alert evaluation job is absent"
+else
+    fail "Retired MVP-7 alert evaluation job still exists (${legacy_alert_jobs})"
+fi
+
+recent_alert_runs="$(
+    psql_query "
+        SELECT COUNT(*)
+        FROM analytics.alert_evaluation_runs
+        WHERE started_at > now() - INTERVAL '3 minutes';
+    "
+)"
+
+if [[ "${recent_alert_runs}" != "0" ]]; then
+    pass "Alert-rule evaluator logged a run in the last 3 minutes"
+else
+    warn "Alert-rule evaluator has not logged a run in the last 3 minutes (stalled, or just registered)"
+fi
 
 
 # ----------------------------------------------------------------------------
@@ -286,7 +313,7 @@ duplicate_custom_jobs="$(
             )
             OR (
                 proc_schema = 'analytics'
-                AND proc_name = 'run_alert_evaluation_job'
+                AND proc_name = 'run_alert_rule_evaluation_job'
             )
             GROUP BY proc_schema, proc_name
             HAVING COUNT(*) > 1
@@ -432,7 +459,7 @@ failed_last_run_count="$(
             OR
             (
                 j.proc_schema = 'analytics'
-                AND j.proc_name = 'run_alert_evaluation_job'
+                AND j.proc_name = 'run_alert_rule_evaluation_job'
             )
         )
         AND LOWER(COALESCE(s.last_run_status, '')) = 'failed';
@@ -466,7 +493,7 @@ never_run_custom_jobs="$(
             OR
             (
                 j.proc_schema = 'analytics'
-                AND j.proc_name = 'run_alert_evaluation_job'
+                AND j.proc_name = 'run_alert_rule_evaluation_job'
             )
         )
         AND s.last_run_started_at IS NULL;
@@ -474,9 +501,9 @@ never_run_custom_jobs="$(
 )"
 
 if [[ "${never_run_custom_jobs}" == "0" ]]; then
-    pass "All telemetry routing jobs and the alert evaluation job have executed at least once"
+    pass "All telemetry routing jobs and the alert-rule evaluation job have executed at least once"
 else
-    warn "${never_run_custom_jobs} custom job(s) (telemetry routing and/or MVP-7 alert evaluation) have not executed yet"
+    warn "${never_run_custom_jobs} custom job(s) (telemetry routing and/or alert-rule evaluation) have not executed yet"
 fi
 
 
@@ -498,7 +525,7 @@ psql_query "
        OR
        (
            proc_schema = 'analytics'
-           AND proc_name = 'run_alert_evaluation_job'
+           AND proc_name = 'run_alert_rule_evaluation_job'
        )
        OR
        (

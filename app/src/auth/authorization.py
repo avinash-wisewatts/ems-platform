@@ -1,6 +1,14 @@
+import re
 from enum import Enum
 
 from src.auth.models import AuthenticatedPortalUser
+
+
+# ADR-024 alert write routes (src.routers.alerts_api).
+_ALERT_RULE_WRITE_PATH = re.compile(
+    r"/api/v1/sites/[^/]+/alert-rules|/api/v1/alert-rules/[^/]+(?:/enable|/disable)?"
+)
+_ALERT_ACKNOWLEDGE_PATH = re.compile(r"/api/v1/alerts/[^/]+/acknowledge")
 
 
 class PortalRole(str, Enum):
@@ -25,6 +33,7 @@ class PortalPermission(str, Enum):
     METERING_POLICY_MANAGE = "metering_policy.manage"
     COMMISSIONING_EXECUTE = "commissioning.execute"
     ALERT_ACKNOWLEDGE = "alert.acknowledge"
+    ALERT_CONFIGURE = "alert.configure"
     DASHBOARD_VIEW = "dashboard.view"
     REPORT_EXPORT = "report.export"
     AUDIT_VIEW = "audit.view"
@@ -104,10 +113,22 @@ def required_permission_for_request(
             return PortalPermission.USER_MANAGE
         return None
 
-    # The /api/v1 JSON surface is a single enumerated set of GET endpoints.
-    # Any authenticated portal identity may read it (DASHBOARD_VIEW); an
-    # undefined method on a defined path then resolves to a clean 405 from
-    # the framework rather than a deny-by-default 403.
+    # Alert writes (ADR-024, src.routers.alerts_api) need their dedicated
+    # permission here as well as in the route and in the database function:
+    # rule create / edit / enable / disable / delete -> alert.configure
+    # (ADMIN only); acknowledging an alert -> alert.acknowledge (ADMIN,
+    # OPERATOR). Reading rules and alerts stays dashboard.view.
+    if path.startswith("/api/v1/") and normalized_method in {"POST", "PUT", "PATCH", "DELETE"}:
+        stripped = path.rstrip("/")
+        if _ALERT_RULE_WRITE_PATH.fullmatch(stripped):
+            return PortalPermission.ALERT_CONFIGURE
+        if _ALERT_ACKNOWLEDGE_PATH.fullmatch(stripped):
+            return PortalPermission.ALERT_ACKNOWLEDGE
+    # The rest of the /api/v1 JSON surface: any authenticated portal
+    # identity may use it (DASHBOARD_VIEW); routes that write check their own
+    # permission (Reports export: report.export). An undefined method on a
+    # defined path then resolves to a clean 405 from the framework rather
+    # than a deny-by-default 403.
     if path.startswith("/api/v1/"):
         return PortalPermission.DASHBOARD_VIEW
 
