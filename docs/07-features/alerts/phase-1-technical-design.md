@@ -18,6 +18,17 @@ Status: APPROVED 2026-11-18 (Q1–Q8 as recommended, with the refinements in the
 > (reminder choices None / 15 / 30; staff acknowledgements shown as
 > "WiseWatts Support"; cumulative counters excluded from all comparators;
 > names unique among non-deleted rules, reusable after soft delete).
+>
+> **Amendment 1 (2026-11-18, migration 327, ADR-024 Amendment 1).**
+> *D-1:* the qualification / resolution tests are
+> `since <= p_now - interval + INTERVAL '2 seconds'` — `since` and `p_now`
+> are both run start times and the job jitters ±3 ms around 60 s, so the
+> exact test waited an extra run about half the time. 2 s ≪ 60 s, so a run
+> qualifies only ≥ 4 min 58 s (resolves ≥ 58 s) after the first
+> observation. *D-2:* `previous_occurrence_count` /
+> `most_recent_previous_triggered_at` match `prev.rule_id` (all versions)
+> instead of `prev.condition_key` (per version); served by
+> `ix_alerts_rule_time`. Signatures, grants and lifecycle unchanged.
 Decision record: [ADR-024](../../00-governance/decisions/ADR-024-customer-configurable-alert-rules.md) ·
 Plan: [phase-1-implementation-plan.md](phase-1-implementation-plan.md) ·
 Requirements: `EMS-REQ-082`, `EMS-REQ-140`–`EMS-REQ-152`
