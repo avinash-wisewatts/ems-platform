@@ -76,7 +76,7 @@ def test_me_echoes_global_admin_identity_and_permissions(portal_client, monkeypa
         "organization.manage", "user.manage", "site.manage", "location.manage",
         "asset.manage", "gateway.manage", "device.manage", "relationship.manage",
         "metering_policy.manage", "commissioning.execute", "alert.acknowledge",
-        "dashboard.view", "audit.view",
+        "alert.configure", "dashboard.view", "audit.view",
     }
     assert body["permissions"] == sorted(body["permissions"])
 

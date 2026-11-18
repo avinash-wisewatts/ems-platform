@@ -1,5 +1,31 @@
 # ADR-016: MVP-7 Basic Alerts (Q77) — full scope, lifecycle, and behavior
 
+> **SUPERSEDED (2026-11-18) by
+> [ADR-024](ADR-024-customer-configurable-alert-rules.md)** — the MVP-7
+> Basic Alerts product described here (automatic Site-level Energy
+> Attention alerts, ±15%) is **retired and replaced entirely** by
+> customer-configurable alert rules (ADR-024 §17). Its UI, evaluator and
+> scheduled job are retired and its existing records are to be deleted
+> by the replacement release's migration (ADR-024 §18–§20; **not yet
+> executed** — the mechanism is still running on staging as of
+> 2026-11-18). No legacy Alerts experience is retained.
+> What survives, **only because ADR-024 re-adopts it for rule-based
+> alerts**: the 5-minute qualification and 1-minute resolution periods
+> with gap reset (decisions 2–3), restart/persistence resilience (5–6),
+> the three states (7), configuration-change Ended transitions (8),
+> immutability (9), recurrence (10) and content conventions (11). Replaced
+> or no longer applicable: decision 1 (scope), 2 (Attention-generated
+> alerts as the source), 4 (data-gap ending — replaced by ADR-024 §4A),
+> 12 (delivery wording — in-product only, with "Coming Soon"
+> placeholders), 13 (Attention-condition filters), 14 (configuration and
+> permissions), 15 (no acknowledgement), and Q67 for alert configuration.
+> The ADR-010 Energy Attention display (Site Overview, Main Dashboard,
+> Site Performance Report) is **not** affected. Inline notes below mark
+> each affected decision; the original text is preserved as history. The
+> status paragraph below is a 2026-09-14/15 historical record; the
+> current staging state is in
+> [alerts/README.md](../../07-features/alerts/README.md#staging-baseline-2026-11-18).
+
 Status: Decided (product/UX scope, in full detail); implemented and
 deployed to staging 2026-09-14. **Staging post-deploy validation performed
 2026-09-14: FAIL** — the alert-evaluation TimescaleDB job was not
@@ -46,7 +72,8 @@ session as a structured handoff document — see Evidence) / Engineering
 (repository inspection and architecture-gap identification only, this pass)
 Related requirements: Workshop Q77, Q78 (delivery-channel statement
 superseded — see "Source-of-truth correction"), Q67 (Administration App
-configuration ownership, unchanged); [functional-requirements.md §Alerts](../../02-requirements/functional-requirements.md#alerts)
+configuration ownership, unchanged — **superseded for alert configuration
+by [ADR-024](ADR-024-customer-configurable-alert-rules.md), 2026-11-18**); [functional-requirements.md §Alerts](../../02-requirements/functional-requirements.md#alerts)
 (`EMS-REQ-080`–`EMS-REQ-084`, `EMS-REQ-117`–`EMS-REQ-127`)
 Related features: [Attention](../../07-features/attention/README.md);
 [ADR-010](ADR-010-mvp3-attention-materiality-policy.md) (materiality
@@ -123,6 +150,16 @@ calculations, analytical deep links from an alert to other screens. **This
 supersedes the archived Q78 statement that email is included** — see
 "Source-of-truth correction" below.
 
+> **SUPERSEDED in part (2026-11-18, [ADR-024](ADR-024-customer-configurable-alert-rules.md)):**
+> "acknowledgement workflow" and "Administration-App-only configuration"
+> are no longer out of scope — acknowledgement (ADR-024 §7) and
+> customer-EMS rule configuration by customer site administrators and
+> WiseWatts `GLOBAL` `ADMIN` staff (ADR-024 §1–§3) are approved. Email and WhatsApp may now appear as "Coming Soon"
+> placeholders with stored preferences only; sending email, SMS or
+> WhatsApp, and sharing, remain out of scope (ADR-024 §9). The scope
+> described here — alerts generated from existing Attention conditions —
+> is itself retired (ADR-024 §17).
+
 **2. Triggering and qualification.** Every existing qualifying Attention
 condition automatically generates an alert — there is no separate
 alert-rule-selection layer in MVP-7; each distinct affected context
@@ -134,6 +171,12 @@ time alone does not prove continuous qualification. The alert is generated
 on the next normal evaluation cycle once qualified; there is no separate
 scheduler implied and no customer-visible pending/monitoring state before
 qualification.
+
+> **Note (2026-11-18, [ADR-024](ADR-024-customer-configurable-alert-rules.md)):**
+> Attention-generated alerts are **retired** (ADR-024 §17); customer-
+> defined alert rules are the only source of alerts. The 5-minute
+> qualification (with gap reset) and 1-minute resolution periods are
+> re-adopted for rule-based alerts (ADR-024 §4).
 
 **3. Active behavior and resolution.** Once created, an alert is Active
 indefinitely while its condition remains continuously true — no repeated
@@ -163,6 +206,16 @@ the original wording below — see §7 and Evidence):**
   appropriate)"~~ — this left open which of Resolved/Ended applied when
   the condition was still true on recovery; neither §3 nor §6 actually
   covered that case. The amendment above is the resolution.
+
+> **Rule-based alerts (2026-11-18, [ADR-024](ADR-024-customer-configurable-alert-rules.md) §4A):**
+> the "still material on recovery → Ended `DATA_UNAVAILABLE`" rule above
+> does **not** apply to customer-defined rule alerts. When their telemetry
+> is unavailable the occurrence stays Active **and keeps its
+> acknowledgement**; evaluation resumes on valid data and the same
+> occurrence continues if the condition is still true; it is Resolved
+> only when the condition is confirmed clear (§3). This §4 describes only
+> the retired Energy Attention alerts (ADR-024 §17); it applies to no
+> current or future alert.
 
 **5. Restart/deployment resilience.** Persisted alert records (Active,
 Resolved, Ended) survive service restart/deployment — no disappearance, no
@@ -229,6 +282,12 @@ amendment; the two are independent triggers and do not interact.)
   evaluation (including the 5-minute qualification rule, if the new
   condition is already true) applies going forward.
 
+> **Note (2026-11-18, [ADR-024](ADR-024-customer-configurable-alert-rules.md) §8):**
+> customer rule edits, disabling and (soft) deletion are configuration
+> transitions under this decision — an Active occurrence becomes Ended
+> with `CONFIGURATION_CHANGED`. Deletion never removes historical
+> occurrences.
+
 **9. Historical immutability and retention.** Historical alert records are
 immutable — later configuration changes never rewrite a historical alert's
 condition, metric, threshold/reference, context, trigger info, timestamps,
@@ -294,7 +353,15 @@ dedicated Alerts area in main navigation (Active/Resolved/Ended). There are
 MVP-7 — this narrows `EMS-REQ-081`'s original "jump to the metric's screen"
 framing; see the requirements-traceability correction.
 
-**13. Filtering and ordering.** Cascading Site → Space → Asset filters
+> **Amended (2026-11-18, [ADR-024](ADR-024-customer-configurable-alert-rules.md) §9):**
+> delivery remains **in-product only**. The rule form may show Email and
+> WhatsApp as **Coming Soon** options and store the selected preferences;
+> no message is sent and no delivery status or success is ever shown.
+
+**13. Filtering and ordering.**
+*(2026-11-18: retired with the Energy Attention alerts — its
+Condition/Metric filter and materiality ordering depend on Attention
+conditions; filtering for the replacement UI is specified by ADR-024.)* Cascading Site → Space → Asset filters
 (not a single combined selector, absent repository/UX evidence requiring
 reconsideration); a single-select (not multi-select) Condition/Metric
 filter using existing Attention conditions as customer-facing labels; date
@@ -321,9 +388,36 @@ relevant Site/Space/Asset. Configuration remains exclusively in the
 Administration App (Q67, unchanged) — MVP-7 introduces no customer-facing
 alert configuration system.
 
+> **SUPERSEDED (2026-11-18, [ADR-024](ADR-024-customer-configurable-alert-rules.md) §1–§2, §15):**
+> alert rules are configured in the customer EMS Web Application, by
+> **customer site administrators** (`ADMIN` with access to the site) and
+> **WiseWatts `GLOBAL` `ADMIN` staff** (any customer site, no additional
+> support authorisation), under a new dedicated configuration permission —
+> not the generic `dashboard.view`. Acknowledgement is allowed for those
+> same administrators, for customer operators and for WiseWatts `GLOBAL`
+> `OPERATOR` staff on any customer site (`alert.acknowledge`);
+> operators cannot configure rules; a WiseWatts `GLOBAL` `VIEWER` is
+> read-only. Viewing rules and alerts follows existing site access, as
+> before. Every action is audited with the
+> actual actor and whether it was a customer user or WiseWatts staff. The
+> Administration App gains no alert configuration screen.
+
 **15. No acknowledgement.** No Acknowledge / Snooze / Dismiss-as-
 acknowledged / assigned-to-user workflow in MVP-7, unless introduced by a
 later, separate product decision.
+
+> **SUPERSEDED (2026-11-18, [ADR-024](ADR-024-customer-configurable-alert-rules.md) §7, §10)** —
+> the later, separate product decision this item anticipated. An
+> authorised user (customer site administrator, customer operator, or
+> WiseWatts `GLOBAL` `ADMIN` / `GLOBAL` `OPERATOR` staff) may
+> **acknowledge** an Active alert;
+> who and when are recorded. Acknowledgement is **not** resolution: the
+> alert stays Active until its condition resolves or a rule configuration
+> change ends it, and acknowledgement stops reminders. Telemetry
+> unavailability never removes an acknowledgement. (Energy Attention
+> alerts are retired, ADR-024 §17, so acknowledgement applies only to
+> rule-based alerts.)
+> Snooze, dismiss and assignment remain out of scope.
 
 ## Source-of-truth correction
 

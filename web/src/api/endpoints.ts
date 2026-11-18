@@ -19,8 +19,15 @@
  *   GET /api/v1/sites/{site_id}/energy/consumption/evidence (Slice C)
  *   GET /api/v1/sites/{site_id}/energy/consumption/typical-reference (Slice C)
  *   GET /api/v1/sites/{site_id}/telemetry-freshness (MVP-4)
- *   GET /api/v1/sites/{site_id}/alerts                (MVP-7)
- *   GET /api/v1/alerts/{alert_id}                      (MVP-7)
+ *   GET    /api/v1/sites/{site_id}/alerts              (Alerts, ADR-024)
+ *   GET    /api/v1/alerts/{alert_id}                    (Alerts)
+ *   POST   /api/v1/alerts/{alert_id}/acknowledge        (Alerts, alert.acknowledge)
+ *   GET    /api/v1/sites/{site_id}/alert-rules          (Alerts)
+ *   GET    /api/v1/sites/{site_id}/alert-rules/parameters (Alerts)
+ *   POST   /api/v1/sites/{site_id}/alert-rules          (Alerts, alert.configure)
+ *   PATCH  /api/v1/alert-rules/{rule_id}                (Alerts, alert.configure)
+ *   POST   /api/v1/alert-rules/{rule_id}/enable|disable (Alerts, alert.configure)
+ *   DELETE /api/v1/alert-rules/{rule_id}                (Alerts, alert.configure)
  *   GET /api/v1/sites/{site_id}/analytics/catalog       (Analytics v1, ADR-022)
  *   GET /api/v1/sites/{site_id}/analytics/series        (Analytics v1, ADR-022)
  *   GET  /api/v1/sites/{site_id}/report-exports/estimate (Reports tab)
@@ -31,8 +38,9 @@
  *   GET  /api/v1/report-exports/{job_id}/file            (Reports tab, ZIP)
  *
  * No other paths, no arbitrary parameters, no generic query mechanism. The
- * two POSTs change only the caller's own export job records -- never EMS
- * data.
+ * report-export POSTs change only the caller's own export job records; the
+ * alert writes change only alert rules / acknowledgements (audited
+ * server-side) -- never EMS telemetry or metadata.
  *
  * Slice 0 scope note: getSiteAssets returns identity + placement, plus
  * type/hierarchy/location fields for the Asset View screen (asset_type_name,
@@ -66,7 +74,7 @@
  * is no total-THD field to request or return.
  */
 
-import { apiGet, apiGetFile, apiPostJson } from "./client";
+import { apiGet, apiGetFile, apiPostJson, apiWrite } from "./client";
 import type {
   ReportExportEstimate,
   ReportExportJob,
@@ -78,6 +86,10 @@ import type {
   AnalyticsRequestedResolution,
   AnalyticsSeriesResponse,
   AlertListResponse,
+  AlertRule,
+  AlertRuleInput,
+  AlertRuleParametersResponse,
+  AlertRulesResponse,
   AlertState,
   AssetCurrentDemandResponse,
   AssetDemandSeriesResponse,
@@ -341,38 +353,55 @@ export function getSiteTelemetryFreshness(
 }
 
 export type AlertListQuery = {
-  state?: AlertState;
-  condition_key?: string;
+  states: AlertState[];
   from?: string;
   to?: string;
   limit?: number;
-  before?: string; // infinite-scroll cursor: triggered_at of the last row already seen
+  before?: string; // cursor: next_before of the previous page
 };
 
-/** MVP-7 (ADR-016/ADR-017). In-product only. */
-export function getSiteAlerts(
-  siteId: string,
-  query: AlertListQuery,
-  init?: RequestInit,
-): Promise<AlertListResponse> {
+/** ADR-024: Active Alerts ({ACTIVE}) or Resolved/Ended history. */
+export function getSiteAlerts(siteId: string, query: AlertListQuery, init?: RequestInit): Promise<AlertListResponse> {
   return apiGet<AlertListResponse>(
     `/sites/${encodeURIComponent(siteId)}/alerts`,
-    {
-      state: query.state,
-      condition_key: query.condition_key,
-      from: query.from,
-      to: query.to,
-      limit: query.limit,
-      before: query.before,
-    },
+    { state: query.states, from: query.from, to: query.to, limit: query.limit, before: query.before },
     init,
   );
 }
 
-/** MVP-7. An unknown or inaccessible alert_id resolves as NotAccessibleError,
- *  identical to every other portal-scoped resource this client reads. */
+/** An unknown or inaccessible alert resolves as NotAccessibleError. */
 export function getAlertDetail(alertId: string, init?: RequestInit): Promise<Alert> {
   return apiGet<Alert>(`/alerts/${encodeURIComponent(alertId)}`, undefined, init);
+}
+
+/** alert.acknowledge. Acknowledgement never resolves the alert. */
+export function acknowledgeAlert(alertId: string): Promise<Alert> {
+  return apiWrite<Alert>("POST", `/alerts/${encodeURIComponent(alertId)}/acknowledge`);
+}
+
+export function getSiteAlertRules(siteId: string, init?: RequestInit): Promise<AlertRulesResponse> {
+  return apiGet<AlertRulesResponse>(`/sites/${encodeURIComponent(siteId)}/alert-rules`, undefined, init);
+}
+
+export function getAlertRuleParameters(siteId: string, init?: RequestInit): Promise<AlertRuleParametersResponse> {
+  return apiGet<AlertRuleParametersResponse>(`/sites/${encodeURIComponent(siteId)}/alert-rules/parameters`, undefined, init);
+}
+
+/** alert.configure (site administrators, WiseWatts admin staff). */
+export function createAlertRule(siteId: string, input: AlertRuleInput & { enabled: boolean }): Promise<AlertRule> {
+  return apiWrite<AlertRule>("POST", `/sites/${encodeURIComponent(siteId)}/alert-rules`, input);
+}
+
+export function updateAlertRule(ruleId: string, input: AlertRuleInput & { version: number }): Promise<AlertRule> {
+  return apiWrite<AlertRule>("PATCH", `/alert-rules/${encodeURIComponent(ruleId)}`, input);
+}
+
+export function setAlertRuleEnabled(ruleId: string, enabled: boolean): Promise<AlertRule> {
+  return apiWrite<AlertRule>("POST", `/alert-rules/${encodeURIComponent(ruleId)}/${enabled ? "enable" : "disable"}`);
+}
+
+export function deleteAlertRule(ruleId: string): Promise<void> {
+  return apiWrite<void>("DELETE", `/alert-rules/${encodeURIComponent(ruleId)}`);
 }
 
 // ---- Analytics v1 (ADR-022) -------------------------------------------------

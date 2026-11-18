@@ -1,28 +1,223 @@
 # Feature: Alerts
 
-Status: CURRENT · Last reviewed: 2026-09-14 · Owner: Product + Engineering
-MVP stage: MVP-7 · Related decisions: [ADR-016](../../00-governance/decisions/ADR-016-q77-mvp7-basic-alerts.md), [ADR-017](../../00-governance/decisions/ADR-017-mvp7-alert-architecture.md), [ADR-010](../../00-governance/decisions/ADR-010-mvp3-attention-materiality-policy.md)
+Status: CURRENT · Last reviewed: 2026-11-18 (Phase 0 governance alignment + read-only staging baseline; sections below "Staging baseline" are the 2026-09-14/15 implementation record, kept as history) · Owner: Product + Engineering
+MVP stage: MVP-7 (legacy, **to be retired**) → replaced by ADR-024 customer-configurable rules · Related decisions: [ADR-016](../../00-governance/decisions/ADR-016-q77-mvp7-basic-alerts.md), [ADR-017](../../00-governance/decisions/ADR-017-mvp7-alert-architecture.md), [ADR-010](../../00-governance/decisions/ADR-010-mvp3-attention-materiality-policy.md), [ADR-024](../../00-governance/decisions/ADR-024-customer-configurable-alert-rules.md) (customer-configurable rules, acknowledgement — decided 2026-11-18, not implemented)
 
 ## Purpose
 
-Notify the customer, in-product, of existing Attention conditions that
-qualify (persist) for a meaningful period — "the same story Attention
-already tells, delivered as a notification" (ADR-016).
+**Current product (decided 2026-11-18, not implemented):** notify the
+customer, in-product, when an alert rule configured for one of their
+assets is breached for a meaningful period — rules are configured by the
+site's administrators in the EMS Web App ([ADR-024](../../00-governance/decisions/ADR-024-customer-configurable-alert-rules.md)).
+This **replaces MVP-7 Basic Alerts entirely**.
+
+*Legacy (running on staging, to be retired by the replacement release):*
+notify the customer of existing Attention conditions that qualify
+(persist) for a meaningful period — "the same story Attention already
+tells, delivered as a notification" (ADR-016). Its UI, ±15% evaluator,
+scheduled job and records are retired and deleted (§ "Legacy retirement"
+below); the Energy Attention **display** on Site Overview, Main Dashboard
+and the Site Performance Report is not affected.
 
 ## Requirements
 
 [functional-requirements.md §Alerts](../../02-requirements/functional-requirements.md#alerts)
-(`EMS-REQ-080`–`084`, `EMS-REQ-117`–`127`).
+(`EMS-REQ-080`–`084`, `EMS-REQ-117`–`127`; customer-configurable rules
+`EMS-REQ-082`, `EMS-REQ-140`–`152`).
 
 ## User experience
 
-[information-architecture.md §Alerts](../../03-ux-and-design/information-architecture.md);
+[information-architecture.md §Alerts](../../03-ux-and-design/information-architecture.md).
+*Legacy UI (to be replaced entirely — no legacy view is retained):*
 header Active-alert-count indicator + dedicated Alerts area
 (Active/Resolved/Ended tabs, single-select condition filter, date range,
 list + detail). In-product only — no email/SMS/WhatsApp/sharing, no
 analytical deep links, no customer-facing severity taxonomy.
+*(2026-11-18: still in-product only for delivery; ADR-024 adds Email and
+WhatsApp only as "Coming Soon" placeholders that send nothing.)*
+
+## Customer-configurable alert rules (ADR-024) — decided 2026-11-18, not implemented
+
+Phase 0 complete (DDS classification approved). Proposed Phase 1:
+[phase-1-implementation-plan.md](phase-1-implementation-plan.md); Step 0 technical design proposed for
+review: [phase-1-technical-design.md](phase-1-technical-design.md). No implementation started.
+
+Full record: [ADR-024](../../00-governance/decisions/ADR-024-customer-configurable-alert-rules.md).
+Supersedes the earlier "configuration stays in the Administration App
+(Q67)" and "no acknowledgement" decisions for alerts, and **replaces the
+MVP-7 Energy Attention alerts entirely** (ADR-024 §17).
+
+- **Screens.** Alerts gains an Active Alerts view (Name, Asset, Status,
+  Acknowledge; detail with triggered time, triggering condition, asset,
+  parameter, threshold/value, status, acknowledgement), a **Create
+  Alert** subtab (rule list with Name, Asset, Parameter, Value/condition,
+  enabled toggle, Edit, Delete; Create New Alert) and a read-only
+  **Resolved/Ended history** (last 90 days, including occurrences of
+  deleted rules).
+- **Permissions.** View = every authorised user of the site. Configure
+  (create, edit, enable/disable, delete) = **customer site administrators
+  and WiseWatts `GLOBAL` `ADMIN` staff** (new dedicated permission,
+  `ADMIN`). Acknowledge = **those administrators, customer operators and
+  WiseWatts `GLOBAL` `OPERATOR` staff** (`alert.acknowledge`); operators
+  cannot configure. Staff act on any
+  customer site with no additional support authorisation for now; a
+  WiseWatts `GLOBAL` `VIEWER` is read-only.
+  Enforced at the API route and in the database function;
+  `dashboard.view` alone never authorises a write.
+- **Rule.** One site, one asset, one parameter available for that asset;
+  greater than / less than / equal to (explicit tolerance in the
+  parameter's unit, no default; not offered for cumulative counters);
+  fixed value first, mean over a configurable window in a later
+  increment; schedule = daily time range + every day or weekdays, in the
+  site's timezone; reminder frequency; Email/WhatsApp preferences (Coming
+  Soon); enabled flag. At most 25 active rules per site (subject to
+  staging performance validation).
+- **Lifecycle.** 5 minutes continuously true → Active (inside the
+  schedule window only); 1 minute continuously false on valid data →
+  Resolved; telemetry unavailable → stays Active, keeps its
+  acknowledgement, shows "data unavailable", evaluation resumes on valid
+  data (never Ended `DATA_UNAVAILABLE`); edit, disable or delete while
+  Active → Ended `CONFIGURATION_CHANGED`; schedule close never resolves or
+  ends an Active alert; soft delete keeps every historical occurrence
+  (90-day retention for Resolved/Ended occurrences).
+- **Acknowledgement is not resolution.** It records who and when, stops
+  reminders, and leaves the alert Active until its condition resolves or a
+  configuration change ends it; telemetry unavailability does not remove
+  it. "Acknowledged" is an attribute, not a fourth state.
+- **Delivery and reminders.** Nothing is sent in this release: no email,
+  no WhatsApp, no reminder, no delivery status. Reminder generation and
+  any delivery channel are later phases.
+- **Write path.** EMS Web App → customer API (dedicated permission,
+  same-site JSON only) → SECURITY DEFINER function (re-checks permission,
+  site, asset, parameter) → change + `admin.audit_events` row in one
+  transaction, recording the actual acting user and whether it was a
+  customer user or WiseWatts staff. Evaluation is server-side, bounded,
+  set-based and monitored, with the 25-rule per-site limit and a staging
+  performance check before release.
+
+### Legacy retirement (ADR-024 §17–§20) — decided, not executed
+
+Nothing has been deleted, disabled or changed; the legacy mechanism is
+still running on staging (baseline below).
+
+| Legacy component | Disposition |
+|---|---|
+| TimescaleDB job running `analytics.run_alert_evaluation_job` (job 1127 on staging; production unknown — registered manually) | **Retire** in the retirement migration, located by procedure name; absent is not an error |
+| `postgres/jobs/238_alert_evaluation_job.sql` | **Retire** — removed so it cannot be re-registered |
+| `analytics.run_alert_evaluation_job`, `analytics.evaluate_alerts()`, `analytics.evaluate_energy_attention_materiality` | **Retire** — no other caller (verified); the ADR-010 client Attention does not use them |
+| Legacy `analytics.alerts` rows (`ENERGY_ATTENTION:…`) and `analytics.alert_evaluation_candidates` rows | **Delete** — legacy only |
+| `analytics.alerts` table / constraints / unique index | **Reuse (recommended)** for rule-based occurrences, extended in Phase 1, with a guard against legacy-shaped rows; or replace — Phase 1 design |
+| `analytics.alert_evaluation_candidates` table | Reuse or replace for rule timers — Phase 1 design. Its gap-reset timers are reusable; its "still material on recovery → Ended" branch is not (ADR-024 §4A) |
+| `get_portal_site_alerts` / `get_portal_alert_detail`, `/api/v1/sites/{site_id}/alerts`, `/api/v1/alerts/{alert_id}`, `AlertSummary` | **Replace** with rule-aware contracts (re-grant after DROP/CREATE, guarded for production where `ems_customer_api` is absent) |
+| `AlertsArea.tsx`, legacy `Alert` types and endpoints | **Replace** with Active Alerts / Create Alert |
+| `useActiveAlertCount`, nav entries, `/features/alerts` route | **Reuse** for rule-based alerts |
+| `verify_jobs.sh` MVP-7 section, legacy alert tests and `assert_mvp7_alert_*` scripts | **Replace/retire** with the objects they test — never weakened |
+| Migrations 238–242 and their ledger rows | **Keep** — history is never edited; retirement is a forward migration |
+| ADR-010 Attention (`web/src/attention/*`), `analytics.energy_consumption_daily`, typical-reference read | **Keep** — not part of the alerting layer |
+
+**Retirement migration (proposed scope, ADR-024 §20):** explicitly listed
+in `postgres/migration_environment_scope.csv` as `staging|production|test`;
+pre-check that every row classifies as legacy or rule-based (abort
+otherwise) → remove the legacy job(s) and retire the legacy procedures →
+delete legacy candidates, then legacy alerts (`condition_key LIKE
+'ENERGY_ATTENTION:%'` and `metric = 'ENERGY_CONSUMPTION'` and no rule
+reference) → constraint against legacy-shaped rows → record per-table and
+per-state counts durably and in the release record → post-check.
+Staging deletes in the replacement release; production deletes
+automatically within the separately approved production deployment of the
+same replacement, never ahead of it. For scale: staging held 79 legacy
+alert rows (2 ACTIVE, 1 RESOLVED, 76 ENDED) and 0 candidates on
+2026-11-18; the count at release time will differ (one new ENDED row per
+site per day; 90-day retention ageing). Production counts were not
+checked.
+
+## Staging baseline (2026-11-18)
+
+Read-only checks against staging on **2026-11-18 03:56–03:57 UTC
+(09:26–09:27 IST; staging DB `TimeZone` = Asia/Kolkata)**. Each psql
+session was forced read-only (`default_transaction_read_only=on`,
+`statement_timeout=30 s`, `lock_timeout=2 s`); host checks used `free`,
+`df`, `uptime`, `nproc` and `docker stats --no-stream` only. Nothing was
+changed. Production was not accessed. **[V]** = verified live; **[I]** =
+inferred from repository code.
+
+**Job 1127 [V]** — `analytics.run_alert_evaluation_job`, owner
+`ems_admin`, `scheduled = true`, schedule 1 minute, max runtime 5 min,
+3 retries, 1-minute retry period. `job_stats`: last run started
+09:27:04 IST, finished successfully (`last_run_status = Success`,
+duration 0.059 s), `job_status = Scheduled`, next start 09:28:04 IST;
+`total_runs` 91,040 / `total_successes` 91,036 / `total_failures` 3.
+`timescaledb_information.job_errors` holds **0** rows for the job — the 3
+failures are the 2026-09-14 pre-migration-241 failures recorded above,
+whose error rows have since aged out **[I]**. No stall: evaluation runs
+every minute and `analytics.alerts.last_evaluated_at` for Active rows is
+the current minute.
+
+**`analytics.alerts` [V]** — 79 rows, all `ENERGY_ATTENTION` condition
+keys, 2 sites, `asset_id` never populated:
+
+| State | Rows | Notes |
+|---|---|---|
+| ACTIVE | 2 | one per site, both triggered 2026-11-18 00:23:04 IST; `data_unavailable = false` |
+| RESOLVED | 1 | triggered 2026-09-23 00:23 IST, last evaluated 2026-09-26 — a real Active → Resolved transition (the resolution case the 2026-09-14 validation could not observe) |
+| ENDED | 76 | **all** `ended_reason_code = DATA_UNAVAILABLE`; triggered 2026-09-14 → 2026-11-17 across 42 distinct days; none `CONFIGURATION_CHANGED` |
+
+`analytics.alert_evaluation_candidates`: 0 rows.
+
+**Daily Ended/re-trigger churn [V pattern / I mechanism].** For both
+sites, each day's Active alert is Ended `DATA_UNAVAILABLE` at ~00:23 IST
+and a new Active alert is created with `triggered_at` equal to that same
+instant (e.g. 2026-11-17 00:23:04 → Ended 2026-11-18 00:23:04, next alert
+triggered 2026-11-18 00:23:04). Mechanism from the migration 242 code:
+the evaluator judges the most recently completed site-local day; after
+midnight the new "yesterday" has no daily energy yet, so the Active alert
+is flagged `data_unavailable`; when that day's data lands (~00:23) and is
+still material, ADR-016 §4 Ends the old alert and starts a fresh
+qualification whose `triggered_at` is the recovery observation. This is
+the decided §4 behaviour working as specified, but it means an Energy
+Attention alert never survives a site-local midnight — relevant to
+acknowledgement (an acknowledgement would be lost daily) and to rule
+alerts on live telemetry. Resolved for rule-based alerts by ADR-024 §4A
+(they keep the Active occurrence and its acknowledgement); Energy
+Attention alerts are retired and their records deleted by the replacement
+release (ADR-024 §17), so the question no longer arises (former T-1).
+
+**Migration ledger [V]** — `admin.schema_migrations`: 191 rows, head
+`319_portal_user_audit_history_read`. All **76** repository migration
+files numbered 238–319 on `origin/staging` `8abd023` are in the ledger;
+none missing, no extra ledger rows in that range. 238/239 applied
+2026-09-14 19:12 IST, 240 20:35, 241 22:29, 242 2026-09-15 14:59 (all
+`applied`). Production's ledger was **not** checked (outside this
+authorisation).
+
+**Host headroom [V]** — 2 vCPU; load average 0.93 / 0.50 / 0.41; memory
+1,905 MiB total, 1,160 used, 122 free, **745 MiB available**; swap 288 of
+2,047 MiB used; `ems-timescaledb` container 939 MiB; root disk 96 G,
+54 G used, **43 G available (57 %)**; uptime 8 days 22 h, all eight
+containers up (healthy where a health check exists). Memory is the
+binding constraint for evaluator work — see the 2026-10-09 read-query
+crash lesson; any rule evaluator must stay small, bounded and indexed.
+
+## Open technical questions
+
+Product decisions in ADR-024 are not reopened here. Status after the
+final Phase 0 Product Owner decisions (2026-11-18):
+
+| # | Question | Status |
+|---|---|---|
+| T-1 | Data-unavailable recovery vs. acknowledgement | **Resolved** (ADR-024 §4A, `EMS-REQ-150`): the Active occurrence and its acknowledgement are preserved, evaluation resumes on valid data, Resolved only when confirmed clear. The former Energy Attention residual is gone — those alerts are retired (ADR-024 §17). |
+| T-2 | Equality tolerance | **Resolved** (ADR-024 §5): explicit tolerance in the parameter's unit, required, no default of any kind; "equal to" not offered for cumulative counters initially. *Phase 1 detail:* which metadata identifies a cumulative counter (`config.energy_register_semantics` / `PULSE_COUNT` vs. catalogue category). |
+| T-3 | Who counts as a site administrator | **Resolved** (ADR-024 §2): customer `ADMIN` with scope covering the site, plus WiseWatts `GLOBAL` `ADMIN` staff on any customer site, no additional support authorisation for now; every action audited with customer-vs-staff actor type. `GLOBAL` `VIEWER` is read-only (decided). `GLOBAL` `OPERATOR` acknowledges on any customer site, cannot configure (decided 2026-11-18). **Closed.** |
+| T-4 | Evaluator source and limits | **Partly resolved**: at most 25 active rules per site (subject to staging validation); bounded, set-based, monitored evaluation (ADR-024 §13). *Open, Phase 1 design:* which read supplies the current value (live-state cache vs. 1-minute tier), when telemetry counts as unavailable, and the job runtime budget — proven by staging performance checks. |
+| T-5 | Production path | **Open, not a Phase 1 blocker**: `ems_customer_api` (migration 313) and customer-api exist on staging only; on production `/api/v1` is served by admin-portal as `ems_app`. Grants and migration scope are decided at production-release time. |
+| T-6 | DDS classification | **Approved 2026-11-18** — rules and occurrences remain within the existing `Alert` DDS concept. **Closed**; no longer a Phase 1 entry condition. |
+| T-7 | Legacy replacement details | **Resolved 2026-11-18**: rule-based history retained 90 days; the UI includes a Resolved/Ended history view (ADR-024 §8, §11; `EMS-REQ-152`). Deletion of legacy records is decided (ADR-024 §17–§20). **Closed.** |
 
 ## Business rules
+
+*(Legacy MVP-7 Energy Attention alert behaviour — superseded by
+ADR-024 and kept as history; the current rule-based behaviour is in
+"Customer-configurable alert rules" above.)*
 
 Full lifecycle per ADR-016: an Attention condition qualifies after 5
 continuous minutes true (gap-resetting); an Active alert resolves after 1
@@ -31,7 +226,9 @@ Resolved/Ended alerts retain for 90 days, Active indefinitely; recurrence
 is derived at read time from the condition's stable identity, never a
 stored counter. Ended has exactly two causes (ADR-016 §4/§7/§8, the
 second added by the 2026-09-15 amendment — **implemented and locally
-tested (migration 242); not yet deployed to staging/production**, see
+tested (migration 242); not yet deployed to staging/production** *(superseded:
+242 applied on staging 2026-09-15 14:59 IST and producing
+`DATA_UNAVAILABLE` Ended rows — see "Staging baseline (2026-11-18)")*, see
 "Known limitations"): a configuration change, or
 an Active alert recovering from a data-unavailable gap while its
 condition is still material. Either cause Ends the existing alert (never
@@ -435,6 +632,15 @@ re-execution, no duplicate, no error.
   lifecycle-validating what it produces over multiple evaluation cycles.)
 
 ## Release status
+
+> **Current (2026-11-18, read-only):** migrations 238–242 applied on
+> staging; job 1127 enabled and succeeding every minute; 2 Active /
+> 1 Resolved / 76 Ended alerts — see
+> [Staging baseline (2026-11-18)](#staging-baseline-2026-11-18). The
+> account below is the 2026-09-14 record, kept as history. Production
+> state was not checked in Phase 0. **This whole legacy mechanism is to be
+> retired and its records deleted by the ADR-024 replacement release**
+> (see "Legacy retirement" above).
 
 **IMPLEMENTED, DEPLOYED TO STAGING, STAGING VALIDATION FAILED (2026-09-14).**
 Root cause: the alert-evaluation TimescaleDB job was never registered

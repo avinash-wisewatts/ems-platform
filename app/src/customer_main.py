@@ -36,6 +36,7 @@ from src.customer_config import get_customer_settings
 from src.database import close_database_pool, database_connection, open_database_pool
 from src.report_export_worker import ReportExportWorker
 from src.routers.analytics_api import router as analytics_api_router
+from src.routers.alerts_api import router as alerts_api_router
 from src.routers.customer_auth import router as customer_auth_router
 from src.routers.report_exports import router as report_exports_router
 
@@ -94,6 +95,8 @@ register_flat_error_handlers(app, ("/api/v1/", "/auth/"))
 
 app.include_router(customer_auth_router)
 app.include_router(analytics_api_router)
+# Alerts (ADR-024): rule configuration, Active Alerts, history, acknowledgement.
+app.include_router(alerts_api_router)
 # Reports export routes exist only where Reports is enabled (staging-only).
 if settings.reports_enabled:
     app.include_router(report_exports_router)

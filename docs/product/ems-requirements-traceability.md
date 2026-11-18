@@ -1,5 +1,13 @@
 # WiseWatts EMS — Requirements Traceability
 
+> **Non-canonical legacy copy (2026-11-18 note).** The canonical set is
+> `docs/00-governance/` … `docs/10-operations/` (see `docs/README.md`).
+> Statements here that alert configuration stays in the Administration
+> App (Q67), that the customer EMS is read-only, that acknowledgement is
+> excluded, or that alert delivery is in-product only without Coming Soon
+> placeholders are **superseded for alerts** by
+> [ADR-024](../00-governance/decisions/ADR-024-customer-configurable-alert-rules.md).
+
 > **Status:** WORKING DRAFT · **Version:** 0.2 · **Owner:** Product · **Last updated:** 2026-09-11
 >
 > **Source basis:** `ems-customer-requirements.md`, `ems-information-architecture.md`, `ems-product-roadmap.md` (v0.2), `ems-product-architecture.md`, DDS + roadmap (Phases 7–17), `ems-product-owner-workshop-baseline.md` §92–134 (Q49–Q101), and direct verification against `origin/staging` (`a5094a1`) on 2026-09-11 (branch comparison, code/schema inspection — not inferred from commit titles).

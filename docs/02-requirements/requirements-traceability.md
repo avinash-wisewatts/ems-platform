@@ -87,7 +87,7 @@ Implementation status
 | `API.portfolio` | cross-site aggregation | `MISSING`; `PLANNED (MVP-8, lowest priority)` |
 | `API.cost` | tariff-aware cost values | `MISSING` — **verified: no `config.tariffs`/`analytics.cost_values`-equivalent table exists anywhere in the schema.** |
 | `API.categories` | functional-category model | `MISSING` + `BLOCKED (PA-2)` — not addressed by Q49–Q101 |
-| `API.writes` | any customer-initiated write (saved views, alert rules) | `MISSING` + `BLOCKED (PA-4)`; not required for MVP (Q67) |
+| `API.writes` | any customer-initiated write (saved views, alert rules) | `MISSING` + `BLOCKED (PA-4)`; not required for MVP (Q67). **2026-11-18:** Reports export jobs are `LIVE` on staging (ADR-014 Amendment 2); alert rules and acknowledgement are decided (`PLANNED`, [ADR-024](../00-governance/decisions/ADR-024-customer-configurable-alert-rules.md)) under ADR-007 Amendment 1's enumerated, audited write-route rule; saved views remain `MISSING`. |
 
 ## 2. Q49–Q101 MVP classification (verified 2026-09-11)
 
@@ -111,7 +111,7 @@ Implementation status
 | Q64 | Portfolio MVP depth | **C** | Same as Q63. |
 | Q65 | MVP customer roles | **B** | `ADMIN`/`OPERATOR`/`VIEWER` model exists and is enforced server-side; no explicit mapping to "Facility Manager" persona yet. |
 | Q66 | MVP customer actions | **A** | Time-range change is the only action needed today and is live. |
-| Q67 | MVP configuration boundary | **A** | Already true architecturally; no change required. |
+| Q67 | MVP configuration boundary | **A** | Already true architecturally; no change required. **2026-11-18: superseded for alert configuration** by [ADR-024](../00-governance/decisions/ADR-024-customer-configurable-alert-rules.md) — alert rules are configured in the EMS Web App by customer site administrators and WiseWatts `GLOBAL` `ADMIN` staff; Q67 still holds for every other configuration. |
 | Q68 | MVP customer administration | **C** | User/role management exists in the Administration App, not the EMS Web Application surface the decision refers to. |
 | Q69 | MVP information architecture | **B** | Routing/shell landed; full IA content not built. |
 | Q70 | Site Overview information hierarchy | **C** | No composite Site Overview screen/endpoint exists. |
@@ -160,7 +160,7 @@ the dependency graph (see [../01-product/roadmap.md](../01-product/roadmap.md), 
 |---|---|---|---|
 | `PA-2` functional categories have no home in the frozen model | Category-based nav/breakdown | **Still genuinely open** — not addressed by Q49–Q101. Not required for MVP scope as decided. | Product → Architecture |
 | `PA-3` cost/tariffs conditional on a real customer requirement | Financial visibility | **Resolved at the scope level** by Q73/Q74 — the data dependency itself remains real: no tariff schema exists. | Data/config, not product |
-| `PA-4` no customer-write mechanism | Self-configurable alerts, saved views | **Resolved** by Q67 — configuration stays in the Administration App; MVP is read-only. | — |
+| `PA-4` no customer-write mechanism | Self-configurable alerts, saved views | **Resolved** by Q67 — configuration stays in the Administration App; MVP is read-only. **Re-resolved 2026-11-18** for alerts: customer writes go through audited SECURITY DEFINER write functions behind the customer API (ADR-006 Amendment 2, ADR-007 Amendment 1, [ADR-024](../00-governance/decisions/ADR-024-customer-configurable-alert-rules.md)); `EMS-REQ-082` unblocked. Saved views unchanged. | Architecture |
 | `PA-5` correlations edge toward a query builder | Curated correlations | Not required by Q49–Q101; **Post-MVP**. | — |
 | `PA-6` no cross-site aggregation surface | Portfolio | **Resolved at scope/priority level** by Q63/Q64 (in scope, lowest priority). API shape still `C — NOT LANDED`. | Architecture (when scheduled) |
 | Customer roles undefined | Role-specific overviews | **Partially resolved** by Q65 (Facility/Energy Manager is primary) — no explicit mapping to `ADMIN`/`OPERATOR`/`VIEWER` yet. | Product (light) → Engineering |
@@ -478,3 +478,21 @@ rule.
   Phase) is functional in v1 (D53). Per-phase values still need per-phase
   `asset_points` assignments (ADR-018 Amendments 5-8); until then every series
   is shown as System and disclosed in Data quality.
+
+## 15. Status update (2026-11-18) — Alerts replaced by customer-configurable rules (ADR-024); not implemented
+
+The Product Owner decided that customer-configurable alert rules
+([ADR-024](../00-governance/decisions/ADR-024-customer-configurable-alert-rules.md))
+**replace MVP-7 Basic Alerts entirely**. §10's `LIVE` alert surface is
+the legacy mechanism to be retired by the replacement release; nothing
+has been retired or deleted yet.
+
+| Item | §10 status | 2026-11-18 status |
+|---|---|---|
+| Q77 (MVP alerts) | Implemented (Energy Attention alerts, staging) | **Superseded as a product** — replaced by rule-based alerts (`EMS-REQ-082`, `EMS-REQ-140`–`EMS-REQ-152`); decided, not implemented |
+| `API.alerts` | `LIVE` — `GET /sites/{site_id}/alerts`, `GET /alerts/{alert_id}` | Legacy contract to be **replaced** by rule-aware read routes plus enumerated, audited write routes (ADR-007 Amendment 1); `PLANNED` |
+| `API.writes` (alert rules, acknowledgement) | `MISSING` | `PLANNED` (ADR-024 §14–§16) |
+| `EMS-REQ-117`, `EMS-REQ-119` | `READY-FOR-DESIGN`, implemented | `SUPERSEDED (ADR-024)` — Attention-generated alerts and the data-gap ending retired; `EMS-REQ-150` replaces `-119` |
+| Legacy evaluator, job, records | Running on staging (job 1127) | To be retired and deleted by one migration scoped `staging|production|test` (`EMS-REQ-151`, ADR-024 §17–§20) |
+| ADR-010 Energy Attention display | `LIVE` | **Unchanged** — not part of the retirement |
+| Final Phase 0 approval (2026-11-18) | — | DDS classification **approved** (rules and occurrences stay within `Alert`); rule-based history retention **90 days**; Alerts UI = Active Alerts + Create Alert + Resolved/Ended history (`EMS-REQ-152`); `GLOBAL` `OPERATOR` may acknowledge on every customer site; `GLOBAL` `VIEWER` read-only. Phase 0 complete; Phase 1 planned ([phase-1-implementation-plan.md](../07-features/alerts/phase-1-implementation-plan.md)), not started |

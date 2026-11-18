@@ -515,14 +515,16 @@ def test_allowed_staff_get_read_only_customer_access_and_no_administration(custo
 # --- parity with the admin portal ---------------------------------------------------
 
 def _alert_row() -> dict:
+    t0 = datetime(2026, 9, 14, 10, 0, tzinfo=timezone.utc)
     return {
-        "alert_id": ALERT_ID, "site_id": SITE_ID, "space_id": None, "asset_id": None,
-        "condition_key": "ENERGY_ATTENTION:PERCENT_DEVIATION_FROM_TYPICAL_REFERENCE:15:SITE:" + SITE_ID,
-        "metric": "ENERGY_CONSUMPTION", "state": "ACTIVE",
-        "triggered_at": datetime(2026, 9, 14, 10, 0, tzinfo=timezone.utc), "trigger_value": 123.4,
-        "resolved_at": None, "resolved_value": None, "ended_at": None, "ended_reason": None,
-        "ended_reason_code": None, "data_unavailable": False, "previous_occurrence_count": 2,
-        "most_recent_previous_triggered_at": None,
+        "alert_id": ALERT_ID, "site_id": SITE_ID, "rule_id": "55555555-5555-4555-8555-555555555555",
+        "rule_name": "High power", "rule_deleted": False, "asset_id": "66666666-6666-4666-8666-666666666666",
+        "asset_name": "Chiller 1", "parameter_code": "ACTIVE_POWER", "qualifier": "TOTAL",
+        "parameter_name": "Active Power", "unit_symbol": "kW", "comparator": "GT", "threshold": 50,
+        "tolerance": None, "state": "ACTIVE", "event_at": t0, "triggered_at": t0, "trigger_value": 61.0,
+        "last_value": 62.0, "last_value_at": t0, "data_unavailable": False, "resolved_at": None,
+        "resolved_value": None, "ended_at": None, "ended_reason_code": None, "acknowledged_at": None,
+        "acknowledged_by_name": None, "previous_occurrence_count": 2, "most_recent_previous_triggered_at": None,
     }
 
 
@@ -536,12 +538,17 @@ def both(customer_client, portal_client, monkeypatch):
         seen.append(portal_user_id)
         return str(site_id) == SITE_ID
 
-    async def alerts(**kwargs):
-        seen.append(kwargs.get("portal_user_id"))
+    async def site(portal_user_id, site_id):
+        seen.append(portal_user_id)
+        return {"site_id": SITE_ID, "site_name": "Site", "timezone": "Asia/Kolkata"} if str(site_id) == SITE_ID else None
+
+    async def alerts(portal_user_id, *args):
+        seen.append(portal_user_id)
         return [_alert_row()]
 
     monkeypatch.setattr("src.routers.analytics_api.portal_user_can_access_site", can_access)
-    monkeypatch.setattr("src.routers.analytics_api.fetch_site_alerts", alerts)
+    monkeypatch.setattr("src.routers.alerts_api.fetch_analytics_site", site)
+    monkeypatch.setattr("src.routers.alerts_api.fetch_site_alerts", alerts)
     _admin_login(portal_client, monkeypatch)
     assert _customer_login(customer_client, monkeypatch).status_code == 200
     return portal_client, customer_client, seen

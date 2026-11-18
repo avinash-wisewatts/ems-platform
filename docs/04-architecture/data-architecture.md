@@ -85,3 +85,18 @@ this pattern to every future analytical tier (derived parameters, new
 domains) rather than re-implementing it per domain. Operator visibility:
 `analytics.v_pipeline_health` — see
 [../10-operations/monitoring.md](../10-operations/monitoring.md).
+
+## Alert rules and occurrences (ADR-024, migrations 320–326)
+
+The proposed design keeps alerts inside the approved `Alert` DDS concept:
+a new `analytics.alert_rules` table (one row per customer rule,
+soft-deletable) and the existing `analytics.alerts` table reused for
+rule-based occurrences (extended with a rule reference, history snapshot
+and acknowledgement) after the legacy Energy Attention rows are deleted.
+The evaluator (migration 325) reads the latest GOOD value of the asset's
+current `metadata.asset_points` binding from the canonical-unit live-value
+cache `telemetry.device_live_point_state` (unavailable after 5 minutes
+without a valid sample); `telemetry.normalized_points` lags up to ~5
+minutes behind (5-minute normalisation batches), so it is reserved for the
+later mean-over-time increment. See
+[../07-features/alerts/phase-1-technical-design.md](../07-features/alerts/phase-1-technical-design.md) §1–§2, §6.

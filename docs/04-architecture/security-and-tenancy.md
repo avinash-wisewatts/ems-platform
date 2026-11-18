@@ -46,6 +46,20 @@ conclude the database has no validation triggers. Use `ems_admin`, or query
 enumerate triggers. This is a real, unresolved open item — see
 [../10-operations/troubleshooting.md](../10-operations/troubleshooting.md).
 
+## Planned: alert-rule writes and audit actor type (ADR-024, proposed, not implemented)
+
+Customer and staff alert writes (rule create/edit/enable/disable/delete:
+`alert.configure`, `ADMIN` only; acknowledge: `alert.acknowledge`,
+`ADMIN`/`OPERATOR`) run only through SECURITY DEFINER functions that
+re-check permission and site/asset/parameter access, with `GLOBAL` scope
+(WiseWatts staff) reaching every site. Each write records an
+`admin.audit_events` row in the same transaction; the proposed design
+adds `actor_type` (`CUSTOMER` | `WISEWATTS_STAFF`), derived from the
+actor's access scope inside `admin.write_audit_event`. New functions are
+granted to `ems_app` and, where it exists, `ems_customer_api` (guarded —
+the role is staging/test only). See
+[../07-features/alerts/phase-1-technical-design.md](../07-features/alerts/phase-1-technical-design.md) §1, §3, §4.
+
 ## Secrets handling
 
 Never commit secrets anywhere (code, tests, docs, Docker images, dashboards);

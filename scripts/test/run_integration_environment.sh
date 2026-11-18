@@ -234,8 +234,8 @@ echo "[analytics-api-query-boundary] Running Phase 7 (migration 231) /api/v1 que
 bash "${SCRIPT_DIR}/assert_analytics_api_query_boundary.sh"
 
 echo
-echo "[mvp7-alert-evaluation-job-executes] Running MVP-7 (migration 241) alert-evaluation job live-execution assertions..."
-bash "${SCRIPT_DIR}/assert_mvp7_alert_evaluation_job_executes.sh"
+echo "[alert-legacy-retirement] Running ADR-024 (migration 320) legacy Energy Attention alert retirement assertions..."
+bash "${SCRIPT_DIR}/assert_alert_legacy_retirement.sh"
 
 echo
 echo "[raw-message-failure-capture-bounded-catchup-window] Running job 1068 (migration 243) bounded catch-up window assertions..."

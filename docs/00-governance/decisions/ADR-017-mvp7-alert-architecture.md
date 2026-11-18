@@ -1,5 +1,25 @@
 # ADR-017: MVP-7 Alert architecture — evaluation mechanism (A1) and domain concept (B1)
 
+> **Scope note (2026-11-18):** [ADR-024](ADR-024-customer-configurable-alert-rules.md)
+> replaces MVP-7's Energy Attention alerts with customer-defined alert
+> rules, which become the **only** source of `Alert` occurrences.
+> **Retired** (ADR-024 §17–§20; not yet executed): this ADR's A1
+> evaluator *instance* — the job running
+> `analytics.run_alert_evaluation_job`, `analytics.evaluate_alerts()` —
+> and the server-side ±15% single-source-of-truth function
+> `analytics.evaluate_energy_attention_materiality` (and with it the
+> client-migration follow-on and parity-test arrangement for alerting).
+> **Retained:** the TimescaleDB-job mechanism (A1) as the pattern for the
+> new rule evaluator, which must be bounded, set-based (at most 25 active
+> rules per site initially) and monitored via this ADR's job-registration
+> and `scripts/verify/verify_jobs.sh` pattern; and the `Alert` concept
+> (B1), with the rule treated as the condition definition behind its
+> `condition_key` identity rather than a new core concept — **approved
+> 2026-11-18**: alert rules and alert occurrences remain within the
+> existing `Alert` DDS concept (ADR-024 change-control note). Nothing in this ADR is otherwise changed. The status paragraph below is a 2026-09-14/15
+> historical record; current staging state:
+> [alerts/README.md](../../07-features/alerts/README.md#staging-baseline-2026-11-18).
+
 Status: **Decided (architecture) and implemented** — ratified and built
 2026-09-14, deployed to staging 2026-09-14. Staging post-deploy validation
 performed 2026-09-14: **FAIL** (alert-evaluation TimescaleDB job not

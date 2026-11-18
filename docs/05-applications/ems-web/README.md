@@ -80,6 +80,16 @@ user's own export jobs through the Analytics API
 no EMS data is written. The second exception (Admin → Users) is not the
 Analytics API at all: it calls the Administration App's own
 user-management API (`/api/admin/v1`, below) with the same session.
+Decided 2026-11-18, not implemented
+([ADR-024](../../00-governance/decisions/ADR-024-customer-configurable-alert-rules.md)):
+the Alerts area will create, edit, enable/disable and delete alert rules
+(customer site administrators and WiseWatts `GLOBAL` `ADMIN` staff) and acknowledge alerts (those
+administrators, customer operators and WiseWatts `GLOBAL` `OPERATOR`
+staff), with Active Alerts, Create Alert and Resolved/Ended history views, through audited Analytics API write routes — no EMS
+telemetry/metadata is written, and Email/WhatsApp are "Coming Soon"
+placeholders that send nothing.
+This replaces the current MVP-7 Alerts area (`AlertsArea.tsx`) entirely;
+no legacy Alerts view is kept (ADR-024 §17, §19).
 No direct DB/TimescaleDB/Grafana access, no query builder, no dynamic SQL.
 
 ## Authentication

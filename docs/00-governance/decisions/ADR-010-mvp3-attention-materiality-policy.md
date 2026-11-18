@@ -42,6 +42,16 @@ threshold is:
   > migrate this client-side code to consume the server-computed result,
   > gated by a mandatory parity test in the interim. See ADR-017
   > §"A1 — Single-source-of-truth arrangement."
+  >
+  > **Note (2026-11-18,
+  > [ADR-024](ADR-024-customer-configurable-alert-rules.md) §17, §19):**
+  > the MVP-7 Energy Attention alerts are retired and their server-side
+  > function (`analytics.evaluate_energy_attention_materiality`) is to be
+  > retired with them, so the qualification above lapses once that
+  > release ships: `MVP3_MATERIALITY_POLICY` is again the only
+  > implementation of this rule, and the Attention display it drives
+  > (Site Overview, Main Dashboard, Site Performance Report) is
+  > unchanged.
 - **No configuration UI** — for MVP-3 the policy is a plain, centrally-
   defined constant, per the decision pack's own instruction: "Do NOT build
   configuration UI now."

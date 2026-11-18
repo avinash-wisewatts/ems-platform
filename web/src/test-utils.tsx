@@ -26,6 +26,7 @@ export const ADMIN_USER: CurrentUser = {
     "metering_policy.manage",
     "commissioning.execute",
     "alert.acknowledge",
+    "alert.configure",
     "dashboard.view",
     "report.export",
     "audit.view",

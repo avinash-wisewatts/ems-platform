@@ -58,7 +58,8 @@ ADR with its status and date.
 | [ADR-013](ADR-013-deferred-asset-component-tree.md) | Deferred asset component-tree functionality |
 | [ADR-014](ADR-014-q75-export-scope-and-behavior.md) | MVP-6 Export scope, content, format, and behavior (Q75) — decided; not implemented |
 | [ADR-015](ADR-015-q76-site-performance-report.md) | MVP-6 Site Performance Report (Q76) — decided; implemented, not deployed |
-| [ADR-016](ADR-016-q77-mvp7-basic-alerts.md) | MVP-7 Basic Alerts (Q77) — decided in full detail; implemented, not yet deployed |
-| [ADR-017](ADR-017-mvp7-alert-architecture.md) | MVP-7 Alert architecture — evaluation mechanism (TimescaleDB job) and domain concept (Alert, DDS 10→11) decided; implemented, not yet deployed |
+| [ADR-016](ADR-016-q77-mvp7-basic-alerts.md) | MVP-7 Basic Alerts (Q77) — implemented and running on staging (2026-11-18 baseline); **superseded by ADR-024**: product retired and replaced, legacy records to be deleted by the replacement release |
+| [ADR-017](ADR-017-mvp7-alert-architecture.md) | MVP-7 Alert architecture — evaluation mechanism (TimescaleDB job) and domain concept (Alert, DDS 10→11) decided; implemented and running on staging; scope note for ADR-024 (evaluator instance and ±15% server function retired; mechanism and `Alert` concept retained) |
 | [ADR-018](ADR-018-asset-point-assignment-and-commissioning.md) | Asset ↔ data point assignment and the commissioning gate for Analytics — `metadata.asset_points` as sole authoritative source, Automatic-candidate + Admin-adjustment commissioning model, backfill/no-backfill/move/immutability rules; decided, not implemented |
 | [ADR-022](ADR-022-analytics-v1-scope-and-contract.md) | Analytics v1 scope, catalogue and series contract — decided; implementation in progress |
+| [ADR-024](ADR-024-customer-configurable-alert-rules.md) | Customer-configurable alert rules, acknowledgement and "Coming Soon" delivery placeholders in the EMS Web App, replacing MVP-7 Basic Alerts (legacy retired and deleted) — decided 2026-11-18; DDS classification approved; Phase 0 complete; not implemented |

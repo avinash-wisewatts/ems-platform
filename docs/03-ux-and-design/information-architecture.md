@@ -112,19 +112,32 @@ and [ADR-004](../00-governance/decisions/ADR-004-site-overview-primary-destinati
 - **Comparisons:** periods, sites, spaces, or same-type assets — fairness rule: asset comparisons only within one `asset_type_id`. `PLANNED (Post-MVP)`.
 - **Correlations:** curated pairs only (e.g. energy vs. outside temperature) — never arbitrary metric-vs-metric. `MISSING`/`PLANNED (Post-MVP)`.
 
-## Alerts  *(SHOULD — MVP-7, implemented 2026-09-14, staging validation pending)*
+## Alerts  *(SHOULD — legacy MVP-7 Energy Attention alerts implemented 2026-09-14 and running on staging, to be replaced entirely; customer rules decided 2026-11-18, not implemented)*
+
+> **2026-11-18 ([ADR-024](../00-governance/decisions/ADR-024-customer-configurable-alert-rules.md) §17):**
+> the bullets below up to "Customer-configurable alert rules" describe the
+> **legacy** MVP-7 Alerts, which the new experience **replaces entirely** —
+> no legacy Alerts view is retained and the legacy records are deleted by
+> the replacement release. The Energy Attention display elsewhere (Site
+> Overview, Main Dashboard, Site Performance Report) is unchanged.
 
 - **Purpose:** notify the customer of existing, already-computed Attention
   conditions — not a new detection mechanism. Every qualifying Attention
   condition auto-generates an alert per affected context; there is no
-  customer-facing alert-rule-authoring layer.
+  customer-facing alert-rule-authoring layer. **Amended 2026-11-18
+  ([ADR-024](../00-governance/decisions/ADR-024-customer-configurable-alert-rules.md)):**
+  customer-defined alert rules **replace** these alerts and become the
+  only source — see "Customer-configurable alert rules" at the end of
+  this section.
 - **Delivery — in-product only.** A header notification indicator (count of
   currently Active alerts, scoped to the selected Site/context) and a
   dedicated Alerts area in main navigation. **No email, SMS, WhatsApp, or
   sharing** — this corrects the archived Workshop Q78 statement that email
   was included; see
   [ADR-016](../00-governance/decisions/ADR-016-q77-mvp7-basic-alerts.md)
-  "Source-of-truth correction."
+  "Source-of-truth correction." *(2026-11-18: still in-product only;
+  Email/WhatsApp may appear in the rule form as **Coming Soon**
+  placeholders that send nothing — ADR-024 §9.)*
 - **Lifecycle:** a condition must be continuously true for 5 minutes
   (gap-resetting) before an alert qualifies. Active while the condition
   remains true; Resolved after 1 minute continuously false (gap-resetting)
@@ -164,8 +177,37 @@ and [ADR-004](../00-governance/decisions/ADR-004-site-overview-primary-destinati
 - **Empty state (good):** "no active alerts" is a *good* empty state,
   distinct from no conditions configured.
 - **Authorization:** follows existing EMS authorization; no alert-specific
-  recipient/permission model. Configuration remains exclusively in the
-  Administration App (Q67).
+  recipient/permission model. ~~Configuration remains exclusively in the
+  Administration App (Q67).~~ **Superseded 2026-11-18 (ADR-024):** every
+  authorised site user views alerts and rules; customer site
+  administrators and WiseWatts `GLOBAL` `ADMIN` staff configure rules;
+  those administrators, customer operators and WiseWatts `GLOBAL` `OPERATOR` staff acknowledge; a `GLOBAL` `VIEWER`
+  is read-only.
+- **Customer-configurable alert rules (decided 2026-11-18, not
+  implemented — ADR-024, `EMS-REQ-140`–`EMS-REQ-152`):**
+  - *Active Alerts* (selected site): Name, Asset, Status, Acknowledge
+    action; selecting an alert opens detail — triggered time, triggering
+    condition, asset, parameter, threshold/value, current status,
+    acknowledgement (who, when). Acknowledged alerts remain Active —
+    also while telemetry is unavailable ("Unable to evaluate — data
+    unavailable"); acknowledgement never resolves an alert.
+  - *Create Alert* subtab: the site's rules (Name, Asset, Parameter,
+    Value/condition, enabled toggle, Edit, Delete) and Create New Alert.
+    Form: asset → parameters available for that asset → greater than /
+    less than / equal to (tolerance entered explicitly, no default; not
+    offered for cumulative counters) → fixed value (mean over a
+    window in a later increment) → schedule time range in the site's
+    timezone, every day or chosen weekdays → reminder frequency →
+    Email/WhatsApp marked **Coming Soon**. At most 25 active rules per
+    site.
+  - *Resolved/Ended history* (read-only): the site's rule-based
+    occurrences Resolved or Ended in the last 90 days, with the same
+    detail plus resolved/ended time, Ended reason and acknowledgement;
+    occurrences of deleted rules stay listed.
+  - Controls that change rules or acknowledge are shown only to users who
+    hold the permission; the server enforces it regardless.
+  - Delete asks for confirmation in-page; deleted rules disappear from the
+    list but their past alerts stay in Resolved/Ended history.
 - **Full decision record:**
   [ADR-016](../00-governance/decisions/ADR-016-q77-mvp7-basic-alerts.md);
   requirements:

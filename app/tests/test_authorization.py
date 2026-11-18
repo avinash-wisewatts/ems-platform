@@ -233,6 +233,7 @@ CANONICAL_PERMISSION_CODES = {
     "metering_policy.manage",
     "commissioning.execute",
     "alert.acknowledge",
+    "alert.configure",
     "dashboard.view",
     "report.export",
     "audit.view",
