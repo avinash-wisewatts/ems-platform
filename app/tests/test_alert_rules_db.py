@@ -730,3 +730,168 @@ def test_history_and_active_reads_are_ordered_and_filtered(world):
     assert cur.fetchall() == [("RESOLVED", 0)]
     cur.execute("SELECT state, previous_occurrence_count FROM analytics.get_portal_site_alerts(%s, %s)", (world["u"]["viewer"], world["site"]))
     assert cur.fetchall() == [("ACTIVE", 1), ("RESOLVED", 0)]
+
+
+# ---------------------------------------------------------------------------
+# Migration 327 -- D-1: run-jitter grace on qualification / resolution.
+# Grace = 2 s; runs are nominally 60 s apart. A run qualifies (resolves) only
+# when >= 298 s (58 s) have elapsed since the first observation.
+# ---------------------------------------------------------------------------
+
+def _step(cur, feed, at, value):
+    feed(value, at)
+    return evaluate(cur, at)
+
+
+def _sec(t0, seconds):
+    return t0 + timedelta(seconds=seconds)
+
+
+def test_d1_jittered_runs_qualify_and_resolve_on_the_nominal_run(world):
+    """Staging 2026-11-18 run gaps (59.997-60.003 s): before 327 the 5-minute
+    run missed by 3 ms and the alert waited one more minute."""
+    cur, rule, feed = _rule_and_feed(world)
+    t0 = datetime(2026, 11, 18, 6, 0, tzinfo=timezone.utc)
+    offsets = [0, 59.998, 120.001, 179.998, 240.001]
+    for s in offsets:
+        _step(cur, feed, _sec(t0, s), 70)
+        assert alerts(cur, rule) == [], s
+    _step(cur, feed, _sec(t0, 299.997), 70)  # nominal 5-minute run, 3 ms early
+    [(state, triggered, *_rest)] = alerts(cur, rule)
+    assert state == "ACTIVE" and triggered == t0  # recorded time unchanged
+    clear = _sec(t0, 360.003)
+    _step(cur, feed, clear, 10)  # first clear observation
+    assert alerts(cur, rule)[0][0] == "ACTIVE"
+    _step(cur, feed, clear + timedelta(seconds=59.997), 10)  # nominal 1-minute run, 3 ms early
+    state, _, resolved_at, *_ = alerts(cur, rule)[0]
+    assert state == "RESOLVED" and resolved_at == clear
+
+
+@pytest.mark.parametrize("final_offset,qualifies", [(298.000, True), (297.999, False)])
+def test_d1_qualification_grace_boundary(world, final_offset, qualifies):
+    cur, rule, feed = _rule_and_feed(world)
+    t0 = datetime(2026, 11, 18, 6, 0, tzinfo=timezone.utc)
+    for s in (0, 60, 120, 180, 240):
+        _step(cur, feed, _sec(t0, s), 70)
+    _step(cur, feed, _sec(t0, final_offset), 70)
+    assert [a[0] for a in alerts(cur, rule)] == (["ACTIVE"] if qualifies else [])
+    if not qualifies:
+        _step(cur, feed, _sec(t0, 360), 70)  # the next run qualifies, still from t0
+        [(state, triggered, *_rest)] = alerts(cur, rule)
+        assert state == "ACTIVE" and triggered == t0
+
+
+@pytest.mark.parametrize("final_offset,resolves", [(58.000, True), (57.999, False)])
+def test_d1_resolution_grace_boundary(world, final_offset, resolves):
+    cur, rule, feed = _rule_and_feed(world)
+    t0 = datetime(2026, 11, 18, 6, 0, tzinfo=timezone.utc)
+    for m in range(6):
+        _step(cur, feed, t0 + timedelta(minutes=m), 70)
+    assert alerts(cur, rule)[0][0] == "ACTIVE"
+    clear = t0 + timedelta(minutes=6)
+    _step(cur, feed, clear, 10)
+    _step(cur, feed, clear + timedelta(seconds=final_offset), 10)
+    assert alerts(cur, rule)[0][0] == ("RESOLVED" if resolves else "ACTIVE")
+
+
+def test_d1_grace_never_qualifies_or_resolves_an_earlier_run(world):
+    """Extra runs every 30 s (e.g. retries): nothing qualifies before 4 min 58 s
+    of continuous breach, nothing resolves before 58 s of continuous clear."""
+    cur, rule, feed = _rule_and_feed(world)
+    t0 = datetime(2026, 11, 18, 6, 0, tzinfo=timezone.utc)
+    for s in range(0, 300, 30):  # 0 .. 270 s
+        _step(cur, feed, _sec(t0, s), 70)
+        assert alerts(cur, rule) == [], s
+    _step(cur, feed, _sec(t0, 297.5), 70)  # within 2.5 s of 5 min: still too early
+    assert alerts(cur, rule) == []
+    _step(cur, feed, _sec(t0, 300), 70)
+    assert alerts(cur, rule)[0][0] == "ACTIVE"
+    clear = _sec(t0, 330)
+    for s in (0, 30, 57.5):
+        _step(cur, feed, clear + timedelta(seconds=s), 10)
+        assert alerts(cur, rule)[0][0] == "ACTIVE", s
+    _step(cur, feed, clear + timedelta(seconds=60), 10)
+    assert alerts(cur, rule)[0][0] == "RESOLVED"
+
+
+def test_d1_grace_is_bounded_in_the_deployed_evaluator():
+    with psycopg.connect(CONNINFO) as connection:
+        definition = connection.execute(
+            "SELECT pg_get_functiondef('analytics.evaluate_alert_rules(timestamptz)'::regprocedure)"
+        ).fetchone()[0]
+    assert "c_jitter_grace      CONSTANT INTERVAL := INTERVAL '2 seconds'" in definition
+    assert definition.count("+ c_jitter_grace") == 2
+    assert "c_unavailable_after CONSTANT INTERVAL := INTERVAL '5 minutes'" in definition
+    assert "c_gap               CONSTANT INTERVAL := INTERVAL '3 minutes'" in definition
+
+
+# ---------------------------------------------------------------------------
+# Migration 327 -- D-2: previous occurrences counted per rule (all versions).
+# ---------------------------------------------------------------------------
+
+def _occurrence(cur, feed, start, minutes_on=6, minutes_off=2):
+    for m in range(minutes_on):
+        _step(cur, feed, start + timedelta(minutes=m), 70)
+    for m in range(minutes_on, minutes_on + minutes_off):
+        _step(cur, feed, start + timedelta(minutes=m), 10)
+
+
+def _detail(cur, user, alert_id):
+    cur.execute(
+        "SELECT previous_occurrence_count, most_recent_previous_triggered_at, threshold "
+        "FROM analytics.get_portal_alert_detail(%s, %s)",
+        (user, alert_id),
+    )
+    return cur.fetchone()
+
+
+def test_d2_previous_occurrences_survive_edit_disable_enable_and_delete(world):
+    cur, rule, feed = _rule_and_feed(world)
+    admin, viewer = world["u"]["admin"], world["u"]["viewer"]
+    t0 = datetime(2026, 11, 18, 6, 0, tzinfo=timezone.utc)
+    _occurrence(cur, feed, t0)  # occurrence 1, version 1, RESOLVED
+    assert update(cur, admin, rule, 1, world["asset"], threshold=60) == ("ok", rule, 2)
+    t1 = t0 + timedelta(minutes=10)
+    _occurrence(cur, feed, t1, minutes_off=0)  # occurrence 2, version 2, ACTIVE
+    cur.execute("SELECT result FROM analytics.set_portal_alert_rule_enabled(%s, %s, FALSE)", (admin, rule))
+    cur.execute("SELECT result, version FROM analytics.set_portal_alert_rule_enabled(%s, %s, TRUE)", (admin, rule))
+    assert cur.fetchone() == ("ok", 3)
+    t2 = t0 + timedelta(minutes=20)
+    _occurrence(cur, feed, t2, minutes_off=0)  # occurrence 3, version 3, ACTIVE
+    cur.execute(
+        "SELECT alert_id, state, rule_version, condition_key, threshold FROM analytics.alerts "
+        "WHERE rule_id = %s ORDER BY triggered_at",
+        (rule,),
+    )
+    rows = cur.fetchall()
+    assert [(r[1], r[2], r[3], float(r[4])) for r in rows] == [
+        ("RESOLVED", 1, f"RULE:{rule}:v1", 50.0),
+        ("ENDED", 2, f"RULE:{rule}:v2", 60.0),
+        ("ACTIVE", 3, f"RULE:{rule}:v3", 60.0),
+    ]
+    first, second, third = (r[0] for r in rows)
+    assert _detail(cur, viewer, first)[:2] == (0, None)
+    assert _detail(cur, viewer, second)[:2] == (1, t0)
+    assert _detail(cur, viewer, third)[:2] == (2, t1)
+    assert float(_detail(cur, viewer, first)[2]) == 50.0  # snapshot kept
+    cur.execute("SELECT result FROM analytics.delete_portal_alert_rule(%s, %s)", (admin, rule))
+    assert cur.fetchone() == ("ok",)
+    cur.execute(
+        "SELECT rule_deleted, previous_occurrence_count, most_recent_previous_triggered_at "
+        "FROM analytics.get_portal_site_alerts(%s, %s, ARRAY['RESOLVED','ENDED']) ORDER BY triggered_at",
+        (viewer, world["site"]),
+    )
+    assert cur.fetchall() == [(True, 0, None), (True, 1, t0), (True, 2, t1)]
+
+
+def test_d2_other_rules_occurrences_are_not_counted(world):
+    cur, rule_a, feed = _rule_and_feed(world, name="Rule A")
+    _, rule_b, _ = create(cur, world["u"]["admin"], world["site"], world["asset"], name="Rule B", threshold=55)
+    t0 = datetime(2026, 11, 18, 6, 0, tzinfo=timezone.utc)
+    _occurrence(cur, feed, t0)  # both rules breach and resolve together
+    _occurrence(cur, feed, t0 + timedelta(minutes=10), minutes_off=0)
+    for rule in (rule_a, rule_b):
+        cur.execute(
+            "SELECT alert_id FROM analytics.alerts WHERE rule_id = %s AND state = 'ACTIVE'", (rule,)
+        )
+        assert _detail(cur, world["u"]["viewer"], cur.fetchone()[0])[:2] == (1, t0)
