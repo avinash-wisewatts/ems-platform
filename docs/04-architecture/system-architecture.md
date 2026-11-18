@@ -57,7 +57,14 @@ change-control test (see [README.md](README.md)):
   change-control test, not as an instance of a generic event framework;
   distinct from the separate, Post-MVP `analytics.insights` concept. See
   [ADR-017](../00-governance/decisions/ADR-017-mvp7-alert-architecture.md)
-  and the DDS §B.2a.
+  and the DDS §B.2a. **2026-11-18:** customer-defined alert rules
+  ([ADR-024](../00-governance/decisions/ADR-024-customer-configurable-alert-rules.md))
+  **replace** the Attention-generated occurrences entirely and become
+  the concept's only source (the Energy Attention alerts are retired,
+  ADR-024 §17); the rule is classified as the condition definition behind
+  the Alert's existing `condition_key` identity, not a twelfth concept
+  (approved 2026-11-18 — rules and occurrences remain within the `Alert`
+  concept).
 
 **Energy accounting stays deliberately independent of physical asset
 topology** — `config.site_energy_meter_roles` (grid import/export, on-site
@@ -98,6 +105,9 @@ derived calculations) are not started. Phases 7 (Analytics API) and 8
 (Frontend Foundation) — which sit on top of, but do not require, this
 frozen model's newer concepts — are independently **DONE**, verified on
 `origin/staging`. `Alert` (added 2026-09-14) has no migration or code yet —
-architecture only. See
+architecture only. **SUPERSEDED (verified 2026-11-18):** `Alert` is
+implemented (migrations 238–242, applied on staging) and evaluated every
+minute by TimescaleDB job 1127 — see
+[../07-features/alerts/README.md](../07-features/alerts/README.md#staging-baseline-2026-11-18). See
 [../01-product/roadmap.md](../01-product/roadmap.md) for the customer-
 facing sequencing of this work.

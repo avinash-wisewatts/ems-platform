@@ -23,6 +23,14 @@ for the alerting concern, with this feature's existing client-side
 implementation tracked for future migration (not changed by this
 decision). Not implemented — no code or schema exists yet.
 
+> **2026-11-18 ([ADR-024](../../00-governance/decisions/ADR-024-customer-configurable-alert-rules.md)):**
+> the MVP-7 alerts built on these Attention conditions (implemented since,
+> running on staging) are **superseded and to be retired** — replaced by
+> customer-configurable alert rules; their server-side ±15% function and
+> the client-migration follow-on lapse. **This Attention feature itself is
+> unchanged**: Site Overview, Main Dashboard and the Site Performance
+> Report keep computing Attention client-side (ADR-010).
+
 ## User experience
 
 [../../03-ux-and-design/information-architecture.md](../../03-ux-and-design/information-architecture.md)

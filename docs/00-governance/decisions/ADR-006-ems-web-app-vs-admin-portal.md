@@ -1,6 +1,6 @@
 # ADR-006: EMS Web Application vs. Administration App separation
 
-Status: Decided; already merged into the frozen architecture (PR #44)
+Status: Decided; already merged into the frozen architecture (PR #44). Amendment 2 (2026-11-18): alert-rule configuration and alert acknowledgement move into the customer EMS through audited server-side write functions — see below and [ADR-024](ADR-024-customer-configurable-alert-rules.md)
 Date: 2026-09-10 (product decision); PR #44 merged to `staging` (DDS §F.0 boundary clarification)
 Decision owners: Product Owner; Architecture
 Related requirements: EMS-REQ-001, EMS-REQ-006, EMS-REQ-900
@@ -52,9 +52,19 @@ already made, not as a choice among named alternatives.
 - Configuration of alert rules, functional categories, tariffs, and
   onboarding stays in the Administration App even where the customer EMS
   surfaces or triggers related information (Workshop Q67, Q68, Q98).
+  **SUPERSEDED for alert rules only (Amendment 2, 2026-11-18):** alert-rule
+  configuration belongs in the customer EMS
+  ([ADR-024](ADR-024-customer-configurable-alert-rules.md)); functional
+  categories, tariffs and onboarding are unchanged.
 - The customer EMS is read-only for MVP; any future customer-write action
   routes through an Administration-App-owned mechanism, never an ad hoc
   frontend write (`ems-product-architecture.md` §2.2).
+  **SUPERSEDED (Amendment 2, 2026-11-18):** customer-initiated writes
+  (Reports export jobs, ADR-014 Amendment 2; alert rules and alert
+  acknowledgement, ADR-024) go through the customer API and
+  SECURITY DEFINER database write functions, not an
+  Administration-App-owned mechanism. "Never an ad hoc frontend write"
+  still holds without exception.
 - Rolling back the EMS Web Application has no effect on the Administration
   App, Grafana, the database, or telemetry pipelines.
 
@@ -92,6 +102,25 @@ Administration App from the customer request path entirely.
 Alternative rejected: a front reverse proxy with `auth_request` (moves the
 public port binding, adds shared ingress ahead of the TLS work). See
 [../../04-architecture/deployment-architecture.md](../../04-architecture/deployment-architecture.md).
+
+**Amendment 2 (2026-11-18) — customer writes for alert configuration and
+acknowledgement.** Decided by the Product Owner
+([ADR-024](ADR-024-customer-configurable-alert-rules.md)). In the
+customer EMS, customer site administrators and WiseWatts `GLOBAL` `ADMIN`
+staff create, edit, enable/disable and (soft-)delete alert rules; those
+same administrators, customer operators and WiseWatts `GLOBAL`
+`OPERATOR` staff acknowledge alerts (a `GLOBAL` `VIEWER` is read-only); every
+authorised site user views them. Every action is audited with the actual
+actor and whether it was a customer user or WiseWatts staff. The
+application separation itself is unchanged — the
+Administration App does not gain or lose any alert screen, and no
+Administration App workflow changes. The write path is: EMS Web App →
+authenticated same-origin JSON request to the customer API → route-level
+dedicated permission + same-site check → SECURITY DEFINER database
+function that re-checks permission and site/asset/parameter relationships
+and writes the change and its `admin.audit_events` row in one
+transaction. The frontend never writes to the database. Status:
+**decided, not implemented.**
 
 ## Validation references
 

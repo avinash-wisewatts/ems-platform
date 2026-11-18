@@ -22,7 +22,7 @@ content.
 | [site-performance-report/](site-performance-report/README.md) | MVP-6 | **IMPLEMENTED, not deployed** (2026-09-14, ADR-015) — the one decided Q76 report type; broader Reporting scope remains undecided |
 | [analytics/](analytics/README.md) | Analytics v1 | **DECIDED, implementation in progress** (2026-09-27, ADR-022) — Energy-only pilot; non-Energy data points await Asset Data Point Assignment |
 | [export/](export/README.md) | MVP-6 | **IMPLEMENTED, deployed to staging; not on production; UI acceptance outstanding** (2026-10-24, ADR-014 Amendment 2, migration 309) — Reports tab: per-site ZIP of per-asset measurement CSVs, immediate or background with in-app notification; per-cell quality state not exported (open) |
-| [alerts/](alerts/README.md) | MVP-7 | **IMPLEMENTED, staging validation pending** (2026-09-14, ADR-016/ADR-017) — Site-level Energy Attention only; Space/Asset alerts await a separate condition decision |
+| [alerts/](alerts/README.md) | MVP-7 | **IMPLEMENTED, running on staging** (2026-09-14, ADR-016/ADR-017; staging baseline 2026-11-18) — Site-level Energy Attention only; Space/Asset alerts await a separate condition decision. Customer-configurable rules + acknowledgement **decided 2026-11-18, not implemented** (ADR-024) — they **replace** these MVP-7 alerts entirely; the legacy UI, evaluator, job and records are to be retired/deleted by the replacement release |
 
 Evaluated but not given a dedicated document here because it would only
 duplicate [02-requirements/](../02-requirements/) and

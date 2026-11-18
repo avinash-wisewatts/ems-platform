@@ -1,5 +1,13 @@
 # WiseWatts EMS — Information Architecture / UX Blueprint
 
+> **Non-canonical legacy copy (2026-11-18 note).** The canonical set is
+> `docs/00-governance/` … `docs/10-operations/` (see `docs/README.md`).
+> Statements here that alert configuration stays in the Administration
+> App (Q67), that the customer EMS is read-only, that acknowledgement is
+> excluded, or that alert delivery is in-product only without Coming Soon
+> placeholders are **superseded for alerts** by
+> [ADR-024](../00-governance/decisions/ADR-024-customer-configurable-alert-rules.md).
+
 > **Status:** WORKING DRAFT  ·  **Version:** 0.1.2  ·  **Owner:** Product  ·  **Last updated:** 2026-09-12 (§4.5/§4.7 data-model correction only — see Version History; no product decision altered)
 >
 > **Source basis:** product-owner brief (§5–§8, §13, §16), `ems-product-definition.md`, DDS §F / §F.0 / §B.2–B.5 / §E, roadmap Phases 7–17, ZeroWatt technical overview (reference only).

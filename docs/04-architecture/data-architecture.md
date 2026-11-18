@@ -85,3 +85,15 @@ this pattern to every future analytical tier (derived parameters, new
 domains) rather than re-implementing it per domain. Operator visibility:
 `analytics.v_pipeline_health` — see
 [../10-operations/monitoring.md](../10-operations/monitoring.md).
+
+## Planned: alert rules and occurrences (ADR-024, proposed, not implemented)
+
+The proposed design keeps alerts inside the approved `Alert` DDS concept:
+a new `analytics.alert_rules` table (one row per customer rule,
+soft-deletable) and the existing `analytics.alerts` table reused for
+rule-based occurrences (extended with a rule reference, history snapshot
+and acknowledgement) after the legacy Energy Attention rows are deleted.
+The evaluator reads `telemetry.normalized_points` over a bounded recent
+window through the asset's current `metadata.asset_points` binding,
+converted with the field-mapping scale/offset. See
+[../07-features/alerts/phase-1-technical-design.md](../07-features/alerts/phase-1-technical-design.md) §1–§2, §6.

@@ -172,9 +172,27 @@ matches the DDS roadmap's own Phase 8 exit criterion ("empty shell").
 
 - **Decisions served**: Q77 (basic alerts on measurable conditions,
   full lifecycle/state model), Q67 (configuration stays in the
-  Administration App). **Q78 is superseded** — delivery is now decided as
+  Administration App — **superseded for alert configuration 2026-11-18**,
+  see the next bullet). **Q78 is superseded** — delivery is now decided as
   **in-product only**, not in-product + email; see
   [ADR-016](../00-governance/decisions/ADR-016-q77-mvp7-basic-alerts.md).
+- **Customer-configurable alert rules — decided 2026-11-18, not
+  implemented** ([ADR-024](../00-governance/decisions/ADR-024-customer-configurable-alert-rules.md),
+  `EMS-REQ-082`, `EMS-REQ-140`–`EMS-REQ-152`): Alerts → Create Alert for
+  customer site administrators and WiseWatts `GLOBAL` `ADMIN` staff (asset, parameter, greater/less/equal with an
+  explicit tolerance (not for cumulative counters), at most 25 active rules
+  per site, fixed value first and mean over a window later, site-timezone
+  schedule, reminder frequency); acknowledgement for those administrators,
+  customer operators and `GLOBAL` `OPERATOR` staff (never resolution; kept
+  through telemetry gaps); Active Alerts, Create Alert and Resolved/Ended
+  history views (90-day retention); Email/WhatsApp as Coming Soon
+  placeholders. **Replaces the MVP-7 Energy Attention alerts entirely**:
+  their UI, evaluator and job are retired and their records deleted by the
+  replacement release (staging, then production within its separately
+  approved deployment). Phase 0 (governance, staging baseline, DDS
+  classification approved) complete; Phase 1 planned
+  ([phase-1-implementation-plan.md](../07-features/alerts/phase-1-implementation-plan.md)),
+  starts on Product Owner approval.
 - **Decided 2026-09-14, not implemented**: the full alert
   trigger/qualification/resolution lifecycle, Active/Resolved/Ended states
   and configuration-change transitions, persistence-failure handling,
@@ -229,7 +247,9 @@ Data Quality screen beyond freshness visibility; any alert delivery channel
 beyond in-product (email, SMS, WhatsApp, sharing — all removed from MVP-7
 scope, not merely deferred beyond an in-product+email baseline; see
 [ADR-016](../00-governance/decisions/ADR-016-q77-mvp7-basic-alerts.md));
-alert acknowledgement workflows; DDS Phase 11 (Asset Performance / motor
+alert snooze/dismiss/assignment workflows (acknowledgement itself is now
+in scope — ADR-024, 2026-11-18); actual Email/WhatsApp delivery and
+reminder delivery (Coming Soon placeholders only — ADR-024 §9–§10); DDS Phase 11 (Asset Performance / motor
 condition monitoring), Phase 13 (baseline overlays, cross-asset league
 tables), Phase 14 (cost/benchmarking/insights foundations), Phase 16
 (hardening/scale) — real technical phases, not cancelled, simply not

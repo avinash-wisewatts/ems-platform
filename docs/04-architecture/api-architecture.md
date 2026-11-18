@@ -10,7 +10,16 @@ Semantic, read-only `GET /api/v1/*` — with one additive, user-scoped write
 surface: the Reports tab's export jobs (`POST /api/v1/sites/{id}/report-exports`,
 `POST /api/v1/report-exports/{job_id}/retry`, 2026-10-24), which write only
 the caller's own job records (never EMS data), require `application/json`
-and reject cross-site requests. Flat top-level error envelope:
+and reject cross-site requests. **Decided 2026-11-18, not implemented**
+([ADR-024](../00-governance/decisions/ADR-024-customer-configurable-alert-rules.md),
+ADR-007 Amendment 1): a second write set for alert rules (create, edit,
+enable/disable, soft delete — customer site administrators and WiseWatts `GLOBAL` `ADMIN` staff) and alert
+acknowledgement (those administrators, customer operators and WiseWatts `GLOBAL` `OPERATOR` staff). Every write route
+needs a dedicated permission checked at the route and again in its
+SECURITY DEFINER function (never only the blanket `/api/v1/*` →
+`dashboard.view` middleware rule), accepts only same-site
+`application/json`, and writes its `admin.audit_events` row — actual
+actor plus customer-vs-staff actor type — in the same transaction. Flat top-level error envelope:
 `{"error": "<code>", "detail": "<message>"}` — `401 unauthenticated`, `403`,
 `404 not_found`, `422 invalid_parameter`/`invalid_resolution`/`invalid_request`.
 
@@ -18,7 +27,11 @@ and reject cross-site requests. Flat top-level error envelope:
 
 The existing signed session cookie (`ems_admin_session`), shared with the
 Administration App. Served same-origin so the cookie flows automatically —
-no second auth system, no CORS, no CSRF token for GET-only reads.
+no second auth system, no CORS, no CSRF token for GET-only reads. Unsafe
+methods are additionally refused unless same-origin
+(`app/src/auth/customer_middleware.py`), and each write route rejects
+non-JSON bodies and `Sec-Fetch-Site: cross-site`
+(`_require_same_site_json`, `app/src/routers/report_exports.py`).
 
 ## Authorisation
 
@@ -49,6 +62,16 @@ UX-only.
 | `POST /api/v1/sites/{site_id}/report-exports` | Reports tab: queue a background export job (JSON `{from,to,resolution,asset_ids}`) | Added 2026-10-24. 202 job; 422 `export_too_large`; 429 `too_many_active_exports`; 415 non-JSON; 403 cross-site. |
 | `GET /api/v1/report-exports`, `GET /api/v1/report-exports/{job_id}` | Reports tab: the caller's jobs / one job (status, error, `download_url`) | Added 2026-10-24. Owner-only; another user's job is 404. |
 | `POST /api/v1/report-exports/{job_id}/retry`, `GET /api/v1/report-exports/{job_id}/file` | Reports tab: re-queue a FAILED job / download a COMPLETED job's ZIP | Added 2026-10-24. 409 `export_not_failed`; 410 expired or unfinished. |
+
+**Planned — alert rules (ADR-024, proposed design, not implemented):**
+rule-aware `GET /api/v1/sites/{site_id}/alerts` (Active and Resolved/Ended
+history) and `GET /api/v1/alerts/{alert_id}` replace the MVP-7 contract;
+new `GET/POST /api/v1/sites/{site_id}/alert-rules`,
+`GET /api/v1/sites/{site_id}/alert-rules/parameters`,
+`GET/PATCH/DELETE /api/v1/alert-rules/{rule_id}`,
+`POST /api/v1/alert-rules/{rule_id}/enable|disable` (`alert.configure`) and
+`POST /api/v1/alerts/{alert_id}/acknowledge` (`alert.acknowledge`). See
+[../07-features/alerts/phase-1-technical-design.md](../07-features/alerts/phase-1-technical-design.md) §3.
 
 ## Extension model
 
