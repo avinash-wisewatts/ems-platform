@@ -1,11 +1,11 @@
 # Feature: Alerts
 
-Status: CURRENT · Last reviewed: 2026-11-18 (Phase 0 governance alignment + read-only staging baseline; sections below "Staging baseline" are the 2026-09-14/15 implementation record, kept as history) · Owner: Product + Engineering
-MVP stage: MVP-7 (legacy, **to be retired**) → replaced by ADR-024 customer-configurable rules · Related decisions: [ADR-016](../../00-governance/decisions/ADR-016-q77-mvp7-basic-alerts.md), [ADR-017](../../00-governance/decisions/ADR-017-mvp7-alert-architecture.md), [ADR-010](../../00-governance/decisions/ADR-010-mvp3-attention-materiality-policy.md), [ADR-024](../../00-governance/decisions/ADR-024-customer-configurable-alert-rules.md) (customer-configurable rules, acknowledgement — decided 2026-11-18, not implemented)
+Status: CURRENT · Last reviewed: 2026-11-18 (ADR-024 rule-based alerts LIVE ON STAGING `e627298`, not on production; Phase 0 alignment + read-only staging baseline; sections below "Staging baseline" are the 2026-09-14/15 implementation record, kept as history) · Owner: Product + Engineering
+MVP stage: MVP-7 (legacy, **retired on staging 2026-11-18**, still live on production) → replaced by ADR-024 customer-configurable rules · Related decisions: [ADR-016](../../00-governance/decisions/ADR-016-q77-mvp7-basic-alerts.md), [ADR-017](../../00-governance/decisions/ADR-017-mvp7-alert-architecture.md), [ADR-010](../../00-governance/decisions/ADR-010-mvp3-attention-materiality-policy.md), [ADR-024](../../00-governance/decisions/ADR-024-customer-configurable-alert-rules.md) (customer-configurable rules, acknowledgement — decided and implemented 2026-11-18; on staging, not production)
 
 ## Purpose
 
-**Current product (decided 2026-11-18, not implemented):** notify the
+**Current product (ADR-024 — on staging since 2026-11-18, production pending approval):** notify the
 customer, in-product, when an alert rule configured for one of their
 assets is breached for a meaningful period — rules are configured by the
 site's administrators in the EMS Web App ([ADR-024](../../00-governance/decisions/ADR-024-customer-configurable-alert-rules.md)).
@@ -36,11 +36,64 @@ analytical deep links, no customer-facing severity taxonomy.
 *(2026-11-18: still in-product only for delivery; ADR-024 adds Email and
 WhatsApp only as "Coming Soon" placeholders that send nothing.)*
 
-## Customer-configurable alert rules (ADR-024) — decided 2026-11-18, not implemented
+## Customer-configurable alert rules (ADR-024) — on staging 2026-11-18, not on production
 
-Phase 0 complete (DDS classification approved). Proposed Phase 1:
-[phase-1-implementation-plan.md](phase-1-implementation-plan.md); Step 0 technical design proposed for
-review: [phase-1-technical-design.md](phase-1-technical-design.md). No implementation started.
+Implemented by PR #179 (squash `e627298`, migrations 320–326) and
+deployed to staging 2026-11-18 (`deploy-staging` run 44282502005,
+`deploy-customer-api` run 44284913192). Design:
+[phase-1-technical-design.md](phase-1-technical-design.md) (approved; the
+evaluator reads the live-value cache, see its implementation note); plan:
+[phase-1-implementation-plan.md](phase-1-implementation-plan.md).
+Production: [prepared plan](../../09-release-and-deployment/production-release-alerts-adr-024.md),
+not approved.
+
+**Staging release record (2026-11-18).**
+
+- Migration 320 deleted **79** legacy alerts (ENDED 76, ACTIVE 2,
+  RESOLVED 1) and **0** candidates, removed job **1127**; recorded in
+  `admin.migration_outcomes`. New evaluator job **1143** (every minute).
+- Evaluator (134 runs to 18:06 IST): mean 51 ms, p95 45 ms, 0 failures;
+  the first two runs after the deploy took 926 ms and 1,810 ms (cold, 0
+  rules), every later run ≤ 104 ms. Observation pass at 75 rules: 16.5 ms
+  (read-only measurement). Host after acceptance: 724 MiB available of
+  1.9 GB, disk 57%.
+- Acceptance (database functions as `ems_app`, actor `admin_avinash`,
+  rules named "ADR-024 acceptance - …", Coimbatore): validation refusals
+  (equal-to without tolerance, duplicate name ignoring case, stale
+  version); counters absent from eligible parameters; real qualification
+  (Freezer > 1 kW, Chiller1 > 10 kW); stale point counted unavailable with
+  no alert; acknowledgement shown as "WiseWatts Support", stored as staff,
+  second acknowledgement refused; natural resolution when the freezer
+  compressor cycled off; edit ended the Active alert with
+  CONFIGURATION_CHANGED and kept the history snapshot; disable / re-enable
+  (version bump); history and detail views; every write audited
+  `WISEWATTS_STAFF`, older audit rows untouched; overnight schedule
+  (18:00–06:00) started watching at the first run after 18:00 and qualified
+  18:05:55. Clean-up 18:06 IST: all acceptance rules soft deleted (plus a
+  temporary rule proving a deleted name is reusable); no visible rules, no
+  Active alerts; the 4 occurrences remain in History marked
+  `rule_deleted`.
+- Browser path: a signed-in `admin_avinash` session used the deployed
+  web app through the customer API during acceptance (Active, History,
+  rules and parameter reads, and `POST …/disable` on the stale-pump rule —
+  all 200, audited `WISEWATTS_STAFF`). Second freezer occurrence
+  qualified 17:45:55 unacknowledged (acknowledgement does not carry over).
+- Not exercised on staging: customer, operator and viewer roles (no such
+  active users on staging); a telemetry gap during an Active alert; the
+  90-day purge (covered by automated tests).
+- **Known defect D-1 (timing):** qualification takes 5–6 minutes and
+  resolution 1–2 minutes instead of exactly 5 and 1, because the
+  once-a-minute runs start a few milliseconds either side of 60 s apart and
+  the `since <= now - interval` test then waits one extra run. Recorded
+  times are correct. Fix: a small grace in the two comparisons (new
+  migration).
+- **Observation D-2 (product decision):** an alert's "previous
+  occurrences" count only occurrences of the same rule *version*
+  (`condition_key` = `RULE:<id>:v<version>`). An edit resets the count
+  (condition changed); a plain disable / re-enable also resets it,
+  because re-enabling bumps the version. Seen on staging: the freezer's
+  second occurrence (17:39:55) showed 0 previous after the 17:28
+  disable / re-enable.
 
 Full record: [ADR-024](../../00-governance/decisions/ADR-024-customer-configurable-alert-rules.md).
 Supersedes the earlier "configuration stays in the Administration App
