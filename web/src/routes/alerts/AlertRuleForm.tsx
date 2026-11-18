@@ -3,7 +3,11 @@
  * holding alert.configure; the server validates everything again.
  *
  * - Parameters come from the server for the chosen asset (cumulative counters
- *   are never offered).
+ *   are never offered -- the form says so). Options are ordered by name, then
+ *   Total / Average before phases. Changing the asset clears the parameter.
+ * - Compact layout: fixed header and footer (Cancel / Create always visible),
+ *   scrolling body, two-column grid collapsing to one column on narrow
+ *   screens.
  * - Equal to needs an explicit tolerance in the parameter's unit -- no default.
  * - The schedule is in the site's timezone; an end before the start crosses
  *   midnight.
@@ -25,6 +29,23 @@ import { COMPARATOR_LABELS, WEEKDAYS, WEEKDAY_LABELS, parameterLabel } from "./a
 
 function paramKey(code: string, qualifier: string | null): string {
   return `${code}|${qualifier ?? ""}`;
+}
+
+// Total / average first, then phases, line-to-line pairs, neutral, anything else.
+const QUALIFIER_ORDER = ["", "TOTAL", "AVG", "L1", "L2", "L3", "L12", "L23", "L31", "NEUTRAL"];
+
+function qualifierRank(qualifier: string | null): number {
+  const i = QUALIFIER_ORDER.indexOf(qualifier ?? "");
+  return i === -1 ? QUALIFIER_ORDER.length : i;
+}
+
+export function sortParameterOptions(options: AlertRuleParameterOption[]): AlertRuleParameterOption[] {
+  return [...options].sort(
+    (a, b) =>
+      a.parameter.name.localeCompare(b.parameter.name) ||
+      qualifierRank(a.parameter.qualifier) - qualifierRank(b.parameter.qualifier) ||
+      (a.parameter.qualifier ?? "").localeCompare(b.parameter.qualifier ?? ""),
+  );
 }
 
 export function AlertRuleForm({
@@ -65,7 +86,10 @@ export function AlertRuleForm({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const assetParameters = parameters.filter((p) => p.asset.asset_id === assetId);
+  const assetParameters = useMemo(
+    () => sortParameterOptions(parameters.filter((p) => p.asset.asset_id === assetId)),
+    [parameters, assetId],
+  );
   const selectedParam =
     assetParameters.find((p) => paramKey(p.parameter.code, p.parameter.qualifier) === param)?.parameter ??
     (rule && paramKey(rule.parameter.code, rule.parameter.qualifier) === param && rule.asset.asset_id === assetId
@@ -127,7 +151,7 @@ export function AlertRuleForm({
   }
 
   return (
-    <div className="alerts-dialog__backdrop">
+    <div className="alerts-dialog__backdrop alerts-dialog__backdrop--form">
       <form
         className="alerts-dialog alerts-form"
         role="dialog"
@@ -137,160 +161,179 @@ export function AlertRuleForm({
         noValidate
         data-testid="alert-rule-form"
       >
-        <div className="alerts-dialog__header">
+        <div className="alerts-form__header">
           <h2 id="alert-rule-form-title">{rule ? "Edit alert" : "Create new alert"}</h2>
         </div>
-        {rule?.active_alert_id ? (
-          <p className="alerts-notice">Saving changes ends this rule's active alert; evaluation starts again.</p>
-        ) : null}
 
-        <label className="alerts-field">
-          <span>Name</span>
-          <input value={name} maxLength={120} onChange={(e) => setName(e.target.value)} data-testid="rule-name" />
-        </label>
+        <div className="alerts-form__body" data-testid="alert-rule-form-body">
+          {rule?.active_alert_id ? (
+            <p className="alerts-notice">Saving changes ends this rule's active alert; evaluation starts again.</p>
+          ) : null}
 
-        <label className="alerts-field">
-          <span>Asset</span>
-          <select
-            value={assetId}
-            onChange={(e) => {
-              setAssetId(e.target.value);
-              setParam("");
-            }}
-            data-testid="rule-asset"
-          >
-            <option value="">Choose an asset</option>
-            {assets.map(([id, label]) => (
-              <option key={id} value={id}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </label>
+          <div className="alerts-form__grid">
+            <label className="alerts-field alerts-form__span">
+              <span>Name</span>
+              <input value={name} maxLength={120} onChange={(e) => setName(e.target.value)} data-testid="rule-name" />
+            </label>
 
-        <label className="alerts-field">
-          <span>Parameter</span>
-          <select value={param} onChange={(e) => setParam(e.target.value)} disabled={!assetId} data-testid="rule-parameter">
-            <option value="">{assetId ? "Choose a parameter" : "Choose an asset first"}</option>
-            {assetParameters.map((p) => (
-              <option key={paramKey(p.parameter.code, p.parameter.qualifier)} value={paramKey(p.parameter.code, p.parameter.qualifier)}>
-                {parameterLabel(p.parameter)}
-                {p.parameter.unit ? ` (${p.parameter.unit})` : ""}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <div className="alerts-form__row">
-          <label className="alerts-field">
-            <span>Condition</span>
-            <select value={comparator} onChange={(e) => setComparator(e.target.value as AlertComparator)} data-testid="rule-comparator">
-              {(Object.keys(COMPARATOR_LABELS) as AlertComparator[]).map((c) => (
-                <option key={c} value={c}>
-                  {COMPARATOR_LABELS[c]}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="alerts-field">
-            <span>Value{unit ? ` (${unit})` : ""}</span>
-            <input type="number" step="any" value={threshold} onChange={(e) => setThreshold(e.target.value)} data-testid="rule-threshold" />
-          </label>
-          {comparator === "EQ" ? (
             <label className="alerts-field">
-              <span>Tolerance ±{unit ? ` (${unit})` : ""}</span>
-              <input
-                type="number"
-                step="any"
-                min="0"
-                value={tolerance}
-                onChange={(e) => setTolerance(e.target.value)}
-                data-testid="rule-tolerance"
-              />
+              <span>Asset</span>
+              <select
+                value={assetId}
+                onChange={(e) => {
+                  setAssetId(e.target.value);
+                  setParam("");
+                }}
+                data-testid="rule-asset"
+              >
+                <option value="">Choose an asset</option>
+                {assets.map(([id, label]) => (
+                  <option key={id} value={id}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="alerts-field">
+              <span>Parameter</span>
+              <select value={param} onChange={(e) => setParam(e.target.value)} disabled={!assetId} data-testid="rule-parameter">
+                <option value="">{assetId ? "Choose a parameter" : "Choose an asset first"}</option>
+                {assetParameters.map((p) => (
+                  <option key={paramKey(p.parameter.code, p.parameter.qualifier)} value={paramKey(p.parameter.code, p.parameter.qualifier)}>
+                    {parameterLabel(p.parameter)}
+                    {p.parameter.unit ? ` (${p.parameter.unit})` : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {assetId ? (
+              <p className="alerts-muted alerts-form__span alerts-form__hint" data-testid="rule-parameter-hint">
+                {assetParameters.length === 1 ? "1 parameter" : `${assetParameters.length} parameters`} available for this
+                asset. Cumulative energy counters (kWh, kVAh) can't be used for alerts.
+              </p>
+            ) : null}
+          </div>
+
+          <div className="alerts-form__grid alerts-form__grid--3">
+            <label className="alerts-field">
+              <span>Condition</span>
+              <select value={comparator} onChange={(e) => setComparator(e.target.value as AlertComparator)} data-testid="rule-comparator">
+                {(Object.keys(COMPARATOR_LABELS) as AlertComparator[]).map((c) => (
+                  <option key={c} value={c}>
+                    {COMPARATOR_LABELS[c]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="alerts-field">
+              <span>Value{unit ? ` (${unit})` : ""}</span>
+              <input type="number" step="any" value={threshold} onChange={(e) => setThreshold(e.target.value)} data-testid="rule-threshold" />
+            </label>
+            {comparator === "EQ" ? (
+              <label className="alerts-field">
+                <span>Tolerance ±{unit ? ` (${unit})` : ""}</span>
+                <input
+                  type="number"
+                  step="any"
+                  min="0"
+                  value={tolerance}
+                  onChange={(e) => setTolerance(e.target.value)}
+                  data-testid="rule-tolerance"
+                />
+              </label>
+            ) : null}
+            <p className="alerts-muted alerts-form__span alerts-form__hint">
+              Compared against a fixed value. Mean over a time window: coming later.
+            </p>
+          </div>
+
+          <fieldset className="alerts-fieldset">
+            <legend>Schedule{timeZone ? ` (site time, ${timeZone})` : " (site time)"}</legend>
+            <div className="alerts-form__grid alerts-form__grid--3 alerts-form__grid--end">
+              <label className="alerts-field">
+                <span>From</span>
+                <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} data-testid="rule-start" />
+              </label>
+              <label className="alerts-field">
+                <span>To</span>
+                <input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} data-testid="rule-end" />
+              </label>
+              <label className="alerts-check">
+                <input
+                  type="checkbox"
+                  checked={everyDay}
+                  onChange={(e) => setWeekdays(e.target.checked ? [...WEEKDAYS] : [])}
+                  data-testid="rule-every-day"
+                />
+                Every day
+              </label>
+            </div>
+            {endTime < startTime ? <p className="alerts-muted alerts-form__hint">Runs overnight, past midnight.</p> : null}
+            <div className="alerts-days">
+              {WEEKDAYS.map((d) => (
+                <label key={d} className="alerts-check">
+                  <input type="checkbox" checked={weekdays.includes(d)} onChange={() => toggleDay(d)} data-testid={`rule-day-${d}`} />
+                  {WEEKDAY_LABELS[d]}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+
+          <fieldset className="alerts-fieldset">
+            <legend>
+              Notifications <span className="alerts-badge">Coming Soon</span>
+            </legend>
+            <p className="alerts-muted alerts-form__hint" data-testid="rule-delivery-note">
+              Alerts appear in the EMS. Email, WhatsApp and reminders are not sent yet — your choices are saved for when
+              they become available.
+            </p>
+            <div className="alerts-form__grid alerts-form__grid--3 alerts-form__grid--end">
+              <label className="alerts-check">
+                <input type="checkbox" checked={email} onChange={(e) => setEmail(e.target.checked)} data-testid="rule-email" />
+                Email <span className="alerts-badge">Coming Soon</span>
+              </label>
+              <label className="alerts-check">
+                <input type="checkbox" checked={whatsapp} onChange={(e) => setWhatsapp(e.target.checked)} data-testid="rule-whatsapp" />
+                WhatsApp <span className="alerts-badge">Coming Soon</span>
+              </label>
+              <label className="alerts-field">
+                <span>
+                  Reminder <span className="alerts-badge">Coming Soon</span>
+                </span>
+                <select value={reminder} onChange={(e) => setReminder(e.target.value as "" | "15" | "30")} data-testid="rule-reminder">
+                  <option value="">None</option>
+                  <option value="15">Every 15 minutes until acknowledged</option>
+                  <option value="30">Every 30 minutes until acknowledged</option>
+                </select>
+              </label>
+            </div>
+          </fieldset>
+
+          {!rule ? (
+            <label className="alerts-check">
+              <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} data-testid="rule-enabled" />
+              Enabled
             </label>
           ) : null}
         </div>
-        <p className="alerts-muted">Compared against a fixed value. Mean over a time window: coming later.</p>
 
-        <fieldset className="alerts-fieldset">
-          <legend>Schedule{timeZone ? ` (site time, ${timeZone})` : " (site time)"}</legend>
-          <div className="alerts-form__row">
-            <label className="alerts-field">
-              <span>From</span>
-              <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} data-testid="rule-start" />
-            </label>
-            <label className="alerts-field">
-              <span>To</span>
-              <input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} data-testid="rule-end" />
-            </label>
+        <div className="alerts-form__footer">
+          {error ? (
+            <p className="alerts-error alerts-form__error" role="alert" data-testid="rule-form-error">
+              {error}
+            </p>
+          ) : (
+            <span />
+          )}
+          <div className="alerts-actions">
+            <button type="button" className="analytics-button" onClick={onCancel} disabled={saving}>
+              Cancel
+            </button>
+            <button type="submit" className="analytics-button analytics-button--primary" disabled={saving} data-testid="rule-save">
+              {rule ? "Save changes" : "Create alert"}
+            </button>
           </div>
-          {endTime < startTime ? <p className="alerts-muted">Runs overnight, past midnight.</p> : null}
-          <label className="alerts-check">
-            <input
-              type="checkbox"
-              checked={everyDay}
-              onChange={(e) => setWeekdays(e.target.checked ? [...WEEKDAYS] : [])}
-              data-testid="rule-every-day"
-            />
-            Every day
-          </label>
-          <div className="alerts-days">
-            {WEEKDAYS.map((d) => (
-              <label key={d} className="alerts-check">
-                <input type="checkbox" checked={weekdays.includes(d)} onChange={() => toggleDay(d)} data-testid={`rule-day-${d}`} />
-                {WEEKDAY_LABELS[d]}
-              </label>
-            ))}
-          </div>
-        </fieldset>
-
-        <fieldset className="alerts-fieldset">
-          <legend>
-            Notifications <span className="alerts-badge">Coming Soon</span>
-          </legend>
-          <p className="alerts-muted" data-testid="rule-delivery-note">
-            Alerts appear in the EMS. Email, WhatsApp and reminders are not sent yet — your choices are saved for when
-            they become available.
-          </p>
-          <label className="alerts-check">
-            <input type="checkbox" checked={email} onChange={(e) => setEmail(e.target.checked)} data-testid="rule-email" />
-            Email <span className="alerts-badge">Coming Soon</span>
-          </label>
-          <label className="alerts-check">
-            <input type="checkbox" checked={whatsapp} onChange={(e) => setWhatsapp(e.target.checked)} data-testid="rule-whatsapp" />
-            WhatsApp <span className="alerts-badge">Coming Soon</span>
-          </label>
-          <label className="alerts-field">
-            <span>
-              Reminder <span className="alerts-badge">Coming Soon</span>
-            </span>
-            <select value={reminder} onChange={(e) => setReminder(e.target.value as "" | "15" | "30")} data-testid="rule-reminder">
-              <option value="">None</option>
-              <option value="15">Every 15 minutes until acknowledged</option>
-              <option value="30">Every 30 minutes until acknowledged</option>
-            </select>
-          </label>
-        </fieldset>
-
-        {!rule ? (
-          <label className="alerts-check">
-            <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} data-testid="rule-enabled" />
-            Enabled
-          </label>
-        ) : null}
-
-        {error ? (
-          <p className="alerts-error" role="alert" data-testid="rule-form-error">
-            {error}
-          </p>
-        ) : null}
-        <div className="alerts-actions">
-          <button type="button" className="analytics-button" onClick={onCancel} disabled={saving}>
-            Cancel
-          </button>
-          <button type="submit" className="analytics-button analytics-button--primary" disabled={saving} data-testid="rule-save">
-            {rule ? "Save changes" : "Create alert"}
-          </button>
         </div>
       </form>
     </div>

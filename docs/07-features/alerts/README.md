@@ -107,6 +107,14 @@ MVP-7 Energy Attention alerts entirely** (ADR-024 §17).
   enabled toggle, Edit, Delete; Create New Alert) and a read-only
   **Resolved/Ended history** (last 90 days, including occurrences of
   deleted rules).
+- **Rule form (2026-11-18 UI refinement).** The parameter list offers every
+  point bound to the asset except cumulative energy counters (kWh / kVAh
+  registers, pulse counts) — e.g. 37 of 49 for an energy meter, 42 of 54
+  for an AHU with an AirSense sensor (staging) — ordered by name, Total /
+  Average before phases, with an "N parameters available … cumulative
+  energy counters can't be used" note; changing the asset clears the
+  parameter. Compact two-column dialog with a fixed header and a fixed
+  Cancel / Create footer; full-screen on narrow screens.
 - **Permissions.** View = every authorised user of the site. Configure
   (create, edit, enable/disable, delete) = **customer site administrators
   and WiseWatts `GLOBAL` `ADMIN` staff** (new dedicated permission,
