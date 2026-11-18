@@ -7,11 +7,12 @@ unavailability, the per-site rule limit and — final scope amendment — the
 alerts**; final Phase 0 approval decisions on 90-day history retention,
 the Resolved/Ended history view and `GLOBAL` `OPERATOR` acknowledgement);
 **DDS classification APPROVED** (2026-11-18 — § "DDS change-control
-note"); Phase 0 complete; **not implemented** — no migration, API,
-evaluator, job or frontend change exists for anything in this record and
-**no legacy alert record has been deleted**. Phase 1 is planned
-([alerts/phase-1-implementation-plan.md](../../07-features/alerts/phase-1-implementation-plan.md))
-and starts only on explicit Product Owner approval.
+note"); Phase 0 complete; **implemented** (Phase 1, PR #179, migrations
+320–326) and **deployed to staging 2026-11-18**, where migration 320
+deleted the 79 legacy alert records; **Amendment 1** (D-1 timing grace,
+D-2 rule-wide previous occurrences — migration 327) approved 2026-11-18;
+**not on production** (separate approval,
+[production plan](../../09-release-and-deployment/production-release-alerts-adr-024.md)).
 Date: 2026-11-18
 Decision owners: Product Owner (product decisions, §1–§13, §17–§18);
 Architecture (the write-path architecture in §14–§16, which applies the
@@ -159,7 +160,8 @@ created, and an Active occurrence resolves after the condition is
 continuously false for **1 minute** on valid data; a gap in evaluation or
 data resets the running timer (the periods and gap-reset rule re-adopted
 from ADR-016 decisions 2–3). A gap never resolves or ends an Active
-occurrence (§4A).
+occurrence (§4A). The once-a-minute evaluation applies a 2-second
+run-jitter grace to both periods (Amendment 1, D-1).
 
 **4A. Telemetry unavailable.** When the telemetry a rule evaluates
 becomes unavailable while an occurrence is Active, the occurrence **stays
@@ -520,6 +522,33 @@ items, none of them product decisions:
 - Mean-over-window comparison (§12) needs a bounded aggregate read (the
   1-minute tier) and its own performance check.
 
+## Amendment 1 (2026-11-18) — staging refinements D-1 and D-2
+
+Approved by the Product Owner on 2026-11-18 after staging acceptance;
+implemented by migration 327. Permissions, lifecycle semantics, audit and
+the legacy retirement are unchanged.
+
+- **D-1 — qualification and resolution timing (§4).** The evaluator runs
+  once a minute; a run starts a few milliseconds either side of exactly
+  60 s after the previous one. The exact test "first observation at least
+  5 minutes (1 minute) before this run" therefore missed the intended run
+  about half the time, so alerts qualified after 5–6 minutes and resolved
+  after 1–2 minutes. The tests now allow a **2-second run-jitter grace**:
+  an occurrence qualifies at the first run at least 4 min 58 s after the
+  first true observation, and resolves at the first run at least 58 s
+  after the first clear observation. The grace is far below the 1-minute
+  run interval, so no earlier run can qualify or resolve; recorded
+  triggered and resolved times remain the first observation. Gap reset and
+  unavailability are unchanged.
+- **D-2 — previous occurrences.** An occurrence's "Previous occurrences"
+  count and most-recent time now cover **every earlier occurrence of the
+  same rule** (its stable rule ID, across all rule versions), within the
+  90-day retained history. Editing, disabling, re-enabling or soft-deleting
+  a rule no longer resets them. Each occurrence keeps its own rule version
+  and configuration snapshot. (Replaces, for rule-based alerts, the MVP-7
+  recurrence identity of `EMS-REQ-123`, where any configuration change
+  started a new identity.)
+
 ## Rationale
 
 Product: customer site administrators are the users who know which
@@ -631,10 +660,19 @@ entry condition is closed.
 
 ## Implementation references
 
-None. Documentation only (Phase 0). No application code, schema,
-migration, evaluator, job or configuration was changed, and no record
-was deleted.
+- Migrations `postgres/migrations/320_alert_legacy_retirement.sql` …
+  `326_alert_customer_api_grants.sql` (PR #179, `e627298`) and
+  `327_alert_timing_grace_rule_wide_history.sql` (Amendment 1).
+- API `app/src/routers/alerts_api.py`, `app/src/alert_rules_service.py`;
+  frontend `web/src/routes/alerts/`.
+- Design: [phase-1-technical-design.md](../../07-features/alerts/phase-1-technical-design.md).
 
 ## Validation references
 
-None yet — nothing implemented.
+- Tests: `app/tests/test_alert_rules_db.py` (incl. D-1 boundary / jitter
+  and D-2 lifecycle tests), `app/tests/test_alerts_api_routes.py`,
+  `scripts/test/assert_alert_legacy_retirement.sh`,
+  `web/src/routes/alerts/AlertsArea.test.tsx`.
+- Staging release and acceptance record:
+  [alerts/README.md](../../07-features/alerts/README.md) ("Staging release
+  record").
