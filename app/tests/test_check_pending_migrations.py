@@ -3,8 +3,9 @@ refuses a deploy unless the target runner would apply exactly the declared
 migrations and nothing scoped away from the environment.
 
 Pure file inputs: no database. The real repository manifest and scope file are
-used where it matters (309 / 310 / 312 / 313 / 314 staging-only; 311 and 315-319 the next
-production migrations after 308).
+used where it matters (309 / 310 / 312 / 313 / 314 staging-only; 311 and 315-326 the next
+production migrations after 308 -- 320-326 are the ADR-024 Alerts release, 320
+explicitly scoped staging|production|test).
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ def _ids_through(last: str) -> list[str]:
 
 
 def _run(tmp_path, *, environment="production", manifest=MANIFEST, scope=SCOPE, scope_aware="yes",
-         deny=SCOPE, ledger_ids=(), expected="311,315,316,317,318,319"):
+         deny=SCOPE, ledger_ids=(), expected="311,315,316,317,318,319,320,321,322,323,324,325,326"):
     ledger = tmp_path / "ledger.txt"
     ledger.write_text("\n".join(ledger_ids) + "\n", encoding="utf-8")
     result = subprocess.run(
@@ -47,12 +48,15 @@ def _run(tmp_path, *, environment="production", manifest=MANIFEST, scope=SCOPE, 
 PRODUCTION_LEDGER = _ids_through("308_")          # production today: head 308
 
 
-def test_production_today_applies_exactly_311_and_315_to_319(tmp_path):
+def test_production_today_applies_exactly_311_and_315_to_326(tmp_path):
+    # 320-326 (ADR-024 Alerts) are production-applicable: the next production
+    # release must declare them; 320 deletes the legacy Energy Attention alerts.
     code, out = _run(tmp_path, ledger_ids=PRODUCTION_LEDGER)
     assert code == 0, out
-    assert ("Would apply (6): 311_recovery_lookup_event_time_bound 315_portal_user_management_hardening"
+    assert ("Would apply (13): 311_recovery_lookup_event_time_bound 315_portal_user_management_hardening"
             " 316_portal_user_functions_revoke_ems_readonly 317_ems_readonly_admin_least_privilege"
-            " 318_ems_readonly_write_routines_revoke 319_portal_user_audit_history_read") in out
+            " 318_ems_readonly_write_routines_revoke 319_portal_user_audit_history_read"
+            " 320_alert_legacy_retirement 321_alert_rules_schema 322_audit_actor_type 323_alert_rule_write_functions 324_alert_read_functions 325_alert_rule_evaluator 326_alert_customer_api_grants") in out
 
 
 def test_production_release_must_declare_315(tmp_path):
@@ -160,7 +164,7 @@ def test_a_staging_only_migration_already_in_the_production_ledger_is_refused_up
 
 def test_staging_applies_staging_only_migrations(tmp_path):
     code, out = _run(tmp_path, environment="staging", ledger_ids=_ids_through("308_"),
-                     expected="309,310,312,311,313,314,315,316,317,318,319")
+                     expected="309,310,312,311,313,314,315,316,317,318,319,320,321,322,323,324,325,326")
     assert code == 0, out
 
 
@@ -187,6 +191,8 @@ def test_scope_file_contract():
         "312_report_export_asset_selection_1m": "staging|test",
         "313_customer_api_role": "staging|test",
         "314_customer_session_revocation": "staging|test",
+        # ADR-024 §18: explicitly every environment (deletes legacy alerts).
+        "320_alert_legacy_retirement": "staging|production|test",
     }
     manifest_ids = set(_ids_through("~never~"))
     assert set(scoped) <= manifest_ids
@@ -195,7 +201,12 @@ def test_scope_file_contract():
 
 def test_scope_objects_are_created_by_their_migrations():
     objects = REPO / "postgres" / "migration_environment_scope_objects.csv"
-    scoped = {l.split(",")[0] for l in SCOPE.read_text(encoding="utf-8").splitlines()[1:] if l}
+    # Only migrations scoped AWAY from production list objects (they must be
+    # absent there); a production-scoped migration such as 320 lists none.
+    scoped = {
+        l.split(",")[0] for l in SCOPE.read_text(encoding="utf-8").splitlines()[1:]
+        if l and "production" not in l.split(",")[1].split("|")
+    }
     listed = set()
     for line in objects.read_text(encoding="utf-8").splitlines()[1:]:
         migration_id, object_type, name = line.split(",")
