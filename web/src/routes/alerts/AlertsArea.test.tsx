@@ -228,6 +228,75 @@ describe("AlertsArea (ADR-024)", () => {
     });
   });
 
+  it("lists every parameter of the chosen asset by name, explains the counter exclusion and resets on asset change", async () => {
+    const AHU_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const opt = (asset_id: string, name: string, code: string, pname: string, qualifier: string | null, unit: string | null) => ({
+      asset: { asset_id, name },
+      parameter: { code, name: pname, qualifier, unit },
+    });
+    // Server order is by code (as the database returns it), not by name.
+    const params = {
+      site_id: SITE_ID,
+      parameters: [
+        opt(AHU_ID, "AHU 1", "ACTIVE_POWER", "Active Power", "L1", "kW"),
+        opt(AHU_ID, "AHU 1", "ACTIVE_POWER", "Active Power", "TOTAL", "kW"),
+        opt(AHU_ID, "AHU 1", "HUMIDITY", "Relative Humidity", null, "%"),
+        opt(AHU_ID, "AHU 1", "CURRENT", "Current", "NEUTRAL", "A"),
+        opt(AHU_ID, "AHU 1", "CURRENT", "Current", "L2", "A"),
+        opt(AHU_ID, "AHU 1", "TEMPERATURE", "Temperature", null, "degC"),
+        opt(AHU_ID, "AHU 1", "CURRENT", "Current", "TOTAL", "A"),
+        opt(ASSET_ID, "Chiller 1", "FREQUENCY", "Frequency", null, "Hz"),
+      ],
+    };
+    const { calls } = backend((call) => (call.url.includes("/alert-rules/parameters") ? { jsonBody: params } : undefined));
+    render(ADMIN_USER, "/features/alerts?tab=rules");
+    fireEvent.click(await screen.findByTestId("create-alert"));
+    const form = await screen.findByTestId("alert-rule-form");
+    const options = () => Array.from((within(form).getByTestId("rule-parameter") as HTMLSelectElement).options).slice(1).map((o) => o.text);
+    expect(within(form).queryByTestId("rule-parameter-hint")).toBeNull();
+
+    fireEvent.change(within(form).getByTestId("rule-asset"), { target: { value: AHU_ID } });
+    expect(options()).toEqual([
+      "Active Power (kW)",
+      "Active Power (L1) (kW)",
+      "Current (A)",
+      "Current (L2) (A)",
+      "Current (NEUTRAL) (A)",
+      "Relative Humidity (%)",
+      "Temperature (degC)",
+    ]);
+    expect(within(form).getByTestId("rule-parameter-hint").textContent).toMatch(
+      /^7 parameters available for this asset\. Cumulative energy counters \(kWh, kVAh\) can't be used for alerts\.$/,
+    );
+    fireEvent.change(within(form).getByTestId("rule-parameter"), { target: { value: "TEMPERATURE|" } });
+    expect((within(form).getByTestId("rule-parameter") as HTMLSelectElement).value).toBe("TEMPERATURE|");
+
+    fireEvent.change(within(form).getByTestId("rule-asset"), { target: { value: ASSET_ID } });
+    expect((within(form).getByTestId("rule-parameter") as HTMLSelectElement).value).toBe("");
+    expect(options()).toEqual(["Frequency (Hz)"]);
+    expect(within(form).getByTestId("rule-parameter-hint").textContent).toMatch(/^1 parameter available/);
+
+    // Saving without re-choosing a parameter is refused locally; nothing is posted.
+    fireEvent.change(within(form).getByTestId("rule-name"), { target: { value: "Chiller frequency" } });
+    fireEvent.change(within(form).getByTestId("rule-threshold"), { target: { value: "51" } });
+    fireEvent.click(within(form).getByTestId("rule-save"));
+    expect((await within(form).findByTestId("rule-form-error")).textContent).toBe("Choose a parameter.");
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+  });
+
+  it("keeps Cancel and Create in a fixed footer outside the scrolling form body", async () => {
+    backend();
+    render(ADMIN_USER, "/features/alerts?tab=rules");
+    fireEvent.click(await screen.findByTestId("create-alert"));
+    const form = await screen.findByTestId("alert-rule-form");
+    const body = within(form).getByTestId("alert-rule-form-body");
+    const save = within(form).getByTestId("rule-save");
+    expect(body.contains(save)).toBe(false);
+    expect(body.contains(within(form).getByTestId("rule-name"))).toBe(true);
+    expect(save.closest(".alerts-form__footer")).not.toBeNull();
+    expect(within(form).getByRole("button", { name: "Cancel" }).closest(".alerts-form__footer")).not.toBeNull();
+  });
+
   it("edits with the rule version and deletes after confirmation", async () => {
     const { calls } = backend();
     render(ADMIN_USER, "/features/alerts?tab=rules");
