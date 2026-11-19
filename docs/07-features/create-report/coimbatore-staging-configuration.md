@@ -3,8 +3,8 @@
 Status: **§2 configuration APPLIED to staging 2026-11-19 08:13 IST** (Product
 Owner approval, with two amendments: Banquet 1 STANDBY removed; schedules
 provisional), see §6. **§3 automation account CREATED 2026-11-19 08:19 IST**
-(portal user 17, PO approval), validated (§7), **not yet designated** on the
-profile. No report generated. Production is out of scope (A106).
+(portal user 17, PO approval), validated (§7), **designated** on the Coimbatore
+profile 08:25 IST (§8). Automatic schedules remain **paused**. No report generated. Production is out of scope (A106).
 
 Authoritative specification: [README.md](README.md) revision 4.1
 (§4.1 roster, §4.6 read identity, §5.1–5.3 settings). Runbook:
@@ -210,6 +210,27 @@ not locked; the automation checks do not depend on it). Failed sign-ins appear
 in the application logs only (no `admin.audit_events` row), which is existing
 EMS behaviour.
 
-**Not done (needs approval):** designating the account on Coimbatore's report
-profile (Site → Reporting → Automation account); resuming automatic
+**Not done at this point:** designation (done later, §8); resuming automatic
 schedules; customer test users; any report generation.
+
+## 8. Automation account designation record (staging, 2026-11-19)
+
+PO-approved. Portal user 17 was designated with
+`analytics.set_site_report_automation_account(1, Coimbatore, 17)`, the
+Reporting page's function, called via `site_report_service.set_automation_account`
+with actor portal user 1. A pre-check required the profile to be enrolled,
+undesignated and paused.
+
+| Check | Evidence | Result |
+|---|---|---|
+| Saved assignment | `site_report_profiles.automation_portal_user_id` = 17; Administration App profile view: `automation_username` = ww_report_automation_coimbatore, `automation_problem` = none | PASS |
+| Worker acceptance | the AUTOMATION branch of `site_report_read_identity_problem`, evaluated from the saved profile: `site_report_automation_problem(17, Coimbatore)` → accepted | PASS |
+| Read identity data access | `get_portal_analytics_catalog(17, Coimbatore)` = 1,590 rows / 32 assets | PASS |
+| Still Coimbatore only | ADMIN / SELECTED_SITES, active; `portal_user_site_access` = {Coimbatore}; accessible sites = {Coimbatore} of 3 | PASS |
+| Audit | `SITE_REPORT_AUTOMATION_ACCOUNT_CHANGE`, actor 1 / ADMIN, SUCCEEDED, 08:25:18 IST, previous `{"automation_portal_user_id": null}` → new `{"automation_portal_user_id": 17}` | PASS |
+| Still paused, nothing generated | weekly_enabled = false, monthly_enabled = false; reports 0, attempts 0; report-worker healthy, no attempt logged | PASS |
+
+Remaining: resume automatic schedules (needs approval; resuming before
+Sun 22 Nov 06:00 IST would schedule 15–21 Nov, which had the configuration
+for part of the week only); customer test users; the first controlled report
+(22–28 Nov recommended, generable from Sun 29 Nov).
