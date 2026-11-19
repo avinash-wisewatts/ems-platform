@@ -1041,3 +1041,9 @@ summary.analytics-dq__heading { cursor: pointer; }
 .alerts-days { display: flex; flex-wrap: wrap; gap: 10px; }
 .alerts-check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
 .alerts-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; }
+
+/* Reports sub-tabs: Export data | Create report (ADR-025) */
+.reports-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin: 0 0 12px; }
+.reports-tab { background: none; border: none; border-bottom: 2px solid transparent; padding: 8px 14px; font: inherit; color: var(--muted); cursor: pointer; }
+.reports-tab--active { color: inherit; border-bottom-color: currentColor; font-weight: 600; }
+.reports-tab:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }

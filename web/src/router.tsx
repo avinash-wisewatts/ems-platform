@@ -24,7 +24,7 @@ import { PowerQualityOverview } from "./routes/power-quality/PowerQualityOvervie
 import { SitePerformanceReport } from "./routes/reports/SitePerformanceReport";
 import { AlertsArea } from "./routes/alerts/AlertsArea";
 import { AnalyticsPage } from "./routes/analytics/AnalyticsPage";
-import { ReportsPage } from "./routes/reportExports/ReportsPage";
+import { ReportsTabs } from "./routes/reportExports/ReportsTabs";
 import { RequirePermission } from "./auth/RequirePermission";
 import { UsersPage } from "./routes/admin/UsersPage";
 import { UserDetailPage } from "./routes/admin/UserDetailPage";
@@ -38,7 +38,8 @@ import { ChangePasswordPage } from "./routes/account/ChangePasswordPage";
  *   /dashboard   Main Dashboard (WiseWatts redesign) -- the new landing screen
  *   /asset-view  Asset View (WiseWatts redesign) -- filters + live tiles
  *                per asset; supersedes AssetsList in the primary nav
- *   /reports     Reports -- site measurement export (ZIP of per-asset CSVs);
+ *   /reports     Reports -- Export data (site measurement export, ZIP of per-asset CSVs)
+ *                and Create report (?tab=create: read-only weekly / monthly PDF reports, ADR-025);
  *                the primary nav entry directly below Alerts
  *   /home        Site Overview & Attention (MVP-3) -- unchanged; reachable
  *                from the sidebar's Archive section, not the new primary nav
@@ -111,7 +112,7 @@ export function AppRoutes() {
         path="/reports"
         element={
           <ShellGate>
-            <ReportsPage />
+            <ReportsTabs />
           </ShellGate>
         }
       />

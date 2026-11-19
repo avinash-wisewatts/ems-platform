@@ -36,6 +36,9 @@
  *   GET  /api/v1/report-exports                          (Reports tab)
  *   POST /api/v1/report-exports/{job_id}/retry           (Reports tab)
  *   GET  /api/v1/report-exports/{job_id}/file            (Reports tab, ZIP)
+ *   GET  /api/v1/sites/{site_id}/site-reports            (Reports -> Create report, read-only)
+ *   GET  /api/v1/site-reports/{report_id}/versions       (Reports -> Create report, read-only)
+ *   GET  /api/v1/site-report-versions/{version_id}/download (Create report, PDF)
  *
  * No other paths, no arbitrary parameters, no generic query mechanism. The
  * report-export POSTs change only the caller's own export job records; the
@@ -76,6 +79,9 @@
 
 import { apiGet, apiGetFile, apiPostJson, apiWrite } from "./client";
 import type {
+  SiteReportListResponse,
+  SiteReportType,
+  SiteReportVersionsResponse,
   ReportExportEstimate,
   ReportExportJob,
   ReportExportJobListResponse,
@@ -510,4 +516,31 @@ export function getReportExports(init?: RequestInit): Promise<ReportExportJobLis
 
 export function retryReportExport(jobId: string): Promise<ReportExportJob> {
   return apiPostJson<ReportExportJob>(`/report-exports/${encodeURIComponent(jobId)}/retry`, {});
+}
+
+/* --- Reports -> Create report (ADR-025): read-only ----------------------------
+ *   GET /api/v1/sites/{site_id}/site-reports                history + schedule state
+ *   GET /api/v1/site-reports/{report_id}/versions           versions, coverage, settings used
+ *   GET /api/v1/site-report-versions/{version_id}/download  the PDF
+ * There is no write call: generating and managing reports is done by
+ * WiseWatts Admins in the Administration App (A6, A107). */
+
+export function getSiteReports(
+  siteId: string,
+  reportType: SiteReportType | null,
+  init?: RequestInit,
+): Promise<SiteReportListResponse> {
+  return apiGet<SiteReportListResponse>(
+    `/sites/${encodeURIComponent(siteId)}/site-reports`,
+    reportType ? { type: reportType } : undefined,
+    init,
+  );
+}
+
+export function getSiteReportVersions(reportId: string, init?: RequestInit): Promise<SiteReportVersionsResponse> {
+  return apiGet<SiteReportVersionsResponse>(`/site-reports/${encodeURIComponent(reportId)}/versions`, undefined, init);
+}
+
+export function downloadSiteReportVersion(versionId: string): Promise<{ blob: Blob; fileName: string | null }> {
+  return apiGetFile(`/site-report-versions/${encodeURIComponent(versionId)}/download`);
 }
