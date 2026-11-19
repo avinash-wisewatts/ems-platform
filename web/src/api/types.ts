@@ -788,3 +788,57 @@ export type ReportExportJob = {
 };
 
 export type ReportExportJobListResponse = { jobs: ReportExportJob[] };
+
+/* --- Reports -> Create report (ADR-025): read-only customer view -------------- */
+
+export type SiteReportType = "WEEKLY" | "MONTHLY";
+export type SiteReportStatus = "PENDING" | "PROCESSING" | "GENERATED" | "FAILED";
+
+export interface SiteReportItem {
+  report_id: string;
+  report_type: SiteReportType;
+  period_start: string;
+  period_end: string;
+  comparison_start: string;
+  comparison_end: string;
+  status: SiteReportStatus;
+  status_label: string;
+  status_reason: string | null;
+  incomplete_data: boolean;
+  comparison_incomplete: boolean;
+  latest_version_no: number | null;
+  version_count: number;
+  generated_at: string | null;
+  expires_at: string | null;
+  download_version_id: string | null;
+  coverage_summary: Record<string, number | null> | null;
+}
+
+export interface SiteReportListResponse {
+  enrolled: boolean;
+  weekly_enabled: boolean;
+  monthly_enabled: boolean;
+  timezone: string;
+  reports: SiteReportItem[];
+}
+
+export interface SiteReportVersion {
+  version_id: string;
+  version_no: number;
+  generated_at: string;
+  trigger: string;
+  expires_at: string;
+  available: boolean;
+  incomplete_data: boolean;
+  comparison_incomplete: boolean;
+  coverage: Record<string, unknown>;
+  settings_snapshot: Record<string, unknown>;
+  file_name: string;
+  file_size_bytes: number;
+  page_count: number;
+}
+
+export interface SiteReportVersionsResponse {
+  report_id: string;
+  versions: SiteReportVersion[];
+}

@@ -236,6 +236,8 @@ CANONICAL_PERMISSION_CODES = {
     "alert.configure",
     "dashboard.view",
     "report.export",
+    # Reports -> Create report (ADR-025, A5): view/download PDF reports.
+    "report.view",
     "audit.view",
 }
 
@@ -268,6 +270,7 @@ def test_story_3_2_exposes_all_canonical_permissions() -> None:
                 "alert.acknowledge",
                 "dashboard.view",
                 "report.export",
+                "report.view",
             },
         ),
         (
@@ -275,6 +278,7 @@ def test_story_3_2_exposes_all_canonical_permissions() -> None:
             {
                 "dashboard.view",
                 "report.export",
+                "report.view",
             },
         ),
     ],

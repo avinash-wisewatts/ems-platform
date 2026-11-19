@@ -55,6 +55,8 @@ from src.routers.context import router as context_router
 from src.routers.analytics_api import router as analytics_api_router
 from src.routers.alerts_api import router as alerts_api_router
 from src.routers.report_exports import router as report_exports_router
+from src.routers.site_reports import router as site_reports_router
+from src.routers.admin_site_reports import router as admin_site_reports_router
 from src.routers.user_management_api import router as user_management_api_router
 from src.report_export_worker import ReportExportWorker
 from src.auth.security import hash_portal_password
@@ -457,6 +459,12 @@ app.include_router(alerts_api_router)
 # Reports export routes exist only where Reports is enabled (staging-only).
 if settings.reports_enabled:
     app.include_router(report_exports_router)
+    # Reports -> Create report (ADR-025): the read-only report API (same
+    # router as the customer API) and the WiseWatts Admin reporting pages of
+    # this staff-only Administration App (configuration + report management,
+    # A2-A4, A6, A107, A111).
+    app.include_router(site_reports_router)
+    app.include_router(admin_site_reports_router)
 # EMS Web App Admin -> Users: the Administration App's own user management as
 # JSON (ems_admin_session, user.manage, migration 315). Only this process
 # mounts it -- never the customer API (ADR-023) -- and GET /api/v1/me
@@ -1810,6 +1818,9 @@ async def site_detail_administration(request: Request, site_id: UUID) -> Respons
     return templates.TemplateResponse(request=request, name="site_detail.html", context={
         "environment": settings.app_env, "site": site,
         "can_edit": has_permission(user, PortalPermission.SITE_MANAGE),
+        # Reports -> Create report (ADR-025): WiseWatts Admins only (A2-A4).
+        "can_manage_reports": settings.reports_enabled and user.role_code == "ADMIN"
+        and user.access_scope_mode == "GLOBAL",
         "active_navigation_key": "sites"})
 
 

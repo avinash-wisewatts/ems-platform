@@ -350,7 +350,7 @@ async def get_current_user(request: Request) -> CurrentUserResponse:
     # (EMS_REPORTS_ENABLED off -- production) its routes are not mounted, so
     # the permission is not advertised; the role grant itself is unchanged.
     if not get_core_settings().reports_enabled:
-        granted = granted - {PortalPermission.REPORT_EXPORT}
+        granted = granted - {PortalPermission.REPORT_EXPORT, PortalPermission.REPORT_VIEW}
     # Same rule for the SPA's Admin -> Users section: user.manage is
     # advertised only by the process that mounts the user-management API
     # (the Administration App, src.main). The customer API never does

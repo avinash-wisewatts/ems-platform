@@ -5,3 +5,5 @@ migration_id,environments,reason
 313_customer_api_role,staging|test,Customer API role (ADR-023) is not approved for production
 314_customer_session_revocation,staging|test,Customer API sessions (ADR-023) are not approved for production
 320_alert_legacy_retirement,staging|production|test,Alerts legacy retirement (ADR-024 §18): deletes the MVP-7 Energy Attention alerts in every environment as part of the replacement release -- explicitly not staging-only
+328_site_report_settings,staging|test,Create report (ADR-025) is not approved for production
+329_site_reports,staging|test,Create report (ADR-025) is not approved for production

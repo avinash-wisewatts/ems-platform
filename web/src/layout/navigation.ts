@@ -125,7 +125,7 @@ export const SHELL_PRIMARY_NAV: readonly NavItem[] = [
     requiresAnyOf: ["dashboard.view"],
   },
   { key: "shell-alerts", label: "Alerts", to: "/features/alerts", requiresAnyOf: ["dashboard.view"] },
-  { key: "shell-reports", label: "Reports", to: "/reports", requiresAnyOf: ["report.export"] },
+  { key: "shell-reports", label: "Reports", to: "/reports", requiresAnyOf: ["report.export", "report.view"] },
   { key: "settings", label: "Settings", to: "/features/settings", requiresAnyOf: ["dashboard.view"] },
 ];
 

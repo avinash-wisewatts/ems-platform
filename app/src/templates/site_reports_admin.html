@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}Reports | {{ site.site_name }}{% endblock %}
+{% block breadcrumb %}
+<nav class="breadcrumb" aria-label="Breadcrumb">
+    <a href="/administration">Administration</a><span>/</span>
+    <a href="/administration/sites/{{ site.site_id }}">{{ site.site_name }}</a><span>/</span>
+    <span class="breadcrumb-current">Reports</span>
+</nav>
+{% endblock %}
+{% block content %}
+<section class="administration-page site-reports-admin-page">
+    <header class="administration-page-header">
+        <div>
+            <p class="eyebrow">REPORTS · CREATE REPORT</p>
+            <h2>Report management</h2>
+            <p>{{ site.site_name }} · WiseWatts Admins only · All times {{ zone_name }}</p>
+        </div>
+        <div class="row-actions"><a class="button button-secondary" href="/administration/sites/{{ site.site_id }}/reporting">Reporting configuration</a></div>
+    </header>
+    {% if error %}<div class="form-error" role="alert">{{ error }}</div>{% endif %}
+    {% if notice %}<div class="form-success" role="status">{{ notice }}</div>{% endif %}
+
+    {% if not profile.enrolled %}
+    <p>This site is not enrolled for reports. <a href="/administration/sites/{{ site.site_id }}/reporting">Enrol it first.</a></p>
+    {% else %}
+    <section class="surface-panel administration-detail-section">
+        <h3>Generate a report</h3>
+        <p class="field-help">For a completed week or month, including earlier periods while EMS still holds 1-minute data (about 90 days for power and temperature). A period that already has a report is regenerated from its row below instead.</p>
+        <form method="post" action="/administration/sites/{{ site.site_id }}/reports/generate" class="form-grid two-column">
+            <label>Report type<select name="report_type" required onchange="document.getElementById('period-week').hidden = this.value !== 'WEEKLY'; document.getElementById('period-month').hidden = this.value !== 'MONTHLY'; document.getElementById('period-week').querySelector('input').disabled = this.value !== 'WEEKLY'; document.getElementById('period-month').querySelector('input').disabled = this.value !== 'MONTHLY';"><option value="WEEKLY">Weekly (Sunday–Saturday)</option><option value="MONTHLY">Monthly (calendar month)</option></select></label>
+            <label id="period-week">Any day in the week<input type="date" name="period_start" max="{{ today }}" required></label>
+            <label id="period-month" hidden>Month<input type="month" name="period_start" max="{{ today[:7] }}" required disabled></label>
+            <div class="full-width"><button class="button button-primary" type="submit">Generate report</button></div>
+        </form>
+    </section>
+
+    <section class="surface-panel administration-detail-section">
+        <h3>Report history</h3>
+        <form method="get" class="row-actions">
+            <label>Type <select name="type"><option value="">All</option><option value="WEEKLY"{% if type_filter == 'WEEKLY' %} selected{% endif %}>Weekly</option><option value="MONTHLY"{% if type_filter == 'MONTHLY' %} selected{% endif %}>Monthly</option></select></label>
+            <label>Status <select name="status"><option value="">All</option>{% for code, label in status_labels.items() %}<option value="{{ code }}"{% if status_filter == code %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+            <button class="button button-secondary button-compact" type="submit">Filter</button>
+        </form>
+        {% if reports %}
+        <div class="table-scroll"><table class="data-table">
+            <thead><tr><th>Type</th><th>Reporting period</th><th>Comparison period</th><th>Generated</th><th>Status</th><th>Version</th><th>Expires</th><th>Actions</th></tr></thead>
+            <tbody>{% for r in reports %}<tr>
+                <td>{{ 'Weekly' if r.report_type == 'WEEKLY' else 'Monthly' }}</td>
+                <td>{{ r.period_start_date.strftime('%d-%b-%Y') }} – {{ r.period_end_date.strftime('%d-%b-%Y') }}</td>
+                <td>{{ r.comparison_start_date.strftime('%d-%b-%Y') }} – {{ r.comparison_end_date.strftime('%d-%b-%Y') }}</td>
+                <td>{{ r.generated_local }}</td>
+                <td><span class="status-pill{% if r.status == 'GENERATED' %} is-positive{% elif r.status == 'FAILED' %} is-warning{% endif %}">{{ status_labels[r.status] }}</span>
+                    {% if r.incomplete_data %}<span class="status-pill is-warning">Incomplete data</span>{% endif %}
+                    {% if r.comparison_incomplete %}<span class="status-pill">Comparison incomplete</span>{% endif %}
+                    {% if r.status_reason and r.status in ('PENDING', 'FAILED') %}<div class="field-help">{{ r.status_reason }}</div>{% endif %}</td>
+                <td>{% if r.latest_version_no %}v{{ r.latest_version_no }} ({{ r.version_count }}){% else %}—{% endif %}</td>
+                <td>{{ r.expires_local if r.download_version_id else ('Expired' if r.latest_version_no else '—') }}</td>
+                <td><div class="row-actions">
+                    {% if r.download_version_id %}<a class="button button-secondary button-compact" href="/api/v1/site-report-versions/{{ r.download_version_id }}/download">Download</a>{% endif %}
+                    <a class="button button-secondary button-compact" href="/administration/site-reports/{{ r.report_id }}?site_id={{ site.site_id }}">Versions &amp; attempts</a>
+                    {% if r.status in ('GENERATED', 'FAILED') %}<form method="post" action="/administration/site-reports/{{ r.report_id }}/regenerate" onsubmit="return confirm('Regenerate this report? A new version is created with the settings in force for the period. The current version stays available until it expires.');"><input type="hidden" name="site_id" value="{{ site.site_id }}"><button class="button button-secondary button-compact" type="submit">Regenerate</button></form>{% endif %}
+                    {% if r.status == 'FAILED' %}<form method="post" action="/administration/site-reports/{{ r.report_id }}/retry"><input type="hidden" name="site_id" value="{{ site.site_id }}"><button class="button button-secondary button-compact" type="submit">Retry</button></form>{% endif %}
+                    {% if r.status != 'PROCESSING' %}<form method="post" action="/administration/site-reports/{{ r.report_id }}/delete" onsubmit="return confirm('Move this report and all its versions to the recycle bin? It can be restored for 7 days; each version is then permanently deleted, or earlier at its 60-day expiry.');"><input type="hidden" name="site_id" value="{{ site.site_id }}"><input type="hidden" name="confirm" value="yes"><button class="button button-danger button-compact" type="submit">Delete</button></form>{% endif %}
+                </div></td>
+            </tr>{% endfor %}</tbody>
+        </table></div>
+        {% else %}<p class="field-help">No reports{% if type_filter or status_filter %} match the filter{% endif %}.</p>{% endif %}
+    </section>
+
+    <section class="surface-panel administration-detail-section">
+        <h3>Recycle bin</h3>
+        <p class="field-help">Deleted reports can be restored for 7 days. Restoring never extends a version's 60-day expiry. Permanent deletion is available only here.</p>
+        {% if deleted %}
+        <div class="table-scroll"><table class="data-table">
+            <thead><tr><th>Type</th><th>Reporting period</th><th>Deleted</th><th>Restore until</th><th>Next permanent deletion</th><th>Actions</th></tr></thead>
+            <tbody>{% for r in deleted %}<tr>
+                <td>{{ 'Weekly' if r.report_type == 'WEEKLY' else 'Monthly' }}</td>
+                <td>{{ r.period_start_date.strftime('%d-%b-%Y') }} – {{ r.period_end_date.strftime('%d-%b-%Y') }}</td>
+                <td>{{ r.deleted_local }} by {{ r.deleted_by_username or '—' }}</td>
+                <td>{{ r.restore_until_local }}</td>
+                <td>{{ r.next_purge_local }}</td>
+                <td><div class="row-actions">
+                    <form method="post" action="/administration/site-reports/{{ r.report_id }}/restore"><input type="hidden" name="site_id" value="{{ site.site_id }}"><button class="button button-secondary button-compact" type="submit">Restore</button></form>
+                    <details><summary>Delete permanently</summary>
+                        <form method="post" action="/administration/site-reports/{{ r.report_id }}/purge">
+                            <input type="hidden" name="site_id" value="{{ site.site_id }}">
+                            <p class="field-help">This permanently removes the report and all its versions. This cannot be undone. Type PERMANENTLY DELETE to confirm.</p>
+                            <input name="confirm" required pattern="PERMANENTLY DELETE" autocomplete="off" aria-label="Type PERMANENTLY DELETE to confirm">
+                            <button class="button button-danger button-compact" type="submit">Delete permanently</button>
+                        </form>
+                    </details>
+                </div></td>
+            </tr>{% endfor %}</tbody>
+        </table></div>
+        {% else %}<p class="field-help">The recycle bin is empty.</p>{% endif %}
+    </section>
+    {% endif %}
+</section>
+{% endblock %}

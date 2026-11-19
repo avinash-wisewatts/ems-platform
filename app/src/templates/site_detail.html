@@ -19,6 +19,10 @@
         </div>
         <div class="row-actions">
             <a class="button button-secondary" href="/administration/sites">Back</a>
+            {% if can_manage_reports %}
+            <a class="button button-secondary" href="/administration/sites/{{ site.site_id }}/reporting">Reporting</a>
+            <a class="button button-secondary" href="/administration/sites/{{ site.site_id }}/reports">Reports</a>
+            {% endif %}
             {% if can_edit %}
             <a class="button button-primary" href="/administration/sites/{{ site.site_id }}/edit">Edit</a>
             {% endif %}

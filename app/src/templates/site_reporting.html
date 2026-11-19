@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}Reporting | {{ site.site_name }}{% endblock %}
+{% block breadcrumb %}
+<nav class="breadcrumb" aria-label="Breadcrumb">
+    <a href="/administration">Administration</a><span>/</span>
+    <a href="/administration/sites">Sites</a><span>/</span>
+    <a href="/administration/sites/{{ site.site_id }}">{{ site.site_name }}</a><span>/</span>
+    <span class="breadcrumb-current">Reporting</span>
+</nav>
+{% endblock %}
+{% block content %}
+<section class="administration-page site-reporting-page">
+    <header class="administration-page-header">
+        <div>
+            <p class="eyebrow">REPORTS · CREATE REPORT</p>
+            <h2>Reporting configuration</h2>
+            <p>{{ site.site_name }} · WiseWatts Admins only · All times {{ zone_name }}</p>
+        </div>
+        <div class="row-actions">
+            <a class="button button-secondary" href="/administration/sites/{{ site.site_id }}">Back to site</a>
+            {% if profile and profile.enrolled %}<a class="button button-primary" href="/administration/sites/{{ site.site_id }}/reports">Manage reports</a>{% endif %}
+        </div>
+    </header>
+    {% if error %}<div class="form-error" role="alert">{{ error }}</div>{% endif %}
+    {% if notice %}<div class="form-success" role="status">{{ notice }}</div>{% endif %}
+
+    {% if profile and not profile.enrolled %}
+    <section class="surface-panel administration-detail-section">
+        <h3>Enrol this site</h3>
+        <p class="field-help">Enrolling turns on weekly and monthly PDF reports for this site (both schedules start on; no earlier periods are generated automatically). Customer users with access to the site can then view and download reports in the customer portal. Reporting configuration and report management stay in this Administration App.</p>
+        <form method="post" action="/administration/sites/{{ site.site_id }}/reporting/enrol">
+            <button class="button button-primary" type="submit">Enrol site for reports</button>
+        </form>
+    </section>
+    {% elif profile %}
+    <div class="administration-detail-sections">
+        <section class="surface-panel administration-detail-section">
+            <h3>Automatic generation</h3>
+            <div class="table-scroll"><table class="data-table administration-detail-table"><tbody>
+            {% for type, enabled in (('WEEKLY', profile.weekly_enabled), ('MONTHLY', profile.monthly_enabled)) %}
+                <tr><th scope="row">{{ 'Weekly (Sun–Sat)' if type == 'WEEKLY' else 'Monthly (calendar month)' }}</th>
+                    <td><span class="status-pill{% if enabled %} is-positive{% else %} is-warning{% endif %}">{{ 'On' if enabled else 'Paused' }}</span>
+                        <div class="field-help">Generated automatically from 6 hours after the period ends (up to 12 hours while data arrives). {% if enabled %}Active since {{ resumed[type] }}.{% endif %}</div></td>
+                    <td><form method="post" action="/administration/sites/{{ site.site_id }}/reporting/schedule"
+                              onsubmit="return confirm('{{ 'Pause' if enabled else 'Resume' }} automatic {{ type|lower }} reports?{% if not enabled %} Periods that ended while paused are not generated automatically; generate them manually if needed.{% endif %}');">
+                        <input type="hidden" name="report_type" value="{{ type }}">
+                        <input type="hidden" name="enabled" value="{{ 'false' if enabled else 'true' }}">
+                        <button class="button button-secondary button-compact" type="submit">{{ 'Pause' if enabled else 'Resume' }}</button>
+                    </form></td></tr>
+            {% endfor %}
+            </tbody></table></div>
+        </section>
+
+        <section class="surface-panel administration-detail-section">
+            <h3>Automation account</h3>
+            <p class="field-help">Automatic reports read EMS data as a dedicated WiseWatts-controlled automation Admin: role Admin, scope Selected sites, in this site's organization, restricted to this site only, with no usable password. It is checked on every attempt; if it is deactivated or loses access, automatic generation stops with a clear failure.</p>
+            <p>Current: {% if profile.automation_username %}<strong>{{ profile.automation_username }}</strong>{% else %}<em>not set</em>{% endif %}
+               {% if profile.automation_problem %}<span class="status-pill is-warning">{{ profile.automation_problem|replace('_', ' ') }}</span>{% elif profile.automation_username %}<span class="status-pill is-positive">Valid</span>{% endif %}</p>
+            <form method="post" action="/administration/sites/{{ site.site_id }}/reporting/automation-account" class="form-grid two-column">
+                <label>Eligible accounts
+                    <select name="automation_portal_user_id">
+                        <option value="">None</option>
+                        {% for u in candidates %}<option value="{{ u.portal_user_id }}"{% if u.portal_user_id == profile.automation_portal_user_id %} selected{% endif %}>{{ u.username }}{% if not u.is_active %} (inactive){% endif %}</option>{% endfor %}
+                    </select>
+                </label>
+                <div><button class="button button-secondary" type="submit">Save automation account</button>
+                {% if not candidates %}<p class="field-help">No eligible account exists. Creating it requires separate authorization.</p>{% endif %}</div>
+            </form>
+        </section>
+
+        <section class="surface-panel administration-detail-section">
+            <h3>Reporting asset list and groups</h3>
+            <p class="field-help">Managed by WiseWatts. Customer users cannot add, remove or reassign reporting assets. Temperature analysis uses only assets with a temperature sensor in EMS; the others are reported as not temperature-monitored.</p>
+            <div class="table-scroll"><table class="data-table">
+                <thead><tr><th>Asset</th><th>Group</th><th>Area (AHUs)</th><th>Order</th><th>Actions</th></tr></thead>
+                <tbody>
+                {% for a in assets %}
+                <tr>
+                    <td>{% if a.in_roster %}<a class="entity-link" href="/administration/sites/{{ site.site_id }}/reporting/assets/{{ a.asset_id }}">{{ a.asset_name }}</a>{% else %}{{ a.asset_name }}{% endif %}</td>
+                    <td colspan="4">
+                        <form method="post" action="/administration/sites/{{ site.site_id }}/reporting/assets/{{ a.asset_id }}/roster" class="row-actions">
+                            <select name="report_group" aria-label="Group for {{ a.asset_name }}"><option value="">Not reported</option>{% for code, label in group_labels.items() %}<option value="{{ code }}"{% if a.report_group == code %} selected{% endif %}>{{ label }}</option>{% endfor %}</select>
+                            <select name="area" aria-label="Area for {{ a.asset_name }}"><option value="">—</option>{% for code, label in area_labels.items() %}<option value="{{ code }}"{% if a.area == code %} selected{% endif %}>{{ label }}</option>{% endfor %}</select>
+                            <input name="display_order" value="{{ a.display_order }}" inputmode="numeric" size="3" aria-label="Order for {{ a.asset_name }}">
+                            <button class="button button-secondary button-compact" type="submit" name="action" value="save">{{ 'Update' if a.in_roster else 'Add' }}</button>
+                            {% if a.in_roster %}<button class="button button-danger button-compact" type="submit" name="action" value="remove" onclick="return confirm('Remove {{ a.asset_name }} from the reporting asset list?');">Remove</button>{% endif %}
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table></div>
+        </section>
+
+        <section class="surface-panel administration-detail-section">
+            <h3>Report data-quality thresholds</h3>
+            <p class="field-help">Fixed and controlled by WiseWatts; not configurable.</p>
+            <div class="table-scroll"><table class="data-table administration-detail-table"><tbody>
+                {% for label, text in thresholds %}<tr><th scope="row">{{ label }}</th><td>{{ text }}</td></tr>{% endfor %}
+            </tbody></table></div>
+        </section>
+
+        <section class="surface-panel administration-detail-section">
+            <h3>Configuration change log</h3>
+            {% if changes %}
+            <div class="table-scroll"><table class="data-table">
+                <thead><tr><th>Asset</th><th>Setting</th><th>Effective from</th><th>State</th><th>Changed by</th><th>Changed at</th></tr></thead>
+                <tbody>{% for c in changes %}<tr><td>{{ c.asset_name }}</td><td>{{ setting_labels[c.setting_key] }}</td><td>{{ c.effective_local }}</td><td>{{ c.state|title }}{% if c.in_force %} · in force{% endif %}</td><td>{{ c.created_by_username or '—' }}</td><td>{{ c.created_local }}</td></tr>{% endfor %}</tbody>
+            </table></div>
+            {% else %}<p class="field-help">No settings yet. Open an asset above to enter its setpoint, operating schedule and operating thresholds.</p>{% endif %}
+        </section>
+    </div>
+    {% endif %}
+</section>
+{% endblock %}

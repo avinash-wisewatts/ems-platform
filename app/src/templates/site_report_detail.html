@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Report versions and attempts{% endblock %}
+{% block breadcrumb %}
+<nav class="breadcrumb" aria-label="Breadcrumb">
+    <a href="/administration">Administration</a><span>/</span>
+    {% if site_id %}<a href="/administration/sites/{{ site_id }}/reports">Reports</a><span>/</span>{% endif %}
+    <span class="breadcrumb-current">Versions &amp; attempts</span>
+</nav>
+{% endblock %}
+{% block content %}
+<section class="administration-page site-report-detail-page">
+    <header class="administration-page-header">
+        <div><p class="eyebrow">REPORT</p><h2>Versions and generation attempts</h2><p>All times {{ zone_name }}</p></div>
+        {% if site_id %}<div class="row-actions"><a class="button button-secondary" href="/administration/sites/{{ site_id }}/reports">Back to reports</a></div>{% endif %}
+    </header>
+    {% if error %}<div class="form-error" role="alert">{{ error }}</div>{% endif %}
+
+    <section class="surface-panel administration-detail-section">
+        <h3>Versions</h3>
+        {% if versions %}
+        <div class="table-scroll"><table class="data-table">
+            <thead><tr><th>Version</th><th>Generated</th><th>Trigger</th><th>By</th><th>Labels</th><th>Expires</th><th>State</th><th>File</th></tr></thead>
+            <tbody>{% for v in versions %}<tr>
+                <td>v{{ v.version_no }}</td><td>{{ v.generated_local }}</td><td>{{ v.trigger|replace('_', ' ')|title }}</td>
+                <td>{{ v.generated_by_username or (v.automation_username ~ ' (automation)') if (v.generated_by_username or v.automation_username) else '—' }}</td>
+                <td>{% if v.incomplete_data %}<span class="status-pill is-warning">Incomplete data</span>{% endif %}{% if v.comparison_incomplete %}<span class="status-pill">Comparison incomplete</span>{% endif %}</td>
+                <td>{{ v.expires_local }}{% if v.purge_at %}<div class="field-help">Permanent deletion {{ v.purge_local }}</div>{% endif %}</td>
+                <td>{{ v.state|title }}</td>
+                <td>{% if v.state == 'AVAILABLE' %}<a href="/api/v1/site-report-versions/{{ v.version_id }}/download">{{ v.file_name }}</a>{% else %}{{ v.file_name }}{% endif %}<div class="field-help">{{ v.page_count }} pages · {{ (v.file_size_bytes / 1024)|round(0)|int }} KB · SHA-256 {{ v.sha256[:12] }}…</div></td>
+            </tr>
+            <tr><td colspan="8"><details><summary>Data coverage and settings used</summary>
+                <div class="form-grid two-column"><pre class="code-block">{{ v.coverage_json }}</pre><pre class="code-block">{{ v.settings_json }}</pre></div>
+            </details></td></tr>{% endfor %}</tbody>
+        </table></div>
+        {% else %}<p class="field-help">No published version yet.</p>{% endif %}
+    </section>
+
+    <section class="surface-panel administration-detail-section">
+        <h3>Generation attempts</h3>
+        {% if attempts %}
+        <div class="table-scroll"><table class="data-table">
+            <thead><tr><th>Created</th><th>Trigger</th><th>Status</th><th>Retry</th><th>User / identity</th><th>Started – finished</th><th>Reason</th><th>Version</th></tr></thead>
+            <tbody>{% for a in attempts %}<tr>
+                <td>{{ a.created_at_local }}</td><td>{{ a.trigger|replace('_', ' ')|title }}</td><td>{{ a.status|title }}</td><td>{{ a.retry_no }}</td>
+                <td>{{ a.requested_by_username or 'Automatic' }}{% if a.read_identity_username %}<div class="field-help">read as {{ a.read_identity_username }}</div>{% endif %}</td>
+                <td>{{ a.started_at_local }} – {{ a.finished_at_local }}</td>
+                <td>{{ a.error_message or a.wait_message or '' }}{% if a.error_code %}<div class="field-help"><code>{{ a.error_code }}</code></div>{% endif %}</td>
+                <td>{% if a.version_no %}v{{ a.version_no }}{% endif %}</td>
+            </tr>{% endfor %}</tbody>
+        </table></div>
+        {% else %}<p class="field-help">No attempts.</p>{% endif %}
+    </section>
+</section>
+{% endblock %}
