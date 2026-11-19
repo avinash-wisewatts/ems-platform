@@ -2,8 +2,9 @@
 
 Status: **§2 configuration APPLIED to staging 2026-11-19 08:13 IST** (Product
 Owner approval, with two amendments: Banquet 1 STANDBY removed; schedules
-provisional), see §6. **§3 automation account NOT created** (separate
-approval). No report generated. Production is out of scope (A106).
+provisional), see §6. **§3 automation account CREATED 2026-11-19 08:19 IST**
+(portal user 17, PO approval), validated (§7), **not yet designated** on the
+profile. No report generated. Production is out of scope (A106).
 
 Authoritative specification: [README.md](README.md) revision 4.1
 (§4.1 roster, §4.6 read identity, §5.1–5.3 settings). Runbook:
@@ -103,12 +104,12 @@ not configured here.
 - One `admin.audit_events` row per write, with the WiseWatts Admin as actor.
 - `analytics.get_site_report_worker_settings` returns the same values.
 
-## 3. Automation account plan (A88–A90, A108 Option A) — NOT created
+## 3. Automation account plan (A88–A90, A108 Option A) — created, see §7
 
 | Attribute | Value |
 |---|---|
-| Username | `ww_report_automation_coimbatore` (proposed) |
-| Display name | `WiseWatts report automation (Coimbatore)` (proposed) |
+| Username | `ww_report_automation_coimbatore` (confirmed by the PO) |
+| Display name | `WiseWatts report automation (Coimbatore)` |
 | Email | none (optional in EMS; the account receives no mail) |
 | Role / scope | ADMIN / SELECTED_SITES |
 | Organization | Radisson Blu (`0af32ef1-…`) |
@@ -179,3 +180,36 @@ GLOBAL), in one run at 08:13:42 IST.
 runtime "not reported". The week 15–21 Nov has the settings for part of the
 week only. The first week with the full configuration in force throughout
 is **22–28 Nov 2026**, which can be generated from Sun 29 Nov.
+
+## 7. Automation account creation and validation record (staging, 2026-11-19)
+
+**Creation.** Portal user **17**, `ww_report_automation_coimbatore`, created at
+08:19:48 IST through `src.user_management_service.create_managed_user`, which
+calls `admin.create_managed_portal_user`. The actor was portal user 1
+(`admin_avinash`, ADMIN / GLOBAL), and the command ran inside the
+admin-portal container. The password hash is Argon2id of
+`secrets.token_urlsafe(64)`; the secret was deleted in-process and never
+printed, logged, stored or committed. The hash value was never displayed in
+any check.
+
+| Check | Evidence | Result |
+|---|---|---|
+| Shape | ADMIN, SELECTED_SITES, organization Radisson Blu, active, email NULL, Argon2id hash, created_by 1 | PASS |
+| Site restriction | `portal_user_site_access` = {Coimbatore} only | PASS |
+| Option A check | `site_report_automation_problem(17, Coimbatore)` = NULL (accepted) | PASS |
+| Site isolation | `portal_user_can_access_site`: Coimbatore true; Avinash Home / Unit 2 and Meenaxy Pharma / Unit 2 false. Catalogue for Coimbatore 1,590 rows; another organization's site 0 rows; report list for another organization's site 0 rows | PASS |
+| Report management refused (`BEGIN … ROLLBACK`) | enrol, set automation account, resume schedule, change/remove roster asset, add/withdraw setting, generate, and every admin read: `42501 site_report_forbidden` | PASS |
+| Report actions on a report | regenerate, retry, delete, restore, permanently delete: `P0002 site_report_not_found` (no report exists; the target is resolved before the staff check). With a real report, a non-GLOBAL ADMIN is refused `site_report_forbidden`: CI test `test_tenant_admin_cannot_change_roster_or_manage_reports` | PASS (covered) |
+| View access (A5) | `list_portal_site_reports(17, Coimbatore)` allowed (0 rows) | PASS |
+| Nothing persisted by the refusal block | designation NULL, weekly still paused, roster 23, settings 18, reports 0, attempts 0 | PASS |
+| Interactive sign-in refused | Customer API `POST /auth/login` (same-origin) → 401 `invalid_credentials`, no cookie; Administration App `POST /login` → 401, no cookie. Each used a fresh random password | PASS |
+| Audit | `admin.portal_user_audit` USER_CREATED (actor 1, target 17, role ADMIN, organization Radisson Blu, site_ids = {Coimbatore}); the payload has no `password_hash` key | PASS |
+
+**Side effect of the sign-in checks:** `failed_login_count` = 2 (expected;
+not locked; the automation checks do not depend on it). Failed sign-ins appear
+in the application logs only (no `admin.audit_events` row), which is existing
+EMS behaviour.
+
+**Not done (needs approval):** designating the account on Coimbatore's report
+profile (Site → Reporting → Automation account); resuming automatic
+schedules; customer test users; any report generation.
