@@ -224,7 +224,7 @@ describe("Reports -> Create report (read-only)", () => {
     stub();
     render(BOTH);
     await screen.findByTestId("reports-tabs");
-    expect(screen.getByTestId("page-reports")).toBeTruthy();
+    expect(await screen.findByTestId("page-reports")).toBeTruthy();
     await userEvent.click(screen.getByTestId("reports-tab-create"));
     expect(await screen.findByTestId("page-create-report")).toBeTruthy();
   });
