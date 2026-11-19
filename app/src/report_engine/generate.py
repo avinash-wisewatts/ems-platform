@@ -79,8 +79,18 @@ def completeness_note(spec: PeriodSpec, quality: QualityResult) -> str:
 
 
 def comparison_note(spec: PeriodSpec, quality: QualityResult) -> str:
-    reasons = "; ".join(quality.comparison_reasons[:2])
-    return f"† The {spec.prev_noun}'s data is incomplete ({reasons}); changes marked † are indicative."
+    config = quality.comparison_config_reasons
+    data = [r for r in quality.comparison_reasons if r not in config]
+    notes = []
+    if data:
+        notes.append(f"† The {spec.prev_noun}'s data is incomplete ({'; '.join(data[:2])}); changes marked † are indicative.")
+    if config:
+        head, _, detail = config[0].partition(" (")
+        notes.append(f"{'' if data else '† '}In the {spec.prev_noun}, reporting settings were "
+                     f"{head.removeprefix('reporting settings ')} ({detail}. Temperature, AHU runtime and out-of-hours "
+                     f"figures for the {spec.prev_noun} use only the time after that, so comparisons marked † are "
+                     "indicative.")
+    return " ".join(notes)
 
 
 def generate_report(site_name: str, period: ReportPeriod, assets: dict[str, AssetData], layout: Layout,

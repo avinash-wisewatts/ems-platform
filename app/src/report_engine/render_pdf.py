@@ -420,11 +420,12 @@ def render_report(m: dict, charts: dict, observations: list[str], attention: lis
             no_sensor.append(area)
             temp_rows.append([area, "—", "Not temperature-monitored", "NA", "NA", "NA"])
             continue
+        cfg = "" if tp.get("config_complete", True) or pd.isna(tp["mean_abs_deviation"]) else "†"
         temp_rows.append([area, t["setpoint_text"],
                           f"{fmt_num(tp['mean'], 1)} / {fmt_num(t['mean'], 1)}",
-                          f"{fmt_num(tp['mean_abs_deviation'], 1)} / {fmt_num(t['mean_abs_deviation'], 1)}",
+                          f"{fmt_num(tp['mean_abs_deviation'], 1)}{cfg} / {fmt_num(t['mean_abs_deviation'], 1)}",
                           temperature_change_status(t, tp),
-                          f"{fmt_pct(tp['within_band_pct'])} / {fmt_pct(t['within_band_pct'])}"])
+                          f"{fmt_pct(tp['within_band_pct'])}{cfg} / {fmt_pct(t['within_band_pct'])}"])
     story.append(_table(["Area", "Setpoint", "Avg temp °C (prev / latest)", "Deviation °C (prev / latest)",
                          "Deviation change", f"Within ±{TEMP_TOLERANCE_C:g} °C (prev / latest)"], temp_rows, styles,
                         first_col=1.2 * inch))
@@ -517,10 +518,12 @@ def _ahu_section(story: list, m: dict, pngs: dict, styles: dict, ctx: RenderCont
     def runtime_text(r):
         return fmt_num(r["runtime_h"], 1) if ok(r) else r["status"].capitalize()
 
+    config_gap = set(m.get("ahu_comparison_config_gap", []))
     rows = []
     for name, r in runtime.items():
         p, c = r["prev"], r["curr"]
-        rows.append([name, runtime_text(p), runtime_text(c), fmt_pct(c["operating_pct"]) if ok(c) else "NA",
+        rows.append([name, runtime_text(p) + ("†" if name in config_gap else ""), runtime_text(c),
+                     fmt_pct(c["operating_pct"]) if ok(c) else "NA",
                      fmt_num(c["standby_h"], 1) if pd.notna(c["standby_h"]) else "n/a"])
     story.append(_table(["AHU", f"Estimated runtime, {prev_h} (h)", f"Estimated runtime, {curr_h} (h)",
                          "Operating time (%)", f"Standby, {curr_h} (h)"], rows, styles, first_col=2.2 * inch))
@@ -531,6 +534,8 @@ def _ahu_section(story: list, m: dict, pngs: dict, styles: dict, ctx: RenderCont
         notes.append(f"Standby for {', '.join(low_confidence)} is a very low consumption level whose boundary with 'off' "
                      "is uncertain, so standby hours are indicative.")
     story.append(P(" ".join(notes), styles["small"]))
+    if ctx.comparison_incomplete and _has_dagger(rows):
+        story.append(P(ctx.comparison_note, styles["note"]))
 
     scheduled = {n: r for n, r in runtime.items() if r["curr"]["scheduled"]}
     if not scheduled or "ahu_out_of_hours" not in pngs:
@@ -544,7 +549,8 @@ def _ahu_section(story: list, m: dict, pngs: dict, styles: dict, ctx: RenderCont
             hours += " (changed during period)"
         if not m["ahu_confirmed"].get(name):
             hours += " (provisional)"
-        comparable = is_fully_comparable(m["assets"][name]["curr"], m["assets"][name]["prev"])
+        comparable = (is_fully_comparable(m["assets"][name]["curr"], m["assets"][name]["prev"])
+                      and name not in config_gap)
         delta = abs_change(c["energy_out"], p["energy_out"])
         rows.append([f"{name}\n{hours}", fmt_num(c["energy_total"], 1), fmt_num(c["energy_in"], 1), fmt_num(c["energy_out"], 1),
                      f"{fmt_pct(p['ooh_pct'])} / {fmt_pct(c['ooh_pct'])}",

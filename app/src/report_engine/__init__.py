@@ -14,4 +14,4 @@ are imported only by the modules that need them. The web processes
 worker (src.report_worker_main) does.
 """
 
-ENGINE_VERSION = "1.0.0"
+ENGINE_VERSION = "1.1.0"

@@ -233,7 +233,7 @@ def temperature_change_status(current: dict, previous: dict) -> tuple[str, str]:
         return "NA", "neutral"
     delta = current["mean_abs_deviation"] - previous["mean_abs_deviation"]
     text = f"{delta:+.1f} °C"
-    if min(current["coverage"], previous["coverage"]) < FULL_DAY_COVERAGE:
+    if min(current["coverage"], previous["coverage"]) < FULL_DAY_COVERAGE or not previous.get("config_complete", True):
         return text + "†", "indicative"
     if abs(delta) < TEMP_CHANGE_NEUTRAL_C:
         return text, "neutral"
@@ -481,6 +481,31 @@ def ahu_runtime_metrics(assets: dict[str, AssetData], layout: Layout, periods: d
     return out
 
 
+def comparison_config_gaps(settings: ReportSettings, period: PeriodSpec, sensors: list[str],
+                           ahus: list[str]) -> dict:
+    """Reporting settings in force at the end of the latest period but NOT from the
+    start of the comparison period (settings are never back-dated, A17, A23).
+
+    Comparisons that depend on them (temperature deviation and in-band share,
+    AHU runtime, out-of-hours energy) are then disclosed as indicative with the
+    approved comparison disclosure (A109). Nothing is recalculated or estimated."""
+
+    prev_start = period.prev_start
+    curr_last = period.curr_end + pd.Timedelta(days=1) - pd.Timedelta(minutes=1)
+    out: dict = {"setpoints": [], "schedules": [], "thresholds": [], "from": None}
+    firsts = []
+    for key, names in (("setpoints", sensors), ("schedules", ahus), ("thresholds", ahus)):
+        series = getattr(settings, key)
+        for name in names:
+            versions = series.get(name, [])
+            if rt.value_at(versions, curr_last) is None or rt.value_at(versions, prev_start) is not None:
+                continue
+            out[key].append(name)
+            firsts += [f for f, v in versions if v is not None and f > prev_start]
+    out["from"] = min(firsts) if firsts else None
+    return out
+
+
 def compute_report_metrics(assets: dict[str, AssetData], layout: Layout, period: PeriodSpec,
                            settings: ReportSettings) -> dict:
     periods = {"prev": (period.prev_start, period.prev_end), "curr": (period.curr_start, period.curr_end)}
@@ -502,6 +527,12 @@ def compute_report_metrics(assets: dict[str, AssetData], layout: Layout, period:
                         for area, names in temperature_areas.items()}
     m["not_temperature_monitored"] = [n for n in layout.ahu_names
                                       if not (assets.get(n) and assets[n].temperature_monitored)]
+    sensors = sorted({s for temps in m["temperature"].values() for wk in temps.values() for s in wk["sensors"]})
+    gaps = comparison_config_gaps(settings, period, sensors, list(layout.ahu_names))
+    m["comparison_config_gaps"] = gaps
+    for temps in m["temperature"].values():
+        area_sensors = set(temps["prev"]["sensors"]) | set(temps["curr"]["sensors"])
+        temps["prev"]["config_complete"] = not (area_sensors & set(gaps["setpoints"]))
     m["hvac_daily"] = group_daily_energy(assets, hvac_names, curr_start, curr_end)
     energy_areas = layout.energy_areas
     m["energy_areas"] = energy_areas
@@ -541,8 +572,10 @@ def compute_report_metrics(assets: dict[str, AssetData], layout: Layout, period:
                           for n in m["ahu_runtime"]}
     m["ahu_ooh"] = rt.summarise_out_of_hours(m["ahu_runtime"])
     scheduled = [n for n, r in m["ahu_runtime"].items() if r["curr"]["scheduled"]]
+    ahu_gaps = set(gaps["schedules"]) | set(gaps["thresholds"])
+    m["ahu_comparison_config_gap"] = sorted(ahu_gaps)
     m["ahu_ooh"]["comparable"] = bool(scheduled) and all(
-        is_fully_comparable(m["assets"][n]["curr"], m["assets"][n]["prev"]) for n in scheduled)
+        is_fully_comparable(m["assets"][n]["curr"], m["assets"][n]["prev"]) and n not in ahu_gaps for n in scheduled)
     return m
 
 
@@ -615,7 +648,8 @@ def build_summary_points(m: dict) -> tuple[list[str], list[str]]:
                 f"({abs(offset):.1f} °C {side} on average); {fmt_pct(cur['within_band_pct'])} of readings were within "
                 f"±{TEMP_TOLERANCE_C:g} °C")
         if pd.notna(prev["within_band_pct"]):
-            text += f" ({period.prev_noun} {fmt_pct(prev['within_band_pct'])})"
+            dagger = "" if prev.get("config_complete", True) else "†"
+            text += f" ({period.prev_noun} {fmt_pct(prev['within_band_pct'])}{dagger})"
         observations.append(text + ".")
         if cur["within_band_pct"] < ATTENTION_BAND_PCT:
             share = ("none of the temperature readings were" if cur["within_band_pct"] == 0
@@ -629,7 +663,8 @@ def build_summary_points(m: dict) -> tuple[list[str], list[str]]:
         c, p = ooh["curr"], ooh["prev"]
         rows = {n: r["curr"] for n, r in m["ahu_runtime"].items() if r["curr"]["scheduled"]}
         text = (f"Scheduled AHUs used {c['energy_out']:,.1f} kWh outside their configured working hours, "
-                f"{fmt_pct(c['ooh_pct'])} of their energy ({period.prev_noun} {fmt_pct(p['ooh_pct'])}).")
+                f"{fmt_pct(c['ooh_pct'])} of their energy ({period.prev_noun} {fmt_pct(p['ooh_pct'])}"
+                f"{'' if not (set(rows) & set(m.get('ahu_comparison_config_gap', []))) else '†'}).")
         top = max(rows, key=lambda n: rows[n]["energy_out"] if pd.notna(rows[n]["energy_out"]) else -1)
         if rows[top]["energy_out"] > 0:
             runtime = (f", an estimated {rows[top]['runtime_out_h']:,.1f} h of operation"
