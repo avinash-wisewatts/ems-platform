@@ -734,6 +734,20 @@ comparisons are unchanged (A31).
 - The existing † "indicative" rules for the current period stay as they are
   (`is_fully_comparable`, peak coverage < 95 %, temperature coverage < 90 %),
   and use the same † marker.
+- **Settings not in force throughout the comparison period** (Product Owner,
+  2026-11-19; engine 1.1.0). Settings are never back-dated (A17, A23).
+  - **Trigger:** a setpoint, operating schedule or operating threshold is in
+    force at the end of the latest period but not from the start of the
+    comparison period. A change between two configured values is not a gap.
+  - **Disclosure:** the A109 comparison disclosure is applied.
+    - Comparison temperature deviation and in-band share, AHU runtime and
+      out-of-hours figures are marked †.
+    - The note names the settings and when they took effect, e.g. "In the
+      previous week, reporting settings were in force only from 19 Nov 2026
+      08:13 (…)".
+    - History shows "Comparison incomplete".
+  - **No change to calculations:** nothing is recalculated or estimated, the
+    report remains publishable, and the "Incomplete data" label is not applied.
 
 ### 6.6 Data-quality rules
 
