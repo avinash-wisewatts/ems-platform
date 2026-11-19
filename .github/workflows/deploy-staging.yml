@@ -139,7 +139,13 @@ jobs:
             EMS_WEB_IMAGE="${WEB_IMAGE}@${WEB_DIGEST}" \
               "${PROJECT_PATH}/scripts/release/deploy_web.sh"
 
-            "${PROJECT_PATH}/scripts/release/deploy_release.sh"
+            # Staging also runs the Reports -> Create report worker (ADR-025):
+            # the same -app image, compose service `report-worker` (profile
+            # `reports`, started because it is named here). Production's
+            # workflow keeps deploy_release.sh's default service list and never
+            # starts it.
+            APP_SERVICES="admin-portal live-telemetry report-worker" \
+              "${PROJECT_PATH}/scripts/release/deploy_release.sh"
         env:
           RELEASE_SHA: ${{ github.sha }}
           APP_IMAGE: ${{ needs.build-and-push.outputs.image }}
