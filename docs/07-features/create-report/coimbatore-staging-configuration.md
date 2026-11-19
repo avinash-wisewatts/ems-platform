@@ -234,3 +234,32 @@ Remaining: resume automatic schedules (needs approval; resuming before
 Sun 22 Nov 06:00 IST would schedule 15–21 Nov, which had the configuration
 for part of the week only); customer test users; the first controlled report
 (22–28 Nov recommended, generable from Sun 29 Nov).
+
+## 9. Automatic schedule resume (PO-approved 2026-11-19: from Sun 22 Nov 2026 06:00 IST)
+
+EMS has no future-dated resume: `set_site_report_schedule` takes effect at the
+save instant and sets `*_resumed_at`. The scheduler skips any period whose
+first-attempt time (period end + 6 h) is **at or before** `*_resumed_at`
+(`schedule_due_site_reports`). Therefore:
+
+| Period | First attempt | Effect of a resume at ≥ 22 Nov 06:00:00 IST |
+|---|---|---|
+| Weekly 15–21 Nov | Sun 22 Nov 06:00 IST | **skipped, never generated (no back-fill)**. A resume even 1 s earlier would schedule it |
+| Weekly 22–28 Nov | Sun 29 Nov 06:00 IST | scheduled (first automatic report) |
+| Monthly November | Tue 1 Dec 06:00 IST | scheduled |
+
+**State on 2026-11-19:** both schedules **paused** (weekly_enabled =
+monthly_enabled = false); reports 0, attempts 0.
+
+**Mechanism:** a guarded script calls `site_report_service.set_schedule(1, Coimbatore, WEEKLY|MONTHLY, true)`
+(audited `SITE_REPORT_SCHEDULE_RESUME`). It **refuses before
+2026-11-22 06:00:00 IST by the database clock**; this was proven on
+2026-11-19 08:28 IST, when it refused and wrote nothing. The run is scheduled
+for 06:03 IST, to stay clear of the boundary, as a one-shot in the operator's
+Claude Code session. That timer exists only while the session is open; if it
+does not run, a WiseWatts Admin presses *Resume* for Weekly and Monthly on
+Site → Reporting at or after 06:00 IST, which is equivalent.
+
+**Post-resume verification (read-only):** both enabled with `*_resumed_at` ≥
+06:00 IST; two resume audit events; after the worker's next scheduling pass
+(≤ 5 min), no report or attempt for 15 Nov.
