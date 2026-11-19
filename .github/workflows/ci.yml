@@ -74,6 +74,9 @@ jobs:
       - name: Validate compose configuration (disposable test database)
         run: docker compose -f compose.test.yaml config -q
 
+      - name: Single-service deploy scripts detect their compose service reliably
+        run: bash ./scripts/test/assert_release_service_precheck.sh
+
   docker-build-validate:
     name: Docker build validation (application image)
     runs-on: ubuntu-latest

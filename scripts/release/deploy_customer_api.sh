@@ -70,7 +70,15 @@ echo
 # 1. Preconditions.
 # ---------------------------------------------------------------------------
 echo "[1/5] Checking preconditions..."
-if ! EMS_CUSTOMER_API_IMAGE="${EMS_CUSTOMER_API_IMAGE}" compose config --services | grep -qx "${SERVICE}"; then
+# Read the service list completely before matching it. Piping compose
+# straight into `grep -q` under pipefail fails intermittently: grep exits on
+# its first match and compose can then die of SIGPIPE, which looked like a
+# missing service (scripts/test/assert_release_service_precheck.sh).
+if ! services="$(EMS_CUSTOMER_API_IMAGE="${EMS_CUSTOMER_API_IMAGE}" compose config --services)"; then
+    echo "ERROR: could not read the services of ${COMPOSE_FILE} (docker compose config failed; see above)." >&2
+    exit 1
+fi
+if ! grep -qx "${SERVICE}" <<<"${services}"; then
     echo "ERROR: ${COMPOSE_FILE} has no '${SERVICE}' service. Deploy an application release that includes it first." >&2
     exit 1
 fi
