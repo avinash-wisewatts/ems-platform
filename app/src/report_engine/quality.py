@@ -47,6 +47,9 @@ class QualityResult:
     incomplete_reasons: list[str] = field(default_factory=list)
     comparison_incomplete: bool = False
     comparison_reasons: list[str] = field(default_factory=list)
+    # Subset of comparison_reasons: reporting settings not in force throughout
+    # the comparison period (never back-dated, A17/A23); disclosed like A109.
+    comparison_config_reasons: list[str] = field(default_factory=list)
     affected_assets: list[str] = field(default_factory=list)
     coverage: dict = field(default_factory=dict)
 
@@ -99,6 +102,27 @@ def _period_issues(m: dict, wk: str) -> tuple[list[str], list[str]]:
     return reasons, sorted(set(affected))
 
 
+def _names(names: list[str], noun: str) -> str:
+    return ", ".join(names) if len(names) <= 3 else f"{len(names)} {noun}"
+
+
+def config_gap_reason(gaps: dict) -> str:
+    """'reporting settings in force only from 19 Nov 2026 08:13 (...)' or ''."""
+
+    parts = []
+    if gaps.get("setpoints"):
+        parts.append("temperature setpoints: " + _names(gaps["setpoints"], "sensors"))
+    if gaps.get("schedules"):
+        parts.append("AHU operating schedules: " + _names(gaps["schedules"], "AHUs"))
+    if gaps.get("thresholds"):
+        parts.append("AHU operating thresholds: " + _names(gaps["thresholds"], "AHUs"))
+    if not parts:
+        return ""
+    since = gaps.get("from")
+    when = f" from {since:%d %b %Y %H:%M}" if since is not None else ""
+    return f"reporting settings in force only{when} ({'; '.join(parts)})"
+
+
 def assess(m: dict) -> QualityResult:
     result = QualityResult(publishable=True)
     curr = "curr"
@@ -114,6 +138,10 @@ def assess(m: dict) -> QualityResult:
     result.incomplete_reasons, result.affected_assets = _period_issues(m, "curr")
     result.incomplete_data = bool(result.incomplete_reasons)
     result.comparison_reasons, _ = _period_issues(m, "prev")
+    config = config_gap_reason(m.get("comparison_config_gaps") or {})
+    if config:
+        result.comparison_config_reasons = [config]
+        result.comparison_reasons.append(config)
     result.comparison_incomplete = bool(result.comparison_reasons)
 
     def period_block(wk: str) -> dict:
@@ -135,6 +163,7 @@ def assess(m: dict) -> QualityResult:
         "incomplete_reasons": result.incomplete_reasons,
         "comparison_incomplete": result.comparison_incomplete,
         "comparison_reasons": result.comparison_reasons,
+        "comparison_config_reasons": result.comparison_config_reasons,
         "affected_assets": result.affected_assets,
         "not_temperature_monitored": m.get("not_temperature_monitored", []),
     }

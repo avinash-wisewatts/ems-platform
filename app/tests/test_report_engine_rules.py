@@ -24,8 +24,10 @@ import pandas as pd
 import pytest
 
 from tests.report_engine_support import (
+    AHUS,
     ALWAYS,
     KITCHEN,
+    TEMPERATURE_SENSORS,
     radisson_layout,
     reference_settings,
     synthetic_assets,
@@ -41,6 +43,7 @@ from src.report_engine.metrics import (
     compute_report_metrics,
     pct_change,
     setpoint_text,
+    temperature_change_status,
 )
 from src.report_engine.periods import latest_closed_period, period_for, week_start
 from src.report_engine.prepare import ENERGY_COL, prepare_asset
@@ -277,6 +280,66 @@ def test_both_periods_incomplete_get_label_and_comparison_disclosure():
 
     text = " ".join((p.extract_text() or "") for p in PdfReader(io.BytesIO(result.pdf)).pages)
     assert "Data completeness" in text and "The previous week's data is incomplete" in text
+
+
+def _settings_from(start: pd.Timestamp) -> "ReportSettings":
+    """reference_settings(), but every setting first takes effect at `start` (never back-dated)."""
+
+    s = reference_settings()
+    for series in (s.setpoints, s.schedules, s.schedule_confirmed, s.thresholds):
+        for name, versions in series.items():
+            series[name] = [(start, v) for _, v in versions]
+    return s
+
+
+def test_settings_not_in_force_throughout_comparison_are_disclosed():
+    """PO 2026-11-19 / A109: configuration starting mid-comparison-period is disclosed (†, note,
+    'Comparison incomplete'); the report stays publishable, nothing is recalculated or estimated."""
+
+    start = pd.Timestamp("2026-10-14 08:13")            # Wednesday of the comparison week 11-17 Oct
+    settings = _settings_from(start)
+    assets = synthetic_assets(WEEK.comparison_start, 14)
+    m = metrics_for(WEEK, assets, settings)
+    gaps = m["comparison_config_gaps"]
+    assert set(gaps["setpoints"]) == set(TEMPERATURE_SENSORS)
+    assert set(gaps["schedules"]) == set(gaps["thresholds"]) == set(AHUS)
+    assert gaps["from"] == start
+    assert m["temperature"]["Lobby"]["prev"]["config_complete"] is False
+    assert temperature_change_status(m["temperature"]["Lobby"]["curr"], m["temperature"]["Lobby"]["prev"])[1] == "indicative"
+    assert m["ahu_ooh"]["comparable"] is False
+    q = assess(m)
+    assert q.publishable and not q.incomplete_data and q.comparison_incomplete
+    assert q.comparison_config_reasons == [
+        "reporting settings in force only from 14 Oct 2026 08:13 (temperature setpoints: 4 sensors; "
+        "AHU operating schedules: 7 AHUs; AHU operating thresholds: 7 AHUs)"]
+    assert q.coverage["comparison_config_reasons"] == q.comparison_config_reasons
+    observations, _ = build_summary_points(m)
+    assert any("(previous week" in o and "†)" in o for o in observations)
+
+    result = generate_report("Radisson Blu Coimbatore", WEEK, synthetic_assets(WEEK.comparison_start, 14),
+                             radisson_layout(), _settings_from(start))
+    assert result.quality.comparison_incomplete and not result.quality.incomplete_data
+    from pypdf import PdfReader
+
+    text = " ".join((p.extract_text() or "") for p in PdfReader(io.BytesIO(result.pdf)).pages)
+    flat = " ".join(text.split())
+    assert "In the previous week, reporting settings were in force only from 14 Oct 2026 08:13" in flat
+    assert "comparisons marked † are indicative" in flat
+    assert "The previous week's data is incomplete" not in flat     # data was complete
+    assert "Data completeness" not in flat                          # no 'Incomplete data' label
+
+
+def test_settings_in_force_throughout_need_no_configuration_disclosure():
+    """A setpoint CHANGE within the period (24 -> 23 °C) is not a configuration gap."""
+
+    settings = reference_settings()
+    for name in ("Seasons Restaurant AHU-1", "Seasons Restaurant AHU-2"):
+        settings.setpoints[name] = [(ALWAYS, 24.0), (pd.Timestamp("2026-10-14 08:13"), 23.0)]
+    m = metrics_for(WEEK, synthetic_assets(WEEK.comparison_start, 14), settings)
+    assert m["comparison_config_gaps"] == {"setpoints": [], "schedules": [], "thresholds": [], "from": None}
+    assert all(t["prev"]["config_complete"] for t in m["temperature"].values())
+    q = assess(m)
+    assert q.comparison_config_reasons == [] and not q.comparison_incomplete
 
 
 def test_temperature_is_never_estimated():
