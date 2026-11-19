@@ -1,8 +1,9 @@
 # Create report — Radisson Blu Coimbatore staging configuration and automation-account plan
 
-Status: **prepared, not applied** (2026-11-19). Nothing in this document has
-been written to staging. Applying §2 (configuration) and §3 (automation
-account) each needs explicit authorization. Production is out of scope (A106).
+Status: **§2 configuration APPLIED to staging 2026-11-19 08:13 IST** (Product
+Owner approval, with two amendments: Banquet 1 STANDBY removed; schedules
+provisional), see §6. **§3 automation account NOT created** (separate
+approval). No report generated. Production is out of scope (A106).
 
 Authoritative specification: [README.md](README.md) revision 4.1
 (§4.1 roster, §4.6 read identity, §5.1–5.3 settings). Runbook:
@@ -88,7 +89,7 @@ hotel" is **off** (the tool's file records every schedule as unconfirmed).
 | Lobby Area AHU-2 | 05:00–23:00 | 0.05 | — | 0.40 | on | High |
 | Seasons Restaurant AHU-1 | 06:00–22:00 | 0.05 | — | 0.45 | on | High |
 | Seasons Restaurant AHU-2 | 06:00–22:00 | 0.05 | — | 0.45 | on | High |
-| Banquet 1 AHU | 06:00–22:00 | 0.005 | 0.03 | 0.60 | on | High (ON/OFF); Low–Medium (STANDBY) |
+| Banquet 1 AHU | 06:00–22:00 | 0.005 | — (removed, PO 2026-11-19) | 0.60 | on | High (ON/OFF) |
 | Banquet 2 AHU | 06:00–22:00 | 0.05 | — | 0.85 | on | High |
 | Pre Function Area AHU | 06:00–22:00 | 0.05 | — | 0.80 | on | High |
 
@@ -149,5 +150,32 @@ unchanged.
   the PDF marks the working hours as "provisional" until a WiseWatts Admin
   records the hotel's confirmation (a new schedule version with "confirmed by
   hotel" on).
-- **Banquet 1 STANDBY threshold** has Low–Medium confidence (tool evidence).
+- **Banquet 1 STANDBY threshold** had Low–Medium confidence (tool evidence);
+  removed by the Product Owner and not configured (2026-11-19).
 - **First automatic attempt timing:** see §2.1.
+
+## 6. Applied configuration record (staging, 2026-11-19)
+
+Applied through the Administration App's database functions (the same
+audited path as the pages), actor `admin_avinash` (portal user 1, ADMIN /
+GLOBAL), in one run at 08:13:42 IST.
+
+| Item | Result |
+|---|---|
+| Enrolment | Coimbatore enrolled 08:13:42 IST (existing organization and site) |
+| Automatic weekly / monthly | **paused** immediately after enrolment, so that no report is generated before the automation account exists ("do not generate reports"). Resume them on Site → Reporting when authorized; periods that ended while paused are not generated automatically |
+| Roster | 23 assets: 2 chillers, 4 pumps, 2 cooling towers, 7 AHUs (LOBBY 2, RESTAURANT 2, BANQUET_1, BANQUET_2, PRE_FUNCTION), 8 kitchen |
+| Setpoints | 24.0 °C — Lobby Area AHU-1, Seasons Restaurant AHU-1/-2, Banquet 2 AHU (versions 1–4) |
+| Schedules | §2.3 intervals, all 7 days, out-of-hours on, **confirmed by hotel = off (provisional)** (versions 5, 7, 9, 11, 13, 15, 17) |
+| Thresholds | §2.3 OFF/ON; **STANDBY = none for every AHU** (Banquet 1's 0.03 kW not configured); runtime on (versions 6, 8, …, 18) |
+| Effective from | the save instant, 2026-11-19 08:13:42 IST (A19); not retrospective (A17, A23) |
+| Audit | 44 `admin.audit_events` rows, all actor 1 / ADMIN / SUCCEEDED: 1 SITE_REPORT_ENROL, 2 SITE_REPORT_SCHEDULE_PAUSE, 23 SITE_REPORT_ROSTER_CHANGE, 18 REPORT_SETTING_CHANGE (each with previous/new values and effective_from) |
+| Reports / attempts | 0 / 0 |
+| Engine view | the worker's settings path resolves exactly these values for 20-Nov and none for 14-Nov |
+
+**Consequence for the first report.** Because settings take effect from
+19-Nov 08:13 IST and cannot be back-dated, a report for an earlier week (e.g.
+8–14 Nov) would show "setpoint not configured", no out-of-hours split and
+runtime "not reported". The week 15–21 Nov has the settings for part of the
+week only. The first week with the full configuration in force throughout
+is **22–28 Nov 2026**, which can be generated from Sun 29 Nov.
