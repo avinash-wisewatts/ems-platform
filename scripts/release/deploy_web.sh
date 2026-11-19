@@ -77,7 +77,15 @@ echo
 # 1. Preconditions: the deployed compose.yaml must define ems-web.
 # ---------------------------------------------------------------------------
 echo "[1/5] Checking the deployed compose configuration..."
-if ! EMS_WEB_IMAGE="${EMS_WEB_IMAGE}" compose config --services | grep -qx "${SERVICE}"; then
+# Read the service list completely before matching it. Piping compose
+# straight into `grep -q` under pipefail fails intermittently: grep exits on
+# its first match and compose can then die of SIGPIPE, which looked like a
+# missing service (scripts/test/assert_release_service_precheck.sh).
+if ! services="$(EMS_WEB_IMAGE="${EMS_WEB_IMAGE}" compose config --services)"; then
+    echo "ERROR: could not read the services of ${COMPOSE_FILE} (docker compose config failed; see above)." >&2
+    exit 1
+fi
+if ! grep -qx "${SERVICE}" <<<"${services}"; then
     echo "ERROR: ${COMPOSE_FILE} has no '${SERVICE}' service. Deploy an application release that" >&2
     echo "       includes it (deploy-staging.yml) before using the web-only deploy path." >&2
     exit 1
