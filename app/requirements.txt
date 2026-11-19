@@ -16,3 +16,16 @@ paho-mqtt==2.1.0
 # server-side WebSocket support); pinned explicitly here because
 # application code now imports it directly, not just uvicorn internally.
 websockets==17.1
+
+# Reports -> Create report engine (ADR-025). Imported ONLY by the report
+# worker (src.report_worker_main -> src.report_engine); the web processes
+# never import them. Analysis versions are the ones the reference tool was
+# validated with (pandas 3.1.0 / numpy 2.5.4 / matplotlib 3.11.2); PDF output
+# with ReportLab, validation with pypdf + pypdfium2. No LibreOffice, no Word.
+pandas==3.1.0
+numpy==2.5.4
+matplotlib==3.11.2
+pillow==13.0.0
+reportlab==5.1.0
+pypdf==7.1.1
+pypdfium2==5.15.2
