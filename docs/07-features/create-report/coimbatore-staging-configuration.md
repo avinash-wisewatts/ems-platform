@@ -263,3 +263,46 @@ Site → Reporting at or after 06:00 IST, which is equivalent.
 **Post-resume verification (read-only):** both enabled with `*_resumed_at` ≥
 06:00 IST; two resume audit events; after the worker's next scheduling pass
 (≤ 5 min), no report or attempt for 15 Nov.
+
+## 10. Radisson test users (staging only, PO consolidated authorization 2026-11-19)
+
+Created 08:32 IST through `create_managed_user` → `admin.create_managed_portal_user`
+(actor portal user 1), scope SELECTED_SITES in Radisson Blu with Coimbatore
+only, no email. Passwords are random (20 characters), hashed with Argon2id,
+and handed to the Product Owner in a private file outside the repository.
+They are never committed or logged.
+
+| portal_user_id | username | role |
+|---|---|---|
+| 18 | `radisson_test_admin` | ADMIN |
+| 19 | `radisson_test_operator` | OPERATOR |
+| 20 | `radisson_test_viewer` | VIEWER |
+
+| Check | Admin / Operator / Viewer | Result |
+|---|---|---|
+| Shape | active, Radisson Blu, SELECTED_SITES, sites = {Coimbatore}, accessible = {Coimbatore}, Argon2id | PASS |
+| Audit | `portal_user_audit` USER_CREATED ×3, actor 1, no `password_hash` key | PASS |
+| DB management functions (`BEGIN … ROLLBACK`) | 12/12 each → `42501 site_report_forbidden` (enrol, automation account, schedule, roster, settings, generate, admin reads) | PASS |
+| DB view functions | Coimbatore list and schedule allowed; another organization's site 0 rows | PASS |
+| Customer API sign-in | 200, `ems_session` cookie Secure, HttpOnly, SameSite | PASS |
+| `/api/v1/me` | `report.view` present (ADMIN 15 permissions, OPERATOR 12, VIEWER: dashboard.view, report.export, report.view) | PASS |
+| History Coimbatore | 200 (enrolled, weekly/monthly paused, 0 reports) | PASS |
+| Other organization's site / unknown versions / unknown download | 404 / 404 / 404 | PASS |
+| Report writes via the customer API | POST site-reports 405; DELETE 404; admin generate path 404 | PASS |
+| Administration App reporting pages and actions | GET reporting/reports 403; POST generate, schedule, delete, purge 403 (ADMIN, OPERATOR) or 303 → /forbidden (VIEWER) | PASS |
+| **Administration App general access** | **sign-in succeeds (303 → /administration/sites) and Sites pages return 200**, because `EMS_ADMIN_STAFF_ONLY` is off on staging (the default) | **FINDING** (see below) |
+
+**Finding — staff-only Administration App not enforced on staging.**
+ADR-023's switch `EMS_ADMIN_STAFF_ONLY` is unset on staging (default
+false), so customer identities can sign in to the Administration App and
+browse its general pages, such as Sites. Every reporting page and action is
+still refused, by the route check (`_staff()`) and in the database. Enabling
+the switch is a staging configuration change outside this authorization.
+
+## 11. Deployment-script fix (PR #183)
+
+| Item | Value |
+|---|---|
+| PR | #183, squash-merged to `staging` as `400608b`; CI on head `ff52045` 14/14 green (including the full backend suite) |
+| Staging deploy | Deploy to Staging run 44448407754: success. The fixed `deploy_web.sh` check: `[1/5] Checking the deployed compose configuration... OK`; ems-web healthy |
+| Customer API deploy | run 44450767646: success. The fixed `deploy_customer_api.sh` precondition passed; `ems-customer-api` healthy on `400608b` |
