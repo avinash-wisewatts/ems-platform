@@ -165,7 +165,7 @@ def test_a_staging_only_migration_already_in_the_production_ledger_is_refused_up
 
 def test_staging_applies_staging_only_migrations(tmp_path):
     code, out = _run(tmp_path, environment="staging", ledger_ids=_ids_through("308_"),
-                     expected="309,310,312,311,313,314,315,316,317,318,319,320,321,322,323,324,325,326,327")
+                     expected="309,310,312,311,313,314,315,316,317,318,319,320,321,322,323,324,325,326,327,328,329")
     assert code == 0, out
 
 
@@ -194,6 +194,9 @@ def test_scope_file_contract():
         "314_customer_session_revocation": "staging|test",
         # ADR-024 §18: explicitly every environment (deletes legacy alerts).
         "320_alert_legacy_retirement": "staging|production|test",
+        # ADR-025: Create report is not approved for production (A106).
+        "328_site_report_settings": "staging|test",
+        "329_site_reports": "staging|test",
     }
     manifest_ids = set(_ids_through("~never~"))
     assert set(scoped) <= manifest_ids
