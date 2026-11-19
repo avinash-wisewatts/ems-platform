@@ -36,6 +36,12 @@ class PortalPermission(str, Enum):
     ALERT_CONFIGURE = "alert.configure"
     DASHBOARD_VIEW = "dashboard.view"
     REPORT_EXPORT = "report.export"
+    # Reports -> Create report (ADR-025): view and download generated PDF
+    # reports in the customer portal (all profiles, A5). Managing reports and
+    # reporting configuration is NOT a role permission: it requires a WiseWatts
+    # Admin (active ADMIN, GLOBAL scope) in the Administration App, enforced in
+    # the database (A6, A107).
+    REPORT_VIEW = "report.view"
     AUDIT_VIEW = "audit.view"
 
 
@@ -54,12 +60,14 @@ ROLE_PERMISSIONS: dict[PortalRole, frozenset[PortalPermission]] = {
             PortalPermission.ALERT_ACKNOWLEDGE,
             PortalPermission.DASHBOARD_VIEW,
             PortalPermission.REPORT_EXPORT,
+            PortalPermission.REPORT_VIEW,
         }
     ),
     PortalRole.VIEWER: frozenset(
         {
             PortalPermission.DASHBOARD_VIEW,
             PortalPermission.REPORT_EXPORT,
+            PortalPermission.REPORT_VIEW,
         }
     ),
 }
@@ -202,11 +210,17 @@ def required_permission_for_request(
     ):
         return PortalPermission.ORGANIZATION_MANAGE
 
+    # Site writes, including the Create report pages under
+    # /administration/sites/{id}/reporting|reports and the report actions under
+    # /administration/site-reports/ (ADR-025). The report pages additionally
+    # require a WiseWatts Admin (active ADMIN, GLOBAL scope) in the route and in
+    # every database function (A2, A3, A6, A107).
     if (
         normalized_method in {"POST", "PUT", "PATCH", "DELETE"}
         and (
             path.rstrip("/") == "/administration/sites"
             or path.startswith("/administration/sites/")
+            or path.startswith("/administration/site-reports/")
         )
     ):
         return PortalPermission.SITE_MANAGE

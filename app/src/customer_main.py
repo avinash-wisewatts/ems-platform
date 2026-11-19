@@ -39,6 +39,7 @@ from src.routers.analytics_api import router as analytics_api_router
 from src.routers.alerts_api import router as alerts_api_router
 from src.routers.customer_auth import router as customer_auth_router
 from src.routers.report_exports import router as report_exports_router
+from src.routers.site_reports import router as site_reports_router
 
 settings = get_customer_settings()
 use_core_settings(settings)
@@ -100,6 +101,9 @@ app.include_router(alerts_api_router)
 # Reports export routes exist only where Reports is enabled (staging-only).
 if settings.reports_enabled:
     app.include_router(report_exports_router)
+    # Reports -> Create report (ADR-025): READ-ONLY report history, versions
+    # and PDF download for every profile with site access (A5, A107).
+    app.include_router(site_reports_router)
 
 
 @app.get("/health", include_in_schema=False)

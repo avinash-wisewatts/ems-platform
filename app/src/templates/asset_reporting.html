@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}Reporting settings | {{ asset.asset_name }}{% endblock %}
+{% block breadcrumb %}
+<nav class="breadcrumb" aria-label="Breadcrumb">
+    <a href="/administration">Administration</a><span>/</span>
+    <a href="/administration/sites/{{ site.site_id }}">{{ site.site_name }}</a><span>/</span>
+    <a href="/administration/sites/{{ site.site_id }}/reporting">Reporting</a><span>/</span>
+    <span class="breadcrumb-current">{{ asset.asset_name }}</span>
+</nav>
+{% endblock %}
+{% block content %}
+<section class="administration-page asset-reporting-page">
+    <header class="administration-page-header">
+        <div>
+            <p class="eyebrow">REPORTING SETTINGS</p>
+            <h2>{{ asset.asset_name }}</h2>
+            <p>{{ group_labels[asset.report_group] }}{% if asset.area %} · {{ area_labels[asset.area] }}{% endif %} · All times {{ zone_name }}</p>
+        </div>
+        <div class="row-actions"><a class="button button-secondary" href="/administration/sites/{{ site.site_id }}/reporting">Back to reporting</a></div>
+    </header>
+    {% if error %}<div class="form-error" role="alert">{{ error }}</div>{% endif %}
+    {% if notice %}<div class="form-success" role="status">{{ notice }}</div>{% endif %}
+    <p class="field-help">Changes take effect today (at the moment you save) or from 00:00 site time on a future date. Past dates are not allowed. Existing PDF reports never change; only new reports and explicit regenerations use the new values.</p>
+
+    <div class="administration-detail-sections">
+        <section class="surface-panel administration-detail-section">
+            <h3>Current settings</h3>
+            <div class="table-scroll"><table class="data-table administration-detail-table"><tbody>
+                <tr><th scope="row">Temperature monitoring</th><td>{% if monitored %}<span class="status-pill is-positive">Temperature-monitored</span>{% else %}<span class="status-pill">Not temperature-monitored</span> <span class="field-help">No temperature sensor in EMS: energy is included, temperature analysis is omitted and never estimated.</span>{% endif %}</td></tr>
+                {% for key in setting_labels %}<tr><th scope="row">{{ setting_labels[key] }}</th><td>{{ current_text[key] }}</td></tr>{% endfor %}
+            </tbody></table></div>
+        </section>
+
+        {% if monitored %}
+        <section class="surface-panel administration-detail-section">
+            <h3>Change temperature setpoint</h3>
+            <form method="post" action="/administration/sites/{{ site.site_id }}/reporting/assets/{{ asset.asset_id }}/settings" class="form-grid two-column">
+                <input type="hidden" name="setting_key" value="TEMPERATURE_SETPOINT">
+                <label>Setpoint (°C)<input name="value_c" type="number" min="10" max="35" step="0.5" required value="{{ setpoint if setpoint is not none else '' }}"></label>
+                <label>Takes effect on<input name="effective_date" type="date" min="{{ today }}" value="{{ today }}" required></label>
+                <div class="full-width"><button class="button button-primary" type="submit">Save setpoint</button></div>
+            </form>
+        </section>
+        {% endif %}
+
+        {% if asset.report_group == 'HVAC_AHU' %}
+        <section class="surface-panel administration-detail-section">
+            <h3>Change operating schedule</h3>
+            <form method="post" action="/administration/sites/{{ site.site_id }}/reporting/assets/{{ asset.asset_id }}/settings">
+                <input type="hidden" name="setting_key" value="OPERATING_SCHEDULE">
+                <p class="field-help">Up to three working-hour intervals per day, HH:MM. An end at or before the start runs overnight into the next day; 00:00–24:00 is a full day; a day without intervals is closed.</p>
+                <div class="table-scroll"><table class="data-table">
+                    <thead><tr><th>Day</th>{% for slot in range(3) %}<th>Interval {{ slot + 1 }}</th>{% endfor %}</tr></thead>
+                    <tbody>{% for day in days %}{% set intervals = schedule.get(day, []) %}<tr><th scope="row">{{ day }}</th>
+                        {% for slot in range(3) %}{% set iv = intervals[slot] if intervals|length > slot else ['', ''] %}
+                        <td><input name="{{ day }}_{{ slot }}_start" value="{{ iv[0] }}" placeholder="HH:MM" size="5" aria-label="{{ day }} interval {{ slot + 1 }} start"> – <input name="{{ day }}_{{ slot }}_end" value="{{ iv[1] }}" placeholder="HH:MM" size="5" aria-label="{{ day }} interval {{ slot + 1 }} end"></td>
+                        {% endfor %}</tr>{% endfor %}</tbody>
+                </table></div>
+                <div class="form-grid two-column">
+                    <label><input type="checkbox" name="no_schedule"{% if schedule_value and schedule_value.get('schedule') is none %} checked{% endif %}> No working-hours schedule</label>
+                    <label><input type="checkbox" name="calculate_out_of_hours"{% if not schedule_value or schedule_value.get('calculate_out_of_hours', true) %} checked{% endif %}> Calculate out-of-hours energy</label>
+                    <label><input type="checkbox" name="confirmed_by_hotel"{% if schedule_value.get('confirmed_by_hotel') %} checked{% endif %}> Hours confirmed by the hotel (otherwise shown as provisional)</label>
+                    <label>Takes effect on<input name="effective_date" type="date" min="{{ today }}" value="{{ today }}" required></label>
+                </div>
+                <button class="button button-primary" type="submit">Save schedule</button>
+            </form>
+        </section>
+
+        <section class="surface-panel administration-detail-section">
+            <h3>Change operating thresholds</h3>
+            <form method="post" action="/administration/sites/{{ site.site_id }}/reporting/assets/{{ asset.asset_id }}/settings" class="form-grid two-column">
+                <input type="hidden" name="setting_key" value="OPERATING_THRESHOLDS">
+                <label>OFF at or below (kW)<input name="off_kw" type="number" step="any" min="0" required value="{{ thresholds.get('off_kw', '') }}"></label>
+                <label>STANDBY at or below (kW, optional)<input name="standby_kw" type="number" step="any" min="0" value="{{ thresholds.get('standby_kw') if thresholds.get('standby_kw') is not none else '' }}"></label>
+                <label>ON at or above (kW)<input name="on_kw" type="number" step="any" min="0" required value="{{ thresholds.get('on_kw', '') }}"></label>
+                <label>Confidence / basis (optional)<input name="confidence" maxlength="120" value="{{ thresholds.get('confidence', '') }}"></label>
+                <label><input type="checkbox" name="runtime_enabled"{% if thresholds.get('runtime_enabled', true) %} checked{% endif %}> Report estimated runtime</label>
+                <label>Takes effect on<input name="effective_date" type="date" min="{{ today }}" value="{{ today }}" required></label>
+                <div class="full-width"><button class="button button-primary" type="submit">Save thresholds</button></div>
+            </form>
+        </section>
+        {% endif %}
+
+        <section class="surface-panel administration-detail-section">
+            <h3>Settings history</h3>
+            {% if history %}
+            <div class="table-scroll"><table class="data-table">
+                <thead><tr><th>Setting</th><th>Value</th><th>Effective from</th><th>State</th><th>Changed by / at</th><th></th></tr></thead>
+                <tbody>{% for h in history %}<tr>
+                    <td>{{ setting_labels[h.setting_key] }}</td><td>{{ h.text }}</td><td>{{ h.effective_local }}</td>
+                    <td>{% if h.state == 'WITHDRAWN' %}<span class="status-pill">Withdrawn {{ h.withdrawn_local }} by {{ h.withdrawn_by_username }}</span>{% elif h.in_force %}<span class="status-pill is-positive">In force</span>{% elif h.future %}<span class="status-pill is-warning">Scheduled</span>{% else %}Superseded{% endif %}</td>
+                    <td>{{ h.created_by_username or '—' }} · {{ h.created_local }}</td>
+                    <td>{% if h.future %}<form method="post" action="/administration/sites/{{ site.site_id }}/reporting/assets/{{ asset.asset_id }}/settings/{{ h.id }}/withdraw" onsubmit="return confirm('Withdraw this future setting?');"><button class="button button-secondary button-compact" type="submit">Withdraw</button></form>{% endif %}</td>
+                </tr>{% endfor %}</tbody>
+            </table></div>
+            {% else %}<p class="field-help">No settings yet.</p>{% endif %}
+        </section>
+    </div>
+</section>
+{% endblock %}

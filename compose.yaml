@@ -261,6 +261,62 @@ services:
       start_period: 30s
 
 
+  report-worker:
+    # Reports -> Create report (ADR-025): the background worker that
+    # schedules, generates, validates and stores the weekly / monthly PDF
+    # reports and purges expired / deleted ones. The SAME immutable
+    # application image as admin-portal (different command), so the engine is
+    # never rebuilt per environment. Profile `reports`: started only where
+    # the deploy names it explicitly (staging, .github/workflows/
+    # deploy-staging.yml); production never starts it (A106).
+    #
+    # One job at a time, memory-capped for the small staging host (RK-1). No
+    # ports: it serves nothing. Reads EMS data only through the portal-scoped
+    # Analytics functions, as the automation account or the requesting
+    # WiseWatts Admin (A88-A91). Uses app/.env (the ems_app role on staging;
+    # a dedicated least-privilege ems_report_worker role is a production
+    # prerequisite, A92).
+    profiles: ["reports"]
+    image: ${APP_IMAGE:-ems-platform-prod-app:local}
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+
+    container_name: ems-report-worker
+
+    restart: unless-stopped
+
+    command: ["python", "-m", "src.report_worker_main"]
+
+    env_file:
+      - ./app/.env
+
+    environment:
+      MPLCONFIGDIR: /tmp/matplotlib
+      EMS_REPORT_WORKER_HEARTBEAT_FILE: /tmp/report-worker.heartbeat
+
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+
+    mem_limit: 700m
+    mem_reservation: 300m
+    cpus: 1.0
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import os,time; p='/tmp/report-worker.heartbeat'; raise SystemExit(0 if os.path.exists(p) and time.time() - os.path.getmtime(p) < 900 else 1)"
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 6
+      start_period: 60s
+
+
   ems-web:
     # EMS Customer Web App -- the static React bundle served by nginx from
     # its own container, so it is deployed, restarted and rolled back
