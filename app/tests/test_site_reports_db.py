@@ -574,7 +574,7 @@ def test_restore_never_extends_expiry(conn):
 def test_customer_schedule_read(conn):
     enrol(conn)
     assert rows(conn, "SELECT * FROM analytics.get_portal_site_report_schedule(%s, %s)", (uid(conn, "viewer"), SITE_A)) == [
-        (True, True, True, "Asia/Kolkata")]
+        (True, True, True, "Asia/Kolkata", False)]
     assert rows(conn, "SELECT * FROM analytics.get_portal_site_report_schedule(%s, %s)", (uid(conn, "other_org"), SITE_A)) == []
 
 
@@ -829,3 +829,22 @@ def test_customer_api_cannot_apply_a_baseline_or_read_its_table(conn):
     for role in ("ems_app", "ems_customer_api", "grafana_reader"):
         assert not rows(conn, "SELECT has_table_privilege(%s, 'analytics.site_report_retrospective_baselines', 'SELECT')",
                         (role,))[0][0]
+
+
+def test_schedule_read_offers_generation_by_the_database_rule(conn):
+    """can_generate (A113) uses the same rule as the request: Site Admins and
+    WiseWatts Admins yes; Operators, Viewers and the designated automation
+    account no; nothing for a site that is not enrolled."""
+
+    def can(who, site=SITE_A):
+        found = rows(conn, "SELECT can_generate FROM analytics.get_portal_site_report_schedule(%s, %s)", (uid(conn, who), site))
+        return found[0][0] if found else None
+
+    assert can("tenant_admin") is False                    # not enrolled yet
+    enrol(conn)
+    assert (can("staff"), can("tenant_admin"), can("operator"), can("viewer")) == (True, True, False, False)
+    assert can("automation") is True                       # an ADMIN with site access, not yet designated
+    rows(conn, "SELECT * FROM analytics.set_site_report_automation_account(%s, %s, %s)",
+         (uid(conn, "staff"), SITE_A, uid(conn, "automation")))
+    assert can("automation") is False
+    assert can("other_org") is None

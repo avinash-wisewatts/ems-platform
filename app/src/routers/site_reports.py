@@ -171,7 +171,8 @@ async def list_site_reports(request: Request, site_id: UUID,
     reports = await svc.portal_reports(user.portal_user_id, site_id, report_type) if schedule["enrolled"] else []
     return SiteReportListResponse(enrolled=bool(schedule["enrolled"]), weekly_enabled=bool(schedule["weekly_enabled"]),
                                   monthly_enabled=bool(schedule["monthly_enabled"]), timezone=schedule["site_timezone"],
-                                  can_generate=bool(schedule["enrolled"]) and has_permission(user, PortalPermission.REPORT_GENERATE),
+                                  can_generate=bool(schedule.get("can_generate"))
+                                  and has_permission(user, PortalPermission.REPORT_GENERATE),
                                   reports=[_item(r) for r in reports])
 
 

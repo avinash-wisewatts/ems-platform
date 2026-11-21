@@ -93,7 +93,7 @@ function periodLabel(type: SiteReportType, start: string): string {
   }
   const [y, m, d] = start.split("-").map(Number);
   const end = new Date(Date.UTC(y!, m! - 1, d! + 6));
-  return `${formatDate(start)} – ${formatDate(isoDate(end))}`;
+  return `${formatDate(start)} â€“ ${formatDate(isoDate(end))}`;
 }
 
 const POLL_MS = 10_000;
@@ -167,14 +167,16 @@ export function CreateReportTab() {
   const load = useCallback(
     (signal?: AbortSignal) => {
       if (!siteId) return Promise.resolve();
-      return getSiteReports(siteId, typeFilter || null, { signal })
+      // All types are loaded and the Type filter is applied here (like Status),
+      // so the Generate form always knows whether a period already has a report.
+      return getSiteReports(siteId, null, { signal })
         .then((data) => setState({ status: "ready", data }))
         .catch((error: unknown) => {
           if (error instanceof DOMException && error.name === "AbortError") return;
           setState({ status: "error" });
         });
     },
-    [siteId, typeFilter],
+    [siteId],
   );
 
   useEffect(() => {
@@ -194,8 +196,12 @@ export function CreateReportTab() {
 
   const reports = useMemo(
     () =>
-      state.status === "ready" ? state.data.reports.filter((r) => !statusFilter || r.status === statusFilter) : [],
-    [state, statusFilter],
+      state.status === "ready"
+        ? state.data.reports.filter(
+            (r) => (!statusFilter || r.status === statusFilter) && (!typeFilter || r.report_type === typeFilter),
+          )
+        : [],
+    [state, statusFilter, typeFilter],
   );
 
   if (!selectedSite) return null;
@@ -516,7 +522,7 @@ function settingRows(snapshot: Record<string, unknown>): string[] {
         : s.setting === "OPERATING_SCHEDULE"
           ? `schedule ${String(s.description ?? "")}`
           : `thresholds OFF ${String(value.off_kw)} / ON ${String(value.on_kw)} kW`;
-    const retro = s.retrospective ? " — retrospective baseline" : "";
+    const retro = s.retrospective ? " â€” retrospective baseline" : "";
     return `${String(s.asset_name)}: ${text} (from ${String(s.effective_from).slice(0, 16).replace("T", " ")}${retro})`;
   });
 }

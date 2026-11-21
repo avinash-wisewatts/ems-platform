@@ -55,6 +55,22 @@ BEGIN
 END;
 $function$;
 
+-- Migration 329 form of the schedule read (before dropping the helper it uses).
+DROP FUNCTION analytics.get_portal_site_report_schedule(bigint, uuid);
+CREATE FUNCTION analytics.get_portal_site_report_schedule(p_portal_user_id BIGINT, p_site_id UUID)
+RETURNS TABLE (enrolled BOOLEAN, weekly_enabled BOOLEAN, monthly_enabled BOOLEAN, site_timezone TEXT)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path TO pg_catalog, analytics, admin, metadata
+AS $function$
+    SELECT (p.site_id IS NOT NULL), COALESCE(p.weekly_enabled, FALSE), COALESCE(p.monthly_enabled, FALSE),
+           COALESCE(NULLIF(s.timezone, ''), 'UTC')
+    FROM metadata.sites AS s
+    LEFT JOIN analytics.site_report_profiles AS p ON p.site_id = s.id
+    WHERE s.id = p_site_id AND admin.portal_user_can_access_site(p_portal_user_id, p_site_id);
+$function$;
+
 DROP FUNCTION IF EXISTS analytics.site_report_can_generate(bigint, uuid);
 
 -- Migration 329 form of the customer history read.
@@ -104,12 +120,16 @@ DO $grants$
 BEGIN
     ALTER FUNCTION analytics.list_portal_site_reports(bigint, uuid, text, integer) OWNER TO ems_admin;
     ALTER FUNCTION analytics.site_report_read_identity_problem(uuid) OWNER TO ems_admin;
+    ALTER FUNCTION analytics.get_portal_site_report_schedule(bigint, uuid) OWNER TO ems_admin;
+    REVOKE ALL ON FUNCTION analytics.get_portal_site_report_schedule(bigint, uuid) FROM PUBLIC;
+    GRANT EXECUTE ON FUNCTION analytics.get_portal_site_report_schedule(bigint, uuid) TO ems_app;
     REVOKE ALL ON FUNCTION analytics.list_portal_site_reports(bigint, uuid, text, integer) FROM PUBLIC;
     REVOKE ALL ON FUNCTION analytics.site_report_read_identity_problem(uuid) FROM PUBLIC;
     GRANT EXECUTE ON FUNCTION analytics.list_portal_site_reports(bigint, uuid, text, integer) TO ems_app;
     GRANT EXECUTE ON FUNCTION analytics.site_report_read_identity_problem(uuid) TO ems_app;
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'ems_customer_api') THEN
         GRANT EXECUTE ON FUNCTION analytics.list_portal_site_reports(bigint, uuid, text, integer) TO ems_customer_api;
+        GRANT EXECUTE ON FUNCTION analytics.get_portal_site_report_schedule(bigint, uuid) TO ems_customer_api;
     END IF;
 END;
 $grants$;

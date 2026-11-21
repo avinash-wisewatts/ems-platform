@@ -37,6 +37,7 @@
 --   analytics.request_portal_site_report                 ems_customer_api + ems_app
 --   analytics.site_report_read_identity_problem          replaced (requester rule widened)
 --   analytics.list_portal_site_reports                   re-created with retrospective_baseline
+--   analytics.get_portal_site_report_schedule            re-created with can_generate
 --
 -- RULES ENFORCED HERE (never only in the UI)
 --   Baseline: WiseWatts Admin only; one per site; effective date in the past
@@ -415,6 +416,27 @@ AS $function$
 $function$;
 
 
+-- The schedule read also tells the portal whether THIS user may generate, by
+-- the same database rule the request uses (so the automation account, or a
+-- user without site access, is never offered the control).
+DROP FUNCTION analytics.get_portal_site_report_schedule(bigint, uuid);
+CREATE FUNCTION analytics.get_portal_site_report_schedule(p_portal_user_id BIGINT, p_site_id UUID)
+RETURNS TABLE (enrolled BOOLEAN, weekly_enabled BOOLEAN, monthly_enabled BOOLEAN, site_timezone TEXT,
+               can_generate BOOLEAN)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path TO pg_catalog, analytics, admin, metadata
+AS $function$
+    SELECT (p.site_id IS NOT NULL), COALESCE(p.weekly_enabled, FALSE), COALESCE(p.monthly_enabled, FALSE),
+           COALESCE(NULLIF(s.timezone, ''), 'UTC'),
+           (p.site_id IS NOT NULL AND analytics.site_report_can_generate(p_portal_user_id, p_site_id))
+    FROM metadata.sites AS s
+    LEFT JOIN analytics.site_report_profiles AS p ON p.site_id = s.id
+    WHERE s.id = p_site_id AND admin.portal_user_can_access_site(p_portal_user_id, p_site_id);
+$function$;
+
+
 -- ----------------------------------------------------------------------------
 -- 4. Ownership and grants.
 -- ----------------------------------------------------------------------------
@@ -429,7 +451,8 @@ BEGIN
         'analytics.site_report_can_generate(bigint, uuid)',
         'analytics.request_portal_site_report(bigint, uuid, text, date)',
         'analytics.site_report_read_identity_problem(uuid)',
-        'analytics.list_portal_site_reports(bigint, uuid, text, integer)'
+        'analytics.list_portal_site_reports(bigint, uuid, text, integer)',
+        'analytics.get_portal_site_report_schedule(bigint, uuid)'
     ] LOOP
         EXECUTE format('ALTER FUNCTION %s OWNER TO ems_admin', v_sig);
         EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC', v_sig);
@@ -439,13 +462,15 @@ BEGIN
         'analytics.get_site_report_retrospective_baselines(uuid)',
         'analytics.request_portal_site_report(bigint, uuid, text, date)',
         'analytics.site_report_read_identity_problem(uuid)',
-        'analytics.list_portal_site_reports(bigint, uuid, text, integer)'
+        'analytics.list_portal_site_reports(bigint, uuid, text, integer)',
+        'analytics.get_portal_site_report_schedule(bigint, uuid)'
     ] LOOP
         EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO ems_app', v_sig);
     END LOOP;
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'ems_customer_api') THEN
         EXECUTE 'GRANT EXECUTE ON FUNCTION analytics.list_portal_site_reports(bigint, uuid, text, integer) TO ems_customer_api';
         EXECUTE 'GRANT EXECUTE ON FUNCTION analytics.request_portal_site_report(bigint, uuid, text, date) TO ems_customer_api';
+        EXECUTE 'GRANT EXECUTE ON FUNCTION analytics.get_portal_site_report_schedule(bigint, uuid) TO ems_customer_api';
     END IF;
 END;
 $grants$;

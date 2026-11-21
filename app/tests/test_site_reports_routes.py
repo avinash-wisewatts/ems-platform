@@ -47,11 +47,13 @@ class FakeReports:
     def __init__(self) -> None:
         self.calls: list[tuple] = []
         self.generate_error: Exception | None = None
+        # Users the database rule allows to generate (active ADMIN with site access, not the automation account).
+        self.db_can_generate: set[int] = {900, 901}
 
     def install(self, monkeypatch) -> None:
         async def portal_schedule(uid, site_id):
-            return {"enrolled": True, "weekly_enabled": True, "monthly_enabled": False, "site_timezone": "Asia/Kolkata"} \
-                if str(site_id) == SITE_ID else None
+            return {"enrolled": True, "weekly_enabled": True, "monthly_enabled": False, "site_timezone": "Asia/Kolkata",
+                    "can_generate": uid in self.db_can_generate} if str(site_id) == SITE_ID else None
 
         async def portal_reports(uid, site_id, report_type, limit=200):
             self.calls.append(("list", uid, report_type))
@@ -276,6 +278,14 @@ def test_operators_and_viewers_cannot_generate(customer_client, monkeypatch, rep
     response = customer_client.post(f"/api/v1/sites/{SITE_ID}/site-reports", json=GENERATE, headers=ORIGIN)
     assert response.status_code == 403
     assert not [c for c in reports.calls if c[0] == "generate"]
+
+
+def test_can_generate_follows_the_database_rule(customer_client, monkeypatch, reports):
+    """An ADMIN the database refuses (e.g. the designated automation account) is not offered generation."""
+
+    reports.db_can_generate = set()
+    _customer_login(customer_client, monkeypatch, TENANT_ADMIN)
+    assert customer_client.get(f"/api/v1/sites/{SITE_ID}/site-reports").json()["can_generate"] is False
 
 
 def test_generation_refuses_cross_origin_and_non_json(customer_client, monkeypatch, reports):

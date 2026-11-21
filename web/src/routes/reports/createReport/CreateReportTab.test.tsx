@@ -211,14 +211,17 @@ describe("Reports -> Create report (history, view and download)", () => {
     expect(details.textContent).toContain("Lobby Area AHU-1: setpoint 24.0 °C");
   });
 
-  it("filters by type and status", async () => {
+  it("filters by type and status in the browser (all types are loaded once)", async () => {
     const { calls } = stub();
     render(VIEW_ONLY);
     await screen.findByTestId("create-report-table");
     await userEvent.selectOptions(screen.getByTestId("create-report-status"), "FAILED");
     expect(screen.getAllByTestId("create-report-row")).toHaveLength(1);
+    await userEvent.selectOptions(screen.getByTestId("create-report-status"), "");
     await userEvent.selectOptions(screen.getByTestId("create-report-type"), "MONTHLY");
-    await waitFor(() => expect(calls.some((c) => c.url.includes("type=MONTHLY"))).toBe(true));
+    expect(screen.getAllByTestId("create-report-row")).toHaveLength(1);
+    expect(screen.getByText("October 2026")).toBeTruthy();
+    expect(calls.some((c) => c.url.includes("type="))).toBe(false);
   });
 
   it("explains when the site is not enrolled", async () => {
@@ -307,6 +310,8 @@ describe("Reports -> Create report: on-demand generation", () => {
     stub({ can_generate: true, reports: [report({ report_id: "r-m", report_type: "MONTHLY", period_start: latestMonth })] });
     render(BOTH);
     const form = await screen.findByTestId("create-report-generate");
+    // Even with the history filtered to Weekly, the form knows the monthly report exists.
+    await userEvent.selectOptions(screen.getByTestId("create-report-type"), "WEEKLY");
     expect(within(form).getByTestId("create-report-generate-submit").textContent).toBe("Generate report");
     await userEvent.selectOptions(within(form).getByTestId("create-report-generate-type"), "MONTHLY");
     await waitFor(() =>
@@ -324,6 +329,18 @@ describe("Reports -> Create report: on-demand generation", () => {
     const form = await screen.findByTestId("create-report-generate");
     await userEvent.click(within(form).getByTestId("create-report-generate-submit"));
     expect((await screen.findByRole("alert")).textContent).toBe("Three requested reports are already waiting.");
+  });
+});
+
+describe("Reports -> Create report: labels", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("names weekly periods with an en-dash (UTF-8 source)", async () => {
+    stub({ can_generate: true });
+    render(BOTH);
+    const form = await screen.findByTestId("create-report-generate");
+    const first = (within(form).getByTestId("create-report-generate-period") as HTMLSelectElement).options[0]!;
+    expect(first.textContent).toMatch(/^\d{2} [A-Z][a-z]{2} \d{4} – \d{2} [A-Z][a-z]{2} \d{4}$/);
   });
 });
 
