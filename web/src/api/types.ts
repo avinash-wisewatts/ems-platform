@@ -812,6 +812,9 @@ export interface SiteReportItem {
   expires_at: string | null;
   download_version_id: string | null;
   coverage_summary: Record<string, number | null> | null;
+  /** The latest version used AHU settings back-dated under a PO-approved
+   * retrospective reporting baseline (ADR-025 Amendment 1, A116). */
+  retrospective_baseline: boolean;
 }
 
 export interface SiteReportListResponse {
@@ -819,7 +822,16 @@ export interface SiteReportListResponse {
   weekly_enabled: boolean;
   monthly_enabled: boolean;
   timezone: string;
+  /** Site Admins and WiseWatts Admins may generate on demand (A113). */
+  can_generate: boolean;
   reports: SiteReportItem[];
+}
+
+export interface SiteReportGenerateResponse {
+  report_id: string;
+  attempt_id: string;
+  action: "GENERATE" | "REGENERATE";
+  trigger: string;
 }
 
 export interface SiteReportVersion {

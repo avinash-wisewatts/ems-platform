@@ -109,14 +109,14 @@ class SiteReportWorker:
         from src.report_engine import ENGINE_VERSION
         from src.report_engine.ems_loader import RetentionExceededError, check_retention, final_hour_completeness, load_period
         from src.report_engine.periods import RECHECK_INTERVAL, period_for
-        from src.report_engine.settings import roster_and_settings, settings_snapshot
+        from src.report_engine.settings import baseline_note, roster_and_settings, settings_snapshot
 
         problem = await svc.read_identity_problem(attempt_id)
         if problem:
             code = "automation_not_authorized" if job["identity_kind"] == "AUTOMATION" else "requester_not_authorized"
             message = ("The WiseWatts automation account is deactivated, not set, or no longer restricted to this site "
                        f"({problem}). Automatic generation has stopped." if code == "automation_not_authorized"
-                       else "The requesting WiseWatts Admin no longer has access to this site.")
+                       else "The requesting user is no longer a Site Admin or WiseWatts Admin with access to this site.")
             await svc.fail(attempt_id, self.worker_id, code, message, False)
             return code
 
@@ -166,8 +166,13 @@ class SiteReportWorker:
         from src.report_engine.generate import InsufficientDataError, generate_report
         from src.report_engine.validate_pdf import PdfValidationError
 
+        local_start = period.local_bounds(zone)[0]
+        snapshot = settings_snapshot(rows, local_start, period.end_instant(zone),
+                                     period.load_range_utc(zone)[0].astimezone(zone),
+                                     await svc.worker_baselines(site_id))
         try:
-            result = await asyncio.to_thread(generate_report, job["site_name"], period, loaded.assets, layout, settings)
+            result = await asyncio.to_thread(generate_report, job["site_name"], period, loaded.assets, layout, settings,
+                                             baseline_note(snapshot))
         except InsufficientDataError as exc:
             await svc.fail(attempt_id, self.worker_id, "insufficient_data", str(exc), False)
             return "insufficient_data"
@@ -176,9 +181,6 @@ class SiteReportWorker:
                            f"The report failed its quality check and was not published ({exc.check}).", False)
             return "pdf_validation_failed"
 
-        local_start = period.local_bounds(zone)[0]
-        snapshot = settings_snapshot(rows, local_start, period.end_instant(zone),
-                                     period.load_range_utc(zone)[0].astimezone(zone))
         version = await svc.complete(
             attempt_id, self.worker_id, file_name=result.file_name, content=result.pdf, sha256=result.check.sha256,
             page_count=result.check.pages, incomplete_data=result.quality.incomplete_data,

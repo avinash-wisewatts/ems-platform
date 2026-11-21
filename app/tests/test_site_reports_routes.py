@@ -1,8 +1,10 @@
 """Reports -> Create report routes (ADR-025).
 
-Customer portal API (src.routers.site_reports): read-only for every profile
-(A5, A107), no write route, PDF download headers, site access re-checked
-(T-SEC-1/2/7). Administration App pages (src.routers.admin_site_reports):
+Customer portal API (src.routers.site_reports): view/download for every
+profile (A5), PDF download headers, site access re-checked (T-SEC-1/2/7); the
+only write is on-demand generation, for Site Admins and WiseWatts Admins
+(report.generate, ADR-025 Amendment 1, A113) -- Operators and Viewers are
+refused, cross-origin and non-JSON writes are refused. Administration App pages (src.routers.admin_site_reports):
 WiseWatts Admins only, enforced in the route whether EMS_ADMIN_STAFF_ONLY is
 off or on (A2, A3, A12; T-ADM-3/4), cross-origin posts refused, permanent
 deletion requires the typed confirmation (A111; T-DEL-11).
@@ -34,6 +36,8 @@ STAFF = AuthenticatedPortalUser(portal_user_id=900, username="staff@wisewatts.ex
                                 role_code="ADMIN", access_scope_mode="GLOBAL")
 TENANT_ADMIN = AuthenticatedPortalUser(portal_user_id=901, username="admin@radisson.example", display_name="Radisson Admin",
                                        role_code="ADMIN", organization_id=ORG_ID, access_scope_mode="ORGANIZATION")
+OPERATOR = AuthenticatedPortalUser(portal_user_id=903, username="operator@radisson.example", display_name="Operator",
+                                   role_code="OPERATOR", organization_id=ORG_ID, access_scope_mode="ORGANIZATION")
 VIEWER = AuthenticatedPortalUser(portal_user_id=902, username="viewer@radisson.example", display_name="Viewer",
                                  role_code="VIEWER", organization_id=ORG_ID, access_scope_mode="SELECTED_SITES",
                                  site_ids=(SITE_ID,))
@@ -42,11 +46,14 @@ VIEWER = AuthenticatedPortalUser(portal_user_id=902, username="viewer@radisson.e
 class FakeReports:
     def __init__(self) -> None:
         self.calls: list[tuple] = []
+        self.generate_error: Exception | None = None
+        # Users the database rule allows to generate (active ADMIN with site access, not the automation account).
+        self.db_can_generate: set[int] = {900, 901}
 
     def install(self, monkeypatch) -> None:
         async def portal_schedule(uid, site_id):
-            return {"enrolled": True, "weekly_enabled": True, "monthly_enabled": False, "site_timezone": "Asia/Kolkata"} \
-                if str(site_id) == SITE_ID else None
+            return {"enrolled": True, "weekly_enabled": True, "monthly_enabled": False, "site_timezone": "Asia/Kolkata",
+                    "can_generate": uid in self.db_can_generate} if str(site_id) == SITE_ID else None
 
         async def portal_reports(uid, site_id, report_type, limit=200):
             self.calls.append(("list", uid, report_type))
@@ -69,6 +76,13 @@ class FakeReports:
             return {"file_name": "Radisson_Blu_Coimbatore_Weekly.pdf", "content": b"%PDF-1.7 test", "sha256": "0" * 64} \
                 if version_id == VERSION_ID else None
 
+        async def portal_generate(uid, site_id, report_type, period_start):
+            self.calls.append(("generate", uid, str(site_id), report_type, period_start))
+            if self.generate_error is not None:
+                raise self.generate_error
+            return {"report_id": REPORT_ID, "attempt_id": uuid4(), "action": "GENERATE", "trigger": "HISTORICAL"}
+
+        monkeypatch.setattr(svc, "portal_generate", portal_generate)
         for name, fn in (("portal_schedule", portal_schedule), ("portal_reports", portal_reports),
                          ("portal_versions", portal_versions), ("portal_file", portal_file)):
             monkeypatch.setattr(svc, name, fn)
@@ -173,13 +187,14 @@ def _admin_login(portal_client, monkeypatch, user):
 # Customer portal API: read-only (A5, A107)
 # ---------------------------------------------------------------------------
 
-def test_customer_api_has_no_report_write_route():
+def test_customer_api_only_write_route_is_generation():
     import src.customer_main as customer_main
 
     for route in customer_main.app.routes:
         path = getattr(route, "path", "")
         if "site-report" in path:
-            assert set(getattr(route, "methods", set())) <= {"GET", "HEAD"}, path
+            allowed = {"GET", "HEAD", "POST"} if path == "/api/v1/sites/{site_id}/site-reports" else {"GET", "HEAD"}
+            assert set(getattr(route, "methods", set())) <= allowed, path
     paths = {getattr(r, "path", "") for r in customer_main.app.routes}
     assert {"/api/v1/sites/{site_id}/site-reports", "/api/v1/site-reports/{report_id}/versions",
             "/api/v1/site-report-versions/{version_id}/download"} <= paths
@@ -218,9 +233,11 @@ def test_inaccessible_site_report_or_version_is_404(customer_client, monkeypatch
     assert customer_client.get(f"/api/v1/site-report-versions/{uuid4()}/download").status_code == 404
 
 
-def test_write_methods_are_not_allowed(customer_client, monkeypatch, reports):
+def test_other_write_methods_are_not_allowed(customer_client, monkeypatch, reports):
     _customer_login(customer_client, monkeypatch, TENANT_ADMIN)
-    for method, path in (("post", f"/api/v1/sites/{SITE_ID}/site-reports"), ("delete", f"/api/v1/site-reports/{REPORT_ID}/versions"),
+    for method, path in (("delete", f"/api/v1/sites/{SITE_ID}/site-reports"),
+                         ("delete", f"/api/v1/site-reports/{REPORT_ID}/versions"),
+                         ("post", f"/api/v1/site-reports/{REPORT_ID}/versions"),
                          ("post", f"/api/v1/site-report-versions/{VERSION_ID}/download")):
         assert getattr(customer_client, method)(path, headers=ORIGIN).status_code in (404, 405)
     assert not [c for c in reports.calls if c[0] != "list"]
@@ -228,7 +245,72 @@ def test_write_methods_are_not_allowed(customer_client, monkeypatch, reports):
 
 def test_me_advertises_report_view_for_every_role(customer_client, monkeypatch, reports):
     _customer_login(customer_client, monkeypatch, VIEWER)
-    assert "report.view" in customer_client.get("/api/v1/me").json()["permissions"]
+    permissions = customer_client.get("/api/v1/me").json()["permissions"]
+    assert "report.view" in permissions and "report.generate" not in permissions
+
+
+# ---------------------------------------------------------------------------
+# Customer portal: on-demand generation (ADR-025 Amendment 1, A113, A115)
+# ---------------------------------------------------------------------------
+
+GENERATE = {"report_type": "MONTHLY", "period_start": "2026-10-01"}
+
+
+@pytest.mark.parametrize("user", [TENANT_ADMIN, STAFF])
+def test_site_admins_and_wisewatts_admins_generate(customer_client, monkeypatch, reports, user):
+    import src.customer_main as customer_main
+
+    # WiseWatts Admins sign in to the customer app where staff sign-in is allowed (staging).
+    monkeypatch.setattr(customer_main.settings, "customer_allow_staff", True)
+    _customer_login(customer_client, monkeypatch, user)
+    assert "report.generate" in customer_client.get("/api/v1/me").json()["permissions"]
+    assert customer_client.get(f"/api/v1/sites/{SITE_ID}/site-reports").json()["can_generate"] is True
+    response = customer_client.post(f"/api/v1/sites/{SITE_ID}/site-reports", json=GENERATE, headers=ORIGIN)
+    assert response.status_code == 202, response.text
+    assert response.json()["action"] == "GENERATE" and response.json()["trigger"] == "HISTORICAL"
+    assert ("generate", user.portal_user_id, SITE_ID, "MONTHLY", date(2026, 10, 1)) in reports.calls
+
+
+@pytest.mark.parametrize("user", [OPERATOR, VIEWER])
+def test_operators_and_viewers_cannot_generate(customer_client, monkeypatch, reports, user):
+    _customer_login(customer_client, monkeypatch, user)
+    assert customer_client.get(f"/api/v1/sites/{SITE_ID}/site-reports").json()["can_generate"] is False
+    response = customer_client.post(f"/api/v1/sites/{SITE_ID}/site-reports", json=GENERATE, headers=ORIGIN)
+    assert response.status_code == 403
+    assert not [c for c in reports.calls if c[0] == "generate"]
+
+
+def test_can_generate_follows_the_database_rule(customer_client, monkeypatch, reports):
+    """An ADMIN the database refuses (e.g. the designated automation account) is not offered generation."""
+
+    reports.db_can_generate = set()
+    _customer_login(customer_client, monkeypatch, TENANT_ADMIN)
+    assert customer_client.get(f"/api/v1/sites/{SITE_ID}/site-reports").json()["can_generate"] is False
+
+
+def test_generation_refuses_cross_origin_and_non_json(customer_client, monkeypatch, reports):
+    _customer_login(customer_client, monkeypatch, TENANT_ADMIN)
+    path = f"/api/v1/sites/{SITE_ID}/site-reports"
+    assert customer_client.post(path, json=GENERATE, headers={"Origin": "https://evil.example"}).status_code == 403
+    assert customer_client.post(path, json=GENERATE, headers={**ORIGIN, "Sec-Fetch-Site": "cross-site"}).status_code == 403
+    assert customer_client.post(path, content="report_type=MONTHLY", headers={
+        **ORIGIN, "Content-Type": "application/x-www-form-urlencoded"}).status_code == 415
+    assert customer_client.post(path, json={"report_type": "DAILY", "period_start": "2026-10-01"},
+                                headers=ORIGIN).status_code == 422
+    assert not [c for c in reports.calls if c[0] == "generate"]
+
+
+def test_generation_on_an_inaccessible_site_is_404(customer_client, monkeypatch, reports):
+    _customer_login(customer_client, monkeypatch, TENANT_ADMIN)
+    assert customer_client.post(f"/api/v1/sites/{uuid4()}/site-reports", json=GENERATE, headers=ORIGIN).status_code == 404
+
+
+def test_database_refusal_is_returned_with_its_message(customer_client, monkeypatch, reports):
+    _customer_login(customer_client, monkeypatch, TENANT_ADMIN)
+    reports.generate_error = svc.SiteReportError("site_report_period_not_ended", svc.ERROR_TEXT["site_report_period_not_ended"], 400)
+    response = customer_client.post(f"/api/v1/sites/{SITE_ID}/site-reports", json=GENERATE, headers=ORIGIN)
+    assert response.status_code == 400
+    assert response.json() == {"error": "site_report_period_not_ended", "detail": "The reporting period has not ended yet."}
 
 
 # ---------------------------------------------------------------------------

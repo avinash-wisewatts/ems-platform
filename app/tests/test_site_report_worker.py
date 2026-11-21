@@ -5,7 +5,8 @@ run end to end; only the EMS telemetry reads are replaced by deterministic
 synthetic readings (the loader is tested separately). Covers publication with
 coverage and settings snapshot (A58, A80), waiting for late data (A64-A65),
 automation identity failure (A90), insufficient data (A48), retention
-(A71), temporary failure retry (A68) and the heartbeat.
+(A71), temporary failure retry (A68), the heartbeat, a Site Admin's portal
+request (A113) and the retrospective-baseline disclosure (A112, A116).
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ ORG = "00000000-0000-0000-0000-0000000b5e01"
 SITE = "00000000-0000-0000-0000-0000000b5e11"
 STAFF = "srw.staff@test"
 AUTOMATION = "srw.automation@test"
+SITE_ADMIN = "srw.site-admin@test"
 WEEK_START = date(2026, 10, 18)
 
 
@@ -47,7 +49,8 @@ def seed():
             cur.execute("INSERT INTO metadata.assets (id, organization_id, site_id, name, external_id, metering_requirement, "
                         "lifecycle_status) VALUES (%s, %s, %s, %s, %s, 'NOT_REQUIRED', 'ACTIVE') ON CONFLICT (id) DO NOTHING",
                         (asset_id(i), ORG, SITE, name, f"SRW_{i}"))
-        for username, role, org, scope in ((STAFF, "ADMIN", None, "GLOBAL"), (AUTOMATION, "ADMIN", ORG, "SELECTED_SITES")):
+        for username, role, org, scope in ((STAFF, "ADMIN", None, "GLOBAL"), (AUTOMATION, "ADMIN", ORG, "SELECTED_SITES"),
+                                           (SITE_ADMIN, "ADMIN", ORG, "ORGANIZATION")):
             cur.execute("""INSERT INTO admin.portal_users (username, display_name, password_hash, role_code, organization_id,
                                                          access_scope_mode, created_by)
                            VALUES (%s, %s, '$argon2id$placeholder', %s, %s, %s, 'srw-test') ON CONFLICT (username) DO NOTHING""",
@@ -241,3 +244,61 @@ async def test_inactive_automation_account_stops_generation(conn, pool, ems, tmp
     await worker(tmp_path).run_once()
     attempts = latest_attempts(conn, report_id)
     assert attempts == [("FAILED", "automation_not_authorized", "AUTOMATIC", 0, None)]      # no automatic retry
+
+
+def pdf_text(conn, report_id) -> str:
+    import io
+
+    from pypdf import PdfReader
+
+    content = q(conn, "SELECT f.content FROM analytics.site_report_files f JOIN analytics.site_report_versions v "
+                      "ON v.id = f.version_id WHERE v.report_id = %s ORDER BY v.version_no DESC LIMIT 1", (report_id,))[0][0]
+    return " ".join(" ".join((p.extract_text() or "").split()) for p in PdfReader(io.BytesIO(bytes(content))).pages)
+
+
+async def test_site_admin_portal_request_publishes_with_their_read_identity(conn, pool, ems, tmp_path):
+    site_admin = q(conn, "SELECT portal_user_id FROM admin.portal_users WHERE username = %s", (SITE_ADMIN,))[0][0]
+    report_id, attempt_id, action, trigger = q(conn, "SELECT * FROM analytics.request_portal_site_report(%s, %s, 'WEEKLY', %s)",
+                                               (site_admin, SITE, WEEK_START))[0]
+    assert (action, trigger) == ("GENERATE", "HISTORICAL")
+    await worker(tmp_path).run_once()
+    assert q(conn, "SELECT analytics.site_report_display_status(%s)", (report_id,))[0][0] == "GENERATED",         latest_attempts(conn, report_id)
+    assert q(conn, "SELECT read_identity_portal_user_id FROM analytics.site_report_attempts WHERE id = %s",
+             (attempt_id,))[0][0] == site_admin
+    snapshot = q(conn, "SELECT settings_snapshot FROM analytics.site_report_versions WHERE report_id = %s", (report_id,))[0][0]
+    assert "retrospective_baseline" not in snapshot
+    assert "retrospective reporting baseline" not in pdf_text(conn, report_id)
+
+
+async def test_report_using_a_retrospective_baseline_is_labelled(conn, pool, ems, tmp_path):
+    """Versions back-dated under a baseline are marked in the snapshot, the
+    PDF states the basis and that it is not verified operating practice, and
+    history flags it; the readings are not changed (A112, A116)."""
+
+    staff = staff_id(conn)
+    # Test setup only: record a baseline and link the (already back-dated)
+    # versions to it directly; the function's own rules are covered in
+    # test_site_reports_db.py, whose dates stay inside its 180-day window.
+    baseline = q(conn, """INSERT INTO analytics.site_report_retrospective_baselines
+                              (site_id, effective_date, effective_from, approval_reference, approved_by, statement, recorded_by)
+                          VALUES (%s, '2026-10-01', '2026-09-30 18:30+00', 'PO approval 2026-11-21', 'WiseWatts Product Owner',
+                                  'Not verified historical practice.', %s) RETURNING id""", (SITE, staff))[0][0]
+    q(conn, "UPDATE analytics.asset_report_setting_versions SET retrospective_baseline_id = %s WHERE site_id = %s",
+      (baseline, SITE))
+    report_id, _ = q(conn, "SELECT * FROM analytics.request_site_report_generation(%s, %s, 'WEEKLY', %s)",
+                     (staff, SITE, WEEK_START))[0]
+    await worker(tmp_path).run_once()
+    assert q(conn, "SELECT analytics.site_report_display_status(%s)", (report_id,))[0][0] == "GENERATED",         latest_attempts(conn, report_id)
+    snapshot, engine = q(conn, "SELECT settings_snapshot, engine_version FROM analytics.site_report_versions "
+                               "WHERE report_id = %s", (report_id,))[0]
+    assert engine == "1.2.0"
+    block = snapshot["retrospective_baseline"]
+    assert (block["baseline_id"], block["basis"], block["effective_date"]) == (
+        baseline, "WISEWATTS_APPROVED_RETROSPECTIVE_BASELINE", "2026-10-01")
+    assert block["settings_used"] >= 1 and all(s.get("retrospective") for s in snapshot["settings"])
+    text = pdf_text(conn, report_id)
+    assert "Reporting settings basis." in text and "WiseWatts-approved retrospective reporting baseline" in text
+    assert "not independently verified historical hotel operating practice" in text
+    viewer_row = q(conn, "SELECT retrospective_baseline FROM analytics.list_portal_site_reports(%s, %s, NULL, 10)",
+                   (staff, SITE))
+    assert viewer_row == [(True,)]

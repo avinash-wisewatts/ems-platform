@@ -149,6 +149,8 @@ class RenderContext:
     comparison_note: str
     incomplete_data: bool
     completeness_note: str
+    # Set when the report used a retrospective reporting baseline (A116).
+    settings_basis_note: str = ""
 
 
 class _NumberedCanvas(rl_canvas.Canvas):
@@ -373,6 +375,9 @@ def render_report(m: dict, charts: dict, observations: list[str], attention: lis
     story.append(Spacer(1, 8))
     if ctx.incomplete_data:
         story.append(_box(f"<b>Data completeness.</b> {escape(ctx.completeness_note)}", styles))
+        story.append(Spacer(1, 6))
+    if ctx.settings_basis_note:
+        story.append(_box(f"<b>Reporting settings basis.</b> {escape(ctx.settings_basis_note)}", styles))
         story.append(Spacer(1, 6))
     story.append(P("Key observations", styles["h2"]))
     story.append(_bullets(observations, styles))

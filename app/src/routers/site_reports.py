@@ -1,17 +1,22 @@
-"""Reports -> Create report: customer-facing, READ-ONLY report API (ADR-025, A5, A107).
+"""Reports -> Create report: customer-facing report API (ADR-025, A5, A107;
+Amendment 1, A113).
 
-    GET /api/v1/sites/{site_id}/site-reports                     history + schedule state
-    GET /api/v1/site-reports/{report_id}/versions                version details (coverage, settings)
-    GET /api/v1/site-report-versions/{version_id}/download       the PDF
+    GET  /api/v1/sites/{site_id}/site-reports                    history + schedule state + can_generate
+    POST /api/v1/sites/{site_id}/site-reports                    on-demand generation (report.generate)
+    GET  /api/v1/site-reports/{report_id}/versions               version details (coverage, settings)
+    GET  /api/v1/site-report-versions/{version_id}/download      the PDF
 
 Every profile with access to the site (ADMIN, OPERATOR, VIEWER) may view and
-download (report.view). There is deliberately NO write route here: generating,
-regenerating, retrying, deleting, restoring and permanently deleting reports,
-and all reporting configuration, are WiseWatts Admin actions in the staff-only
-Administration App (A2-A4, A6, A107, ADR-023 unchanged). The database
-functions behind these routes are the only ones the customer API's database
-role may execute for reports (migration 329 postconditions); site access is
-re-checked in the database on every call, including at download time.
+download (report.view). On-demand generation -- a new report for an ended
+period, or a NEW version of an existing one (earlier versions stay) -- is for
+Site Admins and WiseWatts Admins only (report.generate = ADMIN role), checked
+here, in the middleware, and again in the database (active ADMIN with site
+access, never the automation account; migration 330). Operators and Viewers
+remain view/download only. A historical period is generated only when a user
+explicitly requests it here (A115). Retry, delete, restore, permanent deletion
+and all reporting configuration stay WiseWatts Admin actions in the staff-only
+Administration App (A2-A4, A6, ADR-023 unchanged). Site access is re-checked
+in the database on every call, including at download time.
 
 Mounted by the customer API and the Administration App only where Reports is
 enabled (EMS_REPORTS_ENABLED, staging-only).
@@ -19,15 +24,17 @@ enabled (EMS_REPORTS_ENABLED, staging-only).
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any, Literal, Optional
 from urllib.parse import quote
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel
 
 from src import site_report_service as svc
 from src.auth.authorization import PortalPermission, has_permission
+from src.auth.customer_session import same_origin
 from src.auth.models import AuthenticatedPortalUser
 from src.routers.analytics_api import _not_found, _require_portal_user
 
@@ -41,6 +48,27 @@ def _require_viewer(request: Request) -> AuthenticatedPortalUser:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                             detail={"error": "forbidden", "detail": "You do not have permission to view reports."})
     return user
+
+
+def _error(status_code: int, code: str, detail: str) -> HTTPException:
+    return HTTPException(status_code=status_code, detail={"error": code, "detail": detail})
+
+
+def _same_origin_json(request: Request) -> None:
+    """CSRF defence for the write (as the alert routes): a cross-site
+    Sec-Fetch-Site or a foreign Origin is 403, a non-JSON body 415; resolved
+    before the body is parsed."""
+
+    headers = request.headers
+    if headers.get("sec-fetch-site", "").lower() == "cross-site":
+        raise _error(status.HTTP_403_FORBIDDEN, "forbidden", "Cross-site requests are not allowed.")
+    origin = headers.get("origin")
+    if origin is not None and not same_origin(origin, headers.get("host")):
+        raise _error(status.HTTP_403_FORBIDDEN, "forbidden", "Cross-origin requests are not allowed.")
+    content_type = headers.get("content-type", "").split(";")[0].strip().lower()
+    if content_type != "application/json":
+        raise _error(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "unsupported_media_type",
+                     "Send the request as application/json.")
 
 
 class SiteReportItem(BaseModel):
@@ -61,6 +89,9 @@ class SiteReportItem(BaseModel):
     expires_at: Optional[str] = None
     download_version_id: Optional[UUID] = None
     coverage_summary: Optional[dict[str, Any]] = None
+    # The latest version used AHU settings back-dated under a PO-approved
+    # retrospective reporting baseline (migration 330, A116).
+    retrospective_baseline: bool = False
 
 
 class SiteReportListResponse(BaseModel):
@@ -68,7 +99,22 @@ class SiteReportListResponse(BaseModel):
     weekly_enabled: bool
     monthly_enabled: bool
     timezone: str
+    # Whether this user may generate on demand (Site Admins and WiseWatts
+    # Admins; the database decides again on the request).
+    can_generate: bool = False
     reports: list[SiteReportItem]
+
+
+class SiteReportGenerateRequest(BaseModel):
+    report_type: Literal["WEEKLY", "MONTHLY"]
+    period_start: date
+
+
+class SiteReportGenerateResponse(BaseModel):
+    report_id: UUID
+    attempt_id: UUID
+    action: Literal["GENERATE", "REGENERATE"]
+    trigger: str
 
 
 class SiteReportVersion(BaseModel):
@@ -109,11 +155,12 @@ def _item(row: dict[str, Any]) -> SiteReportItem:
         latest_version_no=row.get("latest_version_no"), version_count=int(row.get("version_count") or 0),
         generated_at=_iso(row.get("generated_at")), expires_at=_iso(row.get("expires_at")),
         download_version_id=row.get("download_version_id"), coverage_summary=row.get("coverage_summary"),
+        retrospective_baseline=bool(row.get("retrospective_baseline")),
     )
 
 
 @router.get("/sites/{site_id}/site-reports", response_model=SiteReportListResponse,
-            summary="Weekly and monthly report history of a site (read-only)", operation_id="listSiteReports")
+            summary="Weekly and monthly report history of a site", operation_id="listSiteReports")
 async def list_site_reports(request: Request, site_id: UUID,
                             report_type: Optional[Literal["WEEKLY", "MONTHLY"]] = Query(default=None, alias="type")
                             ) -> SiteReportListResponse:
@@ -124,7 +171,29 @@ async def list_site_reports(request: Request, site_id: UUID,
     reports = await svc.portal_reports(user.portal_user_id, site_id, report_type) if schedule["enrolled"] else []
     return SiteReportListResponse(enrolled=bool(schedule["enrolled"]), weekly_enabled=bool(schedule["weekly_enabled"]),
                                   monthly_enabled=bool(schedule["monthly_enabled"]), timezone=schedule["site_timezone"],
+                                  can_generate=bool(schedule.get("can_generate"))
+                                  and has_permission(user, PortalPermission.REPORT_GENERATE),
                                   reports=[_item(r) for r in reports])
+
+
+@router.post("/sites/{site_id}/site-reports", response_model=SiteReportGenerateResponse,
+             status_code=status.HTTP_202_ACCEPTED, dependencies=[Depends(_same_origin_json)],
+             summary="Generate a report on demand (Site Admins and WiseWatts Admins)",
+             operation_id="generateSiteReport")
+async def generate_site_report(request: Request, site_id: UUID, body: SiteReportGenerateRequest
+                               ) -> SiteReportGenerateResponse:
+    user = _require_portal_user(request)
+    if not has_permission(user, PortalPermission.REPORT_GENERATE):
+        raise _error(status.HTTP_403_FORBIDDEN, "forbidden", "Only Site Admins and WiseWatts Admins can generate reports.")
+    schedule = await svc.portal_schedule(user.portal_user_id, site_id)
+    if schedule is None:
+        raise _not_found("Site")
+    try:
+        row = await svc.portal_generate(user.portal_user_id, site_id, body.report_type, body.period_start)
+    except svc.SiteReportError as exc:
+        raise _error(exc.status, exc.code, exc.message)
+    return SiteReportGenerateResponse(report_id=row["report_id"], attempt_id=row["attempt_id"], action=row["action"],
+                                      trigger=row["trigger"])
 
 
 @router.get("/site-reports/{report_id}/versions", response_model=SiteReportVersionsResponse,

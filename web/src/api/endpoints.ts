@@ -36,7 +36,8 @@
  *   GET  /api/v1/report-exports                          (Reports tab)
  *   POST /api/v1/report-exports/{job_id}/retry           (Reports tab)
  *   GET  /api/v1/report-exports/{job_id}/file            (Reports tab, ZIP)
- *   GET  /api/v1/sites/{site_id}/site-reports            (Reports -> Create report, read-only)
+ *   GET  /api/v1/sites/{site_id}/site-reports            (Reports -> Create report: history)
+ *   POST /api/v1/sites/{site_id}/site-reports            (Create report: on-demand generation, report.generate)
  *   GET  /api/v1/site-reports/{report_id}/versions       (Reports -> Create report, read-only)
  *   GET  /api/v1/site-report-versions/{version_id}/download (Create report, PDF)
  *
@@ -79,6 +80,7 @@
 
 import { apiGet, apiGetFile, apiPostJson, apiWrite } from "./client";
 import type {
+  SiteReportGenerateResponse,
   SiteReportListResponse,
   SiteReportType,
   SiteReportVersionsResponse,
@@ -535,6 +537,20 @@ export function getSiteReports(
     reportType ? { type: reportType } : undefined,
     init,
   );
+}
+
+/** On-demand generation (Site Admins and WiseWatts Admins; ADR-025
+ * Amendment 1): a new report for an ended period, or a new version of an
+ * existing one. The database re-checks the role and site access. */
+export function generateSiteReport(
+  siteId: string,
+  reportType: SiteReportType,
+  periodStart: string,
+): Promise<SiteReportGenerateResponse> {
+  return apiPostJson<SiteReportGenerateResponse>(`/sites/${encodeURIComponent(siteId)}/site-reports`, {
+    report_type: reportType,
+    period_start: periodStart,
+  });
 }
 
 export function getSiteReportVersions(reportId: string, init?: RequestInit): Promise<SiteReportVersionsResponse> {

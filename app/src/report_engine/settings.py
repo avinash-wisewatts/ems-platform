@@ -58,9 +58,19 @@ def roster_and_settings(rows: list[dict[str, Any]], zone: ZoneInfo) -> tuple[Lay
 
 
 def settings_snapshot(rows: list[dict[str, Any]], period_start_local: datetime, period_end_exclusive_local: datetime,
-                      comparison_start_local: datetime) -> dict:
+                      comparison_start_local: datetime, baselines: list[dict[str, Any]] | None = None) -> dict:
     """The roster and every setting version in force at any time in the
-    comparison or reporting period (immutable record kept with the PDF)."""
+    comparison or reporting period (immutable record kept with the PDF).
+
+    baselines: analytics.get_site_report_retrospective_baselines rows
+    (migration 330). A version back-dated under one is marked
+    "retrospective": true, and the snapshot then carries a
+    "retrospective_baseline" block (A112, A116)."""
+
+    retro: dict[int, dict[str, Any]] = {}
+    for baseline in baselines or []:
+        for version_id in baseline.get("version_ids") or []:
+            retro[int(version_id)] = baseline
 
     roster = {}
     versions: dict[tuple[str, str], list[dict]] = {}
@@ -80,9 +90,39 @@ def settings_snapshot(rows: list[dict[str, Any]], period_start_local: datetime, 
             value = r["value"]
             entry = {"asset_id": asset_id, "asset_name": roster[asset_id]["asset_name"], "setting": key,
                      "version_id": r["version_id"], "effective_from": r["effective_from"].isoformat(), "value": value}
+            if int(r["version_id"]) in retro:
+                entry["retrospective"] = True
             if key == "OPERATING_SCHEDULE":
                 schedule, _ = normalise_schedule(value.get("schedule"))
                 entry["description"] = describe_schedule(schedule)
             selected.append(entry)
-    return {"roster": [{"asset_id": k, **v} for k, v in roster.items()], "settings": selected,
-            "period_start": period_start_local.isoformat()}
+    snapshot = {"roster": [{"asset_id": k, **v} for k, v in roster.items()], "settings": selected,
+                "period_start": period_start_local.isoformat()}
+    used = [retro[int(e["version_id"])] for e in selected if e.get("retrospective")]
+    if used:
+        b = used[0]
+        snapshot["retrospective_baseline"] = {
+            "baseline_id": int(b["baseline_id"]), "basis": b["basis"],
+            "effective_date": b["effective_date"].isoformat(), "effective_from": b["effective_from"].isoformat(),
+            "approval_reference": b["approval_reference"], "approved_by": b["approved_by"],
+            "statement": b["statement"], "recorded_at": b["recorded_at"].isoformat(),
+            "settings_used": sum(1 for e in selected if e.get("retrospective")),
+        }
+    return snapshot
+
+
+def baseline_note(snapshot: dict) -> str:
+    """The PDF's statement of the reporting-settings basis when back-dated
+    settings were used (A116): names the baseline and when it took effect, and
+    says it is not verified historical operating practice."""
+
+    baseline = snapshot.get("retrospective_baseline")
+    if not baseline:
+        return ""
+    when = datetime.fromisoformat(baseline["effective_date"])
+    return (f"AHU temperature setpoints, operating schedules and operating thresholds used for periods from "
+            f"{when:%d %b %Y} follow a WiseWatts-approved retrospective reporting baseline "
+            f"(approved by {baseline['approved_by']}; recorded {baseline['recorded_at'][:10]}). It applies the current "
+            "approved reporting configuration to earlier dates for reporting purposes only; it is not independently "
+            "verified historical hotel operating practice. Readings are unchanged: no telemetry or temperature was "
+            "added or altered.")
