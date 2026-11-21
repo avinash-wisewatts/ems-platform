@@ -85,6 +85,54 @@ The authoritative specification is
   `/administration/sites/*`); the route and database add the WiseWatts Admin
   requirement on top.
 
+## Amendment 1 (2026-11-21): retrospective AHU baseline and customer-portal generation
+
+Product Owner, planning package revision 4.2, decisions A112–A117; migration
+330 (staging/test only); engine 1.2.0.
+
+1. **Retrospective AHU reporting baseline (A112, A114).**
+   - What it is: one WiseWatts-approved baseline per site. For Radisson Blu
+     Coimbatore, the approved AHU setpoints, operating schedules and OFF/ON
+     thresholds are treated as in force from 1 Oct 2026, recorded in
+     `analytics.site_report_retrospective_baselines`.
+   - How it is applied: `analytics.apply_site_report_retrospective_baseline`,
+     by a WiseWatts Admin. The function copies exactly the in-force AHU
+     versions, unchanged, refuses to override recorded history, and audits
+     every version.
+   - Scope of the exception: it supersedes "settings are never back-dated"
+     (A17/A18) for this baseline only. The normal setting path still refuses
+     past dates.
+   - What it is not: a reporting baseline, **not** verified historical hotel
+     operating practice.
+   - What it does not do: applying it generates no report and changes no
+     schedule.
+2. **On-demand generation in the customer portal (A113, A115).**
+   - Who: Site Admins and WiseWatts Admins (role ADMIN; new permission
+     `report.generate`). Operators and Viewers stay view/download only.
+   - How: `POST /api/v1/sites/{site_id}/site-reports`, same-origin JSON,
+     backed by `analytics.request_portal_site_report`. That function is
+     executable by `ems_customer_api` and re-checks an active ADMIN with site
+     access, never the automation account.
+   - What it creates: a report for an ended period, or a new version of an
+     existing one. Historical reports are produced only by such an explicit
+     request. The automatic schedule is unchanged.
+   - Read identity: `site_report_read_identity_problem` now accepts the
+     requester while they are still allowed to generate.
+   - Still Administration App only, for WiseWatts Admins: retry, delete,
+     restore, permanent deletion and all configuration. ADR-023 is unchanged:
+     the customer API mounts no administration route.
+3. **Labelling (A116).**
+   - Settings snapshots mark baseline-derived settings and carry a
+     `retrospective_baseline` block.
+   - The PDF carries a "Reporting settings basis" note.
+   - History shows "Retrospective baseline".
+   - Existing PDF versions are never modified.
+4. **UI (A117).** Create report is the default Reports tab. The site comes from
+   the application sidebar; the tab has no site selector.
+
+Rollback: `postgres/maintenance/330_site_report_retrospective_baseline_rollback.sql`,
+run before the 328/329 rollback.
+
 ## DDS change-control note
 
 No new DDS core concept is introduced. Report records, versions, files and
@@ -98,6 +146,9 @@ package and is recorded here for Product Owner review.
 
 ## Rollback
 
+Amendment 1 first: `postgres/maintenance/330_site_report_retrospective_baseline_rollback.sql`
+(deletes baseline-derived setting versions and the baseline records; restores
+the migration 329 read-identity rule and history read). Then
 `postgres/maintenance/328_329_site_reports_rollback.sql` (destructive: drops
 all report data and reporting settings; audit events are kept), after
 deploying an image without the feature and stopping `report-worker`.

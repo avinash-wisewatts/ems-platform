@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | **Revision 4.1 — approved specification. IMPLEMENTED for staging (2026-11-19)** on `feature/reports-create-report`: migrations 328–329, report engine and worker, Administration App pages, customer-portal tab ([ADR-025](../../00-governance/decisions/ADR-025-site-energy-performance-reports.md), [implementation evidence](evidence-2026-11-19-implementation.md), [runbook](../../10-operations/create-report-runbook.md)). The automation account (A93) is not created; production is not approved (A106). |
+| Status | **Revision 4.2 — approved specification** (4.1 amended by the product owner, 2026-11-21: retrospective AHU baseline, customer-portal on-demand generation, Reports UI; A112–A117, §2.6). **Revision 4.1 IMPLEMENTED for staging (2026-11-19)** on `feature/reports-create-report`: migrations 328–329, report engine and worker, Administration App pages, customer-portal tab ([ADR-025](../../00-governance/decisions/ADR-025-site-energy-performance-reports.md), [implementation evidence](evidence-2026-11-19-implementation.md), [runbook](../../10-operations/create-report-runbook.md)). The automation account (A93) is not created; production is not approved (A106). |
 | Worktree / branch | `C:\Users\avina\Documents\WiseWatts\ems-create-report`, `feature/reports-create-report` (from `origin/staging` 587de69) |
 | Scope | Radisson Blu Coimbatore only; staging only; no production changes (A105, A106) |
 | Evidence | [evidence-2026-11-18.md](evidence-2026-11-18.md) (unchanged in revision 3) |
@@ -15,6 +15,7 @@ Identifiers and labels:
 - **A1–A106**: the revision 3 authoritative decision set (numbered as in your brief).
 - **A107–A110**: the product owner's revision 4 approvals closing OQ1–OQ4.
 - **A111**: manual permanent deletion from the recycle bin (approved 2026-11-19).
+- **A112–A117**: the product owner's revision 4.2 amendment (2026-11-21): retrospective AHU baseline, on-demand generation in the customer portal, historical generation on explicit request only, Reports UI.
 - **S**: the status set.
 - **[FACT]**: verified (evidence file).
 - **[ASSUMPTION]**: to verify during implementation.
@@ -29,6 +30,7 @@ Identifiers and labels:
 | 2 | 2026-11-18 | F1–F51 and the status set; Q1–Q20 and R1–R7 resolved; remaining TQ1–TQ7 |
 | 3 | 2026-11-18 | Revision 3 decision set A1–A106 applied; TQ1–TQ7 resolved as TC1–TC7. **Superseded:** Radisson Admins configuring or managing reporting (F1/F4/F8/F9/F12 → A1–A12); the proposed ADR-023 amendment and the customer-host settings screen (→ A12); GLOBAL-scope run-as account (→ A88–A90); effective-from-midnight for today (→ A19); the "Admin" web actions (generate, regenerate, retry, delete, restore, pause) in the customer portal (→ the Administration App, [DESIGN] §7). New: effective-at-save timestamps, Source Sans 3, explicit gap-filled handling, per-version purge tests. Open: OQ1–OQ4. |
 | 4 | 2026-11-19 | **Product owner approved all four remaining recommendations**, recorded as A107 (OQ1: only WiseWatts Admins manage reports; Radisson Admin/Operator/Viewer view and download only), A108 (OQ2: Option A automation identity), A109 (OQ3: † + note under affected tables + "Comparison incomplete" in history; no overall label for comparison-only incompleteness) and A110 (OQ4: future-dated settings at 00:00 site time). OQ1–OQ4 closed. New A111: WiseWatts Admins can permanently delete a report (named as a report-management action in the revision 4 direction); placement in the recycle bin is [DESIGN]. Management placement in the Administration App moves from [DESIGN] to approved architecture (A107 and the revision 4 direction §13). The switch-state tests and the automation-account checks are made explicit. Counts recalculated (§2.1). The evidence file is unchanged. |
+| 4.2 | 2026-11-21 | **Product owner amendment (A112–A117), superseding parts of 4.1.** (1) A WiseWatts-approved **retrospective AHU reporting baseline** for Radisson Blu Coimbatore from **1 Oct 2026** (A112): the approved AHU setpoints, operating schedules and OFF/ON thresholds (no STANDBY) are treated as in force from that date. It **supersedes A17/A18 for this baseline only**; every other setting stays today-or-later (A17–A19, A110 unchanged), and A23's "settings cannot be retrospective" now reads "only through an approved baseline". It is recorded, audited and labelled as a reporting baseline, **not** verified historical hotel operating practice. (2) **On-demand generation moves into the customer portal** for Site Admins and WiseWatts Admins; Operators and Viewers stay view/download only (A113, refining A107/A63). (3) Applying the baseline or migration 330 **generates nothing** (A114); historical reports are generated **only on an explicit request** on the Create report page, distinct from the ongoing weekly/monthly schedule (A115, A61–A70 unchanged). (4) Labelling (A116) and Reports UI (A117: Create report is the default tab; site from the sidebar; no site selector). Migration 330, engine 1.2.0. New AC-11–AC-16 and test areas T-RB, T-OD, T-UI-7–9. Counts recalculated (§2.1). |
 | 4.1 | 2026-11-19 | **Product owner approved A111 as proposed; closed.** Permanent deletion is available only for reports already in the seven-day recycle bin, with explicit confirmation and audit logging; never directly from report history. A111 moves from [DESIGN] to an approved decision. Added T-DEL-11 and AC-6c. The review item in §13 is closed. Counts unchanged. |
 
 ## Contents
@@ -156,8 +158,8 @@ data already in EMS, without downloading or uploading reporting data manually.
 | A14 | Settings: setpoints, schedules, operating thresholds | Setting keys | 5.1 | T-SET-1/6 |
 | A15 | Sensor-less assets: energy included, temperature excluded, "Not temperature-monitored" | Sensor presence from the EMS catalogue | 4.2, 6.6 | T-MAP-4, T-RPT-4 |
 | A16 | Temperature never invented or estimated | Loader and engine never fill | 6.6 | T-DQ-8 |
-| A17 | Changes take effect today or later only | DB write function | 5.2 | T-SET-2 |
-| A18 | DB rejects past effective dates | `RAISE` in the write function | 5.2 | T-SET-2 |
+| A17 | Changes take effect today or later only (**except the one approved retrospective AHU baseline, A112**) | DB write function | 5.2 | T-SET-2 |
+| A18 | DB rejects past effective dates (normal path; unchanged by A112) | `RAISE` in the write function | 5.2 | T-SET-2, T-RB-2 |
 | A19 | Effective at the actual save time (not midnight) | `effective_from = clock_timestamp()` for today | 5.2 | T-SET-8 |
 | A20 | Setpoint in force at each temperature reading | Per-reading resolution by timestamp | 5.2 | T-SET-1 |
 | A21 | Different setpoints in an area → show the range | Area label "23.0–24.0 °C" | 5.2, 6.3 | T-RPT-5 |
@@ -246,11 +248,17 @@ data already in EMS, without downloading or uploading reporting data manually.
 | A104 | No editing of generated PDFs | No edit path | 1.6 | T-VER-4 |
 | A105 | Only Radisson Blu Coimbatore initially | Enrolment | 5.1 | T-SEC-2 |
 | A106 | No production deployment until approved | — | 11 | AC-9 |
-| A107 | (OQ1, approved) Only WiseWatts Admins generate, generate historical, regenerate, retry, delete, restore and permanently delete; Radisson Admin, Operator and Viewer view and download only, in the customer portal; customer-facing report APIs read-only | Administration App management; customer API GET only; management functions `ems_app` + GLOBAL ADMIN only | 7.1, 9.1, 9.2 | T-SEC-3, T-ADM-3/4, T-SEC-8 |
+| A107 | (OQ1, approved; **generation refined by A113**) Only WiseWatts Admins generate, generate historical, regenerate, retry, delete, restore and permanently delete; Radisson Admin, Operator and Viewer view and download only, in the customer portal; customer-facing report APIs read-only | Administration App management; customer API GET only; management functions `ems_app` + GLOBAL ADMIN only | 7.1, 9.1, 9.2 | T-SEC-3, T-ADM-3/4, T-SEC-8 |
 | A108 | (OQ2, approved, Option A) Automation identity: WiseWatts-controlled Admin associated with the Radisson organization, restricted to Coimbatore, no usable customer-facing password; checked every attempt; access failure stops the attempt with no automatic retry; trade-off documented; not created now | Profile designation + per-attempt checks | 4.6, 9.3 | T-SEC-5/9/10, T-RT-7 |
 | A109 | (OQ3, approved) Incomplete comparison: † on affected figures, a concise note beneath affected tables, "Comparison incomplete" in report history; no overall "Incomplete data" label for comparison-only incompleteness | Renderer + `comparison_incomplete` flag + UI indicator | 6.5, 6.8, 7.2 | T-DQ-11, T-UI-3 |
 | A110 | (OQ4, approved) A future-dated setting takes effect at 00:00 site time on the selected date | DB write function | 5.2 | T-SET-9 |
 | A111 | (approved 2026-11-19, closed) WiseWatts Admins can permanently delete a report **only while it is in the seven-day recycle bin**, with explicit confirmation and audit logging; **no** permanent deletion directly from report history | Recycle-bin action only; DB function refuses reports not in state DELETED; confirmation step; audit event naming the user | 7.1, 8.4 | T-DEL-9, T-DEL-11, AC-6c |
+| A112 | (rev 4.2, PO 2026-11-21) Retrospective AHU reporting baseline for Coimbatore from 1 Oct 2026: the approved AHU setpoints, operating schedules and OFF/ON thresholds (no STANDBY; Banquet 1 STANDBY absent) are copied unchanged as versions effective 00:00 site time on that date, under one recorded, audited baseline (approval reference, approver, statement, actor, effective date, affected settings). **Supersedes A17/A18 for this baseline only**; normal settings are still never back-dated; recorded history is never overridden | `apply_site_report_retrospective_baseline` (WiseWatts Admin; once per site; exact in-force AHU versions; earliest-version check; ≤ 180 days back); `site_report_retrospective_baselines`; `retrospective_baseline_id` | 5.2, 5.5 | T-RB-1–T-RB-6 |
+| A113 | (rev 4.2) On-demand generation in the customer portal (Reports → Create report) for **Site Admins and WiseWatts Admins** (active ADMIN with site access, never the automation account): a new report for an ended period, or a **new version** of an existing one. Operators and Viewers view and download only. Refines A107 and A63. Retry, delete, restore, permanent deletion and configuration stay WiseWatts Admin actions in the Administration App | `report.generate` (ADMIN); `POST /api/v1/sites/{id}/site-reports` (same-origin JSON); `request_portal_site_report` (ems_customer_api); read identity accepts the requester while still allowed; ≤ 3 queued user requests per site | 7.2, 9.1, 9.2 | T-OD-1–T-OD-7 |
+| A114 | (rev 4.2) Applying migration 330 or the retrospective baseline creates no report or attempt and changes no schedule or resume time (configuration-history backfill only) | Function writes settings and audit only; tests | 5.5 | T-RB-1 |
+| A115 | (rev 4.2) Historical reports are generated only on an explicit request by an authorised user on the Create report page; the ongoing automatic weekly/monthly schedule (A61–A70, no back-fill on resume) is unchanged and separate | No scheduler change; only ended periods offered; nothing is requested without the user's click | 3.5, 7.2 | T-OD-2, T-UI-8 |
+| A116 | (rev 4.2) A report that used baseline settings is labelled: a settings-snapshot `retrospective_baseline` block and per-setting `retrospective` flags; a PDF "Reporting settings basis" note (approved baseline, not verified hotel practice, readings unchanged); a "Retrospective baseline" label in history and version details. Existing PDF versions are never modified; new versions are generated. Readings are never invented | Engine 1.2.0 (`settings_snapshot`, `baseline_note`, renderer); `list_portal_site_reports.retrospective_baseline`; UI | 6.5, 7.2, 8.2 | T-RB-7, T-RB-8, T-UI-9 |
+| A117 | (rev 4.2) Reports opens on **Create report** (Export data at `?tab=export`; old `?tab=create` links still work). The Create report tab has **no site selector** and uses the site selected in the application sidebar | `ReportsTabs`, `CreateReportTab` | 7.2 | T-UI-7 |
 | S | Exactly Pending, Processing, Generated, Failed; "Incomplete data" label on Generated | Status mapping | 6.10 | T-UI-2 |
 
 ### 2.2 Original decisions D1–D30 → revision 3
@@ -370,11 +378,11 @@ retained unchanged, 4 retained with clarification [F2, F10, F28, F45],
 4 refined [F1, F4, F9, F46], 2 superseded [F8, F12]), 7 technical
 clarifications (TC), 106 revision 3 decisions (A1–A106), 4 revision 4
 approvals closing the open questions (A107–A110), 1 revision 4 action decision
-(A111) and 1 status set (S). That is **111 numbered A decisions + S = 112
-authoritative decisions**.
+(A111), 6 revision 4.2 amendment decisions (A112–A117) and 1 status set (S).
+That is **117 numbered A decisions + S = 118 authoritative decisions**.
 
-The traceability matrix (§2.1) has **112 rows**, one per A decision plus S:
-- **107** rows map to tests or a review gate.
+The traceability matrix (§2.1) has **118 rows**, one per A decision plus S:
+- **113** rows map to tests or a review gate.
 - **5** rows are process or scope decisions with nothing to execute, so they
   trace to a process approval instead of a test:
   - A91: staging uses `ems_app`.
@@ -386,8 +394,48 @@ The traceability matrix (§2.1) has **112 rows**, one per A decision plus S:
 
 The D (30), F (51) and TC (7) entries are **not** extra traceability rows. They
 are historical registers that map onto A rows (§2.2–§2.4), so the
-decision-history total (30 + 51 + 7 + 112 = 200 entries) intentionally differs
-from the 112 traceability rows.
+decision-history total (30 + 51 + 7 + 118 = 206 entries) intentionally differs
+from the 118 traceability rows.
+
+### 2.6 Revision 4.2 product-owner amendment (2026-11-21, A112–A117)
+
+The product owner approved a change to the Create report historical
+configuration rules and then corrected the implementation plan the same day.
+
+| Topic | Revision 4.1 rule | Revision 4.2 (superseding) | Decision |
+|---|---|---|---|
+| Back-dated settings | Never (A17, A18, A23) | One WiseWatts-approved retrospective **AHU** baseline per site; Coimbatore from 1 Oct 2026; every other setting still today-or-later | A112 |
+| What the baseline means | — | A reporting baseline approved by WiseWatts; **not** independently verified historical hotel operating practice; stated in the PDF, history and audit | A112, A116 |
+| Generation on demand | WiseWatts Admins, Administration App only (A63, A107) | Also in the customer portal, for Site Admins and WiseWatts Admins; Operators and Viewers view/download only | A113 |
+| Historical reports | WiseWatts Admin request (A71) | Only on an explicit request on the Create report page; the baseline approval is **not** an approval to generate historical reports | A114, A115 |
+| Automatic schedule | A61–A70 | Unchanged and separate from any historical generation | A115 |
+| Reports UI | Export data is the default tab; site selector in the tab | Create report is the default tab; site from the sidebar | A117 |
+
+**Not changed:** the publication gate, data-quality rules and thresholds
+(A11), the treatment of measured / EMS-reconstructed / gap-filled / missing
+readings (A51–A55), temperature never filled (A16), immutable versions and
+retention (A78–A87), configuration and the other management actions
+(WiseWatts Admins only, Administration App), ADR-023, and production (A106).
+
+**Data-availability check (read-only, staging, 2026-11-21 11:07 IST).**
+- **Settings and reports.** The Coimbatore AHU settings in force equal the
+  approved baseline exactly (18 versions, effective 19 Nov 2026 08:13). There
+  are 0 reports and 0 attempts.
+- **Energy (23 roster assets).** October: 99.8–99.9 % for HVAC and 94.7 % for
+  kitchen. 1–20 Nov: 99.8–100 %.
+- **Temperature.** October: Banquet 2 744/744 h. Lobby AHU-1 and Seasons
+  Zones 1/2 have no data from 1 Oct 00:00 to 2 Oct 12:30 IST (~95 % of
+  October).
+- **September (October's comparison month)** is weaker: energy ~85 % (HVAC) /
+  ~78 % (kitchen), AirSense only from 9 Sep, and no settings in force, because
+  the baseline starts on 1 Oct. An October monthly report is therefore
+  publishable, with **"Comparison incomplete"** (A109; engine 1.1.0
+  disclosure).
+- **Retention.** The 1-minute power and temperature floor (90 days) passes
+  1 Sep on about 30 Nov 2026, so an October report generated after that date
+  has less comparison data.
+
+These are disclosures, not blockers.
 
 ---
 
@@ -634,9 +682,47 @@ catalogue, never edited (A15).
 - **Audit (A22):** every write and withdrawal adds an `admin.audit_events` row
   with previous and new values, `effective_from`, actor, role and time.
 - **Immutability (A23):** each PDF version stores the settings snapshot it used.
-  Settings changes affect only new versions. Because settings cannot be
-  retrospective, regenerating a past period reproduces the settings in force
-  then.
+  Settings changes affect only new versions. Settings cannot be
+  retrospective through this path, so regenerating a past period reproduces the
+  settings in force then. The only exception is an approved retrospective
+  baseline (A112, §5.5), which adds versions for an earlier date. It never
+  changes an existing PDF version: a version generated before the baseline
+  keeps its snapshot, and only a newly generated version uses the baseline.
+
+### 5.5 Retrospective AHU reporting baseline (A112, A114; migration 330)
+
+- **Scope.** AHU roster assets only (`HVAC_AHU`), and only the three AHU
+  settings: temperature setpoint, operating schedule and operating thresholds.
+  One baseline per site.
+- **Who.** A WiseWatts Admin (active ADMIN, GLOBAL scope, with site access).
+  The customer API cannot call it.
+- **What it does.**
+  - The caller names **exactly** the AHU setting versions currently in force.
+    Each must be its asset's and key's **earliest** active version, so no
+    recorded history is overridden.
+  - Values are copied **unchanged** as new versions effective 00:00 site time
+    on the baseline date, and each is linked to the baseline record
+    (`retrospective_baseline_id`).
+  - The baseline record keeps the approval reference, approver, statement,
+    actor and time.
+- **Audit.** One `REPORT_SETTING_RETROSPECTIVE` event per inserted version and
+  one `SITE_REPORT_RETROSPECTIVE_BASELINE` event (with `reports_generated: 0`).
+- **Refusals.**
+  - A date today or in the future, or more than 180 days back.
+  - A missing approval reference, approver or statement.
+  - Any other version set.
+  - A second baseline.
+- **Generates nothing.** No report, no attempt, and no schedule or resume-time
+  change (A114). Historical reports follow §7.2 / A115.
+- **Coimbatore.** Baseline date 1 Oct 2026, applied with
+  `postgres/maintenance/330_coimbatore_retrospective_baseline_apply.sql`. The
+  script is a dry run by default and refuses unless the 18 in-force versions
+  equal the approved values. Applying it is a separate staging write that
+  needs its own authorization.
+- **Effect.** From 1 Oct 2026 until 19 Nov 2026 08:13, the baseline versions
+  are in force. From then on, the identical normally saved versions are in
+  force. The values are the same, so no figure changes at that boundary
+  (T-RB-7).
 
 ### 5.3 Missing configuration
 
@@ -735,7 +821,11 @@ comparisons are unchanged (A31).
   (`is_fully_comparable`, peak coverage < 95 %, temperature coverage < 90 %),
   and use the same † marker.
 - **Settings not in force throughout the comparison period** (Product Owner,
-  2026-11-19; engine 1.1.0). Settings are never back-dated (A17, A23).
+  2026-11-19; engine 1.1.0). Settings are never back-dated through the normal
+  path (A17, A23). The approved retrospective baseline (A112) moves the start
+  of Coimbatore's AHU configuration to 1 Oct 2026, so comparisons from October
+  on are fully configured, and October's comparison month (September) is
+  disclosed.
   - **Trigger:** a setpoint, operating schedule or operating threshold is in
     force at the end of the latest period but not from the start of the
     comparison period. A change between two configured values is not a gap.
@@ -885,7 +975,7 @@ validation results and publication. No secrets or PDF content.
 
 ## 7. UI specification
 
-### 7.1 Administration App: WiseWatts Admins only (A2–A4, A6, A62, A63, A69, A71, A81–A84, A107, A111)
+### 7.1 Administration App: WiseWatts Admins only (A2–A4, A6, A62, A63, A69, A71, A81–A84, A107, A111; generation also in the customer portal, A113)
 
 Report configuration and all report-management actions sit in the
 Administration App, beside site and asset information. This is approved
@@ -920,11 +1010,32 @@ consistent with A6 and ADR-023.
   protections. Every write is followed by a confirmation message and an audit
   entry.
 
-### 7.2 Customer portal: Reports → Create report, all profiles, read-only (A5, A58)
+### 7.2 Customer portal: Reports → Create report, all profiles (A5, A58, A113, A117)
 
-- Reports gets sub-tabs **Export data** (existing, unchanged) and **Create
-  report**. The tab is visible for enrolled sites to every profile with site
-  access. "All times Asia/Kolkata".
+- **Tabs and site (A117).**
+  - Reports opens on **Create report**. **Export data** (existing, unchanged)
+    is the second tab, at `?tab=export`; old `?tab=create` links still work.
+  - The tab has **no site selector**: it uses the site selected in the
+    application sidebar and names it in the header.
+  - The tab is visible for enrolled sites to every profile with site access.
+    "All times Asia/Kolkata".
+- **Generate (A113, A115): Site Admins and WiseWatts Admins only.**
+  - The API's `can_generate` decides whether the control is shown, and the
+    database decides again on every request.
+  - Controls: Type (Weekly / Monthly) and Period (the last 12 ended Sun–Sat
+    weeks or the last 3 ended months, in site time), then **Generate report**.
+    When the period already has a report, the button is **Generate new
+    version**: the earlier versions stay. It is disabled while one is pending.
+  - Nothing is requested without this explicit click. This is how a
+    historical report is produced.
+  - The database's reason is shown when a request is refused: period not
+    ended, report in the recycle bin, already pending, or three requests
+    already queued.
+  - Operators and Viewers see no Generate control.
+- **Retrospective baseline (A116):** a "Retrospective baseline" label on
+  history rows and in version details, which name the approved baseline and
+  state that it is not verified historical operating practice. Settings used
+  that came from the baseline are marked.
 - **Automatic generation status** (read-only): Weekly and Monthly On/Paused and
   the next first-attempt time.
 - **History** (combined):
@@ -939,9 +1050,9 @@ consistent with A6 and ADR-023.
 - **"Comparison incomplete"** indicator on rows and in version details when the
   comparison period was incomplete (A109). This is separate from the
   "Incomplete data" label.
-- **Failed rows:** the reason text (§7.3). There is no Generate, historical
-  generation, Regenerate, Retry, Delete, Restore or permanent deletion in the
-  customer portal (A6, A107).
+- **Failed rows:** the reason text (§7.3). There is no Retry, Delete, Restore
+  or permanent deletion in the customer portal (A6, A107). Generation and new
+  versions are described above (A113).
 - Deleted reports are not shown in the customer portal.
 
 ### 7.3 Failure texts
@@ -1018,7 +1129,9 @@ kept [DESIGN: 365 days].
 | Customer portal: view history, versions, coverage; download | ✓ | ✓ | ✓ | ✓ |
 | Administration App access (any reporting page) | ✓ | — | — | — |
 | Configuration: enrolment, automation account, asset list/groups, setpoints, schedules, operating thresholds, schedule pause/resume | ✓ | — | — | — |
-| Report management: generate, historical, regenerate, retry, delete, restore, permanent deletion, recycle bin, attempt history | ✓ | — | — | — |
+| Customer portal: generate on demand (an ended period, including historical; a new version of an existing report) (A113) | ✓ | ✓ | — | — |
+| Report management in the Administration App: generate, historical, regenerate, retry, delete, restore, permanent deletion, recycle bin, attempt history | ✓ | — | — | — |
+| Retrospective AHU baseline (A112) | ✓ | — | — | — |
 | Data-quality thresholds | code only (WiseWatts) | — | — | — |
 | `report.export` (existing) | unchanged | unchanged | unchanged | unchanged |
 
@@ -1029,9 +1142,14 @@ Every capability is limited to sites the user can access. Permission model:
   hold every role permission today. A `report.manage` permission is therefore
   not introduced.
 
-Radisson Admins' reporting permissions are view and download (A107, refining
-A1). The automation account (A108) is ADMIN in the Radisson organization but not
-GLOBAL, so it has no management capability.
+Radisson Admins' reporting permissions are view, download and on-demand
+generation in the customer portal (A113, refining A107). The new role permission
+`report.generate` (ADMIN only) gates the customer route and is advertised only
+where Reports is enabled. The database (`request_portal_site_report`) requires
+an active ADMIN with access to the site, and refuses the site's automation
+account. The automation account (A108) is ADMIN in the Radisson organization but
+not GLOBAL, so it has no Administration App capability, and it cannot generate
+in the portal.
 
 ### 9.2 Enforcement (A2, A3, A6, A12; ADR-023 unchanged)
 
@@ -1106,6 +1224,9 @@ values; checked in the migration precheck.]
 | Versions / retention / deletion (A74–A87) | **T-VER-1** regenerate → v2, v1 downloadable · **T-VER-2** Processing keeps v1 downloadable; failed regeneration leaves v1 latest · **T-VER-3** v1 expires at its own generation + 60 d while v2 remains · **T-VER-4** SHA-256 stable; no update path · **T-DEL-1** delete → hidden, in bin, audited · **T-DEL-2** restore within 7 days; `expires_at` unchanged; audited · **T-DEL-3** version purged at deletion + 7 d when that is earlier · **T-DEL-4** version expiry at 60 d (no deletion) · **T-DEL-5** delete refused while Processing · **T-DEL-6** generation blocked while deleted · **T-DEL-7** a version whose 60 d falls inside the 7-day bin window is purged at its 60 d · **T-DEL-8** multi-version report in the bin: v1 (generated day 0) and v2 (day 55), deleted day 57 → v1 purged day 60, v2 purged day 64; restore on day 61 restores only v2 with its original expiry · **T-DEL-9** manual permanent deletion (A111): WiseWatts Admin only, only from the recycle bin, confirmation required, all versions and files removed, audit names the user; refused for Radisson Admin/Operator/Viewer and for reports not in the bin · **T-DEL-10** a version expiring at 60 d (no deletion) leaves the report and its other versions intact · **T-DEL-11** no permanent-deletion action is rendered in report history; a direct call to the permanent-deletion function for an ACTIVE report is refused; the action without confirmation is refused; a successful permanent deletion writes `SITE_REPORT_PURGE` with the user as actor (A111) |
 | UI | **T-UI-1** customer tab: filters, read-only actions, version details, polling (Vitest) · **T-UI-2** exactly four statuses + label · **T-UI-3** coverage summary and breakdown · tsc, eslint, build · Administration App route/template tests · manual exercise locally against staging through the tunnel (CLAUDE.md §4A) |
 | DB | `scripts/test/assert_site_report_settings.*`, `assert_site_reports.*` on the disposable integration DB (pre/postconditions, grants, rollback) |
+| Retrospective baseline (A112, A114, A116; rev 4.2) | **T-RB-1** a WiseWatts Admin back-dates exactly the in-force AHU versions to 00:00 site time; values unchanged; per-version and baseline audit; no report, no attempt; switches and resume times unchanged; the scheduler creates nothing · **T-RB-2** once per site; a normal back-dated setting is still refused; a back-dated version cannot be withdrawn · **T-RB-3** Radisson Admin, Operator, Viewer, a GLOBAL Operator and an inactive staff account are refused · **T-RB-4** a partial, duplicated or empty version set, today or a future date, > 180 days back, or a missing approval / statement are refused and nothing is written · **T-RB-5** refused when it would override an earlier version (history conflict) · **T-RB-6** the customer API cannot apply a baseline or read its table · **T-RB-7** engine: baseline + identical 19 Nov 08:13 version gives the same figures as one version since 1 Oct (week 15–21 Nov); November fully configured; October discloses the unconfigured September comparison · **T-RB-8** worker end to end: snapshot `retrospective_baseline` block, per-setting flags, the PDF "Reporting settings basis" note with "not independently verified historical hotel operating practice", engine 1.2.0, history flag |
+| On-demand generation (A113, A115; rev 4.2) | **T-OD-1** Site Admin and WiseWatts Admin generate (HISTORICAL trigger for an old period), audited with channel CUSTOMER_PORTAL, valid read identity · **T-OD-2** Operator, Viewer, another organization, a GLOBAL Operator and an inactive account are refused, and nothing is created · **T-OD-3** the designated automation account is refused · **T-OD-4** an existing report gets a new version; v1 is unchanged (sha256, snapshot) and still downloadable · **T-OD-5** refusals: period not ended, invalid period/type, not enrolled, in the recycle bin, already pending, queue of 3 · **T-OD-6** a requester who loses the ADMIN role → `requester_not_authorized` · **T-OD-7** routes: 202 for Admins, 403 for Operator/Viewer, cross-origin 403, non-JSON 415, invalid body 422, inaccessible site 404, the database message returned; `report.generate` only for ADMIN and only where Reports is enabled; the worker publishes a Site Admin's request |
+| UI (rev 4.2) | **T-UI-7** Create report is the default tab; `?tab=export` and old `?tab=create` links; no site selector, the sidebar site named · **T-UI-8** the Generate form only when `can_generate`; ended periods only (Sun–Sat weeks, months); explicit click posts `{report_type, period_start}`; "Generate new version" for an existing period; the database refusal shown · **T-UI-9** "Retrospective baseline" label and tooltip |
 
 ### 10.2 Acceptance criteria
 
@@ -1140,6 +1261,41 @@ values; checked in the migration precheck.]
 - **AC-9:** No production change; existing EMS behaviour unchanged (T-NONREG).
 - **AC-10:** The traceability matrix (§2) maps every A/S decision to passing
   tests or reviewed behaviour.
+
+Revision 4.2 (A112–A117). AC-4 is amended by AC-13: a Radisson Admin may now
+generate in the customer portal.
+
+- **AC-11 (A112):**
+  - A WiseWatts Admin can record the Coimbatore retrospective AHU baseline
+    effective 1 Oct 2026 00:00 IST, once.
+  - Exactly the approved setpoints, schedules and OFF/ON thresholds are copied
+    unchanged; there is no STANDBY threshold.
+  - The approval, actor, effective date and every affected setting are audited.
+  - Anyone else is refused, as are any other version set and any date outside
+    the allowed window.
+  - A normal back-dated setting is still refused (A18).
+- **AC-12 (A114):** Applying migration 330 and the baseline creates no report or
+  attempt and leaves the weekly/monthly switches and resume times unchanged.
+- **AC-13 (A113):** In the customer portal:
+  - A Site Admin and a WiseWatts Admin can generate a report for an ended
+    period, and a new version of an existing one, with earlier versions
+    unchanged and downloadable.
+  - Operators and Viewers see no Generate control and get 403 from the API
+    and `site_report_generate_forbidden` from the database.
+  - Cross-origin and non-JSON requests are refused.
+  - Every request is audited with channel `CUSTOMER_PORTAL`.
+- **AC-14 (A115):** A historical report exists only after a user's explicit
+  Generate request. The automatic schedule never back-fills, as before.
+- **AC-15 (A116):** A version that used baseline settings:
+  - carries the `retrospective_baseline` snapshot block;
+  - states the basis in the PDF ("not independently verified historical hotel
+    operating practice", "no telemetry or temperature was added or altered");
+  - shows "Retrospective baseline" in history.
+  Its figures across the baseline → 19 Nov 08:13 boundary equal a single
+  version in force since 1 Oct. October discloses its unconfigured September
+  comparison.
+- **AC-16 (A117):** Reports opens on Create report. There is no site selector;
+  the sidebar's site is used.
 
 ---
 

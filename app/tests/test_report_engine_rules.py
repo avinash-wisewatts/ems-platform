@@ -500,3 +500,91 @@ def test_blank_page_pdf_is_rejected():
     data = data.replace(b"%%EOF", b"") + b"\n%%EOF\n"
     with pytest.raises(PdfValidationError):
         _validate(data)
+
+
+# ---------------------------------------------------------------------------
+# Retrospective reporting baseline (ADR-025 Amendment 1, A112): the approved
+# AHU settings back-dated to 1 Oct 2026, followed by the identical versions
+# saved normally on 19 Nov 2026 08:13. Calculations are unchanged; only which
+# version is in force at each timestamp.
+# ---------------------------------------------------------------------------
+
+BASELINE_FROM = pd.Timestamp("2026-10-01 00:00")
+SAVED_AT = pd.Timestamp("2026-11-19 08:13")
+
+
+def _baseline_then_saved() -> "ReportSettings":
+    s = reference_settings()
+    for series in (s.setpoints, s.schedules, s.schedule_confirmed, s.thresholds):
+        for name, versions in series.items():
+            value = versions[-1][1]
+            series[name] = [(BASELINE_FROM, value), (SAVED_AT, value)]
+    return s
+
+
+def _figures(m) -> str:
+    """Every computed figure; the raw list of setpoint values in force is
+    dropped (two identical versions list 24.0 twice -- same text and figures)."""
+
+    import json
+
+    keep = {k: m[k] for k in ("ahu_runtime", "ahu_ooh", "temperature", "comparison_config_gaps")}
+    keep = json.loads(json.dumps(keep, default=str))
+    for area in keep["temperature"].values():
+        for side in area.values():
+            if isinstance(side, dict):
+                side.pop("setpoints", None)
+    return json.dumps(keep, sort_keys=True)
+
+
+def test_baseline_and_identical_saved_version_have_no_boundary_effect():
+    """Week 15-21 Nov (compared with 8-14 Nov) straddles the 19 Nov 08:13 save:
+    every figure equals a single version in force since 1 Oct, and the
+    comparison week is fully configured (no disclosure)."""
+
+    week = period_for("WEEKLY", date(2026, 11, 15))
+    with_saved = metrics_for(week, synthetic_assets(week.comparison_start, 14), _baseline_then_saved())
+    single = metrics_for(week, synthetic_assets(week.comparison_start, 14), _settings_from(BASELINE_FROM))
+    assert _figures(with_saved) == _figures(single)
+    assert with_saved["comparison_config_gaps"]["from"] is None
+    q = assess(with_saved)
+    assert q.comparison_config_reasons == [] and not q.comparison_incomplete
+
+
+def test_november_month_is_fully_configured_by_the_baseline():
+    """November (compared with October): the baseline is in force throughout both."""
+
+    month = period_for("MONTHLY", date(2026, 11, 1))
+    m = metrics_for(month, synthetic_assets(month.comparison_start, 61), _baseline_then_saved())
+    assert m["comparison_config_gaps"] == {"setpoints": [], "schedules": [], "thresholds": [], "from": None}
+    # Thresholds in force in both months: no AHU is "not reported" (other
+    # statuses depend only on the synthetic readings).
+    assert all("not reported" not in (r["curr"]["status"], r["prev"]["status"]) for r in m["ahu_runtime"].values())
+    assert all(r["prev"]["scheduled"] and r["curr"]["scheduled"] for r in m["ahu_runtime"].values())
+
+
+def test_october_month_discloses_the_unconfigured_september_comparison():
+    """October (compared with September): the baseline starts 1 Oct, so the
+    comparison month is disclosed (†, note, Comparison incomplete); October
+    itself is fully configured and nothing is estimated."""
+
+    m = metrics_for(MONTH, synthetic_assets(MONTH.comparison_start, 61), _baseline_then_saved())
+    assert m["comparison_config_gaps"]["from"] == BASELINE_FROM
+    assert set(m["comparison_config_gaps"]["thresholds"]) == set(AHUS)
+    assert all(r["curr"]["status"] != "not reported" and r["curr"]["scheduled"] for r in m["ahu_runtime"].values())
+    assert all(r["prev"]["status"] == "not reported" for r in m["ahu_runtime"].values())
+    q = assess(m)
+    assert q.publishable and q.comparison_incomplete and not q.incomplete_data
+    assert q.comparison_config_reasons[0].startswith("reporting settings in force only from 01 Oct 2026 00:00")
+
+
+def test_baseline_note_states_basis_and_is_absent_without_a_baseline():
+    from src.report_engine.settings import baseline_note
+
+    assert baseline_note({"settings": []}) == ""
+    note = baseline_note({"retrospective_baseline": {
+        "effective_date": "2026-10-01", "approved_by": "WiseWatts Product Owner", "recorded_at": "2026-11-21T10:00:00+05:30"}})
+    assert note.startswith("AHU temperature setpoints, operating schedules and operating thresholds used for periods from "
+                           "01 Oct 2026 follow a WiseWatts-approved retrospective reporting baseline")
+    assert "not independently verified historical hotel operating practice" in note
+    assert "no telemetry or temperature was added or altered" in note

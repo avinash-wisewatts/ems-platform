@@ -1,8 +1,9 @@
 /**
- * Reports: sub-tabs "Export data" (the existing measurement export,
- * report.export) and "Create report" (weekly / monthly PDF reports,
- * report.view; read-only, ADR-025). The tab is kept in the URL (?tab=create)
- * so it can be linked to. With only one permitted tab, no tab bar is shown.
+ * Reports: sub-tabs "Create report" (weekly / monthly PDF reports,
+ * report.view; ADR-025) and "Export data" (the existing measurement export,
+ * report.export). Create report is the DEFAULT tab (ADR-025 Amendment 1,
+ * A117); Export data is kept in the URL (?tab=export) so it can be linked
+ * to. With only one permitted tab, no tab bar is shown.
  */
 import { useSearchParams } from "react-router-dom";
 import { useSession } from "../../auth/SessionProvider";
@@ -15,8 +16,8 @@ export function ReportsTabs() {
   const [params, setParams] = useSearchParams();
   const canExport = hasPermission(user, "report.export");
   const canView = hasPermission(user, "report.view");
-  const wantsCreate = params.get("tab") === "create";
-  const showCreate = canView && (wantsCreate || !canExport);
+  const wantsExport = params.get("tab") === "export";
+  const showCreate = canView && (!wantsExport || !canExport);
 
   if (!(canExport && canView)) {
     return showCreate ? <CreateReportTab /> : <ReportsPage />;
@@ -24,7 +25,7 @@ export function ReportsTabs() {
 
   const select = (tab: "export" | "create") => {
     const next = new URLSearchParams(params);
-    if (tab === "create") next.set("tab", "create");
+    if (tab === "export") next.set("tab", "export");
     else next.delete("tab");
     setParams(next, { replace: true });
   };
@@ -35,22 +36,22 @@ export function ReportsTabs() {
         <button
           type="button"
           role="tab"
-          aria-selected={!showCreate}
-          className={`reports-tab${showCreate ? "" : " reports-tab--active"}`}
-          onClick={() => select("export")}
-          data-testid="reports-tab-export"
-        >
-          Export data
-        </button>
-        <button
-          type="button"
-          role="tab"
           aria-selected={showCreate}
           className={`reports-tab${showCreate ? " reports-tab--active" : ""}`}
           onClick={() => select("create")}
           data-testid="reports-tab-create"
         >
           Create report
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={!showCreate}
+          className={`reports-tab${showCreate ? "" : " reports-tab--active"}`}
+          onClick={() => select("export")}
+          data-testid="reports-tab-export"
+        >
+          Export data
         </button>
       </div>
       <div role="tabpanel">{showCreate ? <CreateReportTab /> : <ReportsPage />}</div>

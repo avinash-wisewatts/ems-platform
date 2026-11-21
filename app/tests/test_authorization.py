@@ -238,6 +238,8 @@ CANONICAL_PERMISSION_CODES = {
     "report.export",
     # Reports -> Create report (ADR-025, A5): view/download PDF reports.
     "report.view",
+    # ADR-025 Amendment 1 (A113): on-demand generation, ADMIN only.
+    "report.generate",
     "audit.view",
 }
 
@@ -372,3 +374,16 @@ def test_asset_detail_write_requires_asset_manage() -> None:
         )
         is PortalPermission.ASSET_MANAGE
     )
+
+
+def test_site_report_generation_requires_report_generate() -> None:
+    """ADR-025 Amendment 1 (A113): POST to a site's report history is the
+    on-demand generation write (ADMIN only); reading it stays dashboard.view
+    at the middleware (the route re-checks report.view)."""
+
+    path = "/api/v1/sites/22222222-2222-4222-8222-222222222222/site-reports"
+    assert required_permission_for_request("POST", path) == PortalPermission.REPORT_GENERATE
+    assert required_permission_for_request("GET", path) == PortalPermission.DASHBOARD_VIEW
+    assert PortalPermission.REPORT_GENERATE in ROLE_PERMISSIONS[PortalRole.ADMIN]
+    assert PortalPermission.REPORT_GENERATE not in ROLE_PERMISSIONS[PortalRole.OPERATOR]
+    assert PortalPermission.REPORT_GENERATE not in ROLE_PERMISSIONS[PortalRole.VIEWER]

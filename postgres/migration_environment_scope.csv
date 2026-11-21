@@ -7,3 +7,4 @@ migration_id,environments,reason
 320_alert_legacy_retirement,staging|production|test,Alerts legacy retirement (ADR-024 §18): deletes the MVP-7 Energy Attention alerts in every environment as part of the replacement release -- explicitly not staging-only
 328_site_report_settings,staging|test,Create report (ADR-025) is not approved for production
 329_site_reports,staging|test,Create report (ADR-025) is not approved for production
+330_site_report_retrospective_baseline_and_portal_generation,staging|test,Create report (ADR-025) is not approved for production

@@ -9,6 +9,8 @@ _ALERT_RULE_WRITE_PATH = re.compile(
     r"/api/v1/sites/[^/]+/alert-rules|/api/v1/alert-rules/[^/]+(?:/enable|/disable)?"
 )
 _ALERT_ACKNOWLEDGE_PATH = re.compile(r"/api/v1/alerts/[^/]+/acknowledge")
+# ADR-025 Amendment 1: on-demand report generation (src.routers.site_reports).
+_SITE_REPORT_GENERATE_PATH = re.compile(r"/api/v1/sites/[^/]+/site-reports")
 
 
 class PortalRole(str, Enum):
@@ -37,11 +39,16 @@ class PortalPermission(str, Enum):
     DASHBOARD_VIEW = "dashboard.view"
     REPORT_EXPORT = "report.export"
     # Reports -> Create report (ADR-025): view and download generated PDF
-    # reports in the customer portal (all profiles, A5). Managing reports and
-    # reporting configuration is NOT a role permission: it requires a WiseWatts
-    # Admin (active ADMIN, GLOBAL scope) in the Administration App, enforced in
-    # the database (A6, A107).
+    # reports in the customer portal (all profiles, A5). Reporting
+    # configuration and the other report-management actions are NOT a role
+    # permission: they require a WiseWatts Admin (active ADMIN, GLOBAL scope)
+    # in the Administration App, enforced in the database (A6, A107).
     REPORT_VIEW = "report.view"
+    # On-demand generation in the customer portal (ADR-025 Amendment 1, A113):
+    # ADMIN only (Site Admins and WiseWatts Admins); Operators and Viewers stay
+    # view/download only. Re-checked in the database (active ADMIN with site
+    # access, never the automation account).
+    REPORT_GENERATE = "report.generate"
     AUDIT_VIEW = "audit.view"
 
 
@@ -132,6 +139,8 @@ def required_permission_for_request(
             return PortalPermission.ALERT_CONFIGURE
         if _ALERT_ACKNOWLEDGE_PATH.fullmatch(stripped):
             return PortalPermission.ALERT_ACKNOWLEDGE
+        if normalized_method == "POST" and _SITE_REPORT_GENERATE_PATH.fullmatch(stripped):
+            return PortalPermission.REPORT_GENERATE
     # The rest of the /api/v1 JSON surface: any authenticated portal
     # identity may use it (DASHBOARD_VIEW); routes that write check their own
     # permission (Reports export: report.export). An undefined method on a

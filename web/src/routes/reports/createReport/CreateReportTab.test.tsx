@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { AppRoutes } from "../../../router";
 import type { CurrentUser, SiteReportItem, SiteReportListResponse } from "../../../api/types";
 import { ADMIN_USER, SITES_ONE, VIEWER_USER, renderWithProviders } from "../../../test-utils";
-import { CREATE_REPORT_MESSAGES } from "./CreateReportTab";
+import { CREATE_REPORT_MESSAGES, endedPeriods } from "./CreateReportTab";
 
 const SITE_ID = SITES_ONE.sites[0]!.site_id;
 const VIEW_ONLY: CurrentUser = { ...VIEWER_USER, permissions: ["dashboard.view", "report.view"] };
@@ -29,19 +29,21 @@ function report(overrides: Partial<SiteReportItem> = {}): SiteReportItem {
     expires_at: "2026-12-31T00:45:00Z",
     download_version_id: "v-1",
     coverage_summary: { hvac_available_pct: 99.5, kitchen_available_pct: 97.2 },
+    retrospective_baseline: false,
     ...overrides,
   };
 }
 
-type Call = { url: string; method: string };
+type Call = { url: string; method: string; body?: unknown };
 
-function stub(list: Partial<SiteReportListResponse> = {}) {
+function stub(list: Partial<SiteReportListResponse> = {}, generate: { status: number; payload: unknown } | null = null) {
   const calls: Call[] = [];
   const body: SiteReportListResponse = {
     enrolled: true,
     weekly_enabled: true,
     monthly_enabled: false,
     timezone: "Asia/Kolkata",
+    can_generate: false,
     reports: [
       report(),
       report({
@@ -73,9 +75,14 @@ function stub(list: Partial<SiteReportListResponse> = {}) {
   };
   const mock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
-    calls.push({ url, method: init?.method ?? "GET" });
+    const method = init?.method ?? "GET";
+    calls.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
     const json = (status: number, payload: unknown) =>
       ({ ok: status < 300, status, statusText: "", headers: new Headers(), json: async () => payload }) as unknown as Response;
+    if (method === "POST" && url === `/api/v1/sites/${SITE_ID}/site-reports`) {
+      const g = generate ?? { status: 202, payload: { report_id: "r-new", attempt_id: "a-1", action: "GENERATE", trigger: "HISTORICAL" } };
+      return json(g.status, g.payload);
+    }
     if (url.startsWith(`/api/v1/sites/${SITE_ID}/site-reports`)) return json(200, body);
     if (url === "/api/v1/site-reports/r-month/versions") {
       return json(200, {
@@ -143,7 +150,7 @@ function render(user: CurrentUser, path = "/reports") {
   });
 }
 
-describe("Reports -> Create report (read-only)", () => {
+describe("Reports -> Create report (history, view and download)", () => {
   let click: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
@@ -220,18 +227,112 @@ describe("Reports -> Create report (read-only)", () => {
     expect(await screen.findByText(CREATE_REPORT_MESSAGES.notEnrolled)).toBeTruthy();
   });
 
-  it("offers both tabs when the user can export and view, and switches with ?tab=create", async () => {
+  it("opens on Create report by default and switches to Export data", async () => {
     stub();
     render(BOTH);
-    await screen.findByTestId("reports-tabs");
+    const tabs = await screen.findByTestId("reports-tabs");
+    expect(await screen.findByTestId("page-create-report")).toBeTruthy();
+    expect(within(tabs).getAllByRole("tab")[0]!.textContent).toBe("Create report");
+    await userEvent.click(screen.getByTestId("reports-tab-export"));
     expect(await screen.findByTestId("page-reports")).toBeTruthy();
-    await userEvent.click(screen.getByTestId("reports-tab-create"));
+  });
+
+  it("opens Export data from the URL, and old ?tab=create links still open Create report", async () => {
+    stub();
+    const first = render(BOTH, "/reports?tab=export");
+    expect(await screen.findByTestId("page-reports")).toBeTruthy();
+    first.unmount();
+    render(BOTH, "/reports?tab=create");
     expect(await screen.findByTestId("page-create-report")).toBeTruthy();
   });
 
-  it("opens Create report directly from the URL", async () => {
+  it("has no site selector: the site comes from the application sidebar", async () => {
     stub();
-    render(BOTH, "/reports?tab=create");
-    expect(await screen.findByTestId("page-create-report")).toBeTruthy();
+    render(VIEW_ONLY);
+    await screen.findByTestId("create-report-table");
+    expect(screen.queryByTestId("create-report-site")).toBeNull();
+    expect(screen.queryByRole("combobox", { name: /site/i })).toBeNull();
+    expect(screen.getByTestId("page-create-report").textContent).toContain(SITES_ONE.sites[0]!.site_name);
+  });
+
+  it("labels reports that used the retrospective reporting baseline", async () => {
+    stub({
+      reports: [report({ retrospective_baseline: true, report_id: "r-month", report_type: "MONTHLY", period_start: "2026-10-01" })],
+    });
+    render(VIEW_ONLY);
+    const rows = await screen.findAllByTestId("create-report-row");
+    const label = within(rows[0]!).getByTestId("label-retrospective-baseline");
+    expect(label.textContent).toBe("Retrospective baseline");
+    expect(label.getAttribute("title")).toContain("not verified historical operating practice");
+  });
+});
+
+describe("Reports -> Create report: on-demand generation", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("is not offered to Operators and Viewers", async () => {
+    const { calls } = stub({ can_generate: false });
+    render(VIEW_ONLY);
+    await screen.findByTestId("create-report-table");
+    expect(screen.queryByTestId("create-report-generate")).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Generate/ })).toBeNull();
+    expect(screen.getByText(new RegExp(CREATE_REPORT_MESSAGES.readOnly.slice(0, 30)))).toBeTruthy();
+    expect(calls.every((c) => c.method === "GET")).toBe(true);
+  });
+
+  it("lets a Site Admin request an ended period explicitly", async () => {
+    const { calls } = stub({ can_generate: true });
+    render(BOTH);
+    const form = await screen.findByTestId("create-report-generate");
+    await userEvent.selectOptions(within(form).getByTestId("create-report-generate-type"), "MONTHLY");
+    const period = within(form).getByTestId("create-report-generate-period") as HTMLSelectElement;
+    const options = Array.from(period.options).map((o) => o.value);
+    expect(options).toHaveLength(3);
+    const target = options.find((v) => v !== "2026-10-01") ?? options[0]!;
+    await userEvent.selectOptions(period, target);
+    await userEvent.click(within(form).getByTestId("create-report-generate-submit"));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST")).toBe(true));
+    const post = calls.find((c) => c.method === "POST")!;
+    expect(post.url).toBe(`/api/v1/sites/${SITE_ID}/site-reports`);
+    expect(post.body).toEqual({ report_type: "MONTHLY", period_start: target });
+    expect((await screen.findByTestId("create-report-requested")).textContent).toContain("appears below as Pending");
+    // Nothing is requested without the explicit click.
+    expect(calls.filter((c) => c.method === "POST")).toHaveLength(1);
+  });
+
+  it("offers a new version when the period already has a report", async () => {
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" })
+      .format(new Date());
+    const latestMonth = endedPeriods("MONTHLY", today)[0]!;
+    stub({ can_generate: true, reports: [report({ report_id: "r-m", report_type: "MONTHLY", period_start: latestMonth })] });
+    render(BOTH);
+    const form = await screen.findByTestId("create-report-generate");
+    expect(within(form).getByTestId("create-report-generate-submit").textContent).toBe("Generate report");
+    await userEvent.selectOptions(within(form).getByTestId("create-report-generate-type"), "MONTHLY");
+    await waitFor(() =>
+      expect((within(form).getByTestId("create-report-generate-period") as HTMLSelectElement).value).toBe(latestMonth),
+    );
+    expect(within(form).getByTestId("create-report-generate-submit").textContent).toBe("Generate new version");
+  });
+
+  it("shows the database's refusal", async () => {
+    stub(
+      { can_generate: true },
+      { status: 409, payload: { error: "site_report_queue_full", detail: "Three requested reports are already waiting." } },
+    );
+    render(BOTH);
+    const form = await screen.findByTestId("create-report-generate");
+    await userEvent.click(within(form).getByTestId("create-report-generate-submit"));
+    expect((await screen.findByRole("alert")).textContent).toBe("Three requested reports are already waiting.");
+  });
+});
+
+describe("endedPeriods", () => {
+  it("offers only ended Sunday-Saturday weeks and calendar months, newest first", () => {
+    expect(endedPeriods("WEEKLY", "2026-11-21").slice(0, 2)).toEqual(["2026-11-08", "2026-11-01"]);
+    expect(endedPeriods("WEEKLY", "2026-11-22")[0]).toBe("2026-11-15");
+    expect(endedPeriods("WEEKLY", "2026-11-22")).toHaveLength(12);
+    expect(endedPeriods("MONTHLY", "2026-11-21")).toEqual(["2026-10-01", "2026-09-01", "2026-08-01"]);
+    expect(endedPeriods("MONTHLY", "2027-01-01")).toEqual(["2026-12-01", "2026-11-01", "2026-10-01"]);
   });
 });

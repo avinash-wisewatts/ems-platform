@@ -39,7 +39,8 @@ import { ChangePasswordPage } from "./routes/account/ChangePasswordPage";
  *   /asset-view  Asset View (WiseWatts redesign) -- filters + live tiles
  *                per asset; supersedes AssetsList in the primary nav
  *   /reports     Reports -- Export data (site measurement export, ZIP of per-asset CSVs)
- *                and Create report (?tab=create: read-only weekly / monthly PDF reports, ADR-025);
+ *                and Create report (the default tab: weekly / monthly PDF reports, ADR-025;
+ *                Export data at ?tab=export);
  *                the primary nav entry directly below Alerts
  *   /home        Site Overview & Attention (MVP-3) -- unchanged; reachable
  *                from the sidebar's Archive section, not the new primary nav

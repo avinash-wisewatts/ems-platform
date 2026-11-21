@@ -1,4 +1,4 @@
-"""Reports -> Create report: migrations 328 / 329 against the disposable
+"""Reports -> Create report: migrations 328 / 329 / 330 against the disposable
 ems_test database.
 
 Permissions (A1-A7, A12, A107, T-SEC/T-ADM at the database layer), the
@@ -144,8 +144,10 @@ def test_customer_api_can_execute_only_the_read_functions(conn):
         SELECT p.proname FROM pg_proc AS p JOIN pg_namespace AS n ON n.oid = p.pronamespace
         WHERE n.nspname = 'analytics' AND (p.proname ~ 'site_report' OR p.proname ~ 'asset_report_setting')
           AND has_function_privilege('ems_customer_api', p.oid, 'EXECUTE')""")}
+    # Migration 330 (ADR-025 Amendment 1, A113) deliberately adds portal
+    # generation; every management and configuration function stays ems_app only.
     assert executable == {"list_portal_site_reports", "list_portal_site_report_versions", "get_portal_site_report_file",
-                          "get_portal_site_report_schedule"}
+                          "get_portal_site_report_schedule", "request_portal_site_report"}
     for table in ("site_reports", "site_report_versions", "site_report_files", "site_report_attempts",
                   "site_report_profiles", "site_report_assets", "asset_report_setting_versions"):
         for role in ("ems_app", "ems_customer_api", "grafana_reader"):
@@ -574,3 +576,256 @@ def test_customer_schedule_read(conn):
     assert rows(conn, "SELECT * FROM analytics.get_portal_site_report_schedule(%s, %s)", (uid(conn, "viewer"), SITE_A)) == [
         (True, True, True, "Asia/Kolkata")]
     assert rows(conn, "SELECT * FROM analytics.get_portal_site_report_schedule(%s, %s)", (uid(conn, "other_org"), SITE_A)) == []
+
+
+# ---------------------------------------------------------------------------
+# Migration 330: on-demand generation in the customer portal (A113, A115)
+# ---------------------------------------------------------------------------
+
+def portal_generate(conn, who: str, period_start: date = date(2026, 10, 4), report_type: str = "WEEKLY") -> tuple:
+    return rows(conn, "SELECT report_id, attempt_id, action, trigger FROM analytics.request_portal_site_report(%s, %s, %s, %s)",
+                (uid(conn, who), SITE_A, report_type, period_start))[0]
+
+
+@pytest.mark.parametrize("who", ["staff", "tenant_admin"])
+def test_site_admins_and_wisewatts_admins_generate_on_demand(conn, who):
+    enrol(conn)
+    report_id, attempt_id, action, trigger = portal_generate(conn, who)
+    assert (action, trigger) == ("GENERATE", "HISTORICAL")
+    assert rows(conn, "SELECT identity_kind, requested_by, status FROM analytics.site_report_attempts WHERE id = %s",
+                (attempt_id,)) == [("USER", uid(conn, who), "PENDING")]
+    audit = rows(conn, "SELECT actor_portal_user_id, new_values->>'channel', new_values->>'trigger' FROM admin.audit_events "
+                       "WHERE action = 'SITE_REPORT_GENERATE' AND entity_id = %s", (report_id,))
+    assert audit == [(uid(conn, who), "CUSTOMER_PORTAL", "HISTORICAL")]
+    # The requester is a valid read identity when the attempt runs.
+    assert rows(conn, "SELECT analytics.site_report_read_identity_problem(%s)", (attempt_id,))[0][0] is None
+
+
+@pytest.mark.parametrize("who", ["operator", "viewer", "other_org", "staff_inactive", "staff_operator"])
+def test_operators_viewers_and_outsiders_cannot_generate(conn, who):
+    enrol(conn)
+    refused(conn, "SELECT * FROM analytics.request_portal_site_report(%s, %s, 'WEEKLY', '2026-10-04')",
+            (uid(conn, who), SITE_A), "site_report_generate_forbidden")
+    assert rows(conn, "SELECT count(*) FROM analytics.site_reports WHERE site_id = %s", (SITE_A,))[0][0] == 0
+
+
+def test_automation_account_cannot_generate_in_the_portal(conn):
+    enrol(conn)
+    rows(conn, "SELECT * FROM analytics.set_site_report_automation_account(%s, %s, %s)",
+         (uid(conn, "staff"), SITE_A, uid(conn, "automation")))
+    refused(conn, "SELECT * FROM analytics.request_portal_site_report(%s, %s, 'WEEKLY', '2026-10-04')",
+            (uid(conn, "automation"), SITE_A), "site_report_generate_forbidden")
+
+
+def test_portal_generation_of_an_existing_report_adds_a_version(conn):
+    """A new version; the earlier PDF version is never modified (A79, A80)."""
+
+    enrol(conn)
+    report_id, attempt_id, _, _ = portal_generate(conn, "tenant_admin")
+    refused(conn, "SELECT * FROM analytics.request_portal_site_report(%s, %s, 'WEEKLY', '2026-10-04')",
+            (uid(conn, "tenant_admin"), SITE_A), "site_report_attempt_active")
+    claim(conn)
+    v1 = complete(conn, attempt_id)
+    before = rows(conn, "SELECT sha256, generated_at, settings_snapshot FROM analytics.site_report_versions WHERE id = %s", (v1,))
+    again_id, attempt2, action, trigger = portal_generate(conn, "tenant_admin")
+    assert (again_id, action, trigger) == (report_id, "REGENERATE", "REGENERATE")
+    claim(conn)
+    v2 = complete(conn, attempt2)
+    versions = rows(conn, "SELECT version_id, version_no, state FROM analytics.list_portal_site_report_versions(%s, %s)",
+                    (uid(conn, "viewer"), report_id))
+    assert versions == [(v2, 2, "AVAILABLE"), (v1, 1, "AVAILABLE")]
+    assert rows(conn, "SELECT sha256, generated_at, settings_snapshot FROM analytics.site_report_versions WHERE id = %s",
+                (v1,)) == before
+
+
+def test_portal_generation_refusals(conn):
+    enrol(conn)
+    current_week = rows(conn, "SELECT ((now() AT TIME ZONE 'Asia/Kolkata')::date - extract(dow FROM "
+                              "(now() AT TIME ZONE 'Asia/Kolkata')::date)::int)")[0][0]
+    refused(conn, "SELECT * FROM analytics.request_portal_site_report(%s, %s, 'WEEKLY', %s)",
+            (uid(conn, "tenant_admin"), SITE_A, current_week), "site_report_period_not_ended")
+    refused(conn, "SELECT * FROM analytics.request_portal_site_report(%s, %s, 'WEEKLY', '2026-10-05')",
+            (uid(conn, "tenant_admin"), SITE_A), "site_report_invalid_period")
+    refused(conn, "SELECT * FROM analytics.request_portal_site_report(%s, %s, 'DAILY', '2026-10-04')",
+            (uid(conn, "tenant_admin"), SITE_A), "site_report_invalid_type")
+    refused(conn, "SELECT * FROM analytics.request_portal_site_report(%s, %s, 'WEEKLY', '2026-10-04')",
+            (uid(conn, "tenant_admin"), SITE_A2), "site_report_not_enrolled")
+    # Recycle bin: restore is a WiseWatts Admin action in the Administration App.
+    report_id, attempt_id, _, _ = portal_generate(conn, "tenant_admin")
+    claim(conn)
+    complete(conn, attempt_id)
+    rows(conn, "SELECT analytics.delete_site_report(%s, %s)", (uid(conn, "staff"), report_id))
+    refused(conn, "SELECT * FROM analytics.request_portal_site_report(%s, %s, 'WEEKLY', '2026-10-04')",
+            (uid(conn, "tenant_admin"), SITE_A), "site_report_in_recycle_bin")
+
+
+def test_portal_generation_queue_is_bounded_per_site(conn):
+    enrol(conn)
+    for start in (date(2026, 10, 11), date(2026, 10, 18), date(2026, 10, 25)):
+        portal_generate(conn, "tenant_admin", start)
+    refused(conn, "SELECT * FROM analytics.request_portal_site_report(%s, %s, 'MONTHLY', '2026-10-01')",
+            (uid(conn, "tenant_admin"), SITE_A), "site_report_queue_full")
+
+
+def test_requester_losing_admin_role_stops_their_attempt(conn):
+    enrol(conn)
+    _, attempt_id, _, _ = portal_generate(conn, "tenant_admin")
+    try:
+        rows(conn, "UPDATE admin.portal_users SET role_code = 'OPERATOR' WHERE username = %s", (USERS["tenant_admin"][0],))
+        assert rows(conn, "SELECT analytics.site_report_read_identity_problem(%s)", (attempt_id,))[0][0] == "requester_not_authorized"
+    finally:
+        rows(conn, "UPDATE admin.portal_users SET role_code = 'ADMIN' WHERE username = %s", (USERS["tenant_admin"][0],))
+
+
+# ---------------------------------------------------------------------------
+# Migration 330: the PO-approved retrospective AHU baseline (A112, A114)
+# ---------------------------------------------------------------------------
+
+SCHEDULE = '{"schedule": {"Mon": [["05:00", "23:00"]], "Tue": [["05:00", "23:00"]], "Wed": [["05:00", "23:00"]], ' \
+           '"Thu": [["05:00", "23:00"]], "Fri": [["05:00", "23:00"]], "Sat": [["05:00", "23:00"]], ' \
+           '"Sun": [["05:00", "23:00"]]}, "confirmed_by_hotel": false, "calculate_out_of_hours": true}'
+THRESHOLDS = '{"off_kw": 0.05, "standby_kw": null, "on_kw": 0.4, "runtime_enabled": true, "confidence": "High"}'
+
+
+def ahu_configuration(conn) -> list[int]:
+    """Setpoint, schedule and thresholds for the AHU (ASSET_2), saved today."""
+
+    enrol(conn)
+    today = rows(conn, "SELECT (now() AT TIME ZONE 'Asia/Kolkata')::date")[0][0]
+    ids = []
+    for key, value in (("TEMPERATURE_SETPOINT", '{"value_c": 24.0}'), ("OPERATING_SCHEDULE", SCHEDULE),
+                       ("OPERATING_THRESHOLDS", THRESHOLDS)):
+        ids.append(rows(conn, "SELECT id FROM analytics.add_asset_report_setting(%s, %s, %s, %s::jsonb, %s)",
+                        (uid(conn, "staff"), ASSET_2, key, value, today))[0][0])
+    return sorted(ids)
+
+
+def baseline_date(conn, days_back: int = 30) -> date:
+    return rows(conn, "SELECT (now() AT TIME ZONE 'Asia/Kolkata')::date - %s", (days_back,))[0][0]
+
+
+def apply_baseline(conn, ids, who: str = "staff", when: date | None = None, reference: str = "PO approval 2026-11-21"):
+    return rows(conn, "SELECT baseline_id, version_id, source_version_id, setting_key, effective_from FROM "
+                      "analytics.apply_site_report_retrospective_baseline(%s, %s, %s, %s, %s, 'WiseWatts Product Owner', "
+                      "'WiseWatts-approved retrospective reporting baseline; not verified historical practice.')",
+                (uid(conn, who), SITE_A, when or baseline_date(conn), ids, reference))
+
+
+def test_retrospective_baseline_backdates_exactly_the_approved_ahu_settings(conn):
+    ids = ahu_configuration(conn)
+    resumed = rows(conn, "SELECT weekly_resumed_at, monthly_resumed_at, weekly_enabled, monthly_enabled "
+                         "FROM analytics.site_report_profiles WHERE site_id = %s", (SITE_A,))
+    when = baseline_date(conn)
+    applied = apply_baseline(conn, ids, when=when)
+    assert sorted(r[2] for r in applied) == ids and len({r[0] for r in applied}) == 1
+    midnight = datetime.combine(when, datetime.min.time()).replace(tzinfo=timezone(timedelta(hours=5, minutes=30)))
+    assert all(r[4] == midnight for r in applied)
+    copies = rows(conn, """SELECT n.value = o.value, n.setting_key = o.setting_key, n.effective_date, n.state,
+                                  n.retrospective_baseline_id IS NOT NULL, o.retrospective_baseline_id IS NULL
+                           FROM analytics.asset_report_setting_versions AS n
+                           JOIN analytics.asset_report_setting_versions AS o ON o.id = ANY (%s)
+                                AND o.asset_id = n.asset_id AND o.setting_key = n.setting_key
+                           WHERE n.id = ANY (%s)""", (ids, [r[1] for r in applied]))
+    assert copies == [(True, True, when, "ACTIVE", True, True)] * 3
+    # Configuration-history backfill only: no report, no attempt, schedules untouched.
+    assert rows(conn, "SELECT count(*) FROM analytics.site_reports WHERE site_id = %s", (SITE_A,))[0][0] == 0
+    assert rows(conn, "SELECT weekly_resumed_at, monthly_resumed_at, weekly_enabled, monthly_enabled "
+                      "FROM analytics.site_report_profiles WHERE site_id = %s", (SITE_A,)) == resumed
+    assert rows(conn, "SELECT analytics.schedule_due_site_reports(now())")[0][0] == 0
+    # Audited: one event per back-dated version plus the baseline record.
+    baseline_id = applied[0][0]
+    assert rows(conn, "SELECT count(*) FROM admin.audit_events WHERE action = 'REPORT_SETTING_RETROSPECTIVE' AND site_id = %s "
+                      "AND (new_values->>'retrospective_baseline_id')::bigint = %s", (SITE_A, baseline_id))[0][0] == 3
+    event = rows(conn, "SELECT actor_portal_user_id, new_values FROM admin.audit_events "
+                       "WHERE action = 'SITE_REPORT_RETROSPECTIVE_BASELINE' AND site_id = %s "
+                       "AND (new_values->>'baseline_id')::bigint = %s", (SITE_A, baseline_id))
+    assert len(event) == 1 and event[0][0] == uid(conn, "staff")
+    assert event[0][1]["basis"] == "WISEWATTS_APPROVED_RETROSPECTIVE_BASELINE" and event[0][1]["reports_generated"] == 0
+    assert event[0][1]["effective_date"] == when.isoformat() and len(event[0][1]["versions"]) == 3
+    # The worker sees the baseline and the versions it back-dated.
+    baseline = rows(conn, "SELECT basis, approval_reference, version_ids FROM "
+                          "analytics.get_site_report_retrospective_baselines(%s)", (SITE_A,))
+    assert baseline == [("WISEWATTS_APPROVED_RETROSPECTIVE_BASELINE", "PO approval 2026-11-21", sorted(r[1] for r in applied))]
+    # In force at the baseline date; the value in force now is unchanged.
+    in_force = rows(conn, """SELECT DISTINCT ON (setting_key) setting_key, value FROM analytics.asset_report_setting_versions
+                             WHERE asset_id = %s AND state = 'ACTIVE' AND effective_from <= %s
+                             ORDER BY setting_key, effective_from DESC, id DESC""", (ASSET_2, midnight + timedelta(days=1)))
+    assert len(in_force) == 3
+
+
+def test_retrospective_baseline_is_once_per_site_and_normal_backdating_stays_refused(conn):
+    ids = ahu_configuration(conn)
+    apply_baseline(conn, ids)
+    refused(conn, "SELECT * FROM analytics.apply_site_report_retrospective_baseline(%s, %s, %s, %s, 'x', 'y', 'z')",
+            (uid(conn, "staff"), SITE_A, baseline_date(conn, 40), ids), "report_baseline_exists")
+    yesterday = baseline_date(conn, 1)
+    refused(conn, "SELECT * FROM analytics.add_asset_report_setting(%s, %s, 'TEMPERATURE_SETPOINT', "
+                  "'{\"value_c\": 23.0}'::jsonb, %s)", (uid(conn, "staff"), ASSET_2, yesterday),
+            "report_setting_past_effective_date")
+    # A back-dated version is effective, so it can never be withdrawn.
+    retro = rows(conn, "SELECT id FROM analytics.asset_report_setting_versions WHERE retrospective_baseline_id IS NOT NULL "
+                       "AND site_id = %s LIMIT 1", (SITE_A,))[0][0]
+    refused(conn, "SELECT * FROM analytics.withdraw_asset_report_setting(%s, %s)", (uid(conn, "staff"), retro),
+            "report_setting_already_effective")
+
+
+@pytest.mark.parametrize("who", ["tenant_admin", "operator", "viewer", "staff_operator", "staff_inactive"])
+def test_only_wisewatts_admins_apply_a_baseline(conn, who):
+    ids = ahu_configuration(conn)
+    refused(conn, "SELECT * FROM analytics.apply_site_report_retrospective_baseline(%s, %s, %s, %s, 'x', 'y', 'z')",
+            (uid(conn, who), SITE_A, baseline_date(conn), ids), "site_report_forbidden")
+
+
+def test_retrospective_baseline_refusals(conn):
+    ids = ahu_configuration(conn)
+    staff = uid(conn, "staff")
+    sql = "SELECT * FROM analytics.apply_site_report_retrospective_baseline(%s, %s, %s, %s, %s, %s, %s)"
+    good = ("PO approval", "WiseWatts Product Owner", "Not verified historical practice.")
+    refused(conn, sql, (staff, SITE_A, baseline_date(conn), ids[:2], *good), "report_baseline_versions_mismatch")
+    refused(conn, sql, (staff, SITE_A, baseline_date(conn), ids + [ids[0]], *good), "report_baseline_versions_mismatch")
+    refused(conn, sql, (staff, SITE_A, baseline_date(conn), [], *good), "report_baseline_versions_mismatch")
+    refused(conn, sql, (staff, SITE_A, baseline_date(conn, 0), ids, *good), "report_baseline_invalid_date")
+    refused(conn, sql, (staff, SITE_A, baseline_date(conn, -3), ids, *good), "report_baseline_invalid_date")
+    refused(conn, sql, (staff, SITE_A, baseline_date(conn, 181), ids, *good), "report_baseline_invalid_date")
+    refused(conn, sql, (staff, SITE_A, baseline_date(conn), ids, " ", good[1], good[2]), "report_baseline_approval_required")
+    refused(conn, sql, (staff, SITE_A, baseline_date(conn), ids, good[0], good[1], ""), "report_baseline_approval_required")
+    assert rows(conn, "SELECT count(*) FROM analytics.asset_report_setting_versions WHERE site_id = %s "
+                      "AND retrospective_baseline_id IS NOT NULL", (SITE_A,))[0][0] == 0
+
+
+def test_retrospective_baseline_never_overrides_recorded_history(conn):
+    """If an earlier version of the same setting exists, back-dating the
+    current one over it is refused (the history is never rewritten)."""
+
+    ahu_configuration(conn)
+    today = rows(conn, "SELECT (now() AT TIME ZONE 'Asia/Kolkata')::date")[0][0]
+    newer = rows(conn, "SELECT id FROM analytics.add_asset_report_setting(%s, %s, 'TEMPERATURE_SETPOINT', "
+                       "'{\"value_c\": 23.5}'::jsonb, %s)", (uid(conn, "staff"), ASSET_2, today))[0][0]
+    in_force = sorted(r[0] for r in rows(conn, """SELECT DISTINCT ON (setting_key) id FROM analytics.asset_report_setting_versions
+                                                  WHERE asset_id = %s AND state = 'ACTIVE'
+                                                  ORDER BY setting_key, effective_from DESC, id DESC""", (ASSET_2,)))
+    assert newer in in_force and len(in_force) == 3
+    refused(conn, "SELECT * FROM analytics.apply_site_report_retrospective_baseline(%s, %s, %s, %s, 'x', 'y', 'z')",
+            (uid(conn, "staff"), SITE_A, baseline_date(conn), in_force), "report_baseline_history_conflict")
+    assert rows(conn, "SELECT count(*) FROM analytics.site_report_retrospective_baselines WHERE site_id = %s",
+                (SITE_A,))[0][0] == 0
+
+
+def test_history_flags_versions_that_used_the_baseline(conn):
+    enrol(conn)
+    report_id, attempt_id = generate(conn)
+    claim(conn)
+    rows(conn, "SELECT analytics.complete_site_report_attempt(%s, 'w1', 'r.pdf', %s, %s, 7, false, false, %s::jsonb, "
+               "%s::jsonb, '1.2.0', interval '60 days')",
+         (attempt_id, PDF, SHA, '{"current": {}}', '{"settings": [], "retrospective_baseline": {"baseline_id": 1}}'))
+    assert rows(conn, "SELECT retrospective_baseline FROM analytics.list_portal_site_reports(%s, %s, NULL, 50)",
+                (uid(conn, "viewer"), SITE_A)) == [(True,)]
+
+
+def test_customer_api_cannot_apply_a_baseline_or_read_its_table(conn):
+    assert not rows(conn, "SELECT has_function_privilege('ems_customer_api', "
+                          "'analytics.apply_site_report_retrospective_baseline(bigint, uuid, date, bigint[], text, text, text)', "
+                          "'EXECUTE')")[0][0]
+    for role in ("ems_app", "ems_customer_api", "grafana_reader"):
+        assert not rows(conn, "SELECT has_table_privilege(%s, 'analytics.site_report_retrospective_baselines', 'SELECT')",
+                        (role,))[0][0]

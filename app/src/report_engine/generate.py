@@ -94,7 +94,7 @@ def comparison_note(spec: PeriodSpec, quality: QualityResult) -> str:
 
 
 def generate_report(site_name: str, period: ReportPeriod, assets: dict[str, AssetData], layout: Layout,
-                    settings: ReportSettings) -> GenerationResult:
+                    settings: ReportSettings, settings_basis_note: str = "") -> GenerationResult:
     """Raises InsufficientDataError when the minimum publication requirements
     are not met, PdfValidationError when the PDF fails validation."""
 
@@ -115,7 +115,8 @@ def generate_report(site_name: str, period: ReportPeriod, assets: dict[str, Asse
                             comparison_incomplete=quality.comparison_incomplete,
                             comparison_note=comparison_note(spec, quality) if quality.comparison_incomplete else "",
                             incomplete_data=quality.incomplete_data,
-                            completeness_note=completeness_note(spec, quality) if quality.incomplete_data else "")
+                            completeness_note=completeness_note(spec, quality) if quality.incomplete_data else "",
+                            settings_basis_note=settings_basis_note)
         pdf = render_report(m, charts, observations, attention, ctx)
     finally:
         plt.close("all")

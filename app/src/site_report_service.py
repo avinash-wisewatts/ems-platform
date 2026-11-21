@@ -51,6 +51,13 @@ ERROR_TEXT = {
     "site_report_not_restorable": "The report can no longer be restored (the 7-day recycle-bin period has ended).",
     "site_report_not_in_recycle_bin": "Only a report in the recycle bin can be permanently deleted.",
     "site_report_confirmation_required": "Confirm permanent deletion to continue.",
+    "site_report_generate_forbidden": "Only Site Admins and WiseWatts Admins with access to this site can generate reports.",
+    "site_report_queue_full": "Three requested reports are already waiting for this site. Try again when one has finished.",
+    "report_baseline_exists": "A retrospective baseline is already recorded for this site.",
+    "report_baseline_approval_required": "The approval reference, approver and statement are required.",
+    "report_baseline_invalid_date": "A retrospective baseline must start in the past (at most 180 days ago).",
+    "report_baseline_versions_mismatch": "The versions given are not the AHU settings currently in force",
+    "report_baseline_history_conflict": "Back-dating would override recorded setting history",
 }
 
 
@@ -69,7 +76,8 @@ def _translate(exc: Exception) -> SiteReportError:
     code, _, detail = text.partition(":")
     code = code.strip()
     message = ERROR_TEXT.get(code, "The request could not be completed.")
-    if detail and code in ("site_report_automation_account_invalid", "report_setting_invalid", "site_report_invalid_period"):
+    if detail and code in ("site_report_automation_account_invalid", "report_setting_invalid", "site_report_invalid_period",
+                           "report_baseline_versions_mismatch", "report_baseline_history_conflict"):
         message = f"{message}: {detail.strip()}."
     status = 403 if isinstance(exc, psycopg.errors.InsufficientPrivilege) else 409 if isinstance(
         exc, (psycopg.errors.UniqueViolation, psycopg.errors.ObjectNotInPrerequisiteState)) else 404 if isinstance(
@@ -124,6 +132,17 @@ async def portal_reports(portal_user_id: int, site_id: UUID, report_type: str | 
 
 async def portal_versions(portal_user_id: int, report_id: UUID) -> list[dict[str, Any]]:
     return await _read("SELECT * FROM analytics.list_portal_site_report_versions(%s, %s)", (portal_user_id, str(report_id)))
+
+
+async def portal_generate(portal_user_id: int, site_id: UUID, report_type: str, period_start: date) -> dict[str, Any]:
+    """On-demand generation in the customer portal (migration 330, A113): a
+    new report for a period without one, or a NEW version of an existing
+    report. Allowed for Site Admins and WiseWatts Admins (checked in the
+    database); historical periods only when explicitly requested (A115)."""
+
+    rows = await _write("SELECT * FROM analytics.request_portal_site_report(%s, %s, %s, %s)",
+                        (portal_user_id, str(site_id), report_type, period_start))
+    return rows[0]
 
 
 async def portal_file(portal_user_id: int, version_id: UUID) -> dict[str, Any] | None:
@@ -277,3 +296,10 @@ async def read_identity_problem(attempt_id: UUID) -> str | None:
 
 async def worker_settings(site_id: UUID) -> list[dict[str, Any]]:
     return await _read("SELECT * FROM analytics.get_site_report_worker_settings(%s)", (str(site_id),))
+
+
+async def worker_baselines(site_id: UUID) -> list[dict[str, Any]]:
+    """The site's approved retrospective baseline(s) and the setting versions
+    each back-dated (migration 330, A112)."""
+
+    return await _read("SELECT * FROM analytics.get_site_report_retrospective_baselines(%s)", (str(site_id),))

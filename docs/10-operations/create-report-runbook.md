@@ -43,12 +43,46 @@ docker inspect --format '{{.State.Health.Status}}' ems-report-worker
 | Failure code | Meaning | Action |
 |---|---|---|
 | `automation_not_authorized` | Automation account not set, inactive, wrong scope or no longer only this site | Fix the account (separate authorization), then Retry |
-| `requester_not_authorized` | The WiseWatts Admin who requested it lost access | Retry as a current WiseWatts Admin |
+| `requester_not_authorized` | The user who requested it (WiseWatts Admin or Site Admin) is no longer an active ADMIN with access to the site | Request it again as a current Site Admin or WiseWatts Admin |
 | `insufficient_data` | Current period below 80 % for HVAC or Kitchen, or no valid peak timestamp | Investigate telemetry; Retry or Regenerate after data recovers |
 | `retention_exceeded` | Period older than the 1-minute retention | Not generable |
 | `pdf_validation_failed:<check>` | The PDF failed a quality check; nothing was published | Report a defect with the attempt id |
 | `worker_interrupted`, `generation_failed` | Temporary; retried automatically at 15, 30 and 60 minutes | Check worker logs if all retries fail |
 | `roster_empty` | No reporting assets configured | Configure the reporting asset list |
+
+## On-demand and historical generation (revision 4.2, A113, A115)
+
+- **Who generates.** Site Admins and WiseWatts Admins, in the customer portal
+  under Reports → Create report: choose Weekly or Monthly and an ended period,
+  then **Generate report**. For a period that already has a report, the button
+  is **Generate new version**. WiseWatts Admins can still also use Site →
+  Reports in the Administration App.
+- **Limit.** At most three user-requested attempts may be queued per site.
+- **Historical reports** exist only when someone makes this explicit request.
+  Applying the retrospective baseline never generates one.
+- **Automatic schedule.** The weekly and monthly schedule is unchanged and
+  still never back-fills on resume.
+
+## Retrospective AHU baseline (revision 4.2, A112, A114; staging write, separate authorization)
+
+1. **Prerequisite.** Migration 330 is deployed through the normal staging
+   deployment.
+2. **Dry run** (checks and rolls back):
+   `docker exec -i ems-timescaledb psql -U ems_admin -d ems -X -v ON_ERROR_STOP=1 -v actor=<WiseWatts Admin uid> < postgres/maintenance/330_coimbatore_retrospective_baseline_apply.sql`.
+   It refuses unless the 18 AHU versions in force equal the approved baseline.
+   It prints the inserted rows and `reports = 0, attempts = 0`.
+3. **Apply** with the same command plus `-v confirm=yes`, only after the
+   operation itself is authorized.
+4. **Verify (read-only).**
+   - `analytics.get_site_report_retrospective_baselines(<site>)` returns one
+     row with 18 version ids.
+   - There are 18 `REPORT_SETTING_RETROSPECTIVE` audit events and 1
+     `SITE_REPORT_RETROSPECTIVE_BASELINE` audit event.
+   - There are no new reports or attempts, and the schedule switches and
+     resume times are unchanged.
+5. **What it changes.** Only versions generated afterwards use the baseline;
+   their PDFs carry "Reporting settings basis". Existing versions are never
+   modified.
 
 ## Resource notes
 
@@ -58,8 +92,12 @@ Staging host ~1.9 GB RAM. One monthly report reads about 9 asset-weeks of 1-minu
 
 1. Stop the worker: `docker compose -f compose.yaml stop report-worker` (staging host).
 2. Deploy an application image without the feature (normal rollback workflow; the customer API is redeployed separately).
-3. Only if the database objects must go (destructive; deletes all reports and reporting settings): `postgres/maintenance/328_329_site_reports_rollback.sql` with explicit authorization.
+3. Only if the database objects must go, and only with explicit authorization:
+   1. `postgres/maintenance/330_site_report_retrospective_baseline_rollback.sql`
+      removes the baseline and portal generation, and restores the 329 rules.
+   2. Then `postgres/maintenance/328_329_site_reports_rollback.sql` (destructive:
+      deletes all reports and reporting settings).
 
 ## Before any production use (not approved)
 
-Product Owner approval (A106); a dedicated least-privilege `ems_report_worker` database role (A92); the automation account created under separate authorization (A93); migrations 328–329 moved out of the staging-only scope; production deployment workflow changes.
+Product Owner approval (A106); a dedicated least-privilege `ems_report_worker` database role (A92); the automation account created under separate authorization (A93); migrations 328–330 moved out of the staging-only scope; production deployment workflow changes.

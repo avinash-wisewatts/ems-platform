@@ -165,7 +165,7 @@ def test_a_staging_only_migration_already_in_the_production_ledger_is_refused_up
 
 def test_staging_applies_staging_only_migrations(tmp_path):
     code, out = _run(tmp_path, environment="staging", ledger_ids=_ids_through("308_"),
-                     expected="309,310,312,311,313,314,315,316,317,318,319,320,321,322,323,324,325,326,327,328,329")
+                     expected="309,310,312,311,313,314,315,316,317,318,319,320,321,322,323,324,325,326,327,328,329,330")
     assert code == 0, out
 
 
@@ -197,6 +197,8 @@ def test_scope_file_contract():
         # ADR-025: Create report is not approved for production (A106).
         "328_site_report_settings": "staging|test",
         "329_site_reports": "staging|test",
+        # ADR-025 Amendment 1 (retrospective baseline, portal generation): staging/test only.
+        "330_site_report_retrospective_baseline_and_portal_generation": "staging|test",
     }
     manifest_ids = set(_ids_through("~never~"))
     assert set(scoped) <= manifest_ids
