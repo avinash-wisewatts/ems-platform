@@ -5,8 +5,9 @@ on 2026-11-23. The architecture decision
 ([ADR-026](../../../00-governance/decisions/ADR-026-whatsapp-alert-notifications.md))
 stays **Proposed** until provider validation, privacy/legal review and the
 infrastructure approvals are complete (D13). Phase 1 configuration behaviour
-is covered by **ADR-024 Amendment 2, PROPOSED**, awaiting Product Owner and
-Architecture approval (review B1). **Nothing is implemented or
+is covered by **ADR-024 Amendment 2, DECIDED 2026-11-23** (Product Owner and
+Architecture approvals recorded; resolves review B1). That is not an
+implementation approval. **Nothing is implemented or
 authorised**: no database, API, UI, infrastructure or production change.
 Owner: Product + Engineering. Last reviewed: 2026-11-23.
 
@@ -153,21 +154,20 @@ The details are in [phase-1-plan.md §3.6](phase-1-plan.md) and
 | R8 | Server-side, staging-only allow-list of WiseWatts test numbers; shipped empty; populating it is a separately approved staging write | Product, Architecture | Proposed | Approve it as part of Phase 1 scope? |
 | R9 | Name the sending business in the opt-in wording | Product, Legal | **Open question** | WiseWatts or the customer site? |
 | R10 | Phase 2 STOP handling keyword-only; no retention of message text beyond what is needed | Engineering design; Provider (P-3); Legal | Proposed (Phase 2) | Confirm minimal retention of inbound content |
-| R11 | Formal requirement IDs for the Phase 1 acceptance criteria | Product | Proposed | Allocate `EMS-REQ-153+` once Amendment 2 is Decided? |
+| R11 | Formal requirement IDs for the Phase 1 acceptance criteria | Product | Proposed | Amendment 2 is now Decided: allocate `EMS-REQ-153+`? |
 | R12 | No phone numbers, full or masked, in the permanent audit log until Legal approves; recipient ids instead | Legal | Proposed; reflected in the plan as the default | What may the audit log hold, and for how long (L-2)? |
 
 ## 5. Approval gates and dependencies
 
-**Resolving B1:** ADR-024 Amendment 2 is drafted and **Proposed**. It needs
-the **Product Owner** (scope 2A, 2D, 2E) and **Architecture** (2B, 2C, the 2D
-enforcement) to approve it, recorded in its approval table. PR #186 stays in
-draft until then. Leaving draft afterwards means documentation review only,
-not implementation.
+**B1 resolved:** ADR-024 Amendment 2 is **Decided** (2026-11-23). The
+approvals of the Product Owner (2A, 2D, 2E) and Architecture (2B, 2C, the 2D
+enforcement) are recorded in its approval table. PR #186 stays in draft
+until the documentation review is complete. Leaving draft means
+documentation review only, not implementation.
 
 **Before Phase 1 implementation:**
-- the authorising record for Phase 1 (review B1): a Decided ADR-024
-  Amendment 2 scoped to D5, D6, D16, D17 and D20, or an explicit PO
-  statement;
+- ~~the authorising record for Phase 1 (review B1)~~ — **done**: ADR-024
+  Amendment 2 Decided 2026-11-23;
 - an Architecture decision on automation accounts (review R5);
 - explicit approval to implement Phase 1;
 - D21: the opt-in wording approved by Product, before the UI ships to
@@ -222,8 +222,8 @@ this file has the full text.
 
 | ID | Conflict | Status |
 |---|---|---|
-| C1 | ADR-024 §9 forbids sending | Stands until ADR-026 is Decided; then ADR-024 Amendment 2 (WhatsApp only; Email stays Coming Soon). |
-| C2 | Changing any rule field, including `whatsapp_requested`, ends the Active occurrence | **Resolved by D6/D20.** Phase 1 §3.3 safeguard and §7.2 regression tests. |
+| C1 | ADR-024 §9 forbids sending | Stands until ADR-026 is Decided; then a further ADR-024 amendment (Amendment 3) allows WhatsApp sending only; Email stays Coming Soon. Amendment 2 (Decided) covers configuration only and sends nothing. |
+| C2 | Changing any rule field, including `whatsapp_requested`, ends the Active occurrence | **Resolved by D6/D20 and ADR-024 Amendment 2 §2C (Decided).** Phase 1 §3.3 safeguard and §7.2 regression tests. |
 | C3 | Existing "requested" flags must not start sending | **Resolved by D5.** Staging: 13 rule rows, 0 with WhatsApp requested. |
 | C4 | PRD §16 describes an outdated baseline | Recorded in the [addendum](prd-draft-0.1-addendum-2026-11-23.md). |
 | C5 | Stored reminder frequency would imply repeat messages | **Resolved by D7.** |

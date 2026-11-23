@@ -1,7 +1,7 @@
 # WhatsApp notifications — Phase 1 plan: staging-only configuration
 
-Status: **PLAN — not authorised.** Requires the Decided ADR-024 Amendment 2
-(currently **Proposed**, awaiting Product Owner and Architecture approval). Implementing, merging or deploying any of
+Status: **PLAN — not authorised.** Design basis: ADR-024 Amendment 2,
+**Decided 2026-11-23**. Implementation still needs its own approval. Implementing, merging or deploying any of
 this needs separate, explicit authorisation. Phase 1 **sends no messages**.
 Decisions: [README.md §2](README.md#2-confirmed-decisions-product-owner-2026-11-23)
 (D1–D21). Architecture: [ADR-026](../../../00-governance/decisions/ADR-026-whatsapp-alert-notifications.md)
@@ -397,12 +397,10 @@ saves:
 
 ## 8. Dependencies
 
-- **Authorising record (review B1), blocking implementation:** Phase 1
-  changes ADR-024 §8 (the WhatsApp flag no longer counts as a change) and
-  §9 / `EMS-REQ-146` (the WhatsApp Coming Soon option is removed). It needs
-  a Decided ADR-024 Amendment 2 scoped to D5, D6, D16, D17 and D20
-  (recommended), or an explicit PO statement that D1–D21 authorise it
-  while ADR-026 stays Proposed.
+- **Authorising record (review B1): done.** ADR-024 Amendment 2 (§2A–§2E)
+  was Decided on 2026-11-23. It amends §8 (the WhatsApp flag no longer
+  counts as a change) and §9 / `EMS-REQ-146` (the WhatsApp Coming Soon
+  option is removed) for Phase 1, staging only.
 - **Deploy order (review R4):** customer API, then web, back to back. In
   between, the old form's Coming Soon tick is ignored. That is harmless,
   because the flag never sends.

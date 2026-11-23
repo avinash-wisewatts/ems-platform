@@ -20,8 +20,10 @@ is under review as [ADR-026](ADR-026-whatsapp-alert-notifications.md)
 be a configuration change), §9 (WhatsApp no longer "Coming Soon") and §10
 (no WhatsApp reminders in its first release). Until then §9 stands: nothing is
 sent.
-**Amendment 2 (Phase 1 WhatsApp configuration) is PROPOSED, awaiting Product
-Owner and Architecture approval** — see "Amendment 2" below. It is not Decided.
+**Amendment 2 (Phase 1 WhatsApp configuration) is DECIDED (2026-11-23)**:
+both the Product Owner and Architecture approvals are recorded. It is not
+implemented; implementation, merge and deployment are separate approvals.
+See "Amendment 2" below.
 Decision owners: Product Owner (product decisions, §1–§13, §17–§18);
 Architecture (the write-path architecture in §14–§16, which applies the
 existing Reports-export pattern and the platform's existing audit
@@ -557,13 +559,10 @@ the legacy retirement are unchanged.
   recurrence identity of `EMS-REQ-123`, where any configuration change
   started a new identity.)
 
-## Amendment 2 (proposed 2026-11-23) — WhatsApp notification configuration (Phase 1, staging only)
+## Amendment 2 (decided 2026-11-23) — WhatsApp notification configuration (Phase 1, staging only)
 
-**Status: PROPOSED — awaiting approval. Not Decided.** This becomes Decided
-only when both approvals below are recorded, with the approver and the date.
-Until then, ADR-024 §8, §9 and `EMS-REQ-146` stand unchanged, and the
-WhatsApp Phase 1 plan must **not** be implemented. This amendment resolves
-review finding B1
+**Status: DECIDED (2026-11-23)** — both approvals are recorded below. This
+amendment resolves review finding B1
 ([review record](../../07-features/alerts/whatsapp-notifications/review-2026-11-23.md)).
 
 **Scope.** Phase 1 **configuration behaviour only**, from the Product Owner's
@@ -630,8 +629,26 @@ review (L-2).
 
 | Approval | Owner | Status |
 |---|---|---|
-| Product scope (2A, 2D, 2E) | Product Owner | **Pending — not given** |
-| Architecture (2B, 2C, the 2D enforcement) | Architecture | **Pending — not given** |
+| Product scope (2A, 2D, 2E) | Product Owner | **Approved 2026-11-23** by the repository owner acting as Product Owner, in this session's instruction to record the approval |
+| Architecture (2B, 2C, the 2D enforcement) | Architecture | **Approved 2026-11-23** by the repository owner acting for Architecture, in the same instruction |
+
+**Approval notes:**
+- One person gave both approvals, in two roles. This follows the precedent
+  of the 2026-11-18 Phase 0 approval, where the user confirmed the
+  architecture decision.
+- The approval covers this amendment **as written**. Review item R5
+  (excluding automation accounts) is **not** included and stays proposed
+  until Architecture approves it separately.
+
+**What Decided does — and does not — authorise:**
+- It authorises the Phase 1 configuration behaviour described above as the
+  design basis.
+- It does **not** authorise implementation, merge, staging deployment or
+  staging test saves. Each of those still needs its own explicit approval.
+- ADR-024 §8–§9 and `EMS-REQ-146` change in practice only when an approved
+  Phase 1 implementation is deployed to staging. Until then the deployed
+  behaviour is unchanged.
+- ADR-026 (delivery) remains **Proposed**.
 
 ## Rationale
 

@@ -93,7 +93,7 @@ defines and approves the exact opt-in wording before it is used.
   `alert.configure` and site access and write one `admin.audit_events` row
   in the same transaction (ADR-024 §14–§16), holding recipient ids, not
   phone numbers (proposed R12, pending L-2). Phase 1 configuration
-  behaviour is governed by the proposed ADR-024 Amendment 2.
+  behaviour is governed by ADR-024 Amendment 2 (Decided 2026-11-23).
 - **A2. Neutralise the legacy flag.** `whatsapp_requested` is retired:
   forced `false` (CHECK), removed from the rule-change comparison, ignored
   on input, still reported as `COMING_SOON` for older clients (D5, D6).
@@ -140,9 +140,10 @@ README §4–§5.
 
 **Review 2026-11-23** ([review record](../../07-features/alerts/whatsapp-notifications/review-2026-11-23.md)):
 blocker B1 — Phase 1 changes ADR-024 §8–§9 and `EMS-REQ-146` (D6, D20) while
-this ADR is Proposed, so Phase 1 needs its own authorising record:
-recommended, a Decided ADR-024 Amendment 2 scoped to D5, D6, D16, D17 and D20,
-leaving delivery here. Open architecture item R5: whether designated
+this ADR is Proposed, so Phase 1 needs its own authorising record. This is
+**resolved**: ADR-024 Amendment 2, covering D5, D6, D16, D17 and D20, was
+Decided on 2026-11-23, with the Product Owner and Architecture approvals
+recorded. Delivery stays here. Open architecture item R5: whether designated
 automation accounts are excluded from the WhatsApp functions. This ADR
 remains **Proposed**.
 
@@ -160,7 +161,9 @@ remains **Proposed**.
 
 ## Consequences
 
-- When Decided: ADR-024 Amendment 2 (§8, §9, §10); `EMS-REQ-084`
+- When Decided: a further ADR-024 amendment (Amendment 3: §9 sending, §10
+  no WhatsApp reminders). Amendment 2, configuration only, is already
+  Decided; `EMS-REQ-084`
   (WhatsApp part) leaves LATER and new requirement IDs are allocated.
 - New operational surface in Phase 2: a worker, a public endpoint, a
   third-party dependency, and personal data under retention rules.
