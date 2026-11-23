@@ -640,6 +640,10 @@ review (L-2).
 - The approval covers this amendment **as written**. Review item R5
   (excluding automation accounts) is **not** included and stays proposed
   until Architecture approves it separately.
+- **Dated note, 2026-11-23:** Architecture (the repository owner) separately
+  **approved R5**. Designated report automation accounts of any site are
+  refused by every WhatsApp function (`EMS-REQ-155`, P1-AC-16). This adds to
+  §2D; it does not change the decided text above.
 
 **What Decided does — and does not — authorise:**
 - It authorises the Phase 1 configuration behaviour described above as the

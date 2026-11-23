@@ -128,6 +128,11 @@ unchanged.
 | `analytics.save_portal_alert_rule_whatsapp(p_portal_user_id, p_rule_id, p_enabled, p_recipients JSONB, p_expected_revision)` | Replace-all save, as PRD §6.3 describes. Same permission and site checks. See the details below this table. |
 | `analytics.get_portal_alert_rule_whatsapp_summaries(p_portal_user_id, p_site_id)` | Per rule: `enabled` and `recipient_count`; no numbers. Requires `alert.configure` and site access; raises `forbidden` otherwise (D16). Feeds the rule-list badge and the configurer-only summary in rule responses. |
 
+**All three functions (R5, approved):** each refuses (`forbidden`) an actor
+who is a designated report automation account of any site
+(`site_report_profiles.automation_portal_user_id`), before any other check
+that could reveal data.
+
 **`save_portal_alert_rule_whatsapp` in detail:**
 - **Locking and concurrency:** `INSERT … ON CONFLICT DO NOTHING` creates a
   settings row at revision 0 if none exists, then locks it
@@ -177,17 +182,18 @@ to `ems_customer_api` (migration 313 pattern). The postconditions assert:
 - the tables are not readable directly;
 - no new function is executable by PUBLIC.
 
-### 3.6 Proposed items: included only if their owner approves
+### 3.6 Review items: owner decisions (2026-11-23)
 
-These are review recommendations, **not approved decisions**. Phase 1 is
-designed so each can be added or left out without changing the rest.
+R5 and R6 are **in Phase 1 scope**, R7 is confirmed and R8 is **out**, per
+the owner decisions recorded in the README §4A. R12 remains a proposal
+pending Legal; the plan uses it as the default.
 
 | Item | Proposal | Owner | Status |
 |---|---|---|---|
-| R5 | Every WhatsApp function (get, save, summaries) refuses (`forbidden`) an actor who is the designated report automation account of **any** site, i.e. `analytics.site_report_profiles.automation_portal_user_id` (on staging, uid 17). This follows `analytics.site_report_can_generate` (migration 330). | Architecture | Proposed |
-| R6 | **Versioned opt-in wording register.** A table `analytics.alert_whatsapp_consent_statements` with `version` (PK), `statement_text`, `approved_by_name`, `approved_at` and `retired_at`. Rows are added by migration only after Product approves the wording (D21). The save refuses new consent while no current approved version exists (`whatsapp_consent_statement_missing`). Each consent stores the version it was given under (FK). A docs mirror lives in [consent-wording-register.md](consent-wording-register.md). | Product (wording), Legal (sufficiency) | Proposed |
-| R7 | **Retention while disabled:** switching WhatsApp off keeps the configured numbers. Disabling stops sending only; deleting a number is a separate, explicit action (removal, or rule deletion). Legal requirements may override this (L-3). This is assumption A-9. | Product, Legal | Proposed |
-| R8 | **Staging-only allow-list:** a table `analytics.alert_whatsapp_test_number_allowlist (phone_e164, added_by, added_at)` and a migration-set flag. On staging and test, the save refuses any number not on the list (`whatsapp_number_not_allowed`). The migration ships the table **empty**. Real numbers are never committed to the repository. Populating the list is a staging data write that needs its own approval. | Product (policy), Architecture | Proposed |
+| R5 | Every WhatsApp function (get, save, summaries) refuses (`forbidden`) an actor who is the designated report automation account of **any** site, i.e. `analytics.site_report_profiles.automation_portal_user_id` (on staging, uid 17). This follows `analytics.site_report_can_generate` (migration 330). | Architecture | **Approved 2026-11-23; in scope** |
+| R6 | **Versioned opt-in wording register.** A table `analytics.alert_whatsapp_consent_statements` with `version` (PK), `statement_text`, `approved_by_name`, `approved_at` and `retired_at`. Rows are added by migration only after Product approves the wording (D21). The save refuses new consent while no current approved version exists (`whatsapp_consent_statement_missing`). Each consent stores the version it was given under (FK). A docs mirror lives in [consent-wording-register.md](consent-wording-register.md). | Product (wording), Legal (sufficiency) | **In scope** (Product, 2026-11-23); Legal sufficiency open |
+| R7 | **Retention while disabled:** switching WhatsApp off keeps the configured numbers. Disabling stops sending only; deleting a number is a separate, explicit action (removal, or rule deletion). Legal requirements may override this (L-3). This is assumption A-9. | Product, Legal | **Confirmed by Product 2026-11-23**; Legal may override |
+| R8 | **Staging-only allow-list:** a table `analytics.alert_whatsapp_test_number_allowlist (phone_e164, added_by, added_at)` and a migration-set flag. On staging and test, the save refuses any number not on the list (`whatsapp_number_not_allowed`). The migration ships the table **empty**. Real numbers are never committed to the repository. Populating the list is a staging data write that needs its own approval. | Product (policy), Architecture | **Out of Phase 1** (Product, 2026-11-23) |
 | R12 | Audit holds recipient ids and consent metadata, with no phone number, full or masked, until Legal approves otherwise. Reflected in §3.5 as the recommended default. | Legal | Proposed |
 
 ## 4. Proposed API (customer API, `/api/v1`, ADR-024 §14 pattern)
@@ -253,10 +259,10 @@ the database CHECK is the backstop.
 | P1-AC-12 | Soft-deleting a rule deletes its WhatsApp settings and recipients, audited with recipient ids only; its occurrences are preserved as today. |
 | P1-AC-13 | Grants match §3.5 exactly, and the tables are not directly readable by the application roles. The migration applies on a fresh test database and is idempotent. Its rollback script, which needs approval like any staging rollback: drops the `whatsapp_requested` CHECK and both new tables, which **deletes every stored number** with no copy kept; reports the deleted counts; and restores the migration 323 definitions of the create, update and delete functions (review B3). |
 | P1-AC-14 | **Lifecycle regression (§7.2):** across every case in the regression matrix, WhatsApp saves and alert saves that change no operational field leave Active occurrence state, trigger and resolution timers, acknowledgements and rule versions byte-for-byte unchanged. Enable/disable, delete and acknowledge behave exactly as on `origin/staging` `458c179`. |
-| P1-AC-15 | Only WiseWatts-controlled test numbers are entered on staging (D17), recorded in the staging verification record. If R8 is approved, this is also enforced by the allow-list. |
-| P1-AC-16 | *(If R5 is approved)* a designated report automation account is refused by every WhatsApp function, even with `alert.configure` and site access. |
-| P1-AC-17 | *(If R6 is approved)* new consent is refused while no approved wording version exists; every consent records an existing register version. |
-| P1-AC-18 | *(If R8 is approved)* on staging and test, a number not on the allow-list is refused, and the stored configuration is unchanged. |
+| P1-AC-15 | Only WiseWatts-controlled test numbers are entered on staging (D17), recorded in the staging verification record. Procedural: R8 (allow-list) is out of Phase 1 scope. |
+| P1-AC-16 | *(R5, approved)* a designated report automation account is refused by every WhatsApp function, even with `alert.configure` and site access. |
+| P1-AC-17 | *(R6, in scope)* new consent is refused while no approved wording version exists; every consent records an existing register version. |
+| P1-AC-18 | *(R8 — **out of Phase 1 scope**; kept for reference only)* on staging and test, a number not on the allow-list is refused, and the stored configuration is unchanged. |
 
 ## 7. Test plan
 
@@ -277,14 +283,14 @@ the database CHECK is the backstop.
 - **Concurrency (review R1):** a first save with revision 0; two concurrent
   first saves (one succeeds, one gets `whatsapp_config_stale`, no error);
   a stale revision.
-- **R5 (if approved):** uid-17-style automation account with `ADMIN` and
-  site access is refused for get, save and summaries; an ordinary `ADMIN`
-  on the same site is allowed; removing the designation restores access.
-- **R6 (if approved):** consent refused with no approved version; a
+- **R5 (approved):** uid-17-style automation account with `ADMIN` and
+  site access is refused for get, save and summaries; an account designated
+  for site A is also refused on site B where it holds `ADMIN`; an ordinary
+  `ADMIN` on the same site is allowed; removing the designation restores
+  access; the customer API returns 403 for the automation account.
+- **R6 (in scope):** consent refused with no approved version; a
   retired version cannot be used for new consent; existing consents keep
   their version.
-- **R8 (if approved):** a non-listed number is refused; a listed number is
-  accepted; the list is empty after migration.
 - **No numbers in text (review R2):** for refused saves, assert the error
   text and the captured logs contain no submitted full number.
 - **Permissions:** customer `ADMIN` own site / other organisation / an
