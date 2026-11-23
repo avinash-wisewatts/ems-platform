@@ -14,6 +14,12 @@ D-2 rule-wide previous occurrences — migration 327) approved 2026-11-18;
 **not on production** (separate approval,
 [production plan](../../09-release-and-deployment/production-release-alerts-adr-024.md)).
 Date: 2026-11-18
+**Note 2026-11-23:** the Product Owner's WhatsApp notifications PRD (Draft 0.1)
+is under review as [ADR-026](ADR-026-whatsapp-alert-notifications.md)
+(**Proposed**). If decided it would amend §8 (notification settings would not
+be a configuration change), §9 (WhatsApp no longer "Coming Soon") and §10
+(no WhatsApp reminders in its first release). Until then §9 stands: nothing is
+sent.
 Decision owners: Product Owner (product decisions, §1–§13, §17–§18);
 Architecture (the write-path architecture in §14–§16, which applies the
 existing Reports-export pattern and the platform's existing audit

@@ -147,6 +147,13 @@ Rule-based alerts re-adopt the lifecycle, states, resilience,
 immutability and recurrence rules of `EMS-REQ-118`, `-120`–`-124`
 (retention: see `EMS-REQ-122`'s note).
 
+> **2026-11-23 — WhatsApp notifications PRD (Draft 0.1), Proposed.** The
+> Product Owner's PRD for real WhatsApp delivery to per-rule recipients is
+> recorded in [alerts/whatsapp-notifications/](../07-features/alerts/whatsapp-notifications/README.md)
+> and proposed as [ADR-026](../00-governance/decisions/ADR-026-whatsapp-alert-notifications.md).
+> Not decided: `EMS-REQ-084`, `-145` and `-146` are unchanged until it is, and
+> new requirement IDs will be allocated then.
+
 | ID | Title / description | Customer question | Priority | Source | Phase | Status | Dependencies | Notes |
 |---|---|---|---|---|---|---|---|---|
 | EMS-REQ-080 | **View active & historical alerts.** Semantic subject, value vs. threshold, time, status. | "What's wrong right now?" | SHOULD | PRODUCT_OWNER, ZEROWATT_TECHNICAL_REFERENCE | MVP-7 | READY-FOR-DESIGN | no alert model/endpoint defined; ADR-016 | Alerts ≠ insights conceptually. "Severity" removed from this row's description 2026-09-14 — see the contradiction record below. Full lifecycle/state/content detail: `EMS-REQ-117`–`127`. 2026-11-18 (ADR-024 §11): met for rule-based alerts by the Active Alerts view and the Resolved/Ended history view (`EMS-REQ-152`). |
