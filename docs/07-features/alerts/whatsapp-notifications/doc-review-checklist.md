@@ -27,16 +27,24 @@ index; `functional-requirements.md`; the Alerts README.
 | 10 | Lifecycle invariants | WhatsApp saves and no-op rule saves never change occurrence state, timers, acknowledgements or versions; operational edits still end alerts (ADR-024 §8) | phase-1-plan §7.2 RG-1 to RG-13; P1-AC-7, -8, -9, -14 |
 | 11 | Phase 1 scope | Sends nothing; no provider, delivery records, queue, sender, receipt endpoint, STOP handling, templates, infrastructure or production | phase-1-plan §1, §9; approval package §3 |
 | 12 | Gates | Implementation, merge, staging deployment and test saves each need separate approval; Phase 2 and production gates are stated | README §5; approval package §2 |
-| 13 | Proposals vs decisions | R5–R12, A-1–A-9 and the proposed requirement IDs are marked proposed or open, never as approved | README §3, §4A; approval package §1, §4 |
+| 13 | Proposals vs decisions | Each item carries its recorded status, with owner and date where decided, and nothing open is shown as approved. **Decided:** ADR-024 Amendment 2 (Product Owner + Architecture). **Approved, in scope:** R5 (Architecture). **In scope:** R6 (Product; wording not supplied, Legal sufficiency open). **Confirmed:** A-1 to A-9 and R7 (Product; R7/A-9 subject to Legal L-3). **Allocated:** R11, `EMS-REQ-153`–`EMS-REQ-159`. **Out of scope:** R8. **Open / proposed:** R9, R10, R12, D21 wording, L-1 to L-3, P-1 to P-4; ADR-026 Proposed. All decisions dated 2026-11-23 | README §3, §4A; review-2026-11-23.md §7; approval package §1, §2, §4; consent-wording-register.md |
 | 14 | Traceability | Each decision maps to an ADR section, a plan section and an acceptance criterion or test | README §5A |
 | 15 | Links | All relative links resolve | Link check |
 
-## 2. Author's self-check (2026-11-23, not independent)
+## 2. Author's mechanical-check record (not independent)
 
-Checks 1, 3, 5 and 15 were verified mechanically by the author at
-`8ce5f0a`: PRD diff, decision-table hashes, ADR-026 status line, link
-check. The others were self-reviewed in review-2026-11-23.md. **This does
-not replace the reviewer's review.**
+Each run names the commit it checked. A run applies to that commit only;
+any later commit needs a new run.
+
+| Commit checked | Date | Checks | Result |
+|---|---|---|---|
+| `8ce5f0a` | 2026-11-23 | 1, 3, 5, 15 | Pass (superseded) |
+| `05204f7` | 2026-11-23 | 1 (PRD diff vs `1824bab`), 3 (D1–D13 rows vs `a750c5f`, D14–D21 rows vs `bc7899e`), 5 (ADR-026 Proposed in ADR, log, index), 15 (171 relative links, 0 broken) | Pass. Cross-document review found six inconsistencies (review record, check 13, this record, consent register, PR description, ADR-024 index row), corrected in the next commit |
+
+The run for the commit that made those corrections is reported in the PR
+#186 description, since a commit cannot record its own SHA. The other checks
+were self-reviewed in review-2026-11-23.md. **This does not replace the
+reviewer's review.**
 
 ## 3. Review record
 

@@ -1,12 +1,15 @@
 # WhatsApp opt-in confirmation wording — register
 
-Status: **PROPOSED register (review item R6), no approved wording yet.** This
-is the documentation record of each approved version of the statement an
-administrator confirms when adding a WhatsApp recipient (decision D21:
-WiseWatts Product defines and approves the exact wording before it is used).
-If R6 is approved, each approved version is also loaded, by migration, into
+Status: **in Phase 1 scope (R6, Product Owner, 2026-11-23); no approved
+wording yet.** This is the documentation record of each approved version of
+the statement an administrator confirms when adding a WhatsApp recipient
+(decision D21: WiseWatts Product defines and approves the exact wording
+before it is used). Each approved version is also loaded, by migration, into
 `analytics.alert_whatsapp_consent_statements`, and every consent records the
-version it was given under.
+version it was given under. Until a version is approved and loaded, the
+register is empty and saves refuse new consent
+(`whatsapp_consent_statement_missing`). Including the register in scope
+approves **no wording**, and Legal sufficiency (L-1) remains open.
 
 Rules:
 - A version is used only after Product approval is recorded here, with the
