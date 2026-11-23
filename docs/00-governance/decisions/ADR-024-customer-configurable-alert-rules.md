@@ -16,7 +16,7 @@ D-2 rule-wide previous occurrences — migration 327) approved 2026-11-18;
 Date: 2026-11-18
 **Note 2026-11-23:** the Product Owner's WhatsApp notifications PRD (Draft 0.1)
 is under review as [ADR-026](ADR-026-whatsapp-alert-notifications.md)
-(**Proposed**). If decided it would amend §8 (notification settings would not
+(**Proposed**; Product Owner decisions D1–D13 agreed 2026-11-23). If decided it would amend §8 (notification settings would not
 be a configuration change), §9 (WhatsApp no longer "Coming Soon") and §10
 (no WhatsApp reminders in its first release). Until then §9 stands: nothing is
 sent.

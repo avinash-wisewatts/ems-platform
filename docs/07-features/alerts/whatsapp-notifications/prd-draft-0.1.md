@@ -5,7 +5,9 @@
 > decided. It authorises no database, API, UI, infrastructure or production
 > change (its own §16). The engineering intake review — how it maps onto the
 > ADR-024 alert-rule model, the conflicts found and the decisions needed — is
-> in [README.md](README.md); the proposed architecture decision is
+> in [README.md](README.md); dated clarifications (including the outdated §16)
+> are in [prd-draft-0.1-addendum-2026-11-23.md](prd-draft-0.1-addendum-2026-11-23.md),
+> never edited into the text below; the proposed architecture decision is
 > [ADR-026](../../../00-governance/decisions/ADR-026-whatsapp-alert-notifications.md).
 > Where this PRD says "alert", the ADR-024 model calls it an **alert rule**;
 > "a triggered alert" is a rule's **occurrence** becoming Active.

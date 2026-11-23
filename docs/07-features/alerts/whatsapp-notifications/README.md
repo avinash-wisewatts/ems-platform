@@ -1,260 +1,183 @@
-# Alerts → WhatsApp notifications — PRD intake review
+# Alerts → WhatsApp notifications — decisions and review
 
-Status: **PROPOSED — not decided, not authorised.** Intake of the Product
-Owner's PRD Draft 0.1 (received 2026-11-23). No database, API, UI,
-infrastructure or production change is authorised (PRD §16). Owner: Product +
-Engineering. Last reviewed: 2026-11-23.
+Status: **PROPOSED.** The Product Owner agreed decisions D1–D13 on
+2026-11-23; the architecture decision
+([ADR-026](../../../00-governance/decisions/ADR-026-whatsapp-alert-notifications.md))
+stays **Proposed** until provider validation, privacy/legal review and the
+infrastructure approvals are complete (D13). **Nothing is implemented or
+authorised**: no database, API, UI, infrastructure or production change.
+Owner: Product + Engineering. Last reviewed: 2026-11-23.
 
-- Source record: [prd-draft-0.1.md](prd-draft-0.1.md) (verbatim).
-- Proposed architecture decision: [ADR-026](../../../00-governance/decisions/ADR-026-whatsapp-alert-notifications.md) (Proposed).
-- Builds on: [ADR-024](../../../00-governance/decisions/ADR-024-customer-configurable-alert-rules.md)
-  (customer alert rules — on staging since 2026-11-18, **not on production**),
-  [ADR-017](../../../00-governance/decisions/ADR-017-mvp7-alert-architecture.md)
-  (evaluator as a TimescaleDB job), [ADR-025](../../../00-governance/decisions/ADR-025-site-energy-performance-reports.md)
-  (the report-worker precedent for a background Python worker).
-- Requirements: `EMS-REQ-084` (multi-channel notification, LATER), `EMS-REQ-145`
-  (reminder frequency), `EMS-REQ-146` (delivery options "Coming Soon").
-
-Evidence for this review: repository `origin/staging` `458c179` and read-only
-staging queries on 2026-11-23 (cited inline).
-
-## 1. How the PRD maps onto what exists
-
-| PRD term | Current model (ADR-024, migrations 320–327) |
+| Document | Purpose |
 |---|---|
-| "Alert" / "individual alert" (e.g. *Maximum Demand Exceeded*) | An **alert rule** (`analytics.alert_rules`): one site, one asset, one parameter, a condition, a schedule; customer-named. At most 25 active rules per site. |
-| "A triggered alert" | A rule's **occurrence** (`analytics.alerts`) becoming **Active** after 5 minutes of the condition holding. One Active occurrence per rule at a time. |
-| "Alert engine" | `analytics.run_alert_rule_evaluation_job`, a TimescaleDB job running **inside PostgreSQL** once a minute (migration 325). |
-| "Site Admin" | Customer `ADMIN` whose ORGANIZATION / SELECTED_SITES scope covers the site. Holds `alert.configure`. |
-| "WiseWatts Global Site Admin" | `GLOBAL`-scope `ADMIN` (WiseWatts staff, ADR-023 decision 4). Holds `alert.configure` on every site. |
-| "Authorised backend write path" (PRD §8.2, open decision 7) | **Already decided and built** by ADR-024 §14–§16: same-origin JSON to `/api/v1`, a route-level dedicated permission, SECURITY DEFINER write functions that re-check permission and site access, and an `admin.audit_events` row in the same transaction. |
-| "Enable WhatsApp Notifications" checkbox | Today `alert_rules.whatsapp_requested` — a stored **"Coming Soon" preference only**; nothing is ever sent (ADR-024 §9). |
+| [prd-draft-0.1.md](prd-draft-0.1.md) | The Product Owner's PRD, verbatim — the source record. |
+| [prd-draft-0.1-addendum-2026-11-23.md](prd-draft-0.1-addendum-2026-11-23.md) | Dated clarifications: where the PRD is out of date or superseded by D1–D13. |
+| This README | Decisions, assumptions, open questions, dependencies, approvals, the conflict review. |
+| [phase-1-plan.md](phase-1-plan.md) | Phase 1 plan — staging-only configuration; sends nothing. Not authorised. |
+| [ADR-026](../../../00-governance/decisions/ADR-026-whatsapp-alert-notifications.md) | Proposed architecture decision. |
 
-So the PRD's role model, location and write-path requirements are already
-met by ADR-024. What is new is **real outbound delivery**, **recipient phone
-numbers (personal data)**, and **delivery records**.
+Builds on [ADR-024](../../../00-governance/decisions/ADR-024-customer-configurable-alert-rules.md)
+(customer alert rules — on staging since 2026-11-18, **not on production**),
+[ADR-017](../../../00-governance/decisions/ADR-017-mvp7-alert-architecture.md)
+(evaluator = TimescaleDB job) and [ADR-025](../../../00-governance/decisions/ADR-025-site-energy-performance-reports.md)
+(background-worker precedent). Requirements: `EMS-REQ-084`, `-145`, `-146`.
+Evidence: `origin/staging` `458c179`; read-only staging queries 2026-11-23.
 
-## 2. Conflicts and gaps found
+## 1. Terms
 
-Each item states what conflicts, where, and the proposed resolution. The
-resolutions are proposals for decision ([ADR-026](../../../00-governance/decisions/ADR-026-whatsapp-alert-notifications.md)), not decisions.
+| PRD term | Model term (ADR-024, migrations 320–327) |
+|---|---|
+| "Alert" (e.g. *Maximum Demand Exceeded*) | **Alert rule** — `analytics.alert_rules`, one row per rule (`rule_id` stable; `version` bumps on every edit). |
+| "A triggered alert" | A rule's **occurrence** (`analytics.alerts`) becoming **Active** after 5 minutes. |
+| "Alert engine" | `analytics.run_alert_rule_evaluation_job` → `analytics.evaluate_alert_rules`, a TimescaleDB job **inside PostgreSQL**, once a minute; qualification timers in `analytics.alert_evaluation_candidates`. |
+| "Site Admin" | Customer `ADMIN` (ORGANIZATION / SELECTED_SITES scope covering the site), holds `alert.configure`. |
+| "WiseWatts Global Site Admin" | `GLOBAL` `ADMIN` (WiseWatts staff), holds `alert.configure` on every site. |
 
-**C1 — ADR-024 §9 forbids sending.** ADR-024 §9, `EMS-REQ-125` and
-`EMS-REQ-146` say no email or WhatsApp message is sent, there is no outbound
-integration, and the UI must show no delivery status. The rule form says
-"Email, WhatsApp and reminders are not sent yet"
-(`web/src/routes/alerts/AlertRuleForm.tsx`). *Proposal:* when the PRD is
-approved, ADR-026 amends ADR-024 §9 for WhatsApp only. Email stays
-"Coming Soon".
+The design keeps **three separate concepts** (D6):
 
-**C2 — Changing WhatsApp settings would end the Active alert.** Under
-ADR-024 §8, `analytics.update_portal_alert_rule` (migration 323) treats
-**any** change as a configuration change, including `whatsapp_requested`:
-- the rule's Active occurrence is ended `CONFIGURATION_CHANGED`;
-- the rule version is bumped;
-- qualification restarts.
+1. **Alert definition and operational lifecycle**: the rule, its occurrences
+   and their timers. This is ADR-024, unchanged.
+2. **WhatsApp notification configuration**: per rule, whether WhatsApp is
+   on, its recipients, and each recipient's consent. This is new in
+   Phase 1.
+3. **WhatsApp delivery records**: one per occurrence and recipient, with
+   provider status. This is Phase 2+, and not in Phase 1.
 
-With real delivery, adding a recipient during an incident would end the
-alert, and five minutes later the alert could re-trigger and send a second
-message. That contradicts the PRD's FR-01 intent (disabling WhatsApp must
-not affect the underlying alert) and AC-15 (no uncontrolled duplicates).
-*Proposal:*
-- Notification configuration becomes its own record with its own audited
-  write function.
-- It is **not** part of the rule's condition identity.
-- Saving it never ends an occurrence or bumps the rule version.
-- The WhatsApp flag is removed from the rule-edit comparison.
+## 2. Confirmed decisions (Product Owner, 2026-11-23)
 
-**C3 — Existing "requested" flags must not start sending.**
-`whatsapp_requested = true` today only records interest. It has no
-recipients, and nobody consented on the basis of it. *Proposal:*
-- These flags never activate delivery; WhatsApp starts disabled for every rule
-  (PRD FR-01 default).
-- The flag is retired or migrated to "disabled", with the count recorded.
-- *Staging (read-only, 2026-11-23):* 2 live rules on 2 sites, **0** with
-  WhatsApp requested, 0 with Email requested. Production has no rules
-  (ADR-024 is not on production).
+| ID | Decision |
+|---|---|
+| D1 | **Provider:** Meta WhatsApp Business Cloud API preferred, subject to validation of account requirements, templates, callbacks, pricing and operational suitability. No commitment to integrate yet. |
+| D2 | **Recipients:** individual phone numbers only; no WhatsApp groups in the initial release. |
+| D3 | **Configuration:** independently per alert rule in EMS → Alerts; multiple numbers per rule; Site Admins only on authorised sites; WiseWatts Global Site Admins on all sites. |
+| D4 | **Consent:** explicit administrator confirmation of opt-in for each number. STOP-based opt-out, subject to provider capability and legal review. No OTP verification initially. |
+| D5 | **Defaults:** WhatsApp off for every rule by default. The existing "Coming Soon" interest checkbox (`whatsapp_requested`) **never** activates sending. |
+| D6 | **Lifecycle isolation:** WhatsApp settings and recipients are stored separately from the operational rule. Saving them never ends an Active occurrence, never resets a trigger timer and never re-triggers an alert. |
+| D7 | **Delivery:** one message per occurrence and recipient; duplicate sends for the same occurrence/recipient suppressed within 60 minutes; no WhatsApp reminders and no recovery messages in the initial release. |
+| D8 | **Templates:** WiseWatts Product owns message wording and templates. |
+| D9 | **Security and privacy:** tenant, site and role permissions enforced server-side. Consent and configuration changes are audited. Phone numbers are masked in delivery history. Full numbers are shown only to authorised admins managing configuration. Operators and Viewers never see recipient numbers. |
+| D10 | **Retention:** delivery history kept 90 days initially. Recipient numbers kept while configured; deletion handled according to applicable legal obligations. |
+| D11 | **Production dependency:** no WhatsApp rollout until the existing Alerts feature (ADR-024) has completed its production rollout and acceptance. |
+| D12 | **Infrastructure:** each of these needs separate explicit approval: the DB-backed queue, the background sender, the public signature-checked delivery-receipt endpoint, outbound server internet access and the provider secrets. They are documented only, not provisioned. |
+| D13 | **Governance:** ADR-026 stays Proposed until provider validation, privacy/legal review and the required infrastructure approvals are complete. |
 
-**C4 — The PRD's baseline statement is out of date.** PRD §16 says the
-customer EMS "primarily consumes configured information" and that alert MVP
-delivery includes email. Both are out of date:
-- **Alert configuration:** ADR-024 (2026-11-18) moved it into the EMS and
-  superseded Q67 for alerts.
-- **Email:** removed from MVP by ADR-016 (2026-09-14 note on `EMS-REQ-084`).
+## 3. Assumptions
 
-*Proposal:* record this in ADR-026. PRD open decision 7 reduces to the API
-contract for the new endpoints, using the ADR-024 pattern.
+Engineering's working assumptions. Each is to be confirmed or corrected.
 
-**C5 — Reminders already have a policy.** ADR-024 §10 / `EMS-REQ-145`:
-- Rules store a reminder frequency (15 or 30 minutes).
-- Reminders repeat while an occurrence is Active and unacknowledged, and stop
-  on acknowledgement.
-- Today nothing is delivered.
+- **A-1. "Admins managing configuration" means `alert.configure` holders.**
+  Those are the customer site `ADMIN` and the `GLOBAL` `ADMIN`. Everyone else
+  counts as "Operators and Viewers" for D9, including `GLOBAL` `OPERATOR` and
+  `GLOBAL` `VIEWER`.
+- **A-2. Editing a number is removing it and adding a new one.** A changed
+  number needs fresh opt-in confirmation (D4); consent never carries over
+  to a different number.
+- **A-3. Removing a recipient deletes its stored number** (D10: kept "while
+  configured"). Phase 1 has no delivery records, so nothing else refers to
+  the number. From Phase 2, delivery records keep only a masked copy.
+- **A-4. The audit log holds masked numbers only, plus the recipient id**,
+  so the permanent audit log keeps no full phone numbers. Whether consent
+  evidence needs more (for example, a keyed hash of the number) is a
+  question for the legal review (Q-6).
+- **A-5. Soft-deleting a rule deletes its WhatsApp settings and recipients
+  in the same audited transaction** (D10), because the numbers are no longer
+  configured.
+- **A-6. Enabling WhatsApp never sends about an occurrence that is already
+  Active.** Only occurrences that become Active afterwards are eligible.
+  This applies from Phase 2.
+- **A-7. The Phase 1 UI is staging-only and labelled "messages are not sent
+  yet"**, and only WiseWatts-controlled test numbers are entered on staging
+  (Q-4).
+- **A-8. Phone numbers are stored in E.164 form** and validated server-side
+  with a pinned library, with a database format check as a backstop.
 
-Once WhatsApp exists, the stored reminder values would imply repeat
-WhatsApp messages every 15–30 minutes. The PRD lists repeat notifications
-as open (open decision 5) and escalation as out of scope. *Proposal:*
-- Release 1 sends **one** message per occurrence and **no reminders**.
-- The form keeps saying reminders are not sent.
-- WhatsApp reminders are a separate later decision.
+## 4. Open questions (need Product Owner input)
 
-**C6 — Retention of delivery records and phone numbers.**
-- Occurrences are purged 90 days after Resolved/Ended (migration 325). A
-  delivery record that references an occurrence must be purged with it, or
-  keep its own snapshot.
-- Phone numbers are personal data. India's Digital Personal Data Protection
-  Act, 2023 requires a purpose, consent and erasure.
-- Removing a recipient must stop future sends, but history needs a decision:
-  keep a masked number, or delete it.
+| ID | Question | Why it matters | Engineering suggestion |
+|---|---|---|---|
+| Q-1 | **Repeated occurrences of the same rule.** D7 limits sends per *occurrence*/recipient. A rule that keeps resolving and re-triggering creates new occurrences: it can resolve after 1 minute and re-qualify after 5 (ADR-024 timing). Should each new occurrence send again? | D7's 60-minute window only covers retries of one occurrence. A flapping rule could message a recipient about every 6 minutes. This was PRD open decision 5. | Add a per-rule/recipient cooldown of 60 minutes across occurrences; sends inside it are recorded as Suppressed. |
+| Q-2 | **Maximum recipients per rule.** | Bounds cost, abuse and UI size. | 10. |
+| Q-3 | **Can Operators and Viewers see masked delivery history**, or no recipient information at all? | D9 says they must not see recipient numbers; masked history may or may not be acceptable. | Masked history plus an "N recipients" summary; no full numbers. |
+| Q-4 | **Should Phase 1 collect real customer numbers** before sending exists? | Holding personal data for a purpose that isn't live yet runs against data minimisation. | Staging only, WiseWatts test numbers only, until Phase 2 is approved. |
+| Q-5 | **Per-site message cap** (storm protection, PRD §8.4). | Not covered by D1–D13. | Decide in Phase 2 design; not needed for Phase 1. |
+| Q-6 | **Legal review scope** (D4, D10): is administrator attestation enough consent evidence; what the audit log may hold; deletion obligations. | Blocks Phase 2 and D13. | Raise with legal before Phase 2. |
+| Q-7 | **Retiring the "Coming Soon" WhatsApp checkbox.** | When the new WhatsApp section appears, the old checkbox would duplicate it. | Remove it from the rule form in Phase 1 and keep Email "Coming Soon". |
 
-*Proposal:*
-- Delivery records follow the occurrence's 90-day retention.
-- History shows masked numbers (last 4 digits).
-- Removed recipients are soft-deactivated; their full number is erased when
-  the last delivery record referencing them ages out.
+## 5. Dependencies and approvals still required
 
-To confirm with the PO, and legal review if required.
-
-**C7 — Who may see recipients and delivery history.** The PRD defines only
-the two configuring roles. Under ADR-024, Operators and Viewers (customer
-and GLOBAL) can see alerts and rules. *Proposal:*
-- Full recipient numbers are visible only to holders of `alert.configure`.
-- Other roles see "WhatsApp on · N recipients" and a delivery summary with
-  masked numbers.
-- Needs a PO decision.
-
-**C8 — The evaluator cannot call WhatsApp.** The evaluator runs inside
-PostgreSQL (ADR-017), which must not make outbound HTTP calls. *Proposal:*
-- **Outbox:** when the evaluator creates an Active occurrence for a rule with
-  WhatsApp enabled, it writes one outbox row per active recipient in the
-  **same transaction**.
-- **Idempotency:** a unique key (occurrence, recipient, event) makes repeat
-  processing harmless (PRD AC-15).
-- **Notification worker:** a separate Python service claims rows with a
-  lease, calls the provider, records the outcome, and retries transient
-  failures with a cap. This is the `ems-report-worker` pattern (ADR-025).
-- **Callbacks:** a signed webhook endpoint updates delivered/failed status.
-
-**C9 — Infrastructure that doesn't exist yet.** Each of these is a
-separate, authorised operational change:
-- a new container on a staging host with little headroom (1.9 GB RAM);
-- outbound HTTPS from the host to the provider, which is unverified — the
-  security-group and network-ACL rules have never been read;
-- a **public inbound webhook** for delivery callbacks, a new
-  internet-facing endpoint with signature verification;
-- a new server-side secret: the provider token and the webhook verify
-  secret, in their own env file, never in the browser.
-
-**C10 — Production depends on the ADR-024 release.** ADR-024 is not on
-production. Its production release is blocked on backup, precheck, bundle
-and approval. Production has no `ems_customer_api` role and no current
-database backup. WhatsApp cannot reach production before ADR-024 does.
-
-**C11 — Which value the message shows.** `analytics.alerts.last_value` is
-the **latest** value and changes as the occurrence runs; it is not the
-value at trigger. *Proposal:* the outbox row snapshots the values at
-creation, so a retried message always says the same thing:
-- trigger value and unit;
-- threshold and tolerance;
-- rule name, site name and asset name;
-- triggered time in the site timezone.
-
-**C12 — The "Secure EMS Link".** The Alerts area is one route
-(`/features/alerts`), and an individual occurrence has no URL yet.
-*Proposal:*
-- The link is a plain deep link to the occurrence on the customer host. It
-  requires normal sign-in and carries no token, session or internal
-  database id beyond the occurrence UUID already used by the API.
-- The deep link needs a small UI routing change.
-
-**C13 — Template content.** Rule, site and asset names are free text typed
-by customers. WhatsApp template variables have length and character limits
-(for example, no new lines). *Proposal:* sanitise and truncate variables in
-the worker, and use one approved utility template per event type.
-
-**C14 — Events that need explicit decisions:**
-- **Resolved:** recovery message? This is PRD open decision 6.
-- **Ended `CONFIGURATION_CHANGED`:** proposal — no message.
-- **"Unable to evaluate — data unavailable"** (ADR-024 §4A): the occurrence
-  stays Active. Proposal — no message.
-- **Flapping:** under ADR-024 timing a rule can resolve after 1 minute and
-  re-trigger after 5, so a flapping rule could message about every
-  6 minutes. That needs a cooldown decision (PRD open decision 5).
-
-**C15 — Limits.** There is no recipients-per-rule cap and no per-site
-message cap. *Proposal:* at most 10 recipients per rule, and a per-site
-hourly send cap with an operator-visible "suppressed" status. To confirm.
-
-**C16 — Phone validation.** No phone-number library is in
-`app/requirements.txt`. *Proposal:*
-- Store numbers in E.164.
-- Validate server-side with a pinned library, enforced again by a database
-  CHECK on the format.
-- Allow no duplicates per rule.
-
-## 3. What the PRD needs decided before implementation
-
-PRD §15 open decisions, with this review's recommendation for each (all for
-Product Owner decision):
-
-| # | Decision | Recommendation |
+| Item | Needed for | Status |
 |---|---|---|
-| 1 | Provider | Choose between the Meta WhatsApp Cloud API direct and an Indian BSP. Validate business verification, the sender number, utility-template approval, India pricing, callbacks and data residency first. **Pick before Phase 2.** |
-| 2 | Number verification | Release 1: none in-product. The administrator attests that recipients have opted in (see 3). |
-| 3 | Consent | WhatsApp policy requires the business to hold opt-in. Proposal: the administrator records the opt-in confirmation per number (who, when), audited, and the recipient can opt out by replying STOP, which deactivates that number everywhere. Legal review advised (DPDP Act). |
-| 4 | Alert scope | Every rule (all are customer-defined); WhatsApp is per-rule opt-in. |
-| 5 | Repeat notifications | One message per occurrence; no reminders in release 1; a re-trigger within a cooldown (proposed 60 min) of the previous message for the same rule is recorded as suppressed. |
-| 6 | Recovery messages | Release 1: no recovery message (fewer template approvals); revisit. |
-| 7 | Write path | Settled by ADR-024 §14–§16 (C4). Only the endpoint contract remains — see ADR-026. |
-| 8 | Template governance | WiseWatts Product owns the template text; changes go through ADR-026 amendments; Operations submits the templates to the provider. |
+| Provider validation (Meta Cloud API): business verification, sender number, utility-template approval, callbacks, India pricing, limits, data handling | Phase 2; D13 | Not started |
+| Privacy/legal review (DPDP Act 2023): consent evidence, retention, deletion, audit content | Phase 2; D13 | Not started |
+| Phase 1 implementation authorisation (staging only) | Phase 1 | **Required: not authorised** |
+| Phase 1 staging migration and deployment authorisation | Phase 1 deploy | Required separately |
+| DB-backed delivery queue (outbox) | Phase 2 | Approval required (D12) |
+| Background sender service (new container on the 1.9 GB staging host) | Phase 2 | Approval required (D12) |
+| Public, signature-checked delivery-receipt endpoint | Phase 2 | Approval required (D12); security review |
+| Outbound HTTPS from the servers to the provider (security-group and network-ACL rules never read) | Phase 2 | Approval required (D12) |
+| Provider secrets (token, webhook secret) in a server-side env file | Phase 2 | Approval required (D12) |
+| WhatsApp templates written and approved | Phase 2 | WiseWatts Product (D8) |
+| ADR-024 production rollout and acceptance (blocked on backup, precheck, bundle, approval) | Any production WhatsApp | Not done (D11) |
 
-Plus decisions this review adds: C2 (notification config separate from rule
-identity), C3 (requested flags never activate), C6 (retention and
-masking), C7 (visibility by role), C14 (Ended / unavailable / flapping),
-C15 (caps).
+## 6. Conflict review — resolution status
 
-## 4. Proposed delivery plan (once decided)
+From the intake review of 2026-11-23 (`1824bab`). The full text of C1–C16 is
+in that commit's version of this file; summarised here with what D1–D13
+settled.
 
-The PRD's phases, adjusted so nothing visible promises delivery before
-delivery exists:
+| ID | Conflict | Status |
+|---|---|---|
+| C1 | ADR-024 §9 forbids sending | Stands until ADR-026 is Decided; then ADR-024 Amendment 2 (WhatsApp only; Email stays Coming Soon). |
+| C2 | Changing any rule field, including `whatsapp_requested`, ends the Active occurrence (`update_portal_alert_rule`, migration 323) | **Resolved by D6.** Phase 1 design in [phase-1-plan.md](phase-1-plan.md) §3, including neutralising `whatsapp_requested` so new-form saves can't end alerts. |
+| C3 | Existing "requested" flags must not start sending | **Resolved by D5.** Staging: 2 live rules, 0 with WhatsApp requested. |
+| C4 | PRD §16 describes an outdated baseline | Recorded in the [addendum](prd-draft-0.1-addendum-2026-11-23.md). |
+| C5 | Stored reminder frequency would imply repeat messages | **Resolved by D7** (no WhatsApp reminders); the form keeps saying reminders are not sent. |
+| C6 | Retention of delivery records and numbers | **Mostly resolved by D10**; deletion detail and audit content in Q-6, A-3, A-4. |
+| C7 | Visibility by role | **Resolved by D9**; masked history for Operators/Viewers in Q-3. |
+| C8 | The evaluator can't call HTTP (needs outbox + worker) | Architecture proposal in ADR-026 A2–A3; approval required (D12). Phase 2. |
+| C9 | New infrastructure (worker, egress, public webhook, secrets) | Approval required (D12). Phase 2. |
+| C10 | Production depends on the ADR-024 rollout | **Resolved by D11.** |
+| C11 | `last_value` is not the value at trigger | Phase 2 design: the outbox row snapshots the message values. |
+| C12 | No deep link to an occurrence | Phase 2 design (small UI routing change). |
+| C13 | Free-text names inside template variables | Phase 2 design (sanitise and truncate); templates owned by Product (D8). |
+| C14 | Resolved / Ended / data-unavailable / flapping | Resolved and reminders settled by D7 (no messages). Ended and data-unavailable: no message (follows from D7: only Active is sent). Flapping is open as Q-1. |
+| C15 | Caps | Recipients per rule (Q-2), per-site cap (Q-5). |
+| C16 | Phone validation | Phase 1 design (A-8). |
 
-1. **Phase 0: decisions.**
-   - PO answers §3; the provider is selected; legal/consent review is done.
-   - ADR-026 moves to Decided, with ADR-024 Amendment 2 for C1/C2/C5.
-2. **Phase 1: configuration.** Staging only.
-   - Migration: the notification-config and recipient tables, the audited
-     write functions, the read functions, guarded grants, and retiring
-     `whatsapp_requested` (C3).
-   - API endpoints and the rule-form recipient editor.
-   - Saving configuration sends nothing. The UI says delivery is not active
-     yet until Phase 2 is live.
-3. **Phase 2: delivery.** Staging only, to WiseWatts-owned test numbers
-   first.
-   - Outbox written by the evaluator, the notification worker, approved
-     templates, and the signed webhook.
-   - Needs the infrastructure authorisations in C9.
-4. **Phase 3: operational readiness.**
-   - Delivery history UI, retries, cooldown and caps.
-   - Monitoring: worker heartbeat and outbox age in the deployment
-     verification suite.
-   - Retention, and security tests: tenant isolation, PII masking, webhook
-     signature.
-5. **Production.** Only after ADR-024 is on production, and with a
-   separate approval.
+## 7. Delivery phases
 
-## 5. Acceptance-criteria notes
+1. **Phase 1: configuration, staging only, sends nothing.** See
+   [phase-1-plan.md](phase-1-plan.md). Needs implementation authorisation.
+2. **Phase 2: delivery.** Covers:
+   - the outbox written by the evaluator, the sender worker and the signed
+     delivery-receipt endpoint;
+   - approved templates and delivery records;
+   - test numbers first.
 
-PRD §11 AC-1 to AC-15 are adopted as written, with these refinements:
+   Needs D12 approvals, provider validation and legal review.
+3. **Phase 3: operational readiness.** Covers:
+   - delivery-history UI, retries, cooldown and caps;
+   - monitoring (worker heartbeat, outbox age);
+   - 90-day retention, and the security tests.
+4. **Production.** Only after ADR-024 is in production and accepted (D11),
+   ADR-026 is Decided (D13), and a separate approval is given.
+
+## 8. Acceptance criteria — whole feature
+
+PRD §11 AC-1 to AC-15 are adopted, with these refinements:
 - **AC-8:** disabling WhatsApp or editing recipients never ends an Active
-  occurrence (C2).
+  occurrence or resets a timer (D6).
 - **AC-9:** applies to occurrences that become Active after WhatsApp was
-  enabled; enabling WhatsApp does not message about an alert that is
-  already Active.
-- **AC-15:** proven by the outbox unique key and a test that replays the
-  same occurrence.
+  enabled (A-6), and only to recipients whose consent is confirmed and who
+  have not opted out.
+- **AC-15:** proven by a unique (occurrence, recipient) key, and by a test
+  that replays the same occurrence.
 
-Proposed additions:
-- **AC-16:** pre-existing "requested" flags send nothing (C3).
-- **AC-17:** delivery history shows masked numbers to non-configuring roles (C7).
-- **AC-18:** a forged or unsigned callback is rejected (C9).
-- **AC-19:** no message is sent for Ended or data-unavailable states (C14).
+Additions:
+- **AC-16:** the "Coming Soon" flag never sends (D5).
+- **AC-17:** Operators and Viewers never see full numbers (D9).
+- **AC-18:** a forged or unsigned delivery receipt is rejected.
+- **AC-19:** no message is sent for Resolved, Ended or data-unavailable
+  states, and no reminders are sent (D7).
+
+Phase 1 has its own criteria in [phase-1-plan.md](phase-1-plan.md) §6.
