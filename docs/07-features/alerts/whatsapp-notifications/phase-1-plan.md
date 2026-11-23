@@ -119,19 +119,6 @@ Its audit row records the removed recipient ids, not phone numbers (proposed
 R12). Occurrence handling is
 unchanged.
 
-### 3.6 Proposed items: included only if their owner approves
-
-These are review recommendations, **not approved decisions**. Phase 1 is
-designed so each can be added or left out without changing the rest.
-
-| Item | Proposal | Owner | Status |
-|---|---|---|---|
-| R5 | Every WhatsApp function (get, save, summaries) refuses (`forbidden`) an actor who is the designated report automation account of **any** site, i.e. `analytics.site_report_profiles.automation_portal_user_id` (on staging, uid 17). This follows `analytics.site_report_can_generate` (migration 330). | Architecture | Proposed |
-| R6 | **Versioned opt-in wording register.** A table `analytics.alert_whatsapp_consent_statements` with `version` (PK), `statement_text`, `approved_by_name`, `approved_at` and `retired_at`. Rows are added by migration only after Product approves the wording (D21). The save refuses new consent while no current approved version exists (`whatsapp_consent_statement_missing`). Each consent stores the version it was given under (FK). A docs mirror lives in [consent-wording-register.md](consent-wording-register.md). | Product (wording), Legal (sufficiency) | Proposed |
-| R7 | **Retention while disabled:** switching WhatsApp off keeps the configured numbers. Disabling stops sending only; deleting a number is a separate, explicit action (removal, or rule deletion). Legal requirements may override this (L-3). This is assumption A-9. | Product, Legal | Proposed |
-| R8 | **Staging-only allow-list:** a table `analytics.alert_whatsapp_test_number_allowlist (phone_e164, added_by, added_at)` and a migration-set flag. On staging and test, the save refuses any number not on the list (`whatsapp_number_not_allowed`). The migration ships the table **empty**. Real numbers are never committed to the repository. Populating the list is a staging data write that needs its own approval. | Product (policy), Architecture | Proposed |
-| R12 | Audit holds recipient ids and consent metadata, with no phone number, full or masked, until Legal approves otherwise. Reflected in §3.5 as the recommended default. | Legal | Proposed |
-
 ### 3.5 Functions (SECURITY DEFINER, owner `ems_admin`, `search_path` pinned)
 
 | Function | Rule |
@@ -189,6 +176,19 @@ to `ems_customer_api` (migration 313 pattern). The postconditions assert:
   plus these three;
 - the tables are not readable directly;
 - no new function is executable by PUBLIC.
+
+### 3.6 Proposed items: included only if their owner approves
+
+These are review recommendations, **not approved decisions**. Phase 1 is
+designed so each can be added or left out without changing the rest.
+
+| Item | Proposal | Owner | Status |
+|---|---|---|---|
+| R5 | Every WhatsApp function (get, save, summaries) refuses (`forbidden`) an actor who is the designated report automation account of **any** site, i.e. `analytics.site_report_profiles.automation_portal_user_id` (on staging, uid 17). This follows `analytics.site_report_can_generate` (migration 330). | Architecture | Proposed |
+| R6 | **Versioned opt-in wording register.** A table `analytics.alert_whatsapp_consent_statements` with `version` (PK), `statement_text`, `approved_by_name`, `approved_at` and `retired_at`. Rows are added by migration only after Product approves the wording (D21). The save refuses new consent while no current approved version exists (`whatsapp_consent_statement_missing`). Each consent stores the version it was given under (FK). A docs mirror lives in [consent-wording-register.md](consent-wording-register.md). | Product (wording), Legal (sufficiency) | Proposed |
+| R7 | **Retention while disabled:** switching WhatsApp off keeps the configured numbers. Disabling stops sending only; deleting a number is a separate, explicit action (removal, or rule deletion). Legal requirements may override this (L-3). This is assumption A-9. | Product, Legal | Proposed |
+| R8 | **Staging-only allow-list:** a table `analytics.alert_whatsapp_test_number_allowlist (phone_e164, added_by, added_at)` and a migration-set flag. On staging and test, the save refuses any number not on the list (`whatsapp_number_not_allowed`). The migration ships the table **empty**. Real numbers are never committed to the repository. Populating the list is a staging data write that needs its own approval. | Product (policy), Architecture | Proposed |
+| R12 | Audit holds recipient ids and consent metadata, with no phone number, full or masked, until Legal approves otherwise. Reflected in §3.5 as the recommended default. | Legal | Proposed |
 
 ## 4. Proposed API (customer API, `/api/v1`, ADR-024 §14 pattern)
 

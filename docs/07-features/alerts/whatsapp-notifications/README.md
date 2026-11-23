@@ -17,6 +17,7 @@ Owner: Product + Engineering. Last reviewed: 2026-11-23.
 | [prd-draft-0.1-addendum-2026-11-23.md](prd-draft-0.1-addendum-2026-11-23.md) | Dated clarifications: where the PRD is out of date or superseded by D1–D21. |
 | This README | Decisions, assumptions, open legal/provider questions, dependencies, approval gates, the conflict review. |
 | [phase-1-plan.md](phase-1-plan.md) | Phase 1 plan — staging-only configuration; sends nothing. Not authorised. |
+| [phase-1-approval-package.md](phase-1-approval-package.md) | Phase 1 approval package (draft): readiness, approval checklist, final scope, proposed requirement IDs, effort, risks. **Not ready**: R5, R6/R8 scope, A-1–A-9, R7 and R11 are still open. |
 | [consent-wording-register.md](consent-wording-register.md) | Register of approved opt-in wording versions (proposed R6); empty, with no wording approved yet. |
 | [review-2026-11-23.md](review-2026-11-23.md) | PR #186 review record: findings B1–B3, R1–R12, I1–I5; status of the outstanding reviews; provider desk research. |
 | [ADR-026](../../../00-governance/decisions/ADR-026-whatsapp-alert-notifications.md) | Proposed architecture decision. |

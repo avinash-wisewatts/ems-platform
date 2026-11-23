@@ -39,7 +39,12 @@ WhatsApp only as "Coming Soon" placeholders that send nothing.)*
 *(2026-11-23: a Product Owner PRD for real WhatsApp delivery is under
 review — [whatsapp-notifications/](whatsapp-notifications/README.md),
 [ADR-026](../../00-governance/decisions/ADR-026-whatsapp-alert-notifications.md)
-**Proposed**. Nothing is sent until it is decided and implemented.)*
+**Proposed**. Nothing is sent until it is decided and implemented.
+Phase 1 configuration behaviour — the WhatsApp Coming Soon option removed, a
+separate configuration store, WhatsApp saves not treated as rule edits,
+configurer-only visibility — is
+[ADR-024 Amendment 2](../../00-governance/decisions/ADR-024-customer-configurable-alert-rules.md),
+**Decided 2026-11-23**, not implemented.)*
 
 ## Customer-configurable alert rules (ADR-024) — on staging 2026-11-18, not on production
 

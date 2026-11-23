@@ -11,7 +11,8 @@ note"); Phase 0 complete; **implemented** (Phase 1, PR #179, migrations
 320–326) and **deployed to staging 2026-11-18**, where migration 320
 deleted the 79 legacy alert records; **Amendment 1** (D-1 timing grace,
 D-2 rule-wide previous occurrences — migration 327) approved 2026-11-18;
-**not on production** (separate approval,
+**Amendment 2** (Phase 1 WhatsApp configuration, staging only) **decided
+2026-11-23**, not implemented; **not on production** (separate approval,
 [production plan](../../09-release-and-deployment/production-release-alerts-adr-024.md)).
 Date: 2026-11-18
 **Note 2026-11-23:** the Product Owner's WhatsApp notifications PRD (Draft 0.1)
