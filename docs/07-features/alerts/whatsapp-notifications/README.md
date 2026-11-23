@@ -1,7 +1,7 @@
 # Alerts → WhatsApp notifications — decisions and review
 
-Status: **PROPOSED.** The Product Owner agreed decisions D1–D13 on
-2026-11-23; the architecture decision
+Status: **PROPOSED.** The Product Owner agreed decisions D1–D13 and D14–D21
+on 2026-11-23. The architecture decision
 ([ADR-026](../../../00-governance/decisions/ADR-026-whatsapp-alert-notifications.md))
 stays **Proposed** until provider validation, privacy/legal review and the
 infrastructure approvals are complete (D13). **Nothing is implemented or
@@ -11,8 +11,8 @@ Owner: Product + Engineering. Last reviewed: 2026-11-23.
 | Document | Purpose |
 |---|---|
 | [prd-draft-0.1.md](prd-draft-0.1.md) | The Product Owner's PRD, verbatim — the source record. |
-| [prd-draft-0.1-addendum-2026-11-23.md](prd-draft-0.1-addendum-2026-11-23.md) | Dated clarifications: where the PRD is out of date or superseded by D1–D13. |
-| This README | Decisions, assumptions, open questions, dependencies, approvals, the conflict review. |
+| [prd-draft-0.1-addendum-2026-11-23.md](prd-draft-0.1-addendum-2026-11-23.md) | Dated clarifications: where the PRD is out of date or superseded by D1–D21. |
+| This README | Decisions, assumptions, open legal/provider questions, dependencies, approval gates, the conflict review. |
 | [phase-1-plan.md](phase-1-plan.md) | Phase 1 plan — staging-only configuration; sends nothing. Not authorised. |
 | [ADR-026](../../../00-governance/decisions/ADR-026-whatsapp-alert-notifications.md) | Proposed architecture decision. |
 
@@ -32,18 +32,21 @@ Evidence: `origin/staging` `458c179`; read-only staging queries 2026-11-23.
 | "Alert engine" | `analytics.run_alert_rule_evaluation_job` → `analytics.evaluate_alert_rules`, a TimescaleDB job **inside PostgreSQL**, once a minute; qualification timers in `analytics.alert_evaluation_candidates`. |
 | "Site Admin" | Customer `ADMIN` (ORGANIZATION / SELECTED_SITES scope covering the site), holds `alert.configure`. |
 | "WiseWatts Global Site Admin" | `GLOBAL` `ADMIN` (WiseWatts staff), holds `alert.configure` on every site. |
+| "Operators and Viewers" | Every role **without** `alert.configure`: customer `OPERATOR` / `VIEWER` and `GLOBAL` `OPERATOR` / `VIEWER` (A-1). |
 
 The design keeps **three separate concepts** (D6):
 
-1. **Alert definition and operational lifecycle**: the rule, its occurrences
-   and their timers. This is ADR-024, unchanged.
+1. **Alert definition and operational lifecycle**: the rule, its occurrences,
+   timers and acknowledgements. This is ADR-024, unchanged.
 2. **WhatsApp notification configuration**: per rule, whether WhatsApp is
    on, its recipients, and each recipient's consent. This is new in
    Phase 1.
 3. **WhatsApp delivery records**: one per occurrence and recipient, with
-   provider status. This is Phase 2+, and not in Phase 1.
+   provider status. This is Phase 2+, and **not** in Phase 1.
 
 ## 2. Confirmed decisions (Product Owner, 2026-11-23)
+
+### 2.1 Decisions D1–D13
 
 | ID | Decision |
 |---|---|
@@ -61,123 +64,156 @@ The design keeps **three separate concepts** (D6):
 | D12 | **Infrastructure:** each of these needs separate explicit approval: the DB-backed queue, the background sender, the public signature-checked delivery-receipt endpoint, outbound server internet access and the provider secrets. They are documented only, not provisioned. |
 | D13 | **Governance:** ADR-026 stays Proposed until provider validation, privacy/legal review and the required infrastructure approvals are complete. |
 
+### 2.2 Decisions D14–D21 (they close the earlier questions Q-1 to Q-7 and the opt-in wording)
+
+| ID | Was | Decision |
+|---|---|---|
+| D14 | Q-1 | **Repeat alerts:** a **60-minute quiet period per rule and recipient across separate occurrences**, in addition to D7's duplicate suppression within one occurrence. A send inside the quiet period is not made, and is recorded as Suppressed (Phase 2). |
+| D15 | Q-2 | **Recipient limit:** at most **10** phone numbers per rule. |
+| D16 | Q-3 | **Operators and Viewers:** **no recipient information** visible to these roles in Phase 1. That means no numbers, no masked numbers, no recipient count and no WhatsApp on/off indicator. Masked delivery history for them is reconsidered when delivery records are introduced (Phase 2/3). |
+| D17 | Q-4 | **Staging numbers:** only WiseWatts-controlled test numbers are entered. **No real customer numbers are collected before sending exists.** |
+| D18 | Q-5 | **Per-site message cap:** deferred to Phase 2 design. |
+| D19 | Q-6 | **Consent and audit:** whether administrator opt-in confirmation is legally sufficient, and what the audit log may contain and for how long, stay **open for privacy/legal review**. **Compliance is not assumed.** See L-1 and L-2. |
+| D20 | Q-7 | **Legacy checkbox:** the old "Coming Soon" WhatsApp checkbox is **removed in Phase 1**, subject to the migration 331 safeguard ([phase-1-plan.md §3.3](phase-1-plan.md)) and the regression tests (phase-1-plan.md §7.2). |
+| D21 | Opt-in wording | WiseWatts Product **defines and approves the exact opt-in confirmation wording before it is used**. The Phase 1 UI cannot ship to staging without it. |
+
 ## 3. Assumptions
 
-Engineering's working assumptions. Each is to be confirmed or corrected.
+Engineering's working assumptions. Each is to be confirmed or corrected in
+review.
 
 - **A-1. "Admins managing configuration" means `alert.configure` holders.**
-  Those are the customer site `ADMIN` and the `GLOBAL` `ADMIN`. Everyone else
-  counts as "Operators and Viewers" for D9, including `GLOBAL` `OPERATOR` and
-  `GLOBAL` `VIEWER`.
+  Those are the customer site `ADMIN` and the `GLOBAL` `ADMIN`. Every other
+  role counts as an "Operator or Viewer" for D9 and D16.
 - **A-2. Editing a number is removing it and adding a new one.** A changed
-  number needs fresh opt-in confirmation (D4); consent never carries over
-  to a different number.
+  number needs fresh opt-in confirmation (D4).
 - **A-3. Removing a recipient deletes its stored number** (D10: kept "while
-  configured"). Phase 1 has no delivery records, so nothing else refers to
-  the number. From Phase 2, delivery records keep only a masked copy.
-- **A-4. The audit log holds masked numbers only, plus the recipient id**,
-  so the permanent audit log keeps no full phone numbers. Whether consent
-  evidence needs more (for example, a keyed hash of the number) is a
-  question for the legal review (Q-6).
-- **A-5. Soft-deleting a rule deletes its WhatsApp settings and recipients
-  in the same audited transaction** (D10), because the numbers are no longer
-  configured.
-- **A-6. Enabling WhatsApp never sends about an occurrence that is already
-  Active.** Only occurrences that become Active afterwards are eligible.
-  This applies from Phase 2.
-- **A-7. The Phase 1 UI is staging-only and labelled "messages are not sent
-  yet"**, and only WiseWatts-controlled test numbers are entered on staging
-  (Q-4).
+  configured"). Phase 1 has no delivery records.
+- **A-4. The audit log stores masked numbers plus the recipient id, never a
+  full number.** This is the privacy-protective default. Whether consent
+  evidence needs more is open (L-1, L-2), so the Phase 1 design must not
+  depend on this answer.
+- **A-5. Soft-deleting a rule deletes its WhatsApp settings and recipients**
+  in the same audited transaction.
+- **A-6. Enabling WhatsApp never sends about an already-Active
+  occurrence.** This applies from Phase 2.
+- **A-7. An "alert save" means any write through the migration 323
+  functions:** create, update, enable/disable, delete, and acknowledge
+  (`acknowledge_portal_alert`). ADR-024 §8 still applies. An update that
+  changes an operational field (name, asset, parameter, condition,
+  threshold, tolerance, schedule, reminder) **intentionally** ends the
+  Active occurrence and bumps the version. The regression guarantee is that
+  WhatsApp saves, and rule saves whose only difference is the legacy
+  WhatsApp field, change none of these.
 - **A-8. Phone numbers are stored in E.164 form** and validated server-side
   with a pinned library, with a database format check as a backstop.
 
-## 4. Open questions (need Product Owner input)
+## 4. Open questions — legal and provider (not product decisions)
 
-| ID | Question | Why it matters | Engineering suggestion |
+| ID | Question | Owner | Blocks |
 |---|---|---|---|
-| Q-1 | **Repeated occurrences of the same rule.** D7 limits sends per *occurrence*/recipient. A rule that keeps resolving and re-triggering creates new occurrences: it can resolve after 1 minute and re-qualify after 5 (ADR-024 timing). Should each new occurrence send again? | D7's 60-minute window only covers retries of one occurrence. A flapping rule could message a recipient about every 6 minutes. This was PRD open decision 5. | Add a per-rule/recipient cooldown of 60 minutes across occurrences; sends inside it are recorded as Suppressed. |
-| Q-2 | **Maximum recipients per rule.** | Bounds cost, abuse and UI size. | 10. |
-| Q-3 | **Can Operators and Viewers see masked delivery history**, or no recipient information at all? | D9 says they must not see recipient numbers; masked history may or may not be acceptable. | Masked history plus an "N recipients" summary; no full numbers. |
-| Q-4 | **Should Phase 1 collect real customer numbers** before sending exists? | Holding personal data for a purpose that isn't live yet runs against data minimisation. | Staging only, WiseWatts test numbers only, until Phase 2 is approved. |
-| Q-5 | **Per-site message cap** (storm protection, PRD §8.4). | Not covered by D1–D13. | Decide in Phase 2 design; not needed for Phase 1. |
-| Q-6 | **Legal review scope** (D4, D10): is administrator attestation enough consent evidence; what the audit log may hold; deletion obligations. | Blocks Phase 2 and D13. | Raise with legal before Phase 2. |
-| Q-7 | **Retiring the "Coming Soon" WhatsApp checkbox.** | When the new WhatsApp section appears, the old checkbox would duplicate it. | Remove it from the rule form in Phase 1 and keep Email "Coming Soon". |
+| L-1 | Is administrator attestation of opt-in legally sufficient consent evidence under the DPDP Act 2023 and Meta policy? Does the recipient need notice, and what records must be kept? | Privacy/legal | Phase 2; ADR-026 Decided (D13) |
+| L-2 | What may the audit log contain about recipients (masked number, keyed hash, full number), and for how long, given `admin.audit_events` is permanent today? | Privacy/legal | Phase 2; may require a Phase 1 audit-content change before production |
+| L-3 | Deletion obligations for removed recipients and opted-out numbers (D10). | Privacy/legal | Phase 2 |
+| P-1 | Meta Cloud API: business verification, sender number, utility-template approval and categories, India pricing, throughput, data handling. | Product + Engineering | Phase 2 |
+| P-2 | Provider delivery-receipt semantics and signature scheme; mapping to Pending / Submitted / Sent / Delivered / Failed / Suppressed. | Engineering | Phase 2 |
+| P-3 | STOP / opt-out support and how it is reported (D4). | Engineering | Phase 2 |
+| P-4 | Template variable limits (length, characters) for customer-entered names (C13). | Engineering + Product (D8) | Phase 2 |
 
-## 5. Dependencies and approvals still required
+## 5. Approval gates and dependencies
 
-| Item | Needed for | Status |
-|---|---|---|
-| Provider validation (Meta Cloud API): business verification, sender number, utility-template approval, callbacks, India pricing, limits, data handling | Phase 2; D13 | Not started |
-| Privacy/legal review (DPDP Act 2023): consent evidence, retention, deletion, audit content | Phase 2; D13 | Not started |
-| Phase 1 implementation authorisation (staging only) | Phase 1 | **Required: not authorised** |
-| Phase 1 staging migration and deployment authorisation | Phase 1 deploy | Required separately |
-| DB-backed delivery queue (outbox) | Phase 2 | Approval required (D12) |
-| Background sender service (new container on the 1.9 GB staging host) | Phase 2 | Approval required (D12) |
-| Public, signature-checked delivery-receipt endpoint | Phase 2 | Approval required (D12); security review |
-| Outbound HTTPS from the servers to the provider (security-group and network-ACL rules never read) | Phase 2 | Approval required (D12) |
-| Provider secrets (token, webhook secret) in a server-side env file | Phase 2 | Approval required (D12) |
-| WhatsApp templates written and approved | Phase 2 | WiseWatts Product (D8) |
-| ADR-024 production rollout and acceptance (blocked on backup, precheck, bundle, approval) | Any production WhatsApp | Not done (D11) |
+**Before Phase 1 implementation:**
+- explicit approval to implement Phase 1;
+- D21: the opt-in wording approved by Product, before the UI ships to
+  staging;
+- a new pinned code dependency, `phonenumbers`.
+
+**Within Phase 1, each separately approved:**
+- merging the PR;
+- applying migration 331 and deploying to staging;
+- any staging test save, using WiseWatts test numbers only (D17).
+
+**Before Phase 2:**
+- Meta provider validation (P-1 to P-4) completed;
+- privacy/legal review completed, and consent evidence and audit retention
+  resolved (L-1 to L-3);
+- separate approval for **each** infrastructure item (D12): the DB-backed
+  delivery queue, the background sender service (a new container on the
+  1.9 GB staging host), the public signature-checked receipt endpoint (with
+  a security review), outbound internet access from the servers (the
+  security-group and network-ACL rules have never been read), and the
+  provider secrets in a server-side env file;
+- WhatsApp templates written and approved by Product (D8);
+- Phase 2 design of the per-site cap (D18) and of masked delivery history
+  for Operators and Viewers (D16).
+
+**Before production:**
+- ADR-024 has completed its production rollout and acceptance (D11). It is
+  currently blocked on backup, precheck, bundle and approval;
+- ADR-026 is Decided (D13);
+- a separate production approval.
 
 ## 6. Conflict review — resolution status
 
-From the intake review of 2026-11-23 (`1824bab`). The full text of C1–C16 is
-in that commit's version of this file; summarised here with what D1–D13
-settled.
+From the intake review of 2026-11-23 (`1824bab`); that commit's version of
+this file has the full text.
 
 | ID | Conflict | Status |
 |---|---|---|
 | C1 | ADR-024 §9 forbids sending | Stands until ADR-026 is Decided; then ADR-024 Amendment 2 (WhatsApp only; Email stays Coming Soon). |
-| C2 | Changing any rule field, including `whatsapp_requested`, ends the Active occurrence (`update_portal_alert_rule`, migration 323) | **Resolved by D6.** Phase 1 design in [phase-1-plan.md](phase-1-plan.md) §3, including neutralising `whatsapp_requested` so new-form saves can't end alerts. |
-| C3 | Existing "requested" flags must not start sending | **Resolved by D5.** Staging: 2 live rules, 0 with WhatsApp requested. |
+| C2 | Changing any rule field, including `whatsapp_requested`, ends the Active occurrence | **Resolved by D6/D20.** Phase 1 §3.3 safeguard and §7.2 regression tests. |
+| C3 | Existing "requested" flags must not start sending | **Resolved by D5.** Staging: 13 rule rows, 0 with WhatsApp requested. |
 | C4 | PRD §16 describes an outdated baseline | Recorded in the [addendum](prd-draft-0.1-addendum-2026-11-23.md). |
-| C5 | Stored reminder frequency would imply repeat messages | **Resolved by D7** (no WhatsApp reminders); the form keeps saying reminders are not sent. |
-| C6 | Retention of delivery records and numbers | **Mostly resolved by D10**; deletion detail and audit content in Q-6, A-3, A-4. |
-| C7 | Visibility by role | **Resolved by D9**; masked history for Operators/Viewers in Q-3. |
-| C8 | The evaluator can't call HTTP (needs outbox + worker) | Architecture proposal in ADR-026 A2–A3; approval required (D12). Phase 2. |
-| C9 | New infrastructure (worker, egress, public webhook, secrets) | Approval required (D12). Phase 2. |
+| C5 | Stored reminder frequency would imply repeat messages | **Resolved by D7.** |
+| C6 | Retention of delivery records and numbers | D10 decided; legal detail open (L-2, L-3). |
+| C7 | Visibility by role | **Resolved by D9/D16.** |
+| C8 | Evaluator can't call HTTP (outbox + worker) | ADR-026 A3–A4; approval required (D12). Phase 2. |
+| C9 | New infrastructure | Approval required per item (D12). Phase 2. |
 | C10 | Production depends on the ADR-024 rollout | **Resolved by D11.** |
-| C11 | `last_value` is not the value at trigger | Phase 2 design: the outbox row snapshots the message values. |
-| C12 | No deep link to an occurrence | Phase 2 design (small UI routing change). |
-| C13 | Free-text names inside template variables | Phase 2 design (sanitise and truncate); templates owned by Product (D8). |
-| C14 | Resolved / Ended / data-unavailable / flapping | Resolved and reminders settled by D7 (no messages). Ended and data-unavailable: no message (follows from D7: only Active is sent). Flapping is open as Q-1. |
-| C15 | Caps | Recipients per rule (Q-2), per-site cap (Q-5). |
+| C11 | `last_value` is not the value at trigger | Phase 2 design (outbox snapshot). |
+| C12 | No deep link to an occurrence | Phase 2 design. |
+| C13 | Free-text names inside template variables | Phase 2 design (P-4, D8). |
+| C14 | Resolved / Ended / data-unavailable / flapping | **Resolved:** D7 (only Active is sent; no recovery or reminders) and D14 (quiet period across occurrences). |
+| C15 | Caps | **Resolved:** 10 recipients per rule (D15); per-site cap deferred (D18). |
 | C16 | Phone validation | Phase 1 design (A-8). |
 
 ## 7. Delivery phases
 
 1. **Phase 1: configuration, staging only, sends nothing.** See
-   [phase-1-plan.md](phase-1-plan.md). Needs implementation authorisation.
+   [phase-1-plan.md](phase-1-plan.md).
 2. **Phase 2: delivery.** Covers:
-   - the outbox written by the evaluator, the sender worker and the signed
-     delivery-receipt endpoint;
-   - approved templates and delivery records;
+   - the outbox, the sender worker and the signed receipt endpoint;
+   - templates and delivery records;
+   - the D7 duplicate suppression and the D14 quiet period;
+   - the per-site cap (D18);
+   - STOP handling;
    - test numbers first.
-
-   Needs D12 approvals, provider validation and legal review.
 3. **Phase 3: operational readiness.** Covers:
-   - delivery-history UI, retries, cooldown and caps;
-   - monitoring (worker heartbeat, outbox age);
+   - delivery-history UI (with the D16 reconsideration), retries and
+     monitoring;
    - 90-day retention, and the security tests.
-4. **Production.** Only after ADR-024 is in production and accepted (D11),
-   ADR-026 is Decided (D13), and a separate approval is given.
+4. **Production.** Behind the gates in §5.
 
 ## 8. Acceptance criteria — whole feature
 
 PRD §11 AC-1 to AC-15 are adopted, with these refinements:
+- **AC-3:** 1–10 numbers per rule (D15).
 - **AC-8:** disabling WhatsApp or editing recipients never ends an Active
-  occurrence or resets a timer (D6).
+  occurrence, resets a timer, or changes an acknowledgement or version (D6).
 - **AC-9:** applies to occurrences that become Active after WhatsApp was
-  enabled (A-6), and only to recipients whose consent is confirmed and who
-  have not opted out.
-- **AC-15:** proven by a unique (occurrence, recipient) key, and by a test
-  that replays the same occurrence.
+  enabled (A-6), and only to consented, not-opted-out recipients outside
+  the D14 quiet period.
+- **AC-15:** a unique (occurrence, recipient) key plus the D14 quiet period,
+  proven by replay tests.
 
 Additions:
 - **AC-16:** the "Coming Soon" flag never sends (D5).
-- **AC-17:** Operators and Viewers never see full numbers (D9).
+- **AC-17:** Operators and Viewers see no recipient information (D16).
 - **AC-18:** a forged or unsigned delivery receipt is rejected.
 - **AC-19:** no message is sent for Resolved, Ended or data-unavailable
   states, and no reminders are sent (D7).
+- **AC-20:** a second occurrence of the same rule within 60 minutes of a
+  message to a recipient is recorded as Suppressed for that recipient
+  (D14).
 
 Phase 1 has its own criteria in [phase-1-plan.md](phase-1-plan.md) §6.

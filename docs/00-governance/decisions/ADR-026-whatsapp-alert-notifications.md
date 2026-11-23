@@ -1,6 +1,6 @@
 # ADR-026: WhatsApp notifications for alert rules — separate notification configuration, transactional outbox and a sender worker
 
-Status: **Proposed** (raised 2026-11-23; Product Owner decisions D1–D13
+Status: **Proposed** (raised 2026-11-23; Product Owner decisions D1–D21
 agreed 2026-11-23). **Remains Proposed** until provider validation,
 privacy/legal review and the required infrastructure approvals are complete
 (D13). Nothing is implemented or authorised. Phase 1 (staging-only
@@ -8,10 +8,10 @@ configuration, sends nothing) is planned in
 [phase-1-plan.md](../../07-features/alerts/whatsapp-notifications/phase-1-plan.md)
 and needs separate authorisation.
 Date: 2026-11-23
-Decision owners: Product Owner (D1–D13); Architecture (A1–A8)
+Decision owners: Product Owner (D1–D21); Architecture (A1–A8); privacy/legal (L-1–L-3, open)
 Source: [PRD Draft 0.1](../../07-features/alerts/whatsapp-notifications/prd-draft-0.1.md)
 (verbatim) and its [dated addendum](../../07-features/alerts/whatsapp-notifications/prd-draft-0.1-addendum-2026-11-23.md);
-decisions, assumptions, open questions and approvals:
+decisions, assumptions, open legal/provider questions and approval gates:
 [whatsapp-notifications/README.md](../../07-features/alerts/whatsapp-notifications/README.md).
 Related requirements: `EMS-REQ-084`, `EMS-REQ-145`, `EMS-REQ-146`
 Would amend (when Decided): [ADR-024](ADR-024-customer-configurable-alert-rules.md)
@@ -69,6 +69,18 @@ receipt endpoint, outbound internet access and provider secrets each need
 separate explicit approval. D13 This ADR stays Proposed until provider
 validation, legal review and infrastructure approvals are complete.
 
+D14 60-minute quiet period per rule and recipient across separate
+occurrences, in addition to D7. D15 At most 10 numbers per rule. D16
+Operators and Viewers see no recipient information in Phase 1 (no numbers,
+count or indicator); masked delivery history reconsidered when delivery
+records exist. D17 Staging uses WiseWatts-controlled test numbers only; no
+real customer numbers before sending exists. D18 Per-site message cap
+deferred to Phase 2. D19 Legal sufficiency of administrator opt-in and
+permitted audit content/retention stay open for legal review; compliance is
+not assumed. D20 The old "Coming Soon" WhatsApp checkbox is removed in
+Phase 1, behind the migration safeguard and regression tests. D21 Product
+defines and approves the exact opt-in wording before it is used.
+
 ### Architecture (proposed)
 
 - **A1. Three separate concepts.** (1) Alert definition and operational
@@ -85,8 +97,8 @@ validation, legal review and infrastructure approvals are complete.
   on input, still reported as `COMING_SOON` for older clients (D5, D6).
 - **A3. Transactional outbox (Phase 2).** When `evaluate_alert_rules`
   creates an Active occurrence for a rule with WhatsApp enabled, it inserts
-  one outbox row per consented, not-opted-out recipient in the same
-  transaction, snapshotting the message values; unique (occurrence,
+  one outbox row per consented, not-opted-out recipient outside the D14
+  quiet period in the same transaction, snapshotting the message values; unique (occurrence,
   recipient) gives idempotency (D7, AC-15). Needs approval (D12).
 - **A4. Sender worker (Phase 2).** A separate Python service
   (report-worker pattern): leased claims, one provider request per
@@ -96,13 +108,15 @@ validation, legal review and infrastructure approvals are complete.
 - **A5. Delivery receipts (Phase 2).** Public endpoint verifying the
   provider signature; maps provider statuses to Pending / Submitted / Sent
   / Delivered / Failed / Suppressed; STOP replies set the recipient
-  `OPTED_OUT` (D4). Needs approval and security review (D12).
+  `OPTED_OUT` (D4, subject to P-3 and legal review). Needs approval and
+  security review (D12).
 - **A6. Secrets.** Provider token and receipt secret only in a server-side
   env file for the worker/endpoint; never browser, Grafana, repository or
   logs (D12).
 - **A7. Customer API.** `GET`/`PUT /api/v1/alert-rules/{rule_id}/whatsapp`
-  (`alert.configure`, same-origin JSON, revision-checked), a no-numbers
-  summary in rule responses; functions granted to `ems_app` and, guarded,
+  (`alert.configure`, same-origin JSON, revision-checked, at most 10
+  recipients), a no-numbers summary in rule responses **for
+  `alert.configure` holders only** (`null` for other roles, D16); functions granted to `ems_app` and, guarded,
   `ems_customer_api` (Phase 1 plan §3–§4).
 - **A8. Environments.** WhatsApp migrations staging/test-scoped; production
   only after ADR-024 is in production and accepted (D11) and this ADR is
@@ -110,12 +124,17 @@ validation, legal review and infrastructure approvals are complete.
 
 ## Open questions and approvals (block Decided status)
 
-Open questions Q-1 (repeat occurrences of a flapping rule — D7 covers only
-the same occurrence), Q-2 (recipient cap), Q-3 (masked history for
-Operators/Viewers), Q-4 (real numbers before Phase 2), Q-5 (per-site cap),
-Q-6 (legal review scope), Q-7 (retire the old checkbox). Approvals: provider
-validation, legal review, the D12 infrastructure items, and per-phase
-implementation and deployment authorisations — see the README §4–§5.
+Product questions are closed (D14–D21). Still open — **not product
+decisions, and not assumed**: legal L-1 (sufficiency of administrator
+opt-in), L-2 (permitted audit content and retention), L-3 (deletion
+obligations); provider P-1 (Meta account, templates, pricing, limits), P-2
+(receipt semantics and signatures), P-3 (STOP support), P-4 (template
+variable limits). Approval gates — Phase 1: implementation, then merge,
+staging deployment and staging test saves, each separately, plus the
+Product-approved opt-in wording (D21); Phase 2: provider validation, legal
+review, and each D12 infrastructure item separately; production: ADR-024
+production rollout and acceptance (D11) and this ADR Decided (D13). See the
+README §4–§5.
 
 ## Alternatives considered
 
