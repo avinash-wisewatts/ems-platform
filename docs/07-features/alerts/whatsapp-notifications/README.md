@@ -14,6 +14,7 @@ Owner: Product + Engineering. Last reviewed: 2026-11-23.
 | [prd-draft-0.1-addendum-2026-11-23.md](prd-draft-0.1-addendum-2026-11-23.md) | Dated clarifications: where the PRD is out of date or superseded by D1–D21. |
 | This README | Decisions, assumptions, open legal/provider questions, dependencies, approval gates, the conflict review. |
 | [phase-1-plan.md](phase-1-plan.md) | Phase 1 plan — staging-only configuration; sends nothing. Not authorised. |
+| [review-2026-11-23.md](review-2026-11-23.md) | PR #186 review record: findings B1–B3, R1–R12, I1–I5; status of the outstanding reviews; provider desk research. |
 | [ADR-026](../../../00-governance/decisions/ADR-026-whatsapp-alert-notifications.md) | Proposed architecture decision. |
 
 Builds on [ADR-024](../../../00-governance/decisions/ADR-024-customer-configurable-alert-rules.md)
@@ -32,7 +33,7 @@ Evidence: `origin/staging` `458c179`; read-only staging queries 2026-11-23.
 | "Alert engine" | `analytics.run_alert_rule_evaluation_job` → `analytics.evaluate_alert_rules`, a TimescaleDB job **inside PostgreSQL**, once a minute; qualification timers in `analytics.alert_evaluation_candidates`. |
 | "Site Admin" | Customer `ADMIN` (ORGANIZATION / SELECTED_SITES scope covering the site), holds `alert.configure`. |
 | "WiseWatts Global Site Admin" | `GLOBAL` `ADMIN` (WiseWatts staff), holds `alert.configure` on every site. |
-| "Operators and Viewers" | Every role **without** `alert.configure`: customer `OPERATOR` / `VIEWER` and `GLOBAL` `OPERATOR` / `VIEWER` (A-1). |
+| "Operators and Viewers" | *Assumption A-1 (awaiting Product):* every role **without** `alert.configure` — customer `OPERATOR` / `VIEWER` and `GLOBAL` `OPERATOR` / `VIEWER`. |
 
 The design keeps **three separate concepts** (D6):
 
@@ -107,6 +108,12 @@ review.
   WhatsApp field, change none of these.
 - **A-8. Phone numbers are stored in E.164 form** and validated server-side
   with a pinned library, with a database format check as a backstop.
+- **A-9. A rule with WhatsApp switched off still counts as "configured"**
+  (D10), so its numbers are kept until they are removed or the rule is
+  deleted (review R7). Needs Product and legal confirmation.
+
+**Status (2026-11-23):** A-1 to A-9 are **awaiting Product confirmation**;
+none is confirmed. See [review-2026-11-23.md](review-2026-11-23.md) §2.
 
 ## 4. Open questions — legal and provider (not product decisions)
 
@@ -120,9 +127,20 @@ review.
 | P-3 | STOP / opt-out support and how it is reported (D4). | Engineering | Phase 2 |
 | P-4 | Template variable limits (length, characters) for customer-entered names (C13). | Engineering + Product (D8) | Phase 2 |
 
+L-1 to L-3 are **not started**. P-1 to P-4 have **desk research only**
+(public documentation, unverified against an account) in
+[review-2026-11-23.md §3](review-2026-11-23.md#3-provider-desk-research-p-1-to-p-4-unverified-public-sources-only).
+That research adds questions for Product and legal: which business the
+opt-in names (R9); whether to store `read` receipts; and inbound message
+content under STOP handling (R10).
+
 ## 5. Approval gates and dependencies
 
 **Before Phase 1 implementation:**
+- the authorising record for Phase 1 (review B1): a Decided ADR-024
+  Amendment 2 scoped to D5, D6, D16, D17 and D20, or an explicit PO
+  statement;
+- an Architecture decision on automation accounts (review R5);
 - explicit approval to implement Phase 1;
 - D21: the opt-in wording approved by Product, before the UI ships to
   staging;

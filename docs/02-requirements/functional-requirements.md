@@ -152,7 +152,11 @@ immutability and recurrence rules of `EMS-REQ-118`, `-120`–`-124`
 > recorded in [alerts/whatsapp-notifications/](../07-features/alerts/whatsapp-notifications/README.md)
 > and proposed as [ADR-026](../00-governance/decisions/ADR-026-whatsapp-alert-notifications.md).
 > Not decided: `EMS-REQ-084`, `-145` and `-146` are unchanged until it is, and
-> new requirement IDs will be allocated then.
+> new requirement IDs will be allocated then. **Note:** the planned Phase 1
+> (staging-only configuration) would remove the WhatsApp "Coming Soon"
+> option of `EMS-REQ-146` (decision D20). It must not be implemented until an
+> authorising record amends `EMS-REQ-146` and ADR-024 §8–§9 (PR #186 review
+> finding B1).
 
 | ID | Title / description | Customer question | Priority | Source | Phase | Status | Dependencies | Notes |
 |---|---|---|---|---|---|---|---|---|

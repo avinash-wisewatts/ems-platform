@@ -136,6 +136,14 @@ review, and each D12 infrastructure item separately; production: ADR-024
 production rollout and acceptance (D11) and this ADR Decided (D13). See the
 README §4–§5.
 
+**Review 2026-11-23** ([review record](../../07-features/alerts/whatsapp-notifications/review-2026-11-23.md)):
+blocker B1 — Phase 1 changes ADR-024 §8–§9 and `EMS-REQ-146` (D6, D20) while
+this ADR is Proposed, so Phase 1 needs its own authorising record:
+recommended, a Decided ADR-024 Amendment 2 scoped to D5, D6, D16, D17 and D20,
+leaving delivery here. Open architecture item R5: whether designated
+automation accounts are excluded from the WhatsApp functions. This ADR
+remains **Proposed**.
+
 ## Alternatives considered
 
 - **Keep WhatsApp on the rule as a rule field** — rejected (D6): editing
