@@ -4,7 +4,9 @@ Status: **PROPOSED.** The Product Owner agreed decisions D1–D13 and D14–D21
 on 2026-11-23. The architecture decision
 ([ADR-026](../../../00-governance/decisions/ADR-026-whatsapp-alert-notifications.md))
 stays **Proposed** until provider validation, privacy/legal review and the
-infrastructure approvals are complete (D13). **Nothing is implemented or
+infrastructure approvals are complete (D13). Phase 1 configuration behaviour
+is covered by **ADR-024 Amendment 2, PROPOSED**, awaiting Product Owner and
+Architecture approval (review B1). **Nothing is implemented or
 authorised**: no database, API, UI, infrastructure or production change.
 Owner: Product + Engineering. Last reviewed: 2026-11-23.
 
@@ -14,6 +16,7 @@ Owner: Product + Engineering. Last reviewed: 2026-11-23.
 | [prd-draft-0.1-addendum-2026-11-23.md](prd-draft-0.1-addendum-2026-11-23.md) | Dated clarifications: where the PRD is out of date or superseded by D1–D21. |
 | This README | Decisions, assumptions, open legal/provider questions, dependencies, approval gates, the conflict review. |
 | [phase-1-plan.md](phase-1-plan.md) | Phase 1 plan — staging-only configuration; sends nothing. Not authorised. |
+| [consent-wording-register.md](consent-wording-register.md) | Register of approved opt-in wording versions (proposed R6); empty, with no wording approved yet. |
 | [review-2026-11-23.md](review-2026-11-23.md) | PR #186 review record: findings B1–B3, R1–R12, I1–I5; status of the outstanding reviews; provider desk research. |
 | [ADR-026](../../../00-governance/decisions/ADR-026-whatsapp-alert-notifications.md) | Proposed architecture decision. |
 
@@ -93,7 +96,9 @@ review.
 - **A-4. The audit log stores masked numbers plus the recipient id, never a
   full number.** This is the privacy-protective default. Whether consent
   evidence needs more is open (L-1, L-2), so the Phase 1 design must not
-  depend on this answer.
+  depend on this answer. *Superseded by the proposed review item R12:*
+  the recommended default is now **no phone number, full or masked, in the
+  audit log**, only recipient ids, until Legal approves otherwise.
 - **A-5. Soft-deleting a rule deletes its WhatsApp settings and recipients**
   in the same audited transaction.
 - **A-6. Enabling WhatsApp never sends about an already-Active
@@ -134,7 +139,30 @@ That research adds questions for Product and legal: which business the
 opt-in names (R9); whether to store `read` receipts; and inbound message
 content under STOP handling (R10).
 
+## 4A. Proposed review items R5–R12: not approved
+
+These are recorded as **proposals for their owners**. None is a decision.
+The details are in [phase-1-plan.md §3.6](phase-1-plan.md) and
+[review-2026-11-23.md](review-2026-11-23.md).
+
+| Item | Proposal | Owner(s) | Status | Question for the owner |
+|---|---|---|---|---|
+| R5 | Exclude designated report automation accounts (staging uid 17) from all WhatsApp read/write functions, following migration 330; add access-control tests | Architecture | Proposed | Approve the exclusion, and apply it to *any* site's automation account? |
+| R6 | A versioned register of approved opt-in wording; each consent records its version | Product (wording), Legal (sufficiency) | Proposed | Approve the register, and supply version 1 of the wording (D21)? |
+| R7 | Keep configured numbers when WhatsApp is disabled; disabling stops sending; deletion is a separate, explicit action | Product, Legal | Proposed (A-9) | Does Legal require deletion after a period of being disabled? |
+| R8 | Server-side, staging-only allow-list of WiseWatts test numbers; shipped empty; populating it is a separately approved staging write | Product, Architecture | Proposed | Approve it as part of Phase 1 scope? |
+| R9 | Name the sending business in the opt-in wording | Product, Legal | **Open question** | WiseWatts or the customer site? |
+| R10 | Phase 2 STOP handling keyword-only; no retention of message text beyond what is needed | Engineering design; Provider (P-3); Legal | Proposed (Phase 2) | Confirm minimal retention of inbound content |
+| R11 | Formal requirement IDs for the Phase 1 acceptance criteria | Product | Proposed | Allocate `EMS-REQ-153+` once Amendment 2 is Decided? |
+| R12 | No phone numbers, full or masked, in the permanent audit log until Legal approves; recipient ids instead | Legal | Proposed; reflected in the plan as the default | What may the audit log hold, and for how long (L-2)? |
+
 ## 5. Approval gates and dependencies
+
+**Resolving B1:** ADR-024 Amendment 2 is drafted and **Proposed**. It needs
+the **Product Owner** (scope 2A, 2D, 2E) and **Architecture** (2B, 2C, the 2D
+enforcement) to approve it, recorded in its approval table. PR #186 stays in
+draft until then. Leaving draft afterwards means documentation review only,
+not implementation.
 
 **Before Phase 1 implementation:**
 - the authorising record for Phase 1 (review B1): a Decided ADR-024
@@ -170,6 +198,22 @@ content under STOP handling (R10).
   currently blocked on backup, precheck, bundle and approval;
 - ADR-026 is Decided (D13);
 - a separate production approval.
+
+## 5A. Traceability
+
+| Decision | ADR record | Phase 1 plan | Acceptance / tests |
+|---|---|---|---|
+| D5 (off by default; the flag never sends) | ADR-024 Am. 2 §2A; ADR-026 A2 | §3.1, §3.3 | P1-AC-11; RG-6, RG-13 |
+| D6 (separate store; not an operational edit) | ADR-024 Am. 2 §2B, §2C; ADR-026 A1 | §2, §3.1–§3.4 | P1-AC-7–9, P1-AC-14; RG-1–RG-12 |
+| D9 / D16 (visibility) | ADR-024 Am. 2 §2D; ADR-026 A7 | §3.5, §4, §5 | P1-AC-4; §7.1 permissions, §7.3, §7.4 |
+| D15 (10 recipients) | ADR-026 A7 | §3.2, §3.5 | P1-AC-1, P1-AC-5; RG-2, RG-4 |
+| D17 (test numbers on staging) | ADR-024 Am. 2 §2E | §1, §7.6; R8 (proposed) | P1-AC-15, P1-AC-18 (if R8) |
+| D20 (remove the legacy checkbox) | ADR-024 Am. 2 §2A | §3.3, §5 | P1-AC-11; §7.4; §7.5 test changes |
+| D21 (approved wording) | — | §3.2; R6 (proposed) | P1-AC-17 (if R6) |
+| D4 (per-number opt-in) | ADR-026 D4 | §3.2, §3.5 (B2 fix) | P1-AC-5; §7.1 recipient identity |
+| D10 / R7 (retention) | ADR-026 D10 | §3.2, §3.4; R7 | P1-AC-12; RG-11 |
+| R5 (automation accounts) | ADR-024 Am. 2 §2D (proposed note) | §3.6 | P1-AC-16 (if R5) |
+| R12 (audit content) | ADR-024 Am. 2 (Not amended, note) | §3.5 | P1-AC-6; §7.1 audit |
 
 ## 6. Conflict review — resolution status
 

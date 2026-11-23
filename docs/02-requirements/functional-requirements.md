@@ -156,7 +156,8 @@ immutability and recurrence rules of `EMS-REQ-118`, `-120`–`-124`
 > (staging-only configuration) would remove the WhatsApp "Coming Soon"
 > option of `EMS-REQ-146` (decision D20). It must not be implemented until an
 > authorising record amends `EMS-REQ-146` and ADR-024 §8–§9 (PR #186 review
-> finding B1).
+> finding B1). That record is drafted as ADR-024 Amendment 2, **Proposed**,
+> awaiting Product Owner and Architecture approval.
 
 | ID | Title / description | Customer question | Priority | Source | Phase | Status | Dependencies | Notes |
 |---|---|---|---|---|---|---|---|---|

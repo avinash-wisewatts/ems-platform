@@ -91,7 +91,9 @@ defines and approves the exact opt-in wording before it is used.
   records — Phase 2 (`alert_whatsapp_deliveries` + outbox). Concept 2 is
   written only by new SECURITY DEFINER functions that re-check
   `alert.configure` and site access and write one `admin.audit_events` row
-  (masked numbers only) in the same transaction (ADR-024 §14–§16).
+  in the same transaction (ADR-024 §14–§16), holding recipient ids, not
+  phone numbers (proposed R12, pending L-2). Phase 1 configuration
+  behaviour is governed by the proposed ADR-024 Amendment 2.
 - **A2. Neutralise the legacy flag.** `whatsapp_requested` is retired:
   forced `false` (CHECK), removed from the rule-change comparison, ignored
   on input, still reported as `COMING_SOON` for older clients (D5, D6).

@@ -20,6 +20,8 @@ is under review as [ADR-026](ADR-026-whatsapp-alert-notifications.md)
 be a configuration change), §9 (WhatsApp no longer "Coming Soon") and §10
 (no WhatsApp reminders in its first release). Until then §9 stands: nothing is
 sent.
+**Amendment 2 (Phase 1 WhatsApp configuration) is PROPOSED, awaiting Product
+Owner and Architecture approval** — see "Amendment 2" below. It is not Decided.
 Decision owners: Product Owner (product decisions, §1–§13, §17–§18);
 Architecture (the write-path architecture in §14–§16, which applies the
 existing Reports-export pattern and the platform's existing audit
@@ -554,6 +556,82 @@ the legacy retirement are unchanged.
   and configuration snapshot. (Replaces, for rule-based alerts, the MVP-7
   recurrence identity of `EMS-REQ-123`, where any configuration change
   started a new identity.)
+
+## Amendment 2 (proposed 2026-11-23) — WhatsApp notification configuration (Phase 1, staging only)
+
+**Status: PROPOSED — awaiting approval. Not Decided.** This becomes Decided
+only when both approvals below are recorded, with the approver and the date.
+Until then, ADR-024 §8, §9 and `EMS-REQ-146` stand unchanged, and the
+WhatsApp Phase 1 plan must **not** be implemented. This amendment resolves
+review finding B1
+([review record](../../07-features/alerts/whatsapp-notifications/review-2026-11-23.md)).
+
+**Scope.** Phase 1 **configuration behaviour only**, from the Product Owner's
+decisions D5, D6, D16, D17 and D20
+([decisions](../../07-features/alerts/whatsapp-notifications/README.md#2-confirmed-decisions-product-owner-2026-11-23)).
+These stay in [ADR-026](ADR-026-whatsapp-alert-notifications.md), which
+remains **Proposed**:
+- message delivery and the provider integration;
+- the delivery queue, the sender, the delivery-receipt endpoint and the
+  secrets;
+- delivery records, reminders and STOP handling.
+
+**No message is sent on any channel.** §9's no-sending rule is not amended.
+
+When Decided, the amendment changes ADR-024 as follows:
+
+- **2A — §9, the Coming Soon option.** The rule form no longer offers
+  WhatsApp as a "Coming Soon" option (D20); Email stays "Coming Soon".
+  - The stored preference `alert_rules.whatsapp_requested` is retired. It is
+    forced to `false` behind a migration safeguard that refuses to run if any
+    value is `true`, and it never activates sending (D5).
+  - Rule responses keep `delivery.whatsapp = COMING_SOON`, for compatibility
+    with older web builds.
+- **2B — a separate store.** Each rule's WhatsApp configuration (on/off,
+  recipient numbers, per-number opt-in confirmation) is stored **separately**
+  from the rule, keyed by the stable `rule_id` (D6).
+  - It is written only by its own SECURITY DEFINER functions, following the
+    §14–§16 pattern: route and database permission checks, site access, and
+    an audit row in the same transaction.
+  - The evaluator never reads it.
+- **2C — §8, WhatsApp saves are not operational edits.** Saving WhatsApp
+  configuration is **not** a configuration change. It never:
+  - ends an Active occurrence;
+  - resets a qualification or resolution timer;
+  - changes an acknowledgement;
+  - bumps the rule version.
+
+  The retired `whatsapp_requested` no longer counts in the rule-edit
+  comparison (D6). Every other rule edit still ends the Active occurrence
+  exactly as §8 states.
+- **2D — §2 and §15, who sees it.** WhatsApp configuration (numbers,
+  counts, on/off) is visible and editable only by `alert.configure` holders:
+  the customer site `ADMIN` within its sites, and the `GLOBAL` `ADMIN` on
+  every site. Every other role, including `GLOBAL` `OPERATOR` and `VIEWER`,
+  sees **no** WhatsApp information (D16).
+  - No new permission is introduced.
+  - *Proposed, not part of this amendment unless Architecture approves it:*
+    exclude designated report automation accounts from the WhatsApp
+    functions (review R5).
+- **2E — environments.** The configuration migration is scoped
+  `staging|test`; production is not covered (ADR-026 / D11). On staging,
+  only WiseWatts-controlled test numbers are entered; no real customer
+  numbers are collected before sending exists (D17).
+
+**Not amended:** §1, §3–§7, §10 (reminders: still not sent), §11–§13, and
+§17–§20. The §16 audit duty applies to WhatsApp saves. What those audit rows
+may contain about recipients is proposed in review R12 and is pending legal
+review (L-2).
+
+**Consequences when Decided:**
+- The WhatsApp part of `EMS-REQ-146` is amended. Phase 1 acceptance
+  criteria get formal requirement IDs (review R11; Product).
+- The decision log and the Alerts README carry dated notes.
+
+| Approval | Owner | Status |
+|---|---|---|
+| Product scope (2A, 2D, 2E) | Product Owner | **Pending — not given** |
+| Architecture (2B, 2C, the 2D enforcement) | Architecture | **Pending — not given** |
 
 ## Rationale
 

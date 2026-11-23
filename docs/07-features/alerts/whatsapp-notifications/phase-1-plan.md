@@ -1,6 +1,7 @@
 # WhatsApp notifications — Phase 1 plan: staging-only configuration
 
-Status: **PLAN — not authorised.** Implementing, merging or deploying any of
+Status: **PLAN — not authorised.** Requires the Decided ADR-024 Amendment 2
+(currently **Proposed**, awaiting Product Owner and Architecture approval). Implementing, merging or deploying any of
 this needs separate, explicit authorisation. Phase 1 **sends no messages**.
 Decisions: [README.md §2](README.md#2-confirmed-decisions-product-owner-2026-11-23)
 (D1–D21). Architecture: [ADR-026](../../../00-governance/decisions/ADR-026-whatsapp-alert-notifications.md)
@@ -72,7 +73,7 @@ No row means WhatsApp is off. That is the state of every existing rule (D5).
 | `phone_e164` | TEXT NOT NULL | CHECK `^\+[1-9][0-9]{7,14}$`; UNIQUE (`rule_id`, `phone_e164`). |
 | `consent_state` | TEXT NOT NULL | CHECK IN (`CONFIRMED`, `OPTED_OUT`). Phase 1 writes only `CONFIRMED`; `OPTED_OUT` is reserved for Phase 2 STOP handling (D4). |
 | `consent_confirmed_at`, `consent_confirmed_by` | TIMESTAMPTZ, BIGINT NOT NULL | The administrator who confirmed opt-in (D4). |
-| `consent_statement_version` | TEXT NOT NULL | Which version of the Product-approved confirmation wording was shown (D21). The wording must be approved before first use. |
+| `consent_statement_version` | TEXT NOT NULL, FK → consent register (§3.6, proposed R6) | Which version of the Product-approved confirmation wording was shown (D21). The wording must be approved before first use. |
 | `opted_out_at`, `opted_out_source` | NULL in Phase 1 | Phase 2. |
 | `created_at`, `created_by` | | |
 
@@ -114,14 +115,28 @@ alert. So migration 331:
 
 `delete_portal_alert_rule` is re-created, with the same signature, to also
 delete the rule's WhatsApp settings and recipients in the same transaction.
-Its audit row records the masked numbers removed. Occurrence handling is
+Its audit row records the removed recipient ids, not phone numbers (proposed
+R12). Occurrence handling is
 unchanged.
+
+### 3.6 Proposed items: included only if their owner approves
+
+These are review recommendations, **not approved decisions**. Phase 1 is
+designed so each can be added or left out without changing the rest.
+
+| Item | Proposal | Owner | Status |
+|---|---|---|---|
+| R5 | Every WhatsApp function (get, save, summaries) refuses (`forbidden`) an actor who is the designated report automation account of **any** site, i.e. `analytics.site_report_profiles.automation_portal_user_id` (on staging, uid 17). This follows `analytics.site_report_can_generate` (migration 330). | Architecture | Proposed |
+| R6 | **Versioned opt-in wording register.** A table `analytics.alert_whatsapp_consent_statements` with `version` (PK), `statement_text`, `approved_by_name`, `approved_at` and `retired_at`. Rows are added by migration only after Product approves the wording (D21). The save refuses new consent while no current approved version exists (`whatsapp_consent_statement_missing`). Each consent stores the version it was given under (FK). A docs mirror lives in [consent-wording-register.md](consent-wording-register.md). | Product (wording), Legal (sufficiency) | Proposed |
+| R7 | **Retention while disabled:** switching WhatsApp off keeps the configured numbers. Disabling stops sending only; deleting a number is a separate, explicit action (removal, or rule deletion). Legal requirements may override this (L-3). This is assumption A-9. | Product, Legal | Proposed |
+| R8 | **Staging-only allow-list:** a table `analytics.alert_whatsapp_test_number_allowlist (phone_e164, added_by, added_at)` and a migration-set flag. On staging and test, the save refuses any number not on the list (`whatsapp_number_not_allowed`). The migration ships the table **empty**. Real numbers are never committed to the repository. Populating the list is a staging data write that needs its own approval. | Product (policy), Architecture | Proposed |
+| R12 | Audit holds recipient ids and consent metadata, with no phone number, full or masked, until Legal approves otherwise. Reflected in §3.5 as the recommended default. | Legal | Proposed |
 
 ### 3.5 Functions (SECURITY DEFINER, owner `ems_admin`, `search_path` pinned)
 
 | Function | Rule |
 |---|---|
-| `analytics.alert_phone_mask(TEXT)` → TEXT | Country code plus the last 4 digits, e.g. `+91 ••••••3210`. IMMUTABLE. Used by audit. |
+| `analytics.alert_phone_mask(TEXT)` → TEXT | Country code plus the last 4 digits, e.g. `+91 ••••••3210`. IMMUTABLE. Used only for the configurer's masked display; **not** written to audit (proposed R12). |
 | `analytics.get_portal_alert_rule_whatsapp(p_portal_user_id, p_rule_id)` | Returns settings and recipients with full numbers. Requires `alert.configure` (`admin.portal_user_has_permission`) and site access. An inaccessible, unknown or soft-deleted rule raises `not_found`, the same as a missing one (ADR-007). Without `alert.configure` it raises `forbidden`; Operators and Viewers never receive recipient information (D9, D16). |
 | `analytics.save_portal_alert_rule_whatsapp(p_portal_user_id, p_rule_id, p_enabled, p_recipients JSONB, p_expected_revision)` | Replace-all save, as PRD §6.3 describes. Same permission and site checks. See the details below this table. |
 | `analytics.get_portal_alert_rule_whatsapp_summaries(p_portal_user_id, p_site_id)` | Per rule: `enabled` and `recipient_count`; no numbers. Requires `alert.configure` and site access; raises `forbidden` otherwise (D16). Feeds the rule-list badge and the configurer-only summary in rule responses. |
@@ -146,11 +161,14 @@ unchanged.
 - **Audit:** writes **one** `admin.audit_events` row in the same
   transaction: action `ALERT_RULE_WHATSAPP_UPDATED`, entity
   `ALERT_RULE_WHATSAPP`, with the actor type derived server-side. Previous
-  and new values hold `enabled` and masked recipients with their consent
-  metadata, plus the lists of added, removed and consent-confirmed
-  recipient ids. No full numbers are written (A-4). This is the
-  privacy-protective default; the permitted audit content and retention
-  stay open for legal review (L-2, D19).
+  and new values hold `enabled` and, per recipient, the `recipient_id`
+  and consent metadata (confirmer, time, statement version), plus the
+  lists of added, removed and consent-confirmed recipient ids. **No phone
+  number, full or masked, is written to the permanent audit log** (proposed
+  R12, which replaces A-4's masked-number default). Recipient ids are
+  random UUIDs and reveal nothing once the recipient row is deleted. The
+  permitted audit content and retention stay open for legal review (L-2,
+  D19).
 - **A no-op save** writes nothing.
 - **What it never touches:** `alert_rules`, `alerts` or
   `alert_evaluation_candidates`.
@@ -226,16 +244,19 @@ the database CHECK is the backstop.
 | P1-AC-3 | A `GLOBAL` `ADMIN` can configure rules on any site. |
 | P1-AC-4 | A customer `ADMIN` gets 404 for another organisation's or an unauthorised site's rule (read and save). Operators, Viewers, `GLOBAL` `OPERATOR` and `GLOBAL` `VIEWER` get 403 on GET/PUT. They receive no recipient information in any response or screen: no number, masked number, count or on/off indicator (D16). |
 | P1-AC-5 | The save is refused, and the stored configuration left exactly as before, when the input has: an invalid number, a duplicate, too many recipients, enabled with no recipient, a new or changed number without opt-in confirmation, or a stale revision. |
-| P1-AC-6 | Every effective save writes exactly one audit row in the same transaction: the actual actor, customer or staff actor type, masked numbers only, and consent who/when. A refused or no-op save writes none. |
+| P1-AC-6 | Every effective save writes exactly one audit row in the same transaction: the actual actor, customer or staff actor type, recipient ids and consent who/when/statement version, and **no phone number, full or masked** (proposed R12). A refused or no-op save writes none. |
 | P1-AC-7 | Saving WhatsApp settings while the rule has an Active occurrence leaves the occurrence, the rule and the timers exactly as they were. The occurrence keeps its state, triggered time, acknowledgement, `condition_key` and `rule_version`; the rule keeps its version; candidate rows are unchanged. The next evaluator run behaves exactly as for a control rule. |
 | P1-AC-8 | Saving while the rule is still qualifying (condition true for less than 5 minutes) does not reset the qualification: the occurrence becomes Active at the same run as a control rule. The same holds during the 1-minute resolution window. |
 | P1-AC-9 | A rule edit that sends `delivery.whatsapp` in either state, or omits it, never ends an Active occurrence, changes its acknowledgement or bumps the rule version, provided nothing else changed. Editing any operational field still ends it as today (`CONFIGURATION_CHANGED`, ADR-024 §8). |
 | P1-AC-10 | No message is sent, and nothing exists that could send one: no outbox or delivery table, no worker, no outbound call, no callback route. `messages_active` is always false, and the UI shows "messages are not sent yet". In-product alerts, the header count and Email "Coming Soon" behave exactly as before. |
 | P1-AC-11 | Every existing rule starts with WhatsApp off. Migration 331 refuses to run if any `whatsapp_requested` is true. |
-| P1-AC-12 | Soft-deleting a rule deletes its WhatsApp settings and recipients, audited with masked numbers; its occurrences are preserved as today. |
+| P1-AC-12 | Soft-deleting a rule deletes its WhatsApp settings and recipients, audited with recipient ids only; its occurrences are preserved as today. |
 | P1-AC-13 | Grants match §3.5 exactly, and the tables are not directly readable by the application roles. The migration applies on a fresh test database and is idempotent. Its rollback script, which needs approval like any staging rollback: drops the `whatsapp_requested` CHECK and both new tables, which **deletes every stored number** with no copy kept; reports the deleted counts; and restores the migration 323 definitions of the create, update and delete functions (review B3). |
 | P1-AC-14 | **Lifecycle regression (§7.2):** across every case in the regression matrix, WhatsApp saves and alert saves that change no operational field leave Active occurrence state, trigger and resolution timers, acknowledgements and rule versions byte-for-byte unchanged. Enable/disable, delete and acknowledge behave exactly as on `origin/staging` `458c179`. |
-| P1-AC-15 | Only WiseWatts-controlled test numbers are entered on staging (D17), recorded in the staging verification record. |
+| P1-AC-15 | Only WiseWatts-controlled test numbers are entered on staging (D17), recorded in the staging verification record. If R8 is approved, this is also enforced by the allow-list. |
+| P1-AC-16 | *(If R5 is approved)* a designated report automation account is refused by every WhatsApp function, even with `alert.configure` and site access. |
+| P1-AC-17 | *(If R6 is approved)* new consent is refused while no approved wording version exists; every consent records an existing register version. |
+| P1-AC-18 | *(If R8 is approved)* on staging and test, a number not on the allow-list is refused, and the stored configuration is unchanged. |
 
 ## 7. Test plan
 
@@ -256,14 +277,23 @@ the database CHECK is the backstop.
 - **Concurrency (review R1):** a first save with revision 0; two concurrent
   first saves (one succeeds, one gets `whatsapp_config_stale`, no error);
   a stale revision.
+- **R5 (if approved):** uid-17-style automation account with `ADMIN` and
+  site access is refused for get, save and summaries; an ordinary `ADMIN`
+  on the same site is allowed; removing the designation restores access.
+- **R6 (if approved):** consent refused with no approved version; a
+  retired version cannot be used for new consent; existing consents keep
+  their version.
+- **R8 (if approved):** a non-listed number is refused; a listed number is
+  accepted; the list is empty after migration.
 - **No numbers in text (review R2):** for refused saves, assert the error
   text and the captured logs contain no submitted full number.
 - **Permissions:** customer `ADMIN` own site / other organisation / an
   unselected site; `OPERATOR`; `VIEWER`; the `GLOBAL` roles; an
   inactive user; a soft-deleted rule. Read, save and summaries for each;
   the summaries are refused for non-configurers (D16).
-- **Audit:** one row per effective save; masked values only (asserts no
-  full number appears in `previous_values` or `new_values`); actor type
+- **Audit:** one row per effective save; no phone digits (asserts neither
+  the full nor the masked number, nor the last 4 digits, appears in
+  `previous_values` or `new_values`; proposed R12); actor type
   customer vs staff; no row on a refusal; rollback atomicity (a forced
   failure after the audit leaves both unchanged).
 - **Migration 331:** the precondition refuses a seeded `true` flag; the
@@ -362,7 +392,7 @@ saves:
 - no change to existing rules or occurrences;
 - WhatsApp off everywhere;
 - with authorisation, one test save by a test admin using WiseWatts test
-  numbers only (D17), then its audit row and the masked values;
+  numbers only (D17), then its audit row (recipient ids, no numbers);
 - an Operator and a Viewer test user see no WhatsApp information (D16).
 
 ## 8. Dependencies
