@@ -19,7 +19,7 @@ Owner: Product + Engineering. Last reviewed: 2026-11-23.
 | [phase-1-plan.md](phase-1-plan.md) | Phase 1 plan — staging-only configuration; sends nothing. Not authorised. |
 | [phase-1-approval-package.md](phase-1-approval-package.md) | Phase 1 approval package: readiness, approval checklist, final scope, requirement IDs, effort, risks. **Not ready**: owner documentation review pending. |
 | [doc-review-checklist.md](doc-review-checklist.md) | Documentation review checklist and review record for PR #186. |
-| [consent-wording-register.md](consent-wording-register.md) | Register of approved opt-in wording versions (proposed R6); empty, with no wording approved yet. |
+| [consent-wording-register.md](consent-wording-register.md) | Register of approved opt-in wording versions (R6: in Phase 1 scope, Product Owner 2026-11-23; Legal sufficiency open, L-1). Empty: no wording is approved, so new opt-ins are refused until an approved version exists (D21). |
 | [review-2026-11-23.md](review-2026-11-23.md) | PR #186 review record: findings B1–B3, R1–R12, I1–I5; status of the outstanding reviews; provider desk research. |
 | [ADR-026](../../../00-governance/decisions/ADR-026-whatsapp-alert-notifications.md) | Proposed architecture decision. |
 
@@ -208,20 +208,73 @@ documentation review only, not implementation.
 
 ## 5A. Traceability
 
-| Decision | ADR record | Phase 1 plan | Acceptance / tests |
-|---|---|---|---|
-| Requirements | — | — | `EMS-REQ-153`–`EMS-REQ-159` ↔ P1-AC (approval package §4) |
-| D5 (off by default; the flag never sends) | ADR-024 Am. 2 §2A; ADR-026 A2 | §3.1, §3.3 | P1-AC-11; RG-6, RG-13 |
-| D6 (separate store; not an operational edit) | ADR-024 Am. 2 §2B, §2C; ADR-026 A1 | §2, §3.1–§3.4 | P1-AC-7–9, P1-AC-14; RG-1–RG-12 |
-| D9 / D16 (visibility) | ADR-024 Am. 2 §2D; ADR-026 A7 | §3.5, §4, §5 | P1-AC-4; §7.1 permissions, §7.3, §7.4 |
-| D15 (10 recipients) | ADR-026 A7 | §3.2, §3.5 | P1-AC-1, P1-AC-5; RG-2, RG-4 |
-| D17 (test numbers on staging) | ADR-024 Am. 2 §2E | §1, §7.6 (R8 out of scope) | P1-AC-15 |
-| D20 (remove the legacy checkbox) | ADR-024 Am. 2 §2A | §3.3, §5 | P1-AC-11; §7.4; §7.5 test changes |
-| D21 (approved wording) | — | §3.2; R6 (in scope) | P1-AC-17 |
-| D4 (per-number opt-in) | ADR-026 D4 | §3.2, §3.5 (B2 fix) | P1-AC-5; §7.1 recipient identity |
-| D10 / R7 (retention) | ADR-026 D10 | §3.2, §3.4; R7 | P1-AC-12; RG-11 |
-| R5 (automation accounts, approved) | ADR-024 Am. 2 §2D note | §3.5, §3.6 | P1-AC-16; §7.1 R5 tests |
-| R12 (audit content) | ADR-024 Am. 2 (Not amended, note) | §3.5 | P1-AC-6; §7.1 audit |
+Every decision D1–D21 appears exactly once below, in one of three tables:
+Phase 1 behaviour (§5A.1), legal and governance (§5A.2), and Phase 2 or
+production (§5A.3). Requirement IDs and the review items R5, R6 and R12
+follow in §5A.4.
+
+How to read the columns:
+- **Decision record.** "ADR-024 Am. 2 §2x" is a section of the **Decided**
+  ADR-024 Amendment 2, the Phase 1 design basis. "ADR-026 Dn" is the decision
+  text recorded under ADR-026 → *Decision → Product decisions*; "ADR-026 An"
+  is ADR-026 → *Decision → Architecture (proposed)*; "ADR-026 OQ" is
+  ADR-026 → *Open questions and approvals*. ADR-026 is **Proposed**: citing
+  it records where a decision is written down, and authorises nothing.
+- **Phase 1 plan** sections are in [phase-1-plan.md](phase-1-plan.md).
+  P1-AC-n is plan §6, RG-n is plan §7.2. "AC-n" is a whole-feature criterion
+  in §8 below, not a Phase 1 criterion.
+- **"None"** means no such entry exists. It is stated rather than invented.
+- **A later-phase row is a tracking reference only.** It does not authorise
+  any Phase 2 or production design, implementation or deployment; the gates
+  in §5 still apply.
+
+### 5A.1 Phase 1 behaviour (configuration, staging only)
+
+| Decision | Decision record | Phase 1 plan | Phase 1 acceptance / tests | Open dependency or later gate |
+|---|---|---|---|---|
+| D2 (individual numbers only; no groups) | ADR-026 D2. None in ADR-024 Am. 2 | §3.2 (one E.164 number per recipient row), §9 (groups out of scope) | No dedicated group test: a group cannot be stored, because every recipient must pass the E.164 CHECK (§3.2). P1-AC-1, P1-AC-5; §7.1 validation (E.164 format) | Groups are excluded from the initial release; any change needs a new Product decision |
+| D3 (per rule; several numbers; Site Admins on authorised sites, Global Site Admins on all sites) | ADR-024 Am. 2 §2B (per rule, keyed by `rule_id`), §2D (who may edit); ADR-026 D3, A7 | §3.1, §3.5, §4, §5 | P1-AC-1 (site `ADMIN`, authorised site), P1-AC-2 (rules independent), P1-AC-3 (`GLOBAL` `ADMIN`, any site), P1-AC-4 (404 for unauthorised sites); §7.1 permissions; §7.3. `EMS-REQ-153`, `EMS-REQ-155` | — |
+| D4 (explicit per-number admin opt-in; no OTP; STOP opt-out later) | ADR-024 Am. 2 §2B (per-number opt-in confirmation); ADR-026 D4; STOP: ADR-026 A5 (Phase 2) | §1 item 4, §3.2 (no verification column, so no OTP; `OPTED_OUT` reserved for Phase 2), §3.5 consent and recipient identity (B2), §9 (OTP and STOP out of scope) | P1-AC-5 (new or changed number without opt-in refused); §7.1 validation (fresh consent for a changed number, A-2) and recipient identity (B2); §7.4 opt-in checkbox required. "No OTP" has no test: Phase 1 adds no verification step to test. `EMS-REQ-154` | Legal sufficiency of the opt-in: D19 / L-1 (§5A.2). STOP handling: Phase 2, P-3, R10 |
+| D5 (off by default; the flag never sends) | ADR-024 Am. 2 §2A; ADR-026 D5, A2 | §3.1, §3.3 | P1-AC-10, P1-AC-11; RG-6, RG-13. `EMS-REQ-157` | — |
+| D6 (separate store; not an operational edit) | ADR-024 Am. 2 §2B, §2C; ADR-026 D6, A1 | §2, §3.1–§3.4 | P1-AC-7–9, P1-AC-14; RG-1–RG-12. `EMS-REQ-156` | — |
+| D9 / D16 (server-side permissions; audited changes; visibility) | ADR-024 Am. 2 §2D; ADR-026 D9, D16, A7 | §3.5, §4, §5 | P1-AC-4, P1-AC-6 (audit); §7.1 permissions and audit, §7.3, §7.4. `EMS-REQ-155`, `EMS-REQ-158` | D9 masked delivery history and the D16 reconsideration: Phase 2/3 (§5 "Before Phase 2"; §7) |
+| D10 / R7 (retention of numbers) | ADR-026 D10 | §3.2, §3.4; §3.6 R7 | P1-AC-12; RG-11 | 90-day delivery-history retention: Phase 3 (§7). Deletion obligations: L-3 (Legal may override R7) |
+| D15 (10 recipients) | ADR-026 D15, A7. None in ADR-024 Am. 2 | §1 item 3, §3.2, §3.5 | P1-AC-1, P1-AC-5; RG-2, RG-4; §7.1 (10 accepted, 11 refused); §7.4. `EMS-REQ-153` | — |
+| D17 (test numbers only on staging) | ADR-024 Am. 2 §2E; ADR-026 D17 | §1, §7.6 (R8 out of scope) | P1-AC-15 (procedural). `EMS-REQ-159` | Each staging test save needs separate approval (§5); no real customer numbers on any environment (plan §9) |
+| D20 (remove the legacy checkbox) | ADR-024 Am. 2 §2A; ADR-026 D20 | §3.3, §5 | P1-AC-9, P1-AC-11; §7.2; §7.4; §7.5 test changes. `EMS-REQ-157` | — |
+| D21 (Product approves the exact opt-in wording before use) | ADR-026 D21 and ADR-026 OQ (a Phase 1 gate). No ADR-024 Am. 2 section | §3.2, §3.6 R6, §5 (placeholder wording only), §8 Product | P1-AC-17; §7.1 R6 tests. `EMS-REQ-154`. **Product approval requirement:** an approval (approver and date) recorded in [consent-wording-register.md](consent-wording-register.md), and the [approval package](phase-1-approval-package.md) §2 "Before staging deployment" item. No wording is approved | Blocks staging deployment of the UI (§5). Depends on R9 (which business is named: Product + Legal). Product approval is not Legal sign-off (L-1) |
+
+### 5A.2 Legal and governance
+
+| Decision | Decision record | Phase 1 plan | Acceptance / tests | Open dependency or later gate |
+|---|---|---|---|---|
+| D19 (legal sufficiency of the opt-in, and audit content and retention, stay open; compliance is not assumed) | ADR-026 D19 and OQ (L-1, L-2); ADR-024 Am. 2 *Not amended* note (audit content pending L-2) | §1 item 4, §3.5 audit, §8 Legal | **No acceptance criterion can close D19**; only Legal can. P1-AC-6 tests the R12 default (no phone number in audit) and P1-AC-17 tests the wording-version record. Neither establishes legal sufficiency | L-1, L-2 (§4); R12 (§4A, proposed). Before Phase 2: L-1 to L-3 resolved (§5). L-2 may require a Phase 1 audit-content change before production |
+| D13 (ADR-026 stays Proposed until provider validation, legal review and infrastructure approvals) | ADR-026 status header and OQ | Plan header (ADR-026 Proposed) | No Phase 1 acceptance criterion. Documentation check: checklist check 5 (ADR-026 Proposed in the ADR, the decision log and the index) | Production gate: ADR-026 Decided (§5 "Before production") |
+
+### 5A.3 Phase 2, production and infrastructure gates (not Phase 1 scope)
+
+No decision here has a Phase 1 acceptance criterion, because none is built
+in Phase 1. Where a Phase 1 criterion is cited, it only proves the thing
+is **absent**.
+
+| Decision | Decision record | Phase 1 plan | Phase 1 evidence | Later-phase tracking reference |
+|---|---|---|---|---|
+| D1 (Meta Cloud API preferred; no integration commitment) | ADR-026 D1 | §9 (provider accounts, SDKs and HTTP calls out of scope) | P1-AC-10 (no outbound call exists) | P-1 to P-4 (§4); §5 "Before Phase 2" (provider validation) |
+| D7 (one message per occurrence and recipient; 60-minute duplicate suppression; no reminders or recovery messages) | ADR-026 D7, A3, A4 | §9 (outbox, worker, reminders and recovery messages out of scope) | P1-AC-10 (nothing can send) | §7 Phase 2; whole-feature AC-15, AC-19 (§8) |
+| D8 (Product owns message wording and templates) | ADR-026 D8 | §9 (templates out of scope) | None | §5 "Before Phase 2" (templates written and approved by Product); P-4. Separate from the D21 opt-in wording |
+| D11 (no rollout before ADR-024 completes production rollout and acceptance) | ADR-026 D11, A8; ADR-024 Am. 2 §2E (production not covered) | §3 (migration 331 scoped `staging\|test`), §8 Platform, §9 (production out of scope) | None | §5 "Before production" |
+| D12 (queue, sender, receipt endpoint, outbound access and secrets each need separate approval) | ADR-026 D12, A3–A6 | §9 (all excluded) | P1-AC-10 (no outbox, worker or callback route) | §5 "Before Phase 2" (one approval per item); whole-feature AC-18 (§8, receipt endpoint) |
+| D14 (60-minute quiet period per rule and recipient across occurrences) | ADR-026 D14, A3 | None (delivery behaviour; §9 excludes the outbox) | None | §7 Phase 2; whole-feature AC-9, AC-15, AC-20 (§8) |
+| D18 (per-site message cap deferred) | ADR-026 D18 | §9 (per-site cap out of scope) | None | §5 "Before Phase 2" (Phase 2 design of the cap); §7 Phase 2 |
+
+### 5A.4 Requirements and review items
+
+| Item | Decision record | Phase 1 plan | Acceptance / tests | Open dependency |
+|---|---|---|---|---|
+| `EMS-REQ-153`–`EMS-REQ-159` | `functional-requirements.md` (allocated 2026-11-23, R11) | §6 | Mapped to P1-AC in the approval package §4 | — |
+| R5 (automation accounts; approved) | ADR-024 Am. 2 approval notes (dated note on §2D) | §3.5, §3.6 | P1-AC-16; §7.1 R5 tests. `EMS-REQ-155` | — |
+| R6 (versioned wording register; in Phase 1 scope) | No ADR section; recorded in §4A and review §7 | §3.2, §3.6 | P1-AC-17; §7.1 R6 tests. `EMS-REQ-154` | Wording unapproved (D21); Legal sufficiency open (L-1) |
+| R12 (audit content; proposed) | ADR-024 Am. 2 *Not amended* note | §3.4, §3.5 | P1-AC-6, P1-AC-12; §7.1 audit. `EMS-REQ-158` | L-2 (Legal). Still a proposal: the plan uses it as the default |
 
 ## 6. Conflict review — resolution status
 

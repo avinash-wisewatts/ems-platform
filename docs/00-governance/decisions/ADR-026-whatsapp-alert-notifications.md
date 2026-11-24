@@ -143,8 +143,10 @@ blocker B1 — Phase 1 changes ADR-024 §8–§9 and `EMS-REQ-146` (D6, D20) whi
 this ADR is Proposed, so Phase 1 needs its own authorising record. This is
 **resolved**: ADR-024 Amendment 2, covering D5, D6, D16, D17 and D20, was
 Decided on 2026-11-23, with the Product Owner and Architecture approvals
-recorded. Delivery stays here. Open architecture item R5: whether designated
-automation accounts are excluded from the WhatsApp functions. This ADR
+recorded. Delivery stays here. Open architecture item R5 at the time:
+whether designated automation accounts are excluded from the WhatsApp
+functions. *Superseded: Architecture approved R5 later on 2026-11-23
+(ADR-024 Amendment 2 approval notes; review record §7).* This ADR
 remains **Proposed**.
 
 ## Alternatives considered

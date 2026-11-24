@@ -73,7 +73,7 @@ No row means WhatsApp is off. That is the state of every existing rule (D5).
 | `phone_e164` | TEXT NOT NULL | CHECK `^\+[1-9][0-9]{7,14}$`; UNIQUE (`rule_id`, `phone_e164`). |
 | `consent_state` | TEXT NOT NULL | CHECK IN (`CONFIRMED`, `OPTED_OUT`). Phase 1 writes only `CONFIRMED`; `OPTED_OUT` is reserved for Phase 2 STOP handling (D4). |
 | `consent_confirmed_at`, `consent_confirmed_by` | TIMESTAMPTZ, BIGINT NOT NULL | The administrator who confirmed opt-in (D4). |
-| `consent_statement_version` | TEXT NOT NULL, FK → consent register (§3.6, proposed R6) | Which version of the Product-approved confirmation wording was shown (D21). The wording must be approved before first use. |
+| `consent_statement_version` | TEXT NOT NULL, FK → consent register (§3.6, R6: in Phase 1 scope, Product 2026-11-23; Legal sufficiency open, L-1) | Which version of the Product-approved confirmation wording was shown (D21). No wording is approved yet: while the register has no current approved version, new consent is refused (`whatsapp_consent_statement_missing`, P1-AC-17). |
 | `opted_out_at`, `opted_out_source` | NULL in Phase 1 | Phase 2. |
 | `created_at`, `created_by` | | |
 
