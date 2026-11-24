@@ -4,9 +4,10 @@ from enum import Enum
 from src.auth.models import AuthenticatedPortalUser
 
 
-# ADR-024 alert write routes (src.routers.alerts_api).
+# ADR-024 alert write routes (src.routers.alerts_api), including the WhatsApp
+# configuration save PUT /api/v1/alert-rules/{rule_id}/whatsapp (migration 331).
 _ALERT_RULE_WRITE_PATH = re.compile(
-    r"/api/v1/sites/[^/]+/alert-rules|/api/v1/alert-rules/[^/]+(?:/enable|/disable)?"
+    r"/api/v1/sites/[^/]+/alert-rules|/api/v1/alert-rules/[^/]+(?:/enable|/disable|/whatsapp)?"
 )
 _ALERT_ACKNOWLEDGE_PATH = re.compile(r"/api/v1/alerts/[^/]+/acknowledge")
 # ADR-025 Amendment 1: on-demand report generation (src.routers.site_reports).

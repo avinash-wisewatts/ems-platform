@@ -14,7 +14,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from src.alert_rules_service import AlertRuleError
+from src.alert_rules_service import AlertRuleError, WhatsAppRuleSummary
 from src.auth.models import AuthenticatedPortalUser
 from src.auth.security import AuthenticationStatus
 from src.auth.service import AuthenticationResult
@@ -74,6 +74,8 @@ class FakeData:
         self.calls: list[tuple] = []
         self.result: str = "ok"
         self.alert = _alert_row()
+        # Migration 331: configurer-only WhatsApp summaries (None = refused).
+        self.whatsapp_summaries: dict | None = {UUID(RULE_ID): WhatsAppRuleSummary(enabled=True, recipient_count=2)}
 
     async def site(self, portal_user_id, site_id):
         self.calls.append(("site", portal_user_id, str(site_id)))
@@ -92,6 +94,10 @@ class FakeData:
 
     async def rule(self, portal_user_id, rule_id):
         return _rule_row() if str(rule_id) == RULE_ID else None
+
+    async def summaries(self, portal_user_id, site_id):
+        self.calls.append(("whatsapp_summaries", portal_user_id, str(site_id)))
+        return self.whatsapp_summaries
 
     async def parameters(self, portal_user_id, site_id, asset_id):
         return [{"asset_id": UUID(ASSET_ID), "asset_name": "Chiller 1", "parameter_code": "ACTIVE_POWER",
@@ -114,7 +120,7 @@ def data(monkeypatch) -> FakeData:
         "fetch_rules": fake.rules, "fetch_rule": fake.rule, "fetch_parameters": fake.parameters,
         "create_rule": fake._write("create"), "update_rule": fake._write("update"),
         "set_rule_enabled": fake._write("enabled"), "delete_rule": fake._write("delete"),
-        "acknowledge_alert": fake._write("ack"),
+        "acknowledge_alert": fake._write("ack"), "fetch_summaries": fake.summaries,
     }.items():
         monkeypatch.setattr(f"{ROUTER}.{attr}", fn)
     return fake
@@ -297,3 +303,33 @@ def test_rule_reads_and_parameters(portal_client, monkeypatch, data) -> None:
     params = portal_client.get(f"/api/v1/sites/{SITE_ID}/alert-rules/parameters").json()
     assert params["parameters"][0]["parameter"]["unit"] == "kW"
     assert portal_client.get(f"/api/v1/alert-rules/{uuid4()}").status_code == 404
+
+
+# --- migration 331: the configurer-only WhatsApp summary in rule responses (D16) ---
+
+@pytest.mark.parametrize("role,scope", [("ADMIN", "ORGANIZATION"), ("ADMIN", "GLOBAL")])
+def test_rule_responses_carry_the_whatsapp_summary_for_configurers(portal_client, monkeypatch, data, role, scope) -> None:
+    _login(portal_client, monkeypatch, role=role, scope=scope)
+    listed = portal_client.get(f"/api/v1/sites/{SITE_ID}/alert-rules").json()["rules"][0]
+    single = portal_client.get(f"/api/v1/alert-rules/{RULE_ID}").json()
+    for rule in (listed, single):
+        assert rule["whatsapp"] == {"enabled": True, "recipient_count": 2}
+        # The retired Coming Soon preference is still reported, never as requested.
+        assert rule["delivery"]["whatsapp"] == {"requested": False, "status": "COMING_SOON"}
+
+
+@pytest.mark.parametrize("role,scope", [("OPERATOR", "ORGANIZATION"), ("VIEWER", "ORGANIZATION"),
+                                        ("OPERATOR", "GLOBAL"), ("VIEWER", "GLOBAL")])
+def test_rule_responses_carry_no_whatsapp_information_for_other_roles(portal_client, monkeypatch, data, role, scope) -> None:
+    _login(portal_client, monkeypatch, role=role, scope=scope)
+    listed = portal_client.get(f"/api/v1/sites/{SITE_ID}/alert-rules").json()["rules"][0]
+    single = portal_client.get(f"/api/v1/alert-rules/{RULE_ID}").json()
+    assert listed["whatsapp"] is None and single["whatsapp"] is None
+    assert not [c for c in data.calls if c[0] == "whatsapp_summaries"]  # not even asked
+
+
+def test_a_refused_summary_leaves_whatsapp_null(portal_client, monkeypatch, data) -> None:
+    """E.g. a designated report automation account (R5): the database refuses."""
+    _login(portal_client, monkeypatch)
+    data.whatsapp_summaries = None
+    assert portal_client.get(f"/api/v1/alert-rules/{RULE_ID}").json()["whatsapp"] is None
