@@ -5,6 +5,10 @@
  * holding alert.configure (site administrators, WiseWatts admin staff) get the
  * toggle, Edit, Delete and Create controls. Editing, disabling or deleting ends
  * the rule's active alert; deleting keeps its history.
+ *
+ * WhatsApp (Phase 1): a "WhatsApp · N" badge marks rules with WhatsApp
+ * switched on -- for alert.configure holders only. Every other role sees no
+ * WhatsApp indicator, count or number (D16; the server sends them none).
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -145,6 +149,15 @@ export function AlertRules({
                 <tr key={r.rule_id} data-testid={`rule-row-${r.rule_id}`}>
                   <td>
                     {r.name}
+                    {canConfigure && r.whatsapp?.enabled ? (
+                      <span
+                        className="alerts-badge alerts-badge--whatsapp"
+                        title="WhatsApp numbers are set up. WhatsApp messages are not sent yet."
+                        data-testid={`rule-whatsapp-badge-${r.rule_id}`}
+                      >
+                        WhatsApp · {r.whatsapp.recipient_count}
+                      </span>
+                    ) : null}
                     <div className="alerts-muted">{scheduleText(r)}</div>
                   </td>
                   <td>{r.asset.name}</td>
