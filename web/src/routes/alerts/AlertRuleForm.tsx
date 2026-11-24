@@ -11,8 +11,12 @@
  * - Equal to needs an explicit tolerance in the parameter's unit -- no default.
  * - The schedule is in the site's timezone; an end before the start crosses
  *   midnight.
- * - Reminder frequency and Email / WhatsApp are stored preferences only and
- *   are labelled "Coming Soon": nothing is sent.
+ * - Reminder frequency and Email are stored preferences only and are labelled
+ *   "Coming Soon": nothing is sent.
+ * - WhatsApp (Phase 1, migration 331) is configured in its own panel, with its
+ *   own Save, on an existing rule only -- never as part of the rule, so saving
+ *   it cannot end the rule's active alert. The old "Coming Soon" WhatsApp
+ *   checkbox is gone (D20). WhatsApp messages are not sent yet.
  */
 
 import { useMemo, useState, type FormEvent } from "react";
@@ -25,6 +29,7 @@ import type {
   AlertRuleParameterOption,
   Weekday,
 } from "../../api/types";
+import { AlertWhatsAppPanel } from "./AlertWhatsAppPanel";
 import { COMPARATOR_LABELS, WEEKDAYS, WEEKDAY_LABELS, parameterLabel } from "./alertFormat";
 
 function paramKey(code: string, qualifier: string | null): string {
@@ -81,7 +86,6 @@ export function AlertRuleForm({
   const [weekdays, setWeekdays] = useState<Weekday[]>(rule?.schedule.weekdays ?? [...WEEKDAYS]);
   const [reminder, setReminder] = useState<"" | "15" | "30">(rule?.reminder_minutes ? (String(rule.reminder_minutes) as "15" | "30") : "");
   const [email, setEmail] = useState(rule?.delivery.email.requested ?? false);
-  const [whatsapp, setWhatsapp] = useState(rule?.delivery.whatsapp.requested ?? false);
   const [enabled, setEnabled] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -134,7 +138,7 @@ export function AlertRuleForm({
       tolerance: comparator === "EQ" ? Number(tolerance) : null,
       schedule: { start_time: startTime, end_time: endTime, weekdays },
       reminder_minutes: reminder === "" ? null : (Number(reminder) as 15 | 30),
-      delivery: { email, whatsapp },
+      delivery: { email },
     };
     setSaving(true);
     setError(null);
@@ -285,17 +289,13 @@ export function AlertRuleForm({
               Notifications <span className="alerts-badge">Coming Soon</span>
             </legend>
             <p className="alerts-muted alerts-form__hint" data-testid="rule-delivery-note">
-              Alerts appear in the EMS. Email, WhatsApp and reminders are not sent yet — your choices are saved for when
-              they become available.
+              Alerts appear in the EMS. Email and reminders are not sent yet — your choices are saved for when they
+              become available.
             </p>
             <div className="alerts-form__grid alerts-form__grid--3 alerts-form__grid--end">
               <label className="alerts-check">
                 <input type="checkbox" checked={email} onChange={(e) => setEmail(e.target.checked)} data-testid="rule-email" />
                 Email <span className="alerts-badge">Coming Soon</span>
-              </label>
-              <label className="alerts-check">
-                <input type="checkbox" checked={whatsapp} onChange={(e) => setWhatsapp(e.target.checked)} data-testid="rule-whatsapp" />
-                WhatsApp <span className="alerts-badge">Coming Soon</span>
               </label>
               <label className="alerts-field">
                 <span>
@@ -309,6 +309,14 @@ export function AlertRuleForm({
               </label>
             </div>
           </fieldset>
+
+          {rule ? (
+            <AlertWhatsAppPanel ruleId={rule.rule_id} />
+          ) : (
+            <p className="alerts-muted alerts-form__hint" data-testid="rule-whatsapp-after-create">
+              WhatsApp numbers can be set up after the alert is created.
+            </p>
+          )}
 
           {!rule ? (
             <label className="alerts-check">

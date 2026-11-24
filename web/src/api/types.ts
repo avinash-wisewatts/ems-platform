@@ -454,8 +454,9 @@ export type SiteTelemetryFreshnessResponse = {
 // ---- Alerts (ADR-024) -----------------------------------------------------
 // Customer-configurable alert rules, Active Alerts, Resolved/Ended history and
 // acknowledgement -- app/src/alert_rules_service.py, field for field. In-product
-// only: email / WhatsApp are stored preferences with status COMING_SOON and are
-// never sent. An acknowledgement by WiseWatts staff reads "WiseWatts Support".
+// only: email is a stored preference with status COMING_SOON and is never sent.
+// The old WhatsApp preference is retired (migration 331): it always reads as not
+// requested. An acknowledgement by WiseWatts staff reads "WiseWatts Support".
 
 export type AlertState = "ACTIVE" | "RESOLVED" | "ENDED";
 export type AlertComparator = "GT" | "LT" | "EQ";
@@ -517,7 +518,11 @@ export type AlertRule = {
   active_alert_id: string | null;
   created_at: string;
   updated_at: string;
+  /** WhatsApp summary for alert.configure holders only; null for every other role (D16). */
+  whatsapp?: AlertRuleWhatsAppSummary | null;
 };
+
+export type AlertRuleWhatsAppSummary = { enabled: boolean; recipient_count: number };
 
 export type AlertRulesResponse = {
   site_id: string;
@@ -543,7 +548,44 @@ export type AlertRuleInput = {
   tolerance: number | null;
   schedule: { start_time: string; end_time: string; weekdays: Weekday[] };
   reminder_minutes: 15 | 30 | null;
-  delivery: { email: boolean; whatsapp: boolean };
+  /** WhatsApp is configured separately (AlertWhatsAppConfigInput), never here. */
+  delivery: { email: boolean };
+};
+
+// ---- WhatsApp notifications, Phase 1 (migration 331) ------------------------
+// GET / PUT /api/v1/alert-rules/{rule_id}/whatsapp -- configuration only,
+// app/src/alert_whatsapp_service.py field for field. messages_active is always
+// false: nothing is sent yet. alert.configure holders only.
+
+export type AlertWhatsAppRecipient = {
+  recipient_id: string;
+  phone_e164: string;
+  phone_masked: string;
+  consent: { state: "CONFIRMED" | "OPTED_OUT"; confirmed_at: string; confirmed_by_name: string; statement_version: string };
+};
+
+export type AlertWhatsAppConfig = {
+  rule_id: string;
+  enabled: boolean;
+  revision: number;
+  messages_active: false;
+  max_recipients: number;
+  recipients: AlertWhatsAppRecipient[];
+  /** The Product-approved opt-in wording to show for a new number; null while none is approved. */
+  consent_statement: { version: string; text: string } | null;
+};
+
+export type AlertWhatsAppRecipientInput = {
+  recipient_id: string | null;
+  phone: string;
+  opt_in_confirmed: boolean;
+};
+
+export type AlertWhatsAppConfigInput = {
+  enabled: boolean;
+  revision: number;
+  recipients: AlertWhatsAppRecipientInput[];
+  consent_statement_version: string | null;
 };
 
 // ---- Analytics v1 (ADR-022) -------------------------------------------------
