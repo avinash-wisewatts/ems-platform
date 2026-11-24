@@ -588,6 +588,59 @@ def _digits(value) -> str:
     return re.sub(r"\D", "", str(value))
 
 
+# Recipient/rule ids and timestamps are not phone data, but their digits can
+# contain any 4-digit run (a save at 17:01:00 contains "0100"), so they are
+# removed before a value is searched for phone digits.
+_ID_OR_TIMESTAMP = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+    r"|\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}(?::?\d{2})?)?",
+    re.IGNORECASE,
+)
+
+
+def _leaves(value):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            yield key
+            yield from _leaves(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _leaves(item)
+    else:
+        yield value
+
+
+def assert_no_phone_data(blob, phones) -> None:
+    """R12: no audit value holds a number -- full, E.164, digits only, or its
+    last four digits -- once ids and timestamps are set aside. Each value is
+    checked on its own, so digits are never joined across fields."""
+
+    text = str(blob)
+    assert "phone" not in text and "•" not in text
+    for phone in phones:
+        assert phone not in text
+    for leaf in _leaves(blob):
+        if leaf is None or isinstance(leaf, bool):
+            continue
+        if isinstance(leaf, int):
+            assert len(str(abs(leaf))) < 8, "an integer shaped like a phone number"
+            continue
+        digits = _digits(_ID_OR_TIMESTAMP.sub(" ", str(leaf)))
+        for phone in phones:
+            assert phone[-4:] not in digits and _digits(phone) not in digits
+
+
+def test_the_phone_data_check_catches_leaks_and_ignores_ids_and_timestamps() -> None:
+    phone = "+12025550100"
+    clean = {"saved_at": "2026-11-24T17:01:00.598925+05:30", "recipient_id": "0100aaaa-0100-4100-8100-000000000100",
+             "revision": 101, "consent_confirmed_by": 10100}
+    assert_no_phone_data(clean, [phone])  # the CI false positive of 2026-11-24
+    for leak in ({"n": phone}, {"n": "202 555 0100"}, {"n": "ends 0100"}, {"n": 12025550100},
+                 {"n": ["x", {"y": "2025550100"}]}, {"phone_masked": "x"}, {"n": "+1 ••••••0100"}):
+        with pytest.raises(AssertionError):
+            assert_no_phone_data(leak, [phone])
+
+
 def test_one_audit_row_per_effective_save_with_actor_type_and_no_phone_digits(wa):
     cur, rule = wa["cur"], wa["rule"]
     statement(cur)
@@ -608,10 +661,7 @@ def test_one_audit_row_per_effective_save_with_actor_type_and_no_phone_digits(wa
     assert rows[1][5]["removed_recipient_ids"] == [str(recipients[P[1]])]
     for row in rows:
         for blob in (row[4], row[5]):
-            text = str(blob)
-            for phone in P[:2]:
-                assert phone not in text and phone[-4:] not in _digits(text) and _digits(phone) not in _digits(text)
-            assert "phone" not in text and "•" not in text
+            assert_no_phone_data(blob, P[:2])
 
 
 def test_audit_and_change_are_atomic(wa):
