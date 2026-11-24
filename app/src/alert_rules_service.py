@@ -10,7 +10,12 @@ back like every other /api/v1 read.
 
 Contract notes:
 - Email / WhatsApp are stored preferences only; their status is always
-  "COMING_SOON" -- nothing is ever sent (ADR-024 §9).
+  "COMING_SOON" -- nothing is ever sent (ADR-024 §9). Since migration 331 the
+  WhatsApp preference is retired: delivery.whatsapp in a request is accepted
+  for older clients and ignored, and is always reported as not requested.
+  WhatsApp configuration has its own endpoints (src.alert_whatsapp_service).
+- whatsapp (rule responses): {enabled, recipient_count} for alert.configure
+  holders only; null for every other role (D16). Never a number.
 - reminder_minutes: none, 15 or 30 -- stored only (ADR-024 §10).
 - An acknowledgement by WiseWatts staff is returned as "WiseWatts Support";
   the staff identity is never returned.
@@ -106,6 +111,8 @@ class DeliveryIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     email: bool = False
+    # Retired (migration 331): accepted from older clients, ignored and never
+    # stored or compared, so sending or omitting it cannot end an alert.
     whatsapp: bool = False
 
 
@@ -182,6 +189,13 @@ class DeliveryOut(BaseModel):
     whatsapp: DeliveryChannelOut
 
 
+class WhatsAppRuleSummary(BaseModel):
+    """Configurer-only WhatsApp summary of a rule (no numbers; D16)."""
+
+    enabled: bool
+    recipient_count: int
+
+
 class AlertRule(BaseModel):
     rule_id: UUID
     site_id: UUID
@@ -197,6 +211,11 @@ class AlertRule(BaseModel):
     active_alert_id: UUID | None = None
     created_at: datetime
     updated_at: datetime
+    whatsapp: WhatsAppRuleSummary | None = Field(
+        default=None,
+        description="WhatsApp configuration summary, for alert.configure holders only (null otherwise). "
+        "WhatsApp messages are not sent yet.",
+    )
 
 
 class AlertRulesResponse(BaseModel):
@@ -319,7 +338,8 @@ def rule_args(body: AlertRuleIn) -> dict[str, Any]:
         "weekdays": weekday_mask(list(body.schedule.weekdays)),
         "reminder": body.reminder_minutes,
         "email": body.delivery.email,
-        "whatsapp": body.delivery.whatsapp,
+        # Retired (migration 331): never forwarded; the database ignores it too.
+        "whatsapp": False,
     }
 
 

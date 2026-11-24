@@ -55,6 +55,9 @@ COPY postgres/maintenance/306_demand_reconcile_wide_cadence_rollback.sql /worksp
 # Migration 311 rollback script, run first by the 303 rollback tests and by
 # app/tests/test_recovery_lookup_event_time_bound.py.
 COPY postgres/maintenance/311_recovery_lookup_event_time_bound_rollback.sql /workspace/postgres/maintenance/311_recovery_lookup_event_time_bound_rollback.sql
+# Rollback of migration 331 (WhatsApp Phase 1), applied in a rolled-back
+# transaction by app/tests/test_alert_whatsapp_config_db.py.
+COPY postgres/maintenance/331_alert_whatsapp_configuration_rollback.sql /workspace/postgres/maintenance/331_alert_whatsapp_configuration_rollback.sql
 COPY scripts/test /workspace/scripts/test
 # Phase 4 routing generator: spec, template, generator, and committed artifact
 # consumed by app/tests/test_routing_generator_contract.py.

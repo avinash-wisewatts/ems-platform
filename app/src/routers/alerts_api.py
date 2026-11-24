@@ -11,6 +11,8 @@ Resolved/Ended history and acknowledgement, under /api/v1.
     PATCH  /api/v1/alert-rules/{rule_id}                         alert.configure
     POST   /api/v1/alert-rules/{rule_id}/enable | /disable        alert.configure
     DELETE /api/v1/alert-rules/{rule_id}                         alert.configure
+    GET    /api/v1/alert-rules/{rule_id}/whatsapp                alert.configure
+    PUT    /api/v1/alert-rules/{rule_id}/whatsapp                alert.configure
 
 Mounted in both the customer API (src.customer_main) and the Administration
 App process (src.main), like the Analytics router. Reads need the session's
@@ -27,6 +29,14 @@ missing. Permission missing on an accessible resource: 403. Contract
 violations: 422 / 409 with the flat {"error", "detail"} envelope. Nothing is
 ever sent by email or WhatsApp; staff acknowledgements are shown as
 "WiseWatts Support".
+
+WhatsApp (Phase 1, migration 331): configuration only -- per-rule on/off and
+1-10 recipient numbers with per-number opt-in confirmation, stored apart from
+the rule, so saving it never ends an Active alert. messages_active is always
+false: nothing is sent. Only alert.configure holders see any of it (rule
+responses carry a whatsapp summary for them and null for everyone else);
+designated report automation accounts are refused in the database (R5).
+Phone numbers never appear in error details or logs.
 
 Replaces the MVP-7 GET /sites/{site_id}/alerts and GET /alerts/{alert_id}
 contract (ADR-024 §19; ADR-007 Amendment 1).
@@ -65,6 +75,14 @@ from src.alert_rules_service import (
     fetch_site_alerts,
     set_rule_enabled,
     update_rule,
+)
+from src.alert_whatsapp_service import (
+    WhatsAppConfigError,
+    WhatsAppConfigIn,
+    WhatsAppConfigOut,
+    fetch_config,
+    fetch_summaries,
+    save_config,
 )
 from src.analytics_trends_service import fetch_analytics_site
 from src.auth.authorization import PortalPermission, has_permission
@@ -245,7 +263,22 @@ async def get_site_rules(request: Request, site_id: UUID) -> AlertRulesResponse:
     if site is None:
         raise _not_found("Site")
     rows = await fetch_rules(user.portal_user_id, site_id)
-    return AlertRulesResponse(site_id=site_id, rules=[build_rule(r, site.get("timezone")) for r in rows])
+    rules = [build_rule(r, site.get("timezone")) for r in rows]
+    await _attach_whatsapp(user, site_id, rules)
+    return AlertRulesResponse(site_id=site_id, rules=rules)
+
+
+async def _attach_whatsapp(user: AuthenticatedPortalUser, site_id: UUID, rules: list[AlertRule]) -> None:
+    """Add the WhatsApp summary for alert.configure holders only (D16); every
+    other role keeps whatsapp = null, with no extra database call."""
+
+    if not rules or not has_permission(user, PortalPermission.ALERT_CONFIGURE):
+        return
+    summaries = await fetch_summaries(user.portal_user_id, site_id)
+    if summaries is None:  # refused in the database (e.g. an automation account)
+        return
+    for rule in rules:
+        rule.whatsapp = summaries.get(rule.rule_id)
 
 
 @router.get(
@@ -279,7 +312,9 @@ async def _rule_response(user: AuthenticatedPortalUser, rule_id: UUID) -> AlertR
     if row is None:
         raise _not_found("Alert rule")
     site = await fetch_analytics_site(user.portal_user_id, row["site_id"])
-    return build_rule(row, site.get("timezone") if site else None)
+    rule = build_rule(row, site.get("timezone") if site else None)
+    await _attach_whatsapp(user, row["site_id"], [rule])
+    return rule
 
 
 @router.get(
@@ -381,3 +416,61 @@ async def delete_rule_route(request: Request, rule_id: UUID) -> Response:
     except AlertRuleError as exc:
         raise _raise_for(exc, "Alert rule")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ---------------------------------------------------------------------------
+# WhatsApp configuration (Phase 1, migration 331) -- nothing is sent
+# ---------------------------------------------------------------------------
+
+_WHATSAPP_RESPONSES: dict[int | str, dict] = {
+    **_READ_RESPONSES,
+    403: {"description": "Missing alert.configure, a report automation account, or a cross-site request."},
+}
+_WHATSAPP_WRITE_RESPONSES: dict[int | str, dict] = {
+    **_WRITE_RESPONSES,
+    403: {"description": "Missing alert.configure, a report automation account, or a cross-site request."},
+    409: {"description": "whatsapp_config_stale: the settings were changed since they were read."},
+    422: {"description": "A WhatsApp refusal code (invalid or duplicate number, more than 10, consent missing, "
+                         "no approved opt-in wording yet, unknown recipient, enabled without recipients)."},
+}
+
+
+def _whatsapp_error(exc: WhatsAppConfigError) -> HTTPException:
+    if exc.code == "not_found":
+        return _not_found("Alert rule")
+    detail: dict = {"error": exc.code, "detail": exc.detail}
+    if exc.index is not None:
+        detail["recipient_index"] = exc.index  # the position only -- never the number
+    return HTTPException(status_code=exc.status, detail=detail)
+
+
+@router.get(
+    "/alert-rules/{rule_id}/whatsapp",
+    response_model=WhatsAppConfigOut,
+    summary="A rule's WhatsApp settings and recipients (alert.configure only; messages are not sent yet)",
+    operation_id="getAlertRuleWhatsApp",
+    responses=_WHATSAPP_RESPONSES,
+)
+async def get_rule_whatsapp(request: Request, rule_id: UUID) -> WhatsAppConfigOut:
+    user = _require(request, PortalPermission.ALERT_CONFIGURE)
+    try:
+        return await fetch_config(user.portal_user_id, rule_id)
+    except WhatsAppConfigError as exc:
+        raise _whatsapp_error(exc)
+
+
+@router.put(
+    "/alert-rules/{rule_id}/whatsapp",
+    response_model=WhatsAppConfigOut,
+    summary="Replace a rule's WhatsApp settings -- never changes the rule or its alerts; sends nothing",
+    operation_id="saveAlertRuleWhatsApp",
+    responses=_WHATSAPP_WRITE_RESPONSES,
+    dependencies=_JSON_WRITE,
+)
+async def put_rule_whatsapp(request: Request, rule_id: UUID, body: WhatsAppConfigIn) -> WhatsAppConfigOut:
+    user = _require(request, PortalPermission.ALERT_CONFIGURE)
+    try:
+        await save_config(user.portal_user_id, rule_id, body)
+        return await fetch_config(user.portal_user_id, rule_id)
+    except WhatsAppConfigError as exc:
+        raise _whatsapp_error(exc)

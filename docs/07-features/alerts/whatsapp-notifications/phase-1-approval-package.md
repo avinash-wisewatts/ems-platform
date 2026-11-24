@@ -53,8 +53,13 @@ new consent (`whatsapp_consent_statement_missing`).
 - [x] Owner documentation review of PR #186 recorded: Approved, repository owner as Product Owner, 2026-11-24, at `3d00c20` (documentation only)
 
 **Phase 1 implementation approval** (explicit, separate):
-- [ ] Approval to implement this scope on a feature branch from fresh
-      `origin/staging`
+- [x] Approval to implement this scope on a feature branch from fresh
+      `origin/staging`: all three increments, Product Owner, 2026-11-24
+      (refused saves write no audit row, P1-AC-6). Implemented and tested
+      locally on `feature/whatsapp-phase1-config`; see phase-1-plan §10.
+      Commits, push and opening the PRs approved 2026-11-24 (PR A backend,
+      PR B web, PR B depends on PR A); merge, the staging migration,
+      deployment and staging test saves are **not** approved
 
 **Before merge** (separate approval):
 - [ ] All P1-AC criteria met (P1-AC-18 does not apply); full regression

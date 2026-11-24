@@ -10,6 +10,11 @@ argon2-cffi==23.1.0
 
 paho-mqtt==2.1.0
 
+# WhatsApp notifications, Phase 1 (migration 331): server-side validation and
+# E.164 normalisation of recipient phone numbers (src.alert_whatsapp_service).
+# Pinned; the database CHECK is the backstop. No WhatsApp provider SDK.
+phonenumbers==9.0.44
+
 # WebSocket client for main.py's Asset View live WebSocket proxy
 # (proxy_asset_live_websocket -> live-telemetry's live_asset_websocket).
 # Already an incidental transitive dependency of uvicorn[standard] (its

@@ -41,6 +41,7 @@ CUSTOMER_CODE = [
     "auth/server_session.py",
     "routers/analytics_api.py",
     "alert_rules_service.py",
+    "alert_whatsapp_service.py",  # migration 331 (WhatsApp Phase 1 configuration)
     "routers/alerts_api.py",
     "routers/report_exports.py",
     "routers/customer_auth.py",
