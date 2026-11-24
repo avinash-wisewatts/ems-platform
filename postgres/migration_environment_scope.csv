@@ -8,3 +8,4 @@ migration_id,environments,reason
 328_site_report_settings,staging|test,Create report (ADR-025) is not approved for production
 329_site_reports,staging|test,Create report (ADR-025) is not approved for production
 330_site_report_retrospective_baseline_and_portal_generation,staging|test,Create report (ADR-025) is not approved for production
+331_alert_whatsapp_configuration,staging|test,WhatsApp Phase 1 is staging-only: production waits for ADR-024 in production (D11) and ADR-026 Decided (D13)

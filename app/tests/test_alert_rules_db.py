@@ -381,6 +381,10 @@ def test_equal_to_with_explicit_tolerance_and_reminder_choices_are_accepted(worl
     ok = create(cur, world["u"]["admin"], world["site"], world["asset"], name="Grid frequency", code="FREQUENCY",
                 qualifier=None, comparator="EQ", threshold=50, tolerance=0.1, reminder=15, email=True, whatsapp=True)
     assert ok[0] == "ok"
+    # Migration 331 retired the WhatsApp "Coming Soon" preference: an older
+    # client's true is accepted but stored false (ADR-024 Amendment 2 §2A).
+    cur.execute("SELECT email_requested, whatsapp_requested FROM analytics.alert_rules WHERE rule_id = %s", (ok[1],))
+    assert cur.fetchone() == (True, False)
     for minutes, name in ((30, "r30"), (None, "none")):
         assert create(cur, world["u"]["admin"], world["site"], world["asset"], name=name, reminder=minutes)[0] == "ok"
 
