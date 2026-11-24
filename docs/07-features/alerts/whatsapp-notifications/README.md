@@ -177,7 +177,8 @@ documentation review only, not implementation.
 - ~~an owner documentation review of PR #186 recorded~~ — **done**:
   Approved 2026-11-24 at `3d00c20`, documentation only
   ([doc-review-checklist.md](doc-review-checklist.md) §3);
-- explicit approval to implement Phase 1;
+- ~~explicit approval to implement Phase 1~~ — **done**: Product Owner,
+  2026-11-24 (implementation only; see phase-1-plan §10);
 - D21: the opt-in wording approved by Product, before the UI ships to
   staging;
 - a new pinned code dependency, `phonenumbers`.

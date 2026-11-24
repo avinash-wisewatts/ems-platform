@@ -1,8 +1,10 @@
 # WhatsApp notifications — Phase 1 plan: staging-only configuration
 
-Status: **PLAN — not authorised.** Design basis: ADR-024 Amendment 2,
-**Decided 2026-11-23**. Implementation still needs its own approval. Implementing, merging or deploying any of
-this needs separate, explicit authorisation. Phase 1 **sends no messages**.
+Status: **IMPLEMENTATION APPROVED 2026-11-24 (Product Owner); implemented and
+tested locally; PRs open — not merged, not deployed** (see §10). Design basis: ADR-024
+Amendment 2, **Decided 2026-11-23**. Merging, the staging migration and
+deployment, and any staging test save each still need separate, explicit
+authorisation. Phase 1 **sends no messages**.
 Decisions: [README.md §2](README.md#2-confirmed-decisions-product-owner-2026-11-23)
 (D1–D21). Architecture: [ADR-026](../../../00-governance/decisions/ADR-026-whatsapp-alert-notifications.md)
 (Proposed). Basis: `origin/staging` `458c179`. Prepared 2026-11-23.
@@ -442,3 +444,32 @@ saves:
 - Any recipient information for Operators or Viewers, including masked
   delivery history (D16; reconsidered in Phase 2/3).
 - A per-site message cap (D18, Phase 2).
+
+## 10. Implementation record (2026-11-24)
+
+The Product Owner approved implementing all three increments on 2026-11-24
+(database, API, UI), and confirmed that a refused save writes **no** audit row
+(P1-AC-6, not the migration 323 `REJECTED` precedent). Branch
+`feature/whatsapp-phase1-config` from `origin/staging` `e5a81c7`. Committed and
+opened as two linked PRs on 2026-11-24 (A: database and API; B: web, depends on
+A); not merged or deployed at the time of writing.
+
+Where the implementation differs from, or makes precise, the design above:
+
+| Topic | Plan | As implemented | Why |
+|---|---|---|---|
+| Opt-in wording shown vs recorded (R6, D21) | The UI shows a placeholder sentence; the save records the current version | `get_portal_alert_rule_whatsapp` also returns the current approved wording `{version, text}` (or null). The UI shows that exact text next to each new number and sends its version; `save_portal_alert_rule_whatsapp(..., p_consent_statement_version)` refuses new consent unless it is still the current version (`whatsapp_consent_statement_changed`, 409). With no approved wording the UI cannot add or edit numbers at all | The recorded version must be the text the administrator actually confirmed (consent evidence, L-1). No placeholder wording is ever shown or recorded |
+| First-save concurrency (R1) | Insert a revision-0 placeholder row, then lock it | A per-rule transaction advisory lock, then `SELECT … FOR UPDATE` of the settings row | Same contract (one save wins, the other gets `whatsapp_config_stale`, never a 500) without leaving a placeholder row behind a refused save |
+| Masked number | `analytics.alert_phone_mask` in the database | Computed in the API with `phonenumbers` (knows country-code lengths); returned to configurers only; never stored or audited | A correct country-code split needs numbering metadata the database lacks |
+| "Never touches" lifecycle tables | The WhatsApp functions reference none of `alert_rules`, `alerts`, `alert_evaluation_candidates` | They never reference `alerts` or `alert_evaluation_candidates`, and never write `alert_rules`; they **read** the rule (existence, site, deletion), locking it `FOR KEY SHARE` in the save. The whole-file test asserts exactly this | The rule must be read to check access; `FOR KEY SHARE` never blocks the evaluator (`FOR SHARE … SKIP LOCKED`) and only orders a save after a concurrent rule edit or delete |
+| Malformed save payload | — | Extra refusal code `whatsapp_invalid_request` (422) | Defence in depth behind the API's own validation |
+| API field | — | Refusals that concern one number carry `recipient_index` (position only, never the number); the UI validates format, duplicates and the limit beside the field | No phone number in any error body |
+| Retired flag on input | Accepted and ignored | Accepted and ignored by the database **and** never forwarded by the API (`rule_args` always sends `false`) | Defence in depth |
+
+Evidence: the database tests (`test_alert_whatsapp_config_db.py`,
+`test_alert_whatsapp_lifecycle_regression_db.py` RG-1 to RG-13), the route
+tests (`test_alerts_whatsapp_routes.py`) and the web tests
+(`AlertWhatsAppPanel.test.tsx`, `AlertsArea.test.tsx`). Reinstating the
+migration 323 `update_portal_alert_rule` makes RG-6 and RG-12 fail, so the
+matrix detects the regression it guards against.
+
