@@ -1,8 +1,10 @@
 # WhatsApp notifications — Phase 1 approval package
 
-Status: **NOT READY — one prerequisite open: the owner documentation review
-of PR #186** ([doc-review-checklist.md](doc-review-checklist.md)). Updated
-2026-11-23 with the Architecture and Product answers. Design basis:
+Status: **READY FOR AN IMPLEMENTATION APPROVAL REQUEST — not approved.** The
+last prerequisite, the owner documentation review of PR #186, was recorded as
+Approved on 2026-11-24 ([doc-review-checklist.md](doc-review-checklist.md)
+§3; documentation only, not independent, not Legal). Updated 2026-11-23 with
+the Architecture and Product answers. Design basis:
 ADR-024 Amendment 2 (**Decided 2026-11-23**), which is **not**
 implementation permission. ADR-026 remains **Proposed**.
 
@@ -26,12 +28,13 @@ Detail: [phase-1-plan.md](phase-1-plan.md). Decisions and open items:
 | Test-number restriction | **Procedural only** | R8 out of scope: D17 relies on process (P1-AC-15) | Product (accepted) |
 | Requirement IDs | **Yes** | `EMS-REQ-153`–`EMS-REQ-159` allocated (2026-11-23) | — |
 | Working assumptions | **Yes** | A-1 to A-9 confirmed (2026-11-23) | — |
-| Documentation review | **No** | Owner review pending | Product Owner |
+| Documentation review | **Yes** | Owner review Approved 2026-11-24 at `3d00c20` (documentation only; not independent, not Legal) | Product Owner |
 | Legal L-1 to L-3 | Not started | Does not block staging with test numbers; blocks Phase 2 and production | Legal |
 | Provider P-1 to P-4 | Desk research only | Not needed for Phase 1; blocks Phase 2 | Product + Engineering |
 
-**Verdict:** once the owner documentation review is recorded, Phase 1 is
-ready for its **implementation approval request**. The opt-in wording (D21,
+**Verdict:** the owner documentation review was recorded on 2026-11-24, so
+Phase 1 is ready for its **implementation approval request**. That request
+is not yet made or granted. The opt-in wording (D21,
 with R9) is required before **staging deployment**, not before
 implementation. Without it, the R6 register is empty, and the save refuses
 new consent (`whatsapp_consent_statement_missing`).
@@ -47,7 +50,7 @@ new consent (`whatsapp_consent_statement_missing`).
 - [x] A-1 to A-8 confirmed: Product Owner, 2026-11-23
 - [x] R11: `EMS-REQ-153`–`EMS-REQ-159` allocated, Product Owner, 2026-11-23
 - [x] Package updated and re-estimated (§5)
-- [ ] Owner documentation review of PR #186 recorded
+- [x] Owner documentation review of PR #186 recorded: Approved, repository owner as Product Owner, 2026-11-24, at `3d00c20` (documentation only)
 
 **Phase 1 implementation approval** (explicit, separate):
 - [ ] Approval to implement this scope on a feature branch from fresh

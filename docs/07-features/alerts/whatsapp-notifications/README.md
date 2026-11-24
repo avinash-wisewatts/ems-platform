@@ -17,7 +17,7 @@ Owner: Product + Engineering. Last reviewed: 2026-11-23.
 | [prd-draft-0.1-addendum-2026-11-23.md](prd-draft-0.1-addendum-2026-11-23.md) | Dated clarifications: where the PRD is out of date or superseded by D1–D21. |
 | This README | Decisions, assumptions, open legal/provider questions, dependencies, approval gates, the conflict review. |
 | [phase-1-plan.md](phase-1-plan.md) | Phase 1 plan — staging-only configuration; sends nothing. Not authorised. |
-| [phase-1-approval-package.md](phase-1-approval-package.md) | Phase 1 approval package: readiness, approval checklist, final scope, requirement IDs, effort, risks. **Not ready**: owner documentation review pending. |
+| [phase-1-approval-package.md](phase-1-approval-package.md) | Phase 1 approval package: readiness, approval checklist, final scope, requirement IDs, effort, risks. Ready for an implementation approval **request** (owner documentation review Approved 2026-11-24); nothing is approved for implementation. |
 | [doc-review-checklist.md](doc-review-checklist.md) | Documentation review checklist and review record for PR #186. |
 | [consent-wording-register.md](consent-wording-register.md) | Register of approved opt-in wording versions (R6: in Phase 1 scope, Product Owner 2026-11-23; Legal sufficiency open, L-1). Empty: no wording is approved, so new opt-ins are refused until an approved version exists (D21). |
 | [review-2026-11-23.md](review-2026-11-23.md) | PR #186 review record: findings B1–B3, R1–R12, I1–I5; status of the outstanding reviews; provider desk research. |
@@ -174,8 +174,9 @@ documentation review only, not implementation.
   Amendment 2 Decided 2026-11-23;
 - ~~an Architecture decision on automation accounts (review R5)~~ — **done**:
   approved 2026-11-23;
-- an owner documentation review of PR #186 recorded
-  ([doc-review-checklist.md](doc-review-checklist.md));
+- ~~an owner documentation review of PR #186 recorded~~ — **done**:
+  Approved 2026-11-24 at `3d00c20`, documentation only
+  ([doc-review-checklist.md](doc-review-checklist.md) §3);
 - explicit approval to implement Phase 1;
 - D21: the opt-in wording approved by Product, before the UI ships to
   staging;
