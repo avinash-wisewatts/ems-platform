@@ -126,7 +126,7 @@ export async function apiPostJson<T>(path: string, body: unknown, init?: Request
  * and acknowledgement). The browser adds the Origin header the server checks.
  * Returns undefined for 204.
  */
-export async function apiWrite<T>(method: "POST" | "PATCH" | "DELETE", path: string, body?: unknown): Promise<T> {
+export async function apiWrite<T>(method: "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: unknown): Promise<T> {
   let response: Response;
   try {
     response = await fetch(buildUrl(path), {

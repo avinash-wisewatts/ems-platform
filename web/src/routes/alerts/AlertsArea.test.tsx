@@ -63,6 +63,19 @@ function ruleFixture(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function whatsappFixture(overrides: Record<string, unknown> = {}) {
+  return {
+    rule_id: RULE_ID,
+    enabled: false,
+    revision: 0,
+    messages_active: false,
+    max_recipients: 10,
+    recipients: [],
+    consent_statement: null,
+    ...overrides,
+  };
+}
+
 const PARAMETERS = {
   site_id: SITE_ID,
   parameters: [
@@ -97,6 +110,7 @@ function backend(extra?: (call: Call) => { status?: number; jsonBody?: unknown }
     }
     if (url.includes(`/alerts/${ALERT_ID}`)) return { jsonBody: alertFixture() };
     if (url.includes("/alert-rules/parameters")) return { jsonBody: PARAMETERS };
+    if (url.endsWith("/whatsapp")) return { jsonBody: whatsappFixture() };
     if (url.includes(`/sites/${SITE_ID}/alert-rules`) && call.method === "GET") {
       return { jsonBody: { site_id: SITE_ID, max_active_rules: 25, rules: [ruleFixture()] } };
     }
@@ -199,6 +213,12 @@ describe("AlertsArea (ADR-024)", () => {
     const form = await screen.findByTestId("alert-rule-form");
     expect(within(form).getAllByText("Coming Soon").length).toBeGreaterThanOrEqual(3);
     expect(within(form).getByTestId("rule-delivery-note").textContent).toContain("not sent yet");
+    // WhatsApp Phase 1 (D20): the old Coming Soon checkbox is gone; Email stays Coming Soon.
+    expect(within(form).queryByTestId("rule-whatsapp")).toBeNull();
+    expect(within(form).getByTestId("rule-email")).toBeTruthy();
+    // A new rule has no WhatsApp panel until it is created.
+    expect(within(form).queryByTestId("whatsapp-panel")).toBeNull();
+    expect(within(form).getByTestId("rule-whatsapp-after-create")).toBeTruthy();
     fireEvent.change(within(form).getByTestId("rule-name"), { target: { value: "Grid frequency" } });
     fireEvent.change(within(form).getByTestId("rule-asset"), { target: { value: ASSET_ID } });
     fireEvent.change(within(form).getByTestId("rule-parameter"), { target: { value: "FREQUENCY|" } });
@@ -223,7 +243,7 @@ describe("AlertsArea (ADR-024)", () => {
       tolerance: 0.1,
       schedule: { start_time: "00:00", end_time: "23:59", weekdays: ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"] },
       reminder_minutes: 15,
-      delivery: { email: true, whatsapp: false },
+      delivery: { email: true },
       enabled: true,
     });
   });
@@ -324,6 +344,46 @@ describe("AlertsArea (ADR-024)", () => {
     const req = calls.find((c) => c.url.includes(`/sites/${SITE_ID}/alerts`))!;
     expect(req.url).toContain("state=RESOLVED");
     expect(req.url).toContain("state=ENDED");
+  });
+
+  it("marks rules with WhatsApp on for configurers only (D16)", async () => {
+    backend((c) =>
+      c.url.includes(`/sites/${SITE_ID}/alert-rules`) && c.method === "GET" && !c.url.includes("parameters")
+        ? { jsonBody: { site_id: SITE_ID, max_active_rules: 25, rules: [ruleFixture({ whatsapp: { enabled: true, recipient_count: 3 } })] } }
+        : undefined,
+    );
+    render(ADMIN_USER, "/features/alerts?tab=rules");
+    expect((await screen.findByTestId(`rule-whatsapp-badge-${RULE_ID}`)).textContent).toBe("WhatsApp · 3");
+  });
+
+  it("shows no WhatsApp indicator to an operator or a viewer, even if a summary were present", async () => {
+    for (const user of [OPERATOR_USER, VIEWER_USER]) {
+      backend((c) =>
+        c.url.includes(`/sites/${SITE_ID}/alert-rules`) && c.method === "GET"
+          ? { jsonBody: { site_id: SITE_ID, max_active_rules: 25, rules: [ruleFixture({ whatsapp: { enabled: true, recipient_count: 3 } })] } }
+          : undefined,
+      );
+      const { unmount } = render(user, "/features/alerts?tab=rules");
+      await screen.findByTestId("alert-rules-table");
+      expect(screen.queryByTestId(`rule-whatsapp-badge-${RULE_ID}`)).toBeNull();
+      expect(screen.queryByText(/WhatsApp/)).toBeNull();
+      unmount();
+    }
+  });
+
+  it("saving the rule and saving WhatsApp are separate requests", async () => {
+    const { calls } = backend();
+    render(ADMIN_USER, "/features/alerts?tab=rules");
+    fireEvent.click(await screen.findByTestId(`rule-edit-${RULE_ID}`));
+    const form = await screen.findByTestId("alert-rule-form");
+    await within(form).findByTestId("whatsapp-enabled");
+    expect(within(form).queryByTestId("rule-whatsapp")).toBeNull();
+    fireEvent.change(within(form).getByTestId("rule-threshold"), { target: { value: "55" } });
+    fireEvent.click(within(form).getByTestId("rule-save"));
+    await waitFor(() => expect(calls.some((c) => c.method === "PATCH")).toBe(true));
+    const patch = calls.find((c) => c.method === "PATCH")! as Call & { body: { delivery: unknown } };
+    expect(patch.body.delivery).toEqual({ email: false });
+    expect(calls.some((c) => c.method === "PUT")).toBe(false);
   });
 
   it("shows a good empty state when nothing is active", async () => {

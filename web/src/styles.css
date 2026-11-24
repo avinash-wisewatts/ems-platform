@@ -997,6 +997,18 @@ summary.analytics-dq__heading { cursor: pointer; }
 .alerts-status--resolved { background: #dcfce7; color: var(--good); }
 .alerts-status--ended { background: #eef2f7; color: var(--muted); }
 .alerts-badge { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 999px; background: #e0ecff; color: var(--estimated); font-size: 11px; font-weight: 500; }
+/* WhatsApp Phase 1 (configuration only) */
+.alerts-badge--whatsapp { background: #e7f6ec; color: #1f6f3f; }
+.alerts-whatsapp__rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.alerts-whatsapp__row { border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+.alerts-whatsapp__line { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.alerts-whatsapp__phone { font-variant-numeric: tabular-nums; }
+.alerts-whatsapp__phone-input { min-width: 0; flex: 1; }
+.alerts-whatsapp__consent { align-items: flex-start; margin-top: 4px; }
+.alerts-whatsapp__add { display: grid; grid-template-columns: 110px minmax(0, 1fr) auto; gap: 8px; align-items: end; margin-top: 8px; }
+.alerts-whatsapp__add-error { grid-column: 1 / -1; margin: 0; }
+.alerts-whatsapp__footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+@media (max-width: 640px) { .alerts-whatsapp__add { grid-template-columns: 1fr; } }
 .alerts-switch { width: 38px; height: 22px; border-radius: 999px; border: 1px solid var(--line); background: #cbd5e1; position: relative; cursor: pointer; padding: 0; }
 .alerts-switch:disabled { cursor: default; opacity: 0.6; }
 .alerts-switch__knob { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: left 0.15s; }

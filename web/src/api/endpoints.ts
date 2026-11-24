@@ -28,6 +28,8 @@
  *   PATCH  /api/v1/alert-rules/{rule_id}                (Alerts, alert.configure)
  *   POST   /api/v1/alert-rules/{rule_id}/enable|disable (Alerts, alert.configure)
  *   DELETE /api/v1/alert-rules/{rule_id}                (Alerts, alert.configure)
+ *   GET    /api/v1/alert-rules/{rule_id}/whatsapp       (WhatsApp Phase 1, alert.configure)
+ *   PUT    /api/v1/alert-rules/{rule_id}/whatsapp       (WhatsApp Phase 1, alert.configure; sends nothing)
  *   GET /api/v1/sites/{site_id}/analytics/catalog       (Analytics v1, ADR-022)
  *   GET /api/v1/sites/{site_id}/analytics/series        (Analytics v1, ADR-022)
  *   GET  /api/v1/sites/{site_id}/report-exports/estimate (Reports tab)
@@ -98,6 +100,8 @@ import type {
   AlertRuleInput,
   AlertRuleParametersResponse,
   AlertRulesResponse,
+  AlertWhatsAppConfig,
+  AlertWhatsAppConfigInput,
   AlertState,
   AssetCurrentDemandResponse,
   AssetDemandSeriesResponse,
@@ -410,6 +414,19 @@ export function setAlertRuleEnabled(ruleId: string, enabled: boolean): Promise<A
 
 export function deleteAlertRule(ruleId: string): Promise<void> {
   return apiWrite<void>("DELETE", `/alert-rules/${encodeURIComponent(ruleId)}`);
+}
+
+/** WhatsApp Phase 1 (configuration only; messages are not sent yet). alert.configure. */
+export function getAlertRuleWhatsApp(ruleId: string, init?: RequestInit): Promise<AlertWhatsAppConfig> {
+  return apiGet<AlertWhatsAppConfig>(`/alert-rules/${encodeURIComponent(ruleId)}/whatsapp`, undefined, {
+    cache: "no-store",
+    ...init,
+  });
+}
+
+/** Replace-all save; never changes the rule or its alerts. */
+export function saveAlertRuleWhatsApp(ruleId: string, input: AlertWhatsAppConfigInput): Promise<AlertWhatsAppConfig> {
+  return apiWrite<AlertWhatsAppConfig>("PUT", `/alert-rules/${encodeURIComponent(ruleId)}/whatsapp`, input);
 }
 
 // ---- Analytics v1 (ADR-022) -------------------------------------------------
