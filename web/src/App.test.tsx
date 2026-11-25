@@ -267,6 +267,49 @@ describe("application shell -- foundation routing, auth and tenant context", () 
     expect(screen.getByText(/not implemented yet/i)).toBeInTheDocument();
   });
 
+  it.each([
+    ["/features/single-line-diagram", "Single Line Diagram", [["Asset View", "/asset-view"], ["Main Dashboard", "/dashboard"]]],
+    ["/features/settings", "Settings", [["Change password", "/account/password"]]],
+  ])("%s opens a plain Coming Soon page with links to what exists today", async (path, title, links) => {
+    renderWithProviders(<AppRoutes />, {
+      session: () => Promise.resolve(ADMIN_USER),
+      sites: () => Promise.resolve(SITES_ONE),
+      initialEntries: [path],
+    });
+    const page = await screen.findByTestId("page-coming-soon");
+    expect(within(page).getByRole("heading", { level: 1 })).toHaveTextContent(`${title} Coming soon`);
+    expect(page).toHaveTextContent("This area is not available yet.");
+    for (const [label, to] of links) {
+      expect(within(page).getByRole("link", { name: label })).toHaveAttribute("href", to);
+    }
+    expect(screen.queryByTestId("page-placeholder")).not.toBeInTheDocument();
+    expect(page.textContent).not.toMatch(/phase|foundation shell|not implemented/i);
+  });
+
+  it("marks exactly the not-yet-built primary items as Soon, and the nav item opens its Coming Soon page", async () => {
+    renderWithProviders(<AppRoutes />, {
+      session: () => Promise.resolve(ADMIN_USER),
+      sites: () => Promise.resolve(SITES_ONE),
+      initialEntries: ["/features/anything"],
+    });
+    await screen.findByTestId("page-placeholder");
+    expect(screen.getByTestId("shell-nav-single-line-diagram-soon")).toHaveTextContent("Soon");
+    expect(screen.getByTestId("shell-nav-settings-soon")).toHaveTextContent("Soon");
+    expect(document.querySelectorAll(".app-shell__nav-soon")).toHaveLength(2);
+    fireEvent.click(screen.getByTestId("shell-nav-settings"));
+    expect(await screen.findByTestId("page-coming-soon")).toHaveTextContent("Settings");
+  });
+
+  it("a Coming Soon page keeps the shell's dashboard.view gate", async () => {
+    renderWithProviders(<AppRoutes />, {
+      session: () => Promise.resolve(NO_SHELL_USER),
+      sites: () => Promise.resolve(SITES_ONE),
+      initialEntries: ["/features/settings"],
+    });
+    await waitFor(() => expect(screen.getByTestId("page-forbidden")).toBeInTheDocument());
+    expect(screen.queryByTestId("page-coming-soon")).not.toBeInTheDocument();
+  });
+
   it("an unknown route renders Not found inside the shell", async () => {
     renderWithProviders(<AppRoutes />, {
       session: () => Promise.resolve(ADMIN_USER),

@@ -260,6 +260,18 @@ a { color: var(--ww-teal-600); }
   display: inline-flex; align-items: center; justify-content: center;
 }
 
+.app-shell__nav-soon {
+  font-size: 10px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase;
+  padding: 1px 6px; border-radius: 999px; border: 1px solid rgba(255, 255, 255, 0.35); color: rgba(255, 255, 255, 0.75);
+}
+.app-shell--collapsed .app-shell__nav-soon { display: none; }
+.coming-soon-tag {
+  display: inline-block; margin-left: 8px; padding: 2px 10px; border-radius: 999px; vertical-align: middle;
+  background: #eef2f7; color: var(--muted); font-size: 13px; font-weight: 600;
+}
+.coming-soon__note { color: var(--muted); }
+.coming-soon__links { padding-left: 18px; }
+
 .app-shell__archive-wrapper { margin-top: auto; padding: 10px; border-top: 1px solid rgba(255, 255, 255, 0.12); }
 .app-shell__archive summary {
   cursor: pointer; list-style: none; display: flex; align-items: center; gap: 10px;

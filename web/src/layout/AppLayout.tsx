@@ -615,6 +615,11 @@ function AppShell({ children }: { children: ReactNode }) {
                       </span>
                     ) : null}
                     {item.key === "shell-reports" ? <ReportsNavBadge /> : null}
+                    {item.comingSoon ? (
+                      <span className="app-shell__nav-soon" data-testid={`shell-nav-${item.key}-soon`}>
+                        Soon
+                      </span>
+                    ) : null}
                   </NavLink>
                 </li>
               ))}
