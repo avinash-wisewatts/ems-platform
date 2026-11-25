@@ -105,6 +105,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useTenant } from "../../tenant/TenantProvider";
+import { useSession } from "../../auth/SessionProvider";
+import { hasPermission } from "../../auth/permissions";
+import { ActiveAlertsCard } from "../alerts/ActiveAlertsCard";
 import {
   getSiteCurrentDemand,
   getSiteDemandSeries,
@@ -402,6 +405,7 @@ function LastDataUpdate({ freshness, onRetry }: { freshness: FreshnessSection; o
 
 export function MainDashboard() {
   const { selectedSite, sites } = useTenant();
+  const { user } = useSession();
 
   const [ytd, setYtd] = useState<EnergyWindowSection>(ENERGY_WINDOW_INITIAL);
   const [ytdNonce, setYtdNonce] = useState(0);
@@ -801,6 +805,13 @@ export function MainDashboard() {
           <LastDataUpdate freshness={freshness} onRetry={() => setFreshnessNonce((n) => n + 1)} />
         </div>
       </header>
+
+      <ActiveAlertsCard
+        key={selectedSite.site_id}
+        siteId={selectedSite.site_id}
+        timeZone={selectedSite.timezone}
+        canAcknowledge={hasPermission(user, "alert.acknowledge")}
+      />
 
       <section className="dashboard-kpis">
         <article className="kpi-card" data-testid="kpi-energy-ytd">

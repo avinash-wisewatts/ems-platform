@@ -4,7 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { vi } from "vitest";
 import { SessionProvider } from "./auth/SessionProvider";
 import { TenantProvider } from "./tenant/TenantProvider";
-import type { CurrentUser, SitesResponse } from "./api/types";
+import type { Alert, CurrentUser, SitesResponse } from "./api/types";
 
 export const ADMIN_USER: CurrentUser = {
   portal_user_id: 1,
@@ -148,4 +148,32 @@ export function stubFetch(
   });
   vi.stubGlobal("fetch", mock);
   return mock;
+}
+
+/** An ACTIVE rule-based alert (ADR-024) for card/list tests. Fictional data. */
+export function activeAlertFixture(overrides: Partial<Alert> = {}): Alert {
+  return {
+    alert_id: "77777777-7777-4777-8777-777777777777",
+    site_id: SITES_ONE.sites[0]!.site_id,
+    rule_id: "55555555-5555-4555-8555-555555555555",
+    rule_name: "Chiller overload",
+    rule_deleted: false,
+    asset: { asset_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", name: "Chiller 1" },
+    parameter: { code: "ACTIVE_POWER", name: "Active Power", qualifier: "TOTAL", unit: "kW" },
+    condition: { comparator: "GT", threshold: 50, tolerance: null, comparison_mode: "FIXED" },
+    state: "ACTIVE",
+    triggered_at: "2026-11-18T06:00:00Z",
+    trigger_value: 61,
+    latest_value: 63,
+    latest_value_at: "2026-11-18T06:10:00Z",
+    data_unavailable: false,
+    resolved_at: null,
+    resolved_value: null,
+    ended_at: null,
+    ended_reason_code: null,
+    acknowledgement: null,
+    previous_occurrence_count: 0,
+    most_recent_previous_occurrence_at: null,
+    ...overrides,
+  };
 }
