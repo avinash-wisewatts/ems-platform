@@ -8,7 +8,12 @@ const RULE_ID = "55555555-5555-4555-8555-555555555555";
 const R1 = "99999999-9999-4999-8999-999999999991";
 const P0 = "+12025550100";
 const P1 = "+12025550101";
-const WORDING = { version: "TEST-1", text: "Test-only wording: this person agreed to WhatsApp alert messages." };
+const BUSINESS = "Fictional Hotels Pvt Ltd"; // fictional customer legal name (R9)
+const WORDING = {
+  version: "TEST-1",
+  text: `Test-only wording: this person agreed to WhatsApp alert messages from ${BUSINESS}.`,
+  business_name: BUSINESS,
+};
 
 function recipient(id: string, phone: string) {
   return {
@@ -99,6 +104,7 @@ describe("AlertWhatsAppPanel (WhatsApp Phase 1)", () => {
       enabled: true,
       revision: 0,
       consent_statement_version: "TEST-1",
+      consent_business_name: BUSINESS,
       recipients: [{ recipient_id: null, phone: P0, opt_in_confirmed: true }],
     });
     expect((await screen.findByTestId("whatsapp-status")).textContent).toBe("WhatsApp settings saved.");
@@ -129,6 +135,7 @@ describe("AlertWhatsAppPanel (WhatsApp Phase 1)", () => {
       enabled: true,
       revision: 4,
       consent_statement_version: "TEST-1",
+      consent_business_name: BUSINESS,
       recipients: [{ recipient_id: R1, phone: P1, opt_in_confirmed: true }],
     });
   });
@@ -168,6 +175,27 @@ describe("AlertWhatsAppPanel (WhatsApp Phase 1)", () => {
     expect(screen.queryByTestId("whatsapp-add")).toBeNull();
     expect(screen.getByTestId("whatsapp-edit-0")).toBeDisabled();
     expect(screen.getByTestId("whatsapp-remove-0")).not.toBeDisabled(); // removing needs no consent
+  });
+
+  it("explains a missing legal business name and blocks new numbers (R9)", async () => {
+    api(config({ enabled: true, revision: 1, consent_statement: null, consent_unavailable_reason: "business_name_missing" }));
+    await panel();
+    expect(screen.getByTestId("whatsapp-no-wording").textContent).toContain("legal business name is not recorded");
+    expect(screen.queryByTestId("whatsapp-add")).toBeNull();
+  });
+
+  it("keeps new numbers closed while the wording awaits Legal review", async () => {
+    api(config({ enabled: true, revision: 1, consent_statement: null, consent_unavailable_reason: "legal_review_pending" }));
+    await panel();
+    expect(screen.getByTestId("whatsapp-no-wording").textContent).toContain("awaiting Legal review");
+    expect(screen.queryByTestId("whatsapp-add")).toBeNull();
+  });
+
+  it("shows the wording naming the customer business next to a new number", async () => {
+    api(config({ enabled: true, revision: 1 }));
+    await panel();
+    addNumber("+1", "2025550101");
+    expect(screen.getByTestId("whatsapp-consent-text-0").textContent).toContain(BUSINESS);
   });
 
   it("stops at ten numbers", async () => {

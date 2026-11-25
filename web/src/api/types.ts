@@ -561,7 +561,14 @@ export type AlertWhatsAppRecipient = {
   recipient_id: string;
   phone_e164: string;
   phone_masked: string;
-  consent: { state: "CONFIRMED" | "OPTED_OUT"; confirmed_at: string; confirmed_by_name: string; statement_version: string };
+  consent: {
+    state: "CONFIRMED" | "OPTED_OUT";
+    confirmed_at: string;
+    confirmed_by_name: string;
+    statement_version: string;
+    /** The business named in the confirmed wording (R9). */
+    business_name?: string | null;
+  };
 };
 
 export type AlertWhatsAppConfig = {
@@ -571,8 +578,10 @@ export type AlertWhatsAppConfig = {
   messages_active: false;
   max_recipients: number;
   recipients: AlertWhatsAppRecipient[];
-  /** The Product-approved opt-in wording to show for a new number; null while none is approved. */
-  consent_statement: { version: string; text: string } | null;
+  /** The Product-approved opt-in wording, naming the customer business (R9), to show for a new number. */
+  consent_statement: { version: string; text: string; business_name: string } | null;
+  /** Why consent_statement is null: no approved wording, Legal review pending, or no legal business name. */
+  consent_unavailable_reason?: "statement_missing" | "legal_review_pending" | "business_name_missing" | null;
 };
 
 export type AlertWhatsAppRecipientInput = {
@@ -586,6 +595,8 @@ export type AlertWhatsAppConfigInput = {
   revision: number;
   recipients: AlertWhatsAppRecipientInput[];
   consent_statement_version: string | null;
+  /** The business name in the wording the administrator was shown (R9). */
+  consent_business_name: string | null;
 };
 
 // ---- Analytics v1 (ADR-022) -------------------------------------------------
