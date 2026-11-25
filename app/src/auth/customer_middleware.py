@@ -46,6 +46,10 @@ from src.config import CoreSettings
 logger = logging.getLogger(__name__)
 
 PUBLIC_PATHS = frozenset({"/health", "/auth/login", "/auth/session", "/auth/logout"})
+# Provider callbacks authenticated by their own HMAC signature (checked in the
+# route, src/routers/whatsapp_webhook.py): no session and no Origin header, so
+# exempt from the same-origin rule and the session gate -- exactly these paths.
+SIGNED_WEBHOOK_PATHS = frozenset({"/api/v1/webhooks/whatsapp"})
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 
@@ -80,6 +84,10 @@ class CustomerAuthenticationMiddleware:
 
         path = scope.get("path", "/")
         method = scope.get("method", "GET").upper()
+
+        if path in SIGNED_WEBHOOK_PATHS and method in {"GET", "POST"}:
+            await self.app(scope, receive, send)
+            return
 
         if method not in SAFE_METHODS and not self._same_origin(Headers(scope=scope)):
             await self._json_error(send, 403, "forbidden", "Cross-origin request refused.")

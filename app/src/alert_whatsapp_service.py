@@ -335,3 +335,50 @@ async def fetch_summaries(portal_user_id: int, site_id: UUID) -> dict[UUID, What
         r["rule_id"]: WhatsAppRuleSummary(enabled=bool(r["enabled"]), recipient_count=int(r["recipient_count"]))
         for r in rows
     }
+
+
+# --- Delivery history (migration 333, ADR-026 Phase 2) -----------------------------------
+
+DeliveryStatus = Literal["PENDING", "SUBMITTED", "SENT", "DELIVERED", "FAILED", "SUPPRESSED"]
+
+
+class WhatsAppDeliveryOut(BaseModel):
+    """One message attempt to one recipient for one alert occurrence. The
+    number is masked ("•••• 0123"); the full number is never returned here."""
+
+    delivery_id: UUID
+    alert_id: UUID
+    recipient_id: UUID
+    phone_masked: str
+    status: DeliveryStatus
+    status_reason: str | None = None
+    attempts: int
+    last_error_code: str | None = None
+    created_at: datetime
+    submitted_at: datetime | None = None
+    sent_at: datetime | None = None
+    delivered_at: datetime | None = None
+    read_at: datetime | None = None
+    failed_at: datetime | None = None
+
+
+class WhatsAppDeliveriesOut(BaseModel):
+    rule_id: UUID
+    deliveries: list[WhatsAppDeliveryOut]
+
+
+async def fetch_deliveries(portal_user_id: int, rule_id: UUID, limit: int = 50) -> WhatsAppDeliveriesOut:
+    rows = await _execute(
+        "SELECT * FROM analytics.get_portal_alert_rule_whatsapp_deliveries(%s, %s, %s)",
+        (portal_user_id, rule_id, limit),
+        commit=False,
+    )
+    if not rows:
+        return WhatsAppDeliveriesOut(rule_id=rule_id, deliveries=[])
+    if rows[0]["result"] != "ok":
+        raise WhatsAppConfigError(rows[0]["result"])
+    return WhatsAppDeliveriesOut(
+        rule_id=rule_id,
+        deliveries=[WhatsAppDeliveryOut(**{k: v for k, v in r.items() if k != "result"}) for r in rows if r["delivery_id"]],
+    )
+

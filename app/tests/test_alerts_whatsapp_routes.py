@@ -359,7 +359,60 @@ async def test_database_errors_are_logged_without_detail_or_cause(monkeypatch, c
 
 
 def test_the_router_exposes_no_other_whatsapp_route(portal_app) -> None:
-    """Phase 1 has no send, test-send, delivery or receipt route (D12)."""
+    """No send or test-send route on the portal (D12). Phase 2 adds only the
+    read-only, masked delivery history; the receipt webhook is served by the
+    customer API alone (test_customer_api)."""
     paths = {getattr(r, "path", "") for r in portal_app.routes}
     whatsapp = {p for p in paths if "whatsapp" in p.lower()}
-    assert whatsapp == {"/api/v1/alert-rules/{rule_id}/whatsapp"}
+    assert whatsapp == {"/api/v1/alert-rules/{rule_id}/whatsapp", "/api/v1/alert-rules/{rule_id}/whatsapp/deliveries"}
+
+
+# --- delivery history (migration 333) ---------------------------------------------------
+
+DELIVERIES = PATH + "/deliveries"
+DELIVERY_ROW = {
+    "result": "ok", "delivery_id": "aaaaaaaa-0000-4000-8000-000000000001", "alert_id": "bbbbbbbb-0000-4000-8000-000000000001",
+    "recipient_id": RECIPIENT, "phone_masked": "•••• 0100", "status": "DELIVERED", "status_reason": None, "attempts": 1,
+    "last_error_code": None, "created_at": T0, "submitted_at": T0, "sent_at": T0, "delivered_at": T0, "read_at": None,
+    "failed_at": None,
+}
+
+
+class FakeDeliveriesDb:
+    def __init__(self, rows):
+        self.rows = rows
+        self.calls: list[tuple] = []
+
+    async def execute(self, sql, params, *, commit):
+        assert "get_portal_alert_rule_whatsapp_deliveries" in sql
+        self.calls.append((params, commit))
+        return self.rows
+
+
+@pytest.mark.parametrize("role,scope", [("OPERATOR", "ORGANIZATION"), ("VIEWER", "ORGANIZATION"), ("VIEWER", "GLOBAL")])
+def test_delivery_history_is_for_configurers_only(portal_client, monkeypatch, data, role, scope) -> None:
+    fake = FakeDeliveriesDb([DELIVERY_ROW])
+    monkeypatch.setattr(f"{SERVICE}._execute", fake.execute)
+    _login(portal_client, monkeypatch, role=role, scope=scope)
+    assert portal_client.get(DELIVERIES).status_code == 403
+    assert fake.calls == []
+
+
+def test_delivery_history_is_masked_and_read_only(portal_client, monkeypatch, data) -> None:
+    fake = FakeDeliveriesDb([DELIVERY_ROW])
+    monkeypatch.setattr(f"{SERVICE}._execute", fake.execute)
+    _login(portal_client, monkeypatch, role="ADMIN", scope="ORGANIZATION", uid=902)
+    response = portal_client.get(DELIVERIES, params={"limit": 20})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["deliveries"][0]["phone_masked"] == "•••• 0100" and payload["deliveries"][0]["status"] == "DELIVERED"
+    assert fake.calls == [((902, UUID(RULE_ID), 20), False)]
+    _no_numbers(response.text.replace("•••• 0100", ""))
+
+
+@pytest.mark.parametrize("code,status", [("not_found", 404), ("forbidden", 403)])
+def test_delivery_history_refusals(portal_client, monkeypatch, data, code, status) -> None:
+    fake = FakeDeliveriesDb([dict({k: None for k in DELIVERY_ROW}, result=code)])
+    monkeypatch.setattr(f"{SERVICE}._execute", fake.execute)
+    _login(portal_client, monkeypatch, role="ADMIN", scope="ORGANIZATION")
+    assert portal_client.get(DELIVERIES).status_code == status

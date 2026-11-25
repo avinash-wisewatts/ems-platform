@@ -13,6 +13,7 @@ Resolved/Ended history and acknowledgement, under /api/v1.
     DELETE /api/v1/alert-rules/{rule_id}                         alert.configure
     GET    /api/v1/alert-rules/{rule_id}/whatsapp                alert.configure
     PUT    /api/v1/alert-rules/{rule_id}/whatsapp                alert.configure
+    GET    /api/v1/alert-rules/{rule_id}/whatsapp/deliveries     alert.configure (masked numbers)
 
 Mounted in both the customer API (src.customer_main) and the Administration
 App process (src.main), like the Analytics router. Reads need the session's
@@ -80,7 +81,9 @@ from src.alert_whatsapp_service import (
     WhatsAppConfigError,
     WhatsAppConfigIn,
     WhatsAppConfigOut,
+    WhatsAppDeliveriesOut,
     fetch_config,
+    fetch_deliveries,
     fetch_summaries,
     save_config,
 )
@@ -476,3 +479,21 @@ async def put_rule_whatsapp(request: Request, rule_id: UUID, body: WhatsAppConfi
         return await fetch_config(user.portal_user_id, rule_id)
     except WhatsAppConfigError as exc:
         raise _whatsapp_error(exc)
+
+
+@router.get(
+    "/alert-rules/{rule_id}/whatsapp/deliveries",
+    response_model=WhatsAppDeliveriesOut,
+    summary="A rule's WhatsApp delivery history, newest first, with masked numbers (alert.configure only)",
+    operation_id="getAlertRuleWhatsAppDeliveries",
+    responses=_WHATSAPP_RESPONSES,
+)
+async def get_rule_whatsapp_deliveries(
+    request: Request, rule_id: UUID, limit: int = Query(50, ge=1, le=200)
+) -> WhatsAppDeliveriesOut:
+    user = _require(request, PortalPermission.ALERT_CONFIGURE)
+    try:
+        return await fetch_deliveries(user.portal_user_id, rule_id, limit)
+    except WhatsAppConfigError as exc:
+        raise _whatsapp_error(exc)
+
