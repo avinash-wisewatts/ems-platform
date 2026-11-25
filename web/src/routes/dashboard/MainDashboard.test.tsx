@@ -3,7 +3,7 @@ import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MainDashboard } from "./MainDashboard";
 import { useTenant } from "../../tenant/TenantProvider";
-import { renderWithProviders, stubFetch, SITES_TWO_ORGS } from "../../test-utils";
+import { activeAlertFixture, renderWithProviders, stubFetch, SITES_TWO_ORGS } from "../../test-utils";
 import { resolveEnergyUsageRequestRange } from "./energyUsage";
 import type {
   CurrentDemandResponse,
@@ -75,10 +75,15 @@ function stubDashboard(
     availability?: SiteEnergyAvailabilityResponse;
     energyUsage?: EnergyUsageStub | EnergyUsageStub[];
     demandCurrent?: Partial<CurrentDemandResponse>;
+    /** Active alerts for the Active Alerts card; omitted -> 404 as before. */
+    activeAlerts?: unknown[];
   } = {},
 ) {
   const energyUsageStubs = opts.energyUsage ? ([] as EnergyUsageStub[]).concat(opts.energyUsage) : [];
   return stubFetch((url) => {
+    if (opts.activeAlerts && url.includes(`/api/v1/sites/${siteId}/alerts`)) {
+      return { jsonBody: { site_id: siteId, alerts: opts.activeAlerts, next_before: null } };
+    }
     if (url.includes(`/api/v1/sites/${siteId}/energy/consumption/availability`)) {
       return { jsonBody: opts.availability ?? availabilityResponse(siteId) };
     }
@@ -628,5 +633,28 @@ describe("MainDashboard -- Energy Usage chart", () => {
       ).toBe(true),
     );
     await waitFor(() => expect(screen.getByTestId("energy-usage-from")).toHaveValue("2026-09-19"));
+  });
+});
+
+describe("MainDashboard -- Active Alerts (ADR-024)", () => {
+  it("shows the site's active rule-based alerts below the header, before the energy KPIs", async () => {
+    stubDashboard(ALPHA_ONE.site_id, {
+      activeAlerts: [activeAlertFixture({ site_id: ALPHA_ONE.site_id, rule_name: "Chiller overload" })],
+    });
+    renderWithProviders(<DashboardHarness />, { sites: () => Promise.resolve(SITES_TWO_ORGS) });
+    await pickAlpha();
+    const card = await screen.findByTestId("active-alerts-card");
+    expect(await screen.findByTestId("active-alerts-table")).toHaveTextContent("Chiller overload");
+    expect(card).toHaveTextContent("Chiller 1");
+    const kpis = document.querySelector(".dashboard-kpis")!;
+    expect(card.compareDocumentPosition(kpis) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("keeps the rest of the dashboard working when active alerts cannot be read", async () => {
+    stubDashboard(ALPHA_ONE.site_id);
+    renderWithProviders(<DashboardHarness />, { sites: () => Promise.resolve(SITES_TWO_ORGS) });
+    await pickAlpha();
+    expect(await screen.findByTestId("active-alerts-error")).toBeInTheDocument();
+    expect(screen.getByTestId("energy-usage")).toBeInTheDocument();
   });
 });

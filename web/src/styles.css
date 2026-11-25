@@ -996,6 +996,7 @@ summary.analytics-dq__heading { cursor: pointer; }
 .alerts-status--active { background: #fee2e2; color: var(--invalid); }
 .alerts-status--resolved { background: #dcfce7; color: var(--good); }
 .alerts-status--ended { background: #eef2f7; color: var(--muted); }
+.active-alerts-card__count { display: inline-block; margin-left: 8px; min-width: 22px; padding: 1px 7px; border-radius: 999px; background: #fee2e2; color: var(--invalid); font-size: 13px; font-weight: 600; text-align: center; vertical-align: middle; }
 .alerts-badge { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 999px; background: #e0ecff; color: var(--estimated); font-size: 11px; font-weight: 500; }
 /* WhatsApp Phase 1 (configuration only) */
 .alerts-badge--whatsapp { background: #e7f6ec; color: #1f6f3f; }

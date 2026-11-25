@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AssetView } from "./AssetView";
-import { renderWithProviders, stubFetch, SITES_ONE } from "../../test-utils";
+import { activeAlertFixture, renderWithProviders, stubFetch, SITES_ONE } from "../../test-utils";
 import type {
   AssetCurrentDemandResponse,
   AssetDemandSeriesResponse,
@@ -211,6 +211,8 @@ type FetchOpts = {
   demandCurrent?: AssetCurrentDemandResponse | "error";
   demandSeries?: AssetDemandSeriesResponse | "error";
   powerTrend?: AssetPowerTrendResponse | "error";
+  /** Active alerts for the Active Alerts card; omitted -> 404 as before. */
+  activeAlerts?: unknown[];
 };
 
 function stubAssetViewFetch(opts: FetchOpts = {}) {
@@ -218,6 +220,9 @@ function stubAssetViewFetch(opts: FetchOpts = {}) {
   const energy = opts.energy ?? emptyEnergyResponse();
   const powerTrend = opts.powerTrend ?? emptyPowerTrend();
   return stubFetch((url) => {
+    if (opts.activeAlerts && url.includes(`/sites/${SITE_ID}/alerts`)) {
+      return { jsonBody: { site_id: SITE_ID, alerts: opts.activeAlerts, next_before: null } };
+    }
     if (url.includes("/live-state")) {
       if (opts.live === "error") return { status: 500, jsonBody: { error: "internal", detail: "boom" } };
       const body = typeof opts.live === "function" ? opts.live() : (opts.live ?? liveState([]));
@@ -1045,5 +1050,25 @@ describe("AssetView", () => {
     expect(within(liveTile).getByTestId("state-error")).toBeTruthy();
     // Energy did not fail, and still renders normally.
     expect(screen.getByTestId("asset-energy-tile")).not.toHaveTextContent("Try again");
+  });
+});
+
+describe("AssetView -- Active Alerts for the selected asset (ADR-024)", () => {
+  it("shows nothing before an asset is selected, then only that asset's active alerts", async () => {
+    stubAssetViewFetch({
+      assets: [asset(), otherAsset()],
+      activeAlerts: [
+        activeAlertFixture({ alert_id: "77777777-7777-4777-8777-000000000001", rule_name: "This asset", asset: { asset_id: ASSET_ID, name: "Main Incomer" } }),
+        activeAlertFixture({ alert_id: "77777777-7777-4777-8777-000000000002", rule_name: "Other asset", asset: { asset_id: OTHER_ASSET_ID, name: "AHU 2" } }),
+      ],
+    });
+    renderWithProviders(<AssetView />, { sites: () => Promise.resolve(SITES_ONE) });
+    await waitFor(() => expect(screen.getByTestId("filter-asset")).not.toBeDisabled());
+    expect(screen.queryByTestId("active-alerts-card")).toBeNull();
+
+    await selectAsset(ASSET_ID);
+    const table = await screen.findByTestId("active-alerts-table");
+    expect(within(table).getByText("This asset")).toBeInTheDocument();
+    expect(within(table).queryByText("Other asset")).toBeNull();
   });
 });

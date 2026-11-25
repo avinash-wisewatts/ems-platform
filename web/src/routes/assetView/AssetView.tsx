@@ -57,6 +57,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useTenant } from "../../tenant/TenantProvider";
+import { useSession } from "../../auth/SessionProvider";
+import { hasPermission } from "../../auth/permissions";
+import { ActiveAlertsCard } from "../alerts/ActiveAlertsCard";
 import {
   getAssetCurrentDemand,
   getAssetDemandSeries,
@@ -311,6 +314,7 @@ function DemandTile({
 
 export function AssetView() {
   const { selectedSite } = useTenant();
+  const { user } = useSession();
 
   const [assetsStatus, setAssetsStatus] = useState<LoadStatus>("loading");
   const [assetsError, setAssetsError] = useState<unknown>(null);
@@ -760,6 +764,15 @@ export function AssetView() {
           placeholders. */}
       {hasAsset ? (
         <>
+          {selectedSite ? (
+            <ActiveAlertsCard
+              key={`${selectedSite.site_id}:${selectedAssetId}`}
+              siteId={selectedSite.site_id}
+              timeZone={selectedSite.timezone}
+              canAcknowledge={hasPermission(user, "alert.acknowledge")}
+              assetId={selectedAssetId}
+            />
+          ) : null}
           {/* How is it performing? + What is happening now? -- Energy and
               Demand (stronger visual weight via kpi-card--primary) and the
               individual electrical parameters share one row/grid now that
