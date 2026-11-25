@@ -16,10 +16,11 @@ Owner: Product + Engineering. Last reviewed: 2026-11-23.
 | [prd-draft-0.1.md](prd-draft-0.1.md) | The Product Owner's PRD, verbatim — the source record. |
 | [prd-draft-0.1-addendum-2026-11-23.md](prd-draft-0.1-addendum-2026-11-23.md) | Dated clarifications: where the PRD is out of date or superseded by D1–D21. |
 | This README | Decisions, assumptions, open legal/provider questions, dependencies, approval gates, the conflict review. |
-| [phase-1-plan.md](phase-1-plan.md) | Phase 1 plan — staging-only configuration; sends nothing. Not authorised. |
-| [phase-1-approval-package.md](phase-1-approval-package.md) | Phase 1 approval package: readiness, approval checklist, final scope, requirement IDs, effort, risks. Ready for an implementation approval **request** (owner documentation review Approved 2026-11-24); nothing is approved for implementation. |
+| [phase-1-plan.md](phase-1-plan.md) | Phase 1 plan — staging-only configuration; sends nothing. Implemented and on staging 2026-11-24 (migration 331); §10 records the as-built deviations. |
+| [phase-1-approval-package.md](phase-1-approval-package.md) | Phase 1 approval package: readiness, approval checklist, final scope, requirement IDs, effort, risks. Implementation approved and on staging 2026-11-24; the opt-in wording approved 2026-11-24 (migration 332 pending). |
 | [doc-review-checklist.md](doc-review-checklist.md) | Documentation review checklist and review record for PR #186. |
-| [consent-wording-register.md](consent-wording-register.md) | Register of approved opt-in wording versions (R6: in Phase 1 scope, Product Owner 2026-11-23; Legal sufficiency open, L-1). Empty: no wording is approved, so new opt-ins are refused until an approved version exists (D21). |
+| [consent-wording-register.md](consent-wording-register.md) | Register of approved opt-in wording versions (R6). `WA-OPTIN-1` approved by the Product Owner 2026-11-24 with R9 (customer business named), subject to Legal review (L-1); loaded by migration 332, not yet deployed. |
+| [legal-review-package.md](legal-review-package.md) | Legal review package (2026-11-24): the system as built, the R9/D21 decisions, and the open consent, privacy, audit and retention questions (L-1 to L-3, R10, R12). Review not started. |
 | [review-2026-11-23.md](review-2026-11-23.md) | PR #186 review record: findings B1–B3, R1–R12, I1–I5; status of the outstanding reviews; provider desk research. |
 | [ADR-026](../../../00-governance/decisions/ADR-026-whatsapp-alert-notifications.md) | Proposed architecture decision. |
 
@@ -82,7 +83,22 @@ The design keeps **three separate concepts** (D6):
 | D18 | Q-5 | **Per-site message cap:** deferred to Phase 2 design. |
 | D19 | Q-6 | **Consent and audit:** whether administrator opt-in confirmation is legally sufficient, and what the audit log may contain and for how long, stay **open for privacy/legal review**. **Compliance is not assumed.** See L-1 and L-2. |
 | D20 | Q-7 | **Legacy checkbox:** the old "Coming Soon" WhatsApp checkbox is **removed in Phase 1**, subject to the migration 331 safeguard ([phase-1-plan.md §3.3](phase-1-plan.md)) and the regression tests (phase-1-plan.md §7.2). |
-| D21 | Opt-in wording | WiseWatts Product **defines and approves the exact opt-in confirmation wording before it is used**. The Phase 1 UI cannot ship to staging without it. |
+| D21 | Opt-in wording | WiseWatts Product **defines and approves the exact opt-in confirmation wording before it is used**. The Phase 1 UI cannot ship to staging without it. **Wording approved 2026-11-24** (version `WA-OPTIN-1`, §2.3), subject to Legal review. |
+
+### 2.3 Decisions recorded 2026-11-24 (Product Owner): R9 and the D21 wording
+
+| ID | Decision | Conditions | Implemented by |
+|---|---|---|---|
+| R9 | **The customer business is the alert originator; WiseWatts is the technology and delivery platform.** The opt-in wording names the customer by its **approved legal or trading name**. | The name comes from the customer organisation's recorded legal name (`metadata.organizations.legal_name`). Where none is recorded, new opt-ins are refused (`whatsapp_business_name_missing`), not shown with another name. The exact name shown is stored with each consent. | Migration 332 |
+| D21 (wording) | **The administrator confirmation wording `WA-OPTIN-1` is approved, subject to Legal review** (L-1). Text: [consent-wording-register.md](consent-wording-register.md). | **Explicit individual recipient consent remains mandatory**: one confirmation per new or changed number. **Operational notifications only; no marketing messages.** Product approval is not Legal sign-off: legal sufficiency (L-1), audit content (L-2) and deletion (L-3) stay open ([legal-review-package.md](legal-review-package.md)). | Migration 332 |
+
+**Opt-ins stay closed until Legal approves `WA-OPTIN-1`** (Product Owner,
+2026-11-24). Migration 332 loads the wording marked Legal review `PENDING`, and new
+opt-ins are refused while it is (`whatsapp_consent_legal_review_pending`).
+Opening them is a separate, separately approved migration that records
+Legal's approval.
+
+Neither decision enables sending: Phase 1 still sends nothing (`messages_active` is always false), and only WiseWatts-controlled test numbers may be entered on staging (D17).
 
 ## 3. Assumptions
 
@@ -145,8 +161,9 @@ content under STOP handling (R10).
 
 ## 4A. Review items R5–R12: owner decisions and open items
 
-Owner answers recorded 2026-11-23 for R5, R6, R7, R8 and R11. R9, R10 and
-R12 are **still open**; they are proposals, not decisions.
+Owner answers recorded 2026-11-23 for R5, R6, R7, R8 and R11, and on
+2026-11-24 for R9 (§2.3). R10 and R12 are **still open**; they are
+proposals, not decisions.
 The details are in [phase-1-plan.md §3.6](phase-1-plan.md) and
 [review-2026-11-23.md](review-2026-11-23.md).
 
@@ -156,7 +173,7 @@ The details are in [phase-1-plan.md §3.6](phase-1-plan.md) and
 | R6 | A versioned register of approved opt-in wording; each consent records its version | Product (wording), Legal (sufficiency) | **In Phase 1 scope** (Product Owner, 2026-11-23); Legal review of sufficiency open | Supply version 1 of the wording (D21) |
 | R7 | Keep configured numbers when WhatsApp is disabled; disabling stops sending; deletion is a separate, explicit action | Product, Legal | **Confirmed by Product 2026-11-23** (A-9); Legal may override (L-3) | Does Legal require deletion after a period of being disabled? |
 | R8 | Server-side, staging-only allow-list of WiseWatts test numbers | Product, Architecture | **Out of Phase 1 scope** (Product Owner, 2026-11-23); D17 stays procedural (P1-AC-15) | — |
-| R9 | Name the sending business in the opt-in wording | Product, Legal | **Open question** | WiseWatts or the customer site? |
+| R9 | Name the sending business in the opt-in wording | Product, Legal | **Decided 2026-11-24 (Product Owner)**: the customer business is the originator, named by its approved legal or trading name; WiseWatts is the technology and delivery platform (§2.3). Legal review of the wording continues (L-1) | — |
 | R10 | Phase 2 STOP handling keyword-only; no retention of message text beyond what is needed | Engineering design; Provider (P-3); Legal | Proposed (Phase 2) | Confirm minimal retention of inbound content |
 | R11 | Formal requirement IDs for the Phase 1 acceptance criteria | Product | **Allocated 2026-11-23**: `EMS-REQ-153`–`EMS-REQ-159` (Product Owner) | — |
 | R12 | No phone numbers, full or masked, in the permanent audit log until Legal approves; recipient ids instead | Legal | Proposed; reflected in the plan as the default | What may the audit log hold, and for how long (L-2)? |
@@ -179,8 +196,9 @@ documentation review only, not implementation.
   ([doc-review-checklist.md](doc-review-checklist.md) §3);
 - ~~explicit approval to implement Phase 1~~ — **done**: Product Owner,
   2026-11-24 (implementation only; see phase-1-plan §10);
-- D21: the opt-in wording approved by Product, before the UI ships to
-  staging;
+- ~~D21: the opt-in wording approved by Product, before the UI ships to
+  staging~~ — **done**: `WA-OPTIN-1` approved 2026-11-24 with R9, subject to
+  Legal review (§2.3); loaded by migration 332 (separately approved);
 - a new pinned code dependency, `phonenumbers`.
 
 **Within Phase 1, each separately approved:**
@@ -244,7 +262,7 @@ How to read the columns:
 | D15 (10 recipients) | ADR-026 D15, A7. None in ADR-024 Am. 2 | §1 item 3, §3.2, §3.5 | P1-AC-1, P1-AC-5; RG-2, RG-4; §7.1 (10 accepted, 11 refused); §7.4. `EMS-REQ-153` | — |
 | D17 (test numbers only on staging) | ADR-024 Am. 2 §2E; ADR-026 D17 | §1, §7.6 (R8 out of scope) | P1-AC-15 (procedural). `EMS-REQ-159` | Each staging test save needs separate approval (§5); no real customer numbers on any environment (plan §9) |
 | D20 (remove the legacy checkbox) | ADR-024 Am. 2 §2A; ADR-026 D20 | §3.3, §5 | P1-AC-9, P1-AC-11; §7.2; §7.4; §7.5 test changes. `EMS-REQ-157` | — |
-| D21 (Product approves the exact opt-in wording before use) | ADR-026 D21 and ADR-026 OQ (a Phase 1 gate). No ADR-024 Am. 2 section | §3.2, §3.6 R6, §5 (placeholder wording only), §8 Product | P1-AC-17; §7.1 R6 tests. `EMS-REQ-154`. **Product approval requirement:** an approval (approver and date) recorded in [consent-wording-register.md](consent-wording-register.md), and the [approval package](phase-1-approval-package.md) §2 "Before staging deployment" item. No wording is approved | Blocks staging deployment of the UI (§5). Depends on R9 (which business is named: Product + Legal). Product approval is not Legal sign-off (L-1) |
+| D21 (Product approves the exact opt-in wording before use) | ADR-026 D21 and ADR-026 OQ (a Phase 1 gate). No ADR-024 Am. 2 section | §3.2, §3.6 R6, §5 (placeholder wording only), §8 Product | P1-AC-17; §7.1 R6 tests. `EMS-REQ-154`. **Product approval requirement:** an approval (approver and date) recorded in [consent-wording-register.md](consent-wording-register.md), and the [approval package](phase-1-approval-package.md) §2 "Before staging deployment" item. **`WA-OPTIN-1` approved 2026-11-24** (Product Owner, with R9); migration 332; tests `test_alert_whatsapp_consent_wording_db.py` | R9 decided 2026-11-24 (§2.3). Product approval is not Legal sign-off (L-1); [legal-review-package.md](legal-review-package.md) |
 
 ### 5A.2 Legal and governance
 

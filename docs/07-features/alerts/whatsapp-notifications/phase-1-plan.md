@@ -473,3 +473,24 @@ tests (`test_alerts_whatsapp_routes.py`) and the web tests
 migration 323 `update_portal_alert_rule` makes RG-6 and RG-12 fail, so the
 matrix detects the regression it guards against.
 
+**Migration 332 (2026-11-24, R9 and D21 decided).** Loads the approved
+wording `WA-OPTIN-1` ([consent-wording-register.md](consent-wording-register.md)),
+marked Legal review `PENDING`. The Product Owner decided that opt-ins stay
+closed until Legal approves the wording, so the save refuses new consent
+under a version that is not Legal-approved
+(`whatsapp_consent_legal_review_pending`), and the read says why. Legal
+approval is recorded later by a separately approved migration.
+Because the wording names the customer business (R9), the register text
+holds `{business_name}` (required by a CHECK), and the read returns it
+filled in with the organisation's legal name. Each consent stores the exact
+name shown (`consent_business_name`). A save that adds a number must send
+back both the version and the business name shown; otherwise it is refused
+(`whatsapp_consent_statement_changed`). Without a legal name, new opt-ins are
+refused (`whatsapp_business_name_missing`), and the panel says why. The save
+function gains a seventh argument with a default, so an older caller that
+passes six arguments still resolves, but can only keep or remove numbers.
+Tests: `test_alert_whatsapp_consent_wording_db.py`. Rollback:
+`postgres/maintenance/332_alert_whatsapp_consent_wording_rollback.sql`,
+which must run before any 331 rollback (the 331 rollback now refuses
+otherwise).
+
