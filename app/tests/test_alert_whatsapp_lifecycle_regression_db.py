@@ -53,10 +53,14 @@ def _feed_value(scenario: str, minute: int) -> int:
 def m(world):
     cur, f = world["cur"], world["f"]
     admin, operator = world["u"]["admin"], world["u"]["operator"]
+    # Saves use the wording loaded by migration 332 (WA-OPTIN-1), which names
+    # the customer by its legal name (R9): a fictional one here.
+    cur.execute("UPDATE metadata.organizations SET legal_name = %s WHERE id = %s", (BUSINESS, world["org"]))
+    # Opt-ins need Legal approval of the wording: recorded here for the
+    # rolled-back test transaction only (on staging it stays PENDING).
     cur.execute(
-        "INSERT INTO analytics.alert_whatsapp_consent_statements (version, statement_text, approved_by_name, approved_at) "
-        "VALUES ('TEST-RG', 'Test-only wording.', 'Test', %s)",
-        (T0 - timedelta(days=1),),
+        "UPDATE analytics.alert_whatsapp_consent_statements SET legal_review_status = 'APPROVED', "
+        "legal_reviewed_by_name = 'Test Legal', legal_reviewed_at = clock_timestamp() WHERE version = 'WA-OPTIN-1'"
     )
     feeds, subjects, controls, assets = {}, {}, {}, {}
     for s in SCENARIOS:
@@ -137,10 +141,13 @@ def rule_audit_count(cur, rules) -> int:
     return cur.fetchone()[0]
 
 
+BUSINESS = "Fictional RG Hotels Pvt Ltd"
+
+
 def wa_save(cur, user, rule, enabled, recipients, revision) -> tuple:
     cur.execute(
-        "SELECT result, revision FROM analytics.save_portal_alert_rule_whatsapp(%s, %s, %s, %s, %s, 'TEST-RG')",
-        (user, rule, enabled, Jsonb(recipients), revision),
+        "SELECT result, revision FROM analytics.save_portal_alert_rule_whatsapp(%s, %s, %s, %s, %s, 'WA-OPTIN-1', %s)",
+        (user, rule, enabled, Jsonb(recipients), revision, BUSINESS),
     )
     return cur.fetchone()
 
@@ -348,8 +355,9 @@ def test_rg13_create_with_the_legacy_flag_stores_false_and_the_check_holds(world
 WHATSAPP_FUNCTIONS = [
     "analytics.get_portal_alert_rule_whatsapp(bigint, uuid)",
     "analytics.get_portal_alert_rule_whatsapp_summaries(bigint, uuid)",
-    "analytics.save_portal_alert_rule_whatsapp(bigint, uuid, boolean, jsonb, integer, text)",
+    "analytics.save_portal_alert_rule_whatsapp(bigint, uuid, boolean, jsonb, integer, text, text)",
     "analytics.alert_whatsapp_actor_is_automation(bigint)",
+    "analytics.alert_whatsapp_business_name(uuid)",
     "analytics.alert_whatsapp_current_statement_version()",
     "analytics.alert_whatsapp_audit_recipients(uuid)",
     "analytics.alert_rule_whatsapp_settings_scope_guard()",

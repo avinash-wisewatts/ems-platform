@@ -11,8 +11,11 @@
  *   server checks again and refuses everyone else (D16, R5).
  * - Up to 10 numbers (D15), entered with their country code. Each new or
  *   changed number needs the administrator to confirm the person opted in,
- *   next to the Product-approved wording the server returns (R6, D21). While
- *   no wording is approved, new numbers cannot be added at all.
+ *   next to the Product-approved wording the server returns (R6, D21),
+ *   which names the customer business (R9). The save sends back the version
+ *   and business name shown. While no wording is approved, or the customer's
+ *   legal name is not recorded, or the wording awaits Legal review, new
+ *   numbers cannot be added at all.
  * - Switching WhatsApp off keeps the numbers (R7); removing a number deletes
  *   it when saved.
  */
@@ -198,6 +201,7 @@ export function AlertWhatsAppPanel({ ruleId }: { ruleId: string }) {
         enabled,
         revision: config.revision,
         consent_statement_version: statement?.version ?? null,
+        consent_business_name: statement?.business_name ?? null,
         recipients: rows.map((r) => ({
           recipient_id: r.recipientId,
           phone: compactPhone(r.phone),
@@ -326,7 +330,11 @@ export function AlertWhatsAppPanel({ ruleId }: { ruleId: string }) {
 
               {!statement ? (
                 <p className="alerts-muted alerts-form__hint" data-testid="whatsapp-no-wording">
-                  New numbers can't be added yet: the opt-in confirmation wording has not been approved.
+                  {config?.consent_unavailable_reason === "legal_review_pending"
+                    ? "New numbers can't be added yet: the opt-in confirmation wording is awaiting Legal review."
+                    : config?.consent_unavailable_reason === "business_name_missing"
+                      ? "New numbers can't be added yet: this customer's legal business name is not recorded. Ask WiseWatts Support to add it."
+                      : "New numbers can't be added yet: the opt-in confirmation wording has not been approved."}
                 </p>
               ) : rows.length >= max ? (
                 <p className="alerts-muted alerts-form__hint" data-testid="whatsapp-limit">

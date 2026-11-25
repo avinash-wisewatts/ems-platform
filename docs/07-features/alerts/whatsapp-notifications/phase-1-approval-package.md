@@ -19,7 +19,7 @@ Detail: [phase-1-plan.md](phase-1-plan.md). Decisions and open items:
 | Scope | **Yes** | R5 in, R6 in, R8 out (2026-11-23) | — |
 | Database / migration 331 | **Yes** (designed) | Includes the R5 check and the R6 register | — |
 | API | **Yes** (designed) | — | — |
-| UI | Designed; **staging deployment blocked** | Approved opt-in wording (D21), which depends on R9 (the sending business) | Product + Legal |
+| UI | **On staging 2026-11-24** (#190); new opt-ins closed | Wording `WA-OPTIN-1` approved by Product 2026-11-24 with R9 (customer business named), subject to Legal review. Migration 332 loads it marked Legal `PENDING`, so opt-ins stay closed until Legal approves it | Legal (L-1) |
 | Permissions / D16 / R5 | **Yes** | A-1 confirmed; R5 approved | — |
 | Audit | **Yes** for staging (R12 default: no numbers) | L-2 may change the content before Phase 2 or production | Legal |
 | Retention | **Yes** | A-9 / R7 confirmed; Legal may override (L-3) | Legal |
@@ -29,7 +29,7 @@ Detail: [phase-1-plan.md](phase-1-plan.md). Decisions and open items:
 | Requirement IDs | **Yes** | `EMS-REQ-153`–`EMS-REQ-159` allocated (2026-11-23) | — |
 | Working assumptions | **Yes** | A-1 to A-9 confirmed (2026-11-23) | — |
 | Documentation review | **Yes** | Owner review Approved 2026-11-24 at `3d00c20` (documentation only; not independent, not Legal) | Product Owner |
-| Legal L-1 to L-3 | Not started | Does not block staging with test numbers; blocks Phase 2 and production | Legal |
+| Legal L-1 to L-3 | **Package prepared 2026-11-24** ([legal-review-package.md](legal-review-package.md)); review not started | Does not block staging with test numbers; blocks Phase 2 and production | Legal |
 | Provider P-1 to P-4 | Desk research only | Not needed for Phase 1; blocks Phase 2 | Product + Engineering |
 
 **Verdict:** the owner documentation review was recorded on 2026-11-24, so
@@ -66,10 +66,16 @@ new consent (`whatsapp_consent_statement_missing`).
       and CI green; code review complete; docs updated in the same PR
 
 **Before staging deployment** (separate approval):
-- [ ] D21 opt-in wording approved by Product, naming the business per R9
-      (Product + Legal)
-- [ ] The wording loaded into the R6 register by migration
-- [ ] Migration 331 applied through the normal staging deployment only
+- [x] D21 opt-in wording approved by Product, naming the business per R9:
+      `WA-OPTIN-1`, Product Owner, 2026-11-24, **subject to Legal review**
+      (L-1; [legal-review-package.md](legal-review-package.md))
+- [ ] The wording loaded into the R6 register by migration: migration 332
+      prepared and tested locally (Legal review `PENDING`, so opt-ins stay
+      closed); merge and staging deployment each need separate approval
+- [ ] Legal approval of `WA-OPTIN-1` recorded by a separate migration
+      before any staging opt-in (Product Owner, 2026-11-24)
+- [x] Migration 331 applied through the normal staging deployment only
+      (2026-11-24, run 45393837858)
 
 **Before any staging test save** (separate approval):
 - [ ] Only WiseWatts-controlled test numbers (D17). This is a procedural
