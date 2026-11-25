@@ -28,6 +28,16 @@ export type NavItem = {
   /** Where this item sits in the agreed IA; undefined = not yet part of it
    *  (rendered without a section heading, e.g. the later-phases catch-all). */
   group?: NavGroup;
+  /** Not built yet: the item stays visible with a "Soon" tag and opens the
+   *  Coming Soon page (routes/ComingSoon.tsx) -- never a fabricated screen. */
+  comingSoon?: ComingSoonInfo;
+};
+
+export type ComingSoonInfo = {
+  /** One plain sentence on what the area will be for. */
+  purpose: string;
+  /** Related things a user can already do today, if any. */
+  availableNow?: readonly { label: string; to: string }[];
 };
 
 export const NAV_GROUP_LABELS: Record<NavGroup, string> = {
@@ -102,9 +112,9 @@ export function visibleNav(items: readonly NavItem[], permissions: readonly stri
  * v1 page at /features/analytics (routes/analytics/AnalyticsPage.tsx; the
  * entry opens Trends directly, ADR-022 Amendment 5, D81), matched before the
  * /features/* catch-all. "Single Line Diagram" and "Settings" have no
- * implementation yet, so they route into the existing, honest /features/*
- * catch-all (PlaceholderArea) exactly like every other not-yet-built feature
- * area -- never a fabricated screen. "Reports" (directly below Alerts) opens
+ * implementation yet: they carry `comingSoon`, show a "Soon" tag and open the
+ * Coming Soon page (routes/ComingSoon.tsx), which says plainly that the area is
+ * not available yet and links to what already is -- never a fabricated screen. "Reports" (directly below Alerts) opens
  * the site measurement export at /reports (routes/reportExports/ReportsPage.tsx)
  * -- distinct from the Archive section's Site Performance Report
  * (/features/reports), which is unchanged.
@@ -123,10 +133,26 @@ export const SHELL_PRIMARY_NAV: readonly NavItem[] = [
     label: "Single Line Diagram",
     to: "/features/single-line-diagram",
     requiresAnyOf: ["dashboard.view"],
+    comingSoon: {
+      purpose: "A diagram of the site's electrical distribution.",
+      availableNow: [
+        { label: "Asset View", to: "/asset-view" },
+        { label: "Main Dashboard", to: "/dashboard" },
+      ],
+    },
   },
   { key: "shell-alerts", label: "Alerts", to: "/features/alerts", requiresAnyOf: ["dashboard.view"] },
   { key: "shell-reports", label: "Reports", to: "/reports", requiresAnyOf: ["report.export", "report.view"] },
-  { key: "settings", label: "Settings", to: "/features/settings", requiresAnyOf: ["dashboard.view"] },
+  {
+    key: "settings",
+    label: "Settings",
+    to: "/features/settings",
+    requiresAnyOf: ["dashboard.view"],
+    comingSoon: {
+      purpose: "Account and site settings in one place.",
+      availableNow: [{ label: "Change password", to: "/account/password" }],
+    },
+  },
 ];
 
 /**
@@ -166,3 +192,8 @@ export function groupNav(items: readonly NavItem[]): NavSection[] {
   }
   return sections;
 }
+
+/** Shell nav items that are not built yet, for the Coming Soon routes. */
+export const COMING_SOON_NAV: readonly (NavItem & { comingSoon: ComingSoonInfo })[] = SHELL_PRIMARY_NAV.filter(
+  (item): item is NavItem & { comingSoon: ComingSoonInfo } => item.comingSoon !== undefined,
+);

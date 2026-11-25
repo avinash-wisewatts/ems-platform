@@ -29,6 +29,8 @@ import { RequirePermission } from "./auth/RequirePermission";
 import { UsersPage } from "./routes/admin/UsersPage";
 import { UserDetailPage } from "./routes/admin/UserDetailPage";
 import { ChangePasswordPage } from "./routes/account/ChangePasswordPage";
+import { ComingSoon } from "./routes/ComingSoon";
+import { COMING_SOON_NAV } from "./layout/navigation";
 
 /**
  * Foundation routes:
@@ -205,6 +207,17 @@ export function AppRoutes() {
           </ShellGate>
         }
       />
+      {COMING_SOON_NAV.map((item) => (
+        <Route
+          key={item.key}
+          path={item.to}
+          element={
+            <ShellGate>
+              <ComingSoon title={item.label} info={item.comingSoon} />
+            </ShellGate>
+          }
+        />
+      ))}
       <Route
         path="/admin/users"
         element={

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PRIMARY_NAV, SECONDARY_NAV, groupNav, visibleNav } from "./navigation";
+import { COMING_SOON_NAV, PRIMARY_NAV, SECONDARY_NAV, SHELL_PRIMARY_NAV, groupNav, visibleNav } from "./navigation";
 import { ADMIN_USER, VIEWER_USER } from "../test-utils";
 
 describe("navigation model -- permission gates VISIBILITY only", () => {
@@ -65,5 +65,22 @@ describe("navigation IA -- MVP-1 closeout: Energy/Demand/PQ are Site capabilitie
 
     // Every visible item still appears exactly once -- grouping is a pure split.
     expect(sections.flatMap((s) => s.items.map((i) => i.key))).toEqual(primary.map((i) => i.key));
+  });
+});
+
+describe("Coming Soon navigation items", () => {
+  it("are exactly Single Line Diagram and Settings, each with a purpose and in-app links", () => {
+    expect(COMING_SOON_NAV.map((i) => i.key)).toEqual(["single-line-diagram", "settings"]);
+    for (const item of COMING_SOON_NAV) {
+      expect(item.to.startsWith("/features/")).toBe(true);
+      expect(item.comingSoon.purpose.length).toBeGreaterThan(0);
+      for (const link of item.comingSoon.availableNow ?? []) expect(link.to.startsWith("/")).toBe(true);
+    }
+  });
+
+  it("stay visible in the primary navigation (not hidden)", () => {
+    const keys = SHELL_PRIMARY_NAV.map((i) => i.key);
+    expect(keys).toContain("single-line-diagram");
+    expect(keys).toContain("settings");
   });
 });
