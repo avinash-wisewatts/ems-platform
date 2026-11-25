@@ -39,16 +39,19 @@ PATH = f"/api/v1/alert-rules/{RULE_ID}/whatsapp"
 T0 = datetime(2026, 11, 24, 6, 0, tzinfo=timezone.utc)
 P0, P1, P2 = "+12025550100", "+12025550101", "+12025550102"  # fictional
 RECIPIENT = "99999999-9999-4999-8999-999999999999"
+BUSINESS = "Fictional Hotels Pvt Ltd"  # fictional customer legal name (R9)
+SHOWN = {"version": "TEST-1", "text": f"Test-only wording naming {BUSINESS}.", "business_name": BUSINESS,
+         "unavailable_reason": None}
 
 
 class FakeDb:
-    """Stands in for the migration 331 functions behind _execute."""
+    """Stands in for the migration 331/332 functions behind _execute."""
 
     def __init__(self) -> None:
         self.calls: list[tuple] = []
         self.save_result = ("ok", 2)
         self.get_result = "ok"
-        self.statement: dict | None = {"version": "TEST-1", "text": "Test-only wording."}
+        self.statement: dict | None = dict(SHOWN)
 
     async def execute(self, sql, params, *, commit):
         if "save_portal_alert_rule_whatsapp" in sql:
@@ -63,7 +66,7 @@ class FakeDb:
                 "recipients": [{
                     "recipient_id": RECIPIENT, "phone_e164": P0, "consent_state": "CONFIRMED",
                     "consent_confirmed_at": T0.isoformat(), "consent_confirmed_by_name": "Asha Admin",
-                    "consent_statement_version": "TEST-1",
+                    "consent_statement_version": "TEST-1", "consent_business_name": BUSINESS,
                 }],
                 "consent_statement": self.statement,
             }]
@@ -78,7 +81,7 @@ def db(monkeypatch) -> FakeDb:
 
 
 def body(**kw) -> dict:
-    payload = {"enabled": True, "revision": 1, "consent_statement_version": "TEST-1",
+    payload = {"enabled": True, "revision": 1, "consent_statement_version": "TEST-1", "consent_business_name": BUSINESS,
                "recipients": [{"recipient_id": None, "phone": P0, "opt_in_confirmed": True}]}
     payload.update(kw)
     return payload
@@ -130,15 +133,35 @@ def test_admin_reads_with_the_session_identity(portal_client, monkeypatch, data,
     [recipient] = payload["recipients"]
     assert recipient["phone_e164"] == P0 and recipient["phone_masked"] == "+1 ••••••0100"
     assert recipient["consent"] == {"state": "CONFIRMED", "confirmed_at": "2026-11-24T06:00:00Z",
-                                    "confirmed_by_name": "Asha Admin", "statement_version": "TEST-1"}
-    assert payload["consent_statement"] == {"version": "TEST-1", "text": "Test-only wording."}
+                                    "confirmed_by_name": "Asha Admin", "statement_version": "TEST-1",
+                                    "business_name": BUSINESS}
+    # The approved wording, rendered with the customer business (R9), to show for a new number.
+    assert payload["consent_statement"] == {"version": "TEST-1", "text": f"Test-only wording naming {BUSINESS}.",
+                                            "business_name": BUSINESS}
+    assert payload["consent_unavailable_reason"] is None
     assert db.calls == [("get", (902, UUID(RULE_ID)), False)]
 
 
 def test_no_approved_wording_reads_as_null(portal_client, monkeypatch, data, db) -> None:
     _login(portal_client, monkeypatch)
     db.statement = None
-    assert portal_client.get(PATH).json()["consent_statement"] is None
+    payload = portal_client.get(PATH).json()
+    assert payload["consent_statement"] is None and payload["consent_unavailable_reason"] == "statement_missing"
+
+
+def test_pending_legal_review_reads_as_null_with_its_reason(portal_client, monkeypatch, data, db) -> None:
+    _login(portal_client, monkeypatch)
+    db.statement = {"version": "TEST-1", "text": None, "business_name": None, "unavailable_reason": "legal_review_pending"}
+    payload = portal_client.get(PATH).json()
+    assert payload["consent_statement"] is None and payload["consent_unavailable_reason"] == "legal_review_pending"
+
+
+def test_no_legal_business_name_reads_as_null_with_its_reason(portal_client, monkeypatch, data, db) -> None:
+    """R9: without the customer's legal name the wording cannot be shown, so it cannot be confirmed."""
+    _login(portal_client, monkeypatch)
+    db.statement = {"version": "TEST-1", "text": None, "business_name": None, "unavailable_reason": "business_name_missing"}
+    payload = portal_client.get(PATH).json()
+    assert payload["consent_statement"] is None and payload["consent_unavailable_reason"] == "business_name_missing"
 
 
 # --- save -------------------------------------------------------------------------------
@@ -154,8 +177,9 @@ def test_save_normalises_numbers_commits_and_returns_the_reloaded_configuration(
     assert response.json()["messages_active"] is False
     (kind, params, commit), (reload_kind, *_rest) = db.calls
     assert (kind, commit, reload_kind) == ("save", True, "get")
-    user, rule, enabled, recipients, revision, shown_version = params
-    assert (user, rule, enabled, revision, shown_version) == (903, UUID(RULE_ID), True, 1, "TEST-1")
+    user, rule, enabled, recipients, revision, shown_version, shown_business = params
+    assert (user, rule, enabled, revision, shown_version, shown_business) == (903, UUID(RULE_ID), True, 1, "TEST-1",
+                                                                              BUSINESS)
     assert recipients.obj == [
         {"recipient_id": RECIPIENT, "phone": P0, "opt_in_confirmed": False},
         {"recipient_id": None, "phone": P1, "opt_in_confirmed": True},
@@ -214,6 +238,7 @@ def test_validation_refusals_name_the_position_never_the_number(portal_client, m
 @pytest.mark.parametrize("result,status_code", [
     ("not_found", 404), ("forbidden", 403), ("whatsapp_config_stale", 409), ("whatsapp_consent_statement_changed", 409),
     ("whatsapp_consent_required", 422), ("whatsapp_consent_statement_missing", 422),
+    ("whatsapp_business_name_missing", 422), ("whatsapp_consent_legal_review_pending", 422),
     ("whatsapp_unknown_recipient", 422), ("whatsapp_too_many_recipients", 422),
 ])
 def test_database_refusals_map_to_http(portal_client, monkeypatch, data, db, result, status_code) -> None:

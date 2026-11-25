@@ -13,6 +13,12 @@ number into a log line, an exception message or an error ``detail``:
 * a database error is re-raised as a generic error WITHOUT its chained cause,
   because PostgreSQL error details can echo row values.
 
+The opt-in wording (migration 332, R9 / D21) names the customer business:
+the read returns it rendered with the organisation's legal name, and a save
+that adds a number must send back the wording version AND the business name
+the administrator was shown; both are recorded with the consent. New
+opt-ins stay closed while the wording's Legal review is pending (L-1).
+
 Permissions are enforced at the route (``alert.configure``) and again inside
 the SECURITY DEFINER functions, which also refuse designated report
 automation accounts of any site (R5) and re-check site access.
@@ -54,6 +60,12 @@ RESULT_DETAIL: dict[str, str] = {
     "whatsapp_consent_required": "Confirm that the person has agreed to receive WhatsApp alert messages.",
     "whatsapp_consent_statement_missing": (
         "New WhatsApp numbers cannot be added yet: the opt-in confirmation wording has not been approved."
+    ),
+    "whatsapp_consent_legal_review_pending": (
+        "New WhatsApp numbers cannot be added yet: the opt-in confirmation wording is awaiting Legal review."
+    ),
+    "whatsapp_business_name_missing": (
+        "New WhatsApp numbers cannot be added yet: the customer's legal business name is not recorded."
     ),
     "whatsapp_unknown_recipient": "A recipient in the request does not belong to this alert rule. Reload and try again.",
     "whatsapp_consent_statement_changed": (
@@ -104,6 +116,12 @@ class WhatsAppConfigIn(BaseModel):
         description="The opt-in wording version shown to the administrator (from the GET); required to add a "
         "new or changed number, and must still be the current approved version.",
     )
+    consent_business_name: str | None = Field(
+        default=None,
+        max_length=300,
+        description="The business name in the opt-in wording shown to the administrator (from the GET); required "
+        "with consent_statement_version, and must still be the customer's recorded legal name.",
+    )
 
 
 class ConsentOut(BaseModel):
@@ -111,6 +129,7 @@ class ConsentOut(BaseModel):
     confirmed_at: datetime
     confirmed_by_name: str = Field(description='Display name, or "WiseWatts Support" for WiseWatts staff.')
     statement_version: str
+    business_name: str | None = Field(default=None, description="The business named in the confirmed wording (R9).")
 
 
 class RecipientOut(BaseModel):
@@ -122,7 +141,8 @@ class RecipientOut(BaseModel):
 
 class ConsentStatementOut(BaseModel):
     version: str
-    text: str
+    text: str = Field(description="The approved wording, with the customer business named (R9).")
+    business_name: str
 
 
 class WhatsAppConfigOut(BaseModel):
@@ -136,8 +156,13 @@ class WhatsAppConfigOut(BaseModel):
     recipients: list[RecipientOut]
     consent_statement: ConsentStatementOut | None = Field(
         default=None,
-        description="The Product-approved opt-in wording to show for a new number; null while none is approved "
-        "(new numbers cannot be added).",
+        description="The Product-approved opt-in wording to show for a new number; null when it cannot be shown "
+        "(new numbers cannot be added; see consent_unavailable_reason).",
+    )
+    consent_unavailable_reason: Literal["statement_missing", "legal_review_pending", "business_name_missing"] | None = Field(
+        default=None,
+        description="Why consent_statement is null: no approved wording, Legal review of the wording pending, or no "
+        "legal business name recorded.",
     )
 
 
@@ -246,13 +271,24 @@ def _build(rule_id: UUID, row: dict[str, Any]) -> WhatsAppConfigOut:
                     confirmed_at=item["consent_confirmed_at"],
                     confirmed_by_name=item["consent_confirmed_by_name"],
                     statement_version=item["consent_statement_version"],
+                    business_name=item.get("consent_business_name"),
                 ),
             )
         )
     statement = row.get("consent_statement")
+    shown: ConsentStatementOut | None = None
+    reason: str | None = None
+    if not statement:
+        reason = "statement_missing"
+    elif statement.get("unavailable_reason") or not statement.get("text"):
+        reason = statement.get("unavailable_reason") or "business_name_missing"
+    else:
+        shown = ConsentStatementOut(
+            version=statement["version"], text=statement["text"], business_name=statement["business_name"]
+        )
     return WhatsAppConfigOut(
         rule_id=rule_id, enabled=bool(row["enabled"]), revision=int(row["revision"]), recipients=recipients,
-        consent_statement=ConsentStatementOut(**statement) if statement else None,
+        consent_statement=shown, consent_unavailable_reason=reason,
     )
 
 
@@ -272,8 +308,9 @@ async def fetch_config(portal_user_id: int, rule_id: UUID) -> WhatsAppConfigOut:
 async def save_config(portal_user_id: int, rule_id: UUID, body: WhatsAppConfigIn) -> int:
     recipients = prepare_recipients(body)
     rows = await _execute(
-        "SELECT result, revision FROM analytics.save_portal_alert_rule_whatsapp(%s, %s, %s, %s, %s, %s)",
-        (portal_user_id, rule_id, body.enabled, Jsonb(recipients), body.revision, body.consent_statement_version),
+        "SELECT result, revision FROM analytics.save_portal_alert_rule_whatsapp(%s, %s, %s, %s, %s, %s, %s)",
+        (portal_user_id, rule_id, body.enabled, Jsonb(recipients), body.revision, body.consent_statement_version,
+         body.consent_business_name),
         commit=True,
     )
     row = rows[0] if rows else {"result": "not_found"}

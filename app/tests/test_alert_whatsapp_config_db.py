@@ -33,18 +33,21 @@ from tests.test_alert_rules_db import CONNINFO, Fixture, create, tx, world  # no
 ROOT = Path(__file__).resolve().parents[2]
 MIGRATION = ROOT / "postgres" / "migrations" / "331_alert_whatsapp_configuration.sql"
 ROLLBACK = ROOT / "postgres" / "maintenance" / "331_alert_whatsapp_configuration_rollback.sql"
+ROLLBACK_332 = ROOT / "postgres" / "maintenance" / "332_alert_whatsapp_consent_wording_rollback.sql"
 MIGRATION_323 = ROOT / "postgres" / "migrations" / "323_alert_rule_write_functions.sql"
 
 # Fictional numbers only (North American 555-0100..0199 is reserved for fiction).
 P = [f"+1202555{n:04d}" for n in range(100, 112)]
 
 GET = "analytics.get_portal_alert_rule_whatsapp(bigint, uuid)"
-SAVE = "analytics.save_portal_alert_rule_whatsapp(bigint, uuid, boolean, jsonb, integer, text)"
+SAVE = "analytics.save_portal_alert_rule_whatsapp(bigint, uuid, boolean, jsonb, integer, text, text)"  # since 332
+SAVE_331 = "analytics.save_portal_alert_rule_whatsapp(bigint, uuid, boolean, jsonb, integer, text)"
 SUMMARIES = "analytics.get_portal_alert_rule_whatsapp_summaries(bigint, uuid)"
 INTERNAL = [
     "analytics.alert_whatsapp_actor_is_automation(bigint)",
     "analytics.alert_whatsapp_current_statement_version()",
     "analytics.alert_whatsapp_audit_recipients(uuid)",
+    "analytics.alert_whatsapp_business_name(uuid)",  # since 332
 ]
 TABLES = [
     "analytics.alert_whatsapp_consent_statements",
@@ -55,14 +58,45 @@ TABLES = [
 
 # --- helpers --------------------------------------------------------------------------
 
-def statement(cur, version: str = "TEST-1") -> str:
-    """Load a TEST wording version (inside the rolled-back transaction only)."""
+TEST_WORDING = "Test-only wording for {business_name}, never shown to anyone."
+
+
+def retire_current_wording(cur) -> None:
+    """Migration 332 loads WA-OPTIN-1; tests that need their own (or no) wording
+    retire it first, inside the rolled-back transaction only."""
+    cur.execute("UPDATE analytics.alert_whatsapp_consent_statements SET retired_at = clock_timestamp() WHERE retired_at IS NULL")
+
+
+def legal_approve(cur, version: str = "WA-OPTIN-1") -> None:
+    """Record a TEST Legal approval of a wording version (rolled-back transaction
+    only). On staging WA-OPTIN-1 stays PENDING, so opt-ins stay closed."""
     cur.execute(
-        "INSERT INTO analytics.alert_whatsapp_consent_statements (version, statement_text, approved_by_name, approved_at) "
-        "VALUES (%s, 'Test-only wording, never shown to anyone.', 'Test Product Owner', clock_timestamp() - interval '1 minute')",
+        "UPDATE analytics.alert_whatsapp_consent_statements SET legal_review_status = 'APPROVED', "
+        "legal_reviewed_by_name = 'Test Legal', legal_reviewed_at = clock_timestamp() WHERE version = %s",
         (version,),
     )
+
+
+def statement(cur, version: str = "TEST-1") -> str:
+    """Make a TEST wording version current and Legal-approved (inside the
+    rolled-back transaction only)."""
+    retire_current_wording(cur)
+    cur.execute(
+        "INSERT INTO analytics.alert_whatsapp_consent_statements (version, statement_text, approved_by_name, approved_at, "
+        "legal_review_status, legal_reviewed_by_name, legal_reviewed_at) "
+        "VALUES (%s, %s, 'Test Product Owner', clock_timestamp() - interval '1 minute', 'APPROVED', 'Test Legal', "
+        "clock_timestamp())",
+        (version, TEST_WORDING),
+    )
     return version
+
+
+def business_name(cur, rule) -> str | None:
+    cur.execute(
+        "SELECT analytics.alert_whatsapp_business_name(r.organization_id) FROM analytics.alert_rules r WHERE r.rule_id = %s",
+        (rule,),
+    )
+    return cur.fetchone()[0]
 
 
 def new(phone: str, confirmed: bool = True) -> dict:
@@ -73,15 +107,19 @@ def keep(recipient_id, phone: str) -> dict:
     return {"recipient_id": str(recipient_id), "phone": phone, "opt_in_confirmed": False}
 
 
-def save(cur, user, rule, enabled, recipients, revision, version: str | None = "current") -> tuple:
-    """version: the wording version the administrator was shown; "current"
-    passes whatever is current now (the normal UI flow)."""
+def save(cur, user, rule, enabled, recipients, revision, version: str | None = "current",
+         business: str | None = "current") -> tuple:
+    """version / business: the wording version and business name the
+    administrator was shown; "current" passes whatever is current now (the
+    normal UI flow)."""
     if version == "current":
         cur.execute("SELECT analytics.alert_whatsapp_current_statement_version()")
         version = cur.fetchone()[0]
+    if business == "current":
+        business = business_name(cur, rule)
     cur.execute(
-        "SELECT result, revision FROM analytics.save_portal_alert_rule_whatsapp(%s, %s, %s, %s, %s, %s)",
-        (user, rule, enabled, Jsonb(recipients), revision, version),
+        "SELECT result, revision FROM analytics.save_portal_alert_rule_whatsapp(%s, %s, %s, %s, %s, %s, %s)",
+        (user, rule, enabled, Jsonb(recipients), revision, version, business),
     )
     return cur.fetchone()
 
@@ -128,6 +166,14 @@ def wa(world):
     _, rule2, _ = create(cur, world["u"]["admin"], world["site"], world["asset"], name="Second rule")
     _, rule_s2, _ = create(cur, world["u"]["sel_admin2"], world["site2"], world["asset2"], name="Site two rule")
     _, rule_b, _ = create(cur, world["u"]["admin_b"], world["site_b"], world["asset_b"], name="Other tenant rule")
+    # Migration 332: opt-ins need Legal approval of the wording (test-only,
+    # rolled back) and the customer's legal name (R9). Fictional.
+    legal_approve(cur)
+    for site, name in ((world["site"], "Fictional A Hotels Pvt Ltd"), (world["site_b"], "Fictional B Hotels Pvt Ltd")):
+        cur.execute(
+            "UPDATE metadata.organizations SET legal_name = %s WHERE id = (SELECT organization_id FROM metadata.sites WHERE id = %s)",
+            (name, site),
+        )
     return dict(world, rule=rule, rule2=rule2, rule_s2=rule_s2, rule_b=rule_b)
 
 
@@ -197,12 +243,6 @@ def test_no_role_reads_the_tables_directly(table, role):
             (role, table) * 4,
         ).fetchone()
     assert row == (False, False, False, False)
-
-
-def test_the_wording_register_ships_empty():
-    with psycopg.connect(CONNINFO) as c:
-        assert c.execute("SELECT count(*) FROM analytics.alert_whatsapp_consent_statements").fetchone() == (0,)
-        assert c.execute("SELECT analytics.alert_whatsapp_current_statement_version()").fetchone() == (None,)
 
 
 def test_legacy_flag_is_retired_by_check():
@@ -312,8 +352,10 @@ def test_non_array_payload_is_refused(wa):
 # --- consent --------------------------------------------------------------------------
 
 def test_new_opt_ins_are_refused_while_no_wording_is_approved(wa):
-    """R6 / D21 / R9: the register ships empty, so nobody can be added yet."""
+    """R6 / D21: with no current wording, nobody can be added (331 shipped it
+    empty; 332 loads WA-OPTIN-1, retired here in-transaction)."""
     cur, admin, rule = wa["cur"], wa["u"]["admin"], wa["rule"]
+    retire_current_wording(cur)
     assert save(cur, admin, rule, True, [new(P[0])], 0) == ("whatsapp_consent_statement_missing", 0)
     assert state(cur, rule) == (None, [])
     assert wa_audit(cur, rule) == []
@@ -321,9 +363,15 @@ def test_new_opt_ins_are_refused_while_no_wording_is_approved(wa):
 
 def test_the_read_returns_the_approved_wording_to_show_or_none(wa):
     cur, admin, rule = wa["cur"], wa["u"]["admin"], wa["rule"]
+    retire_current_wording(cur)
     assert shown_wording(cur, admin, rule) is None
     statement(cur, "TEST-1")
-    assert shown_wording(cur, admin, rule) == {"version": "TEST-1", "text": "Test-only wording, never shown to anyone."}
+    name = business_name(cur, rule)
+    assert name == "Fictional A Hotels Pvt Ltd"
+    assert shown_wording(cur, admin, rule) == {
+        "version": "TEST-1", "text": f"Test-only wording for {name}, never shown to anyone.",
+        "business_name": name, "unavailable_reason": None,
+    }
 
 
 @pytest.mark.parametrize("shown", [None, "TEST-0", "test-1"])
@@ -360,7 +408,12 @@ def test_only_one_current_wording_version_can_exist(wa):
     cur = wa["cur"]
     statement(cur, "TEST-1")
     with pytest.raises(psycopg.errors.UniqueViolation):
-        statement(cur, "TEST-2")
+        # A direct insert, without retiring TEST-1 first.
+        cur.execute(
+            "INSERT INTO analytics.alert_whatsapp_consent_statements (version, statement_text, approved_by_name, approved_at) "
+            "VALUES ('TEST-2', %s, 'Test', clock_timestamp())",
+            (TEST_WORDING,),
+        )  # Legal status defaults to PENDING
 
 
 def test_a_changed_number_needs_fresh_consent_and_is_a_new_recipient(wa):
@@ -444,15 +497,19 @@ def committed_rule():
         asset, _ = f.asset(org, site, gw, "Concurrency Chiller")
         admin = f.user(org, "ORGANIZATION", "ADMIN")
         _, rule, _ = create(cur, admin, site, asset, enabled=False)
-        cur.execute(
-            "INSERT INTO analytics.alert_whatsapp_consent_statements (version, statement_text, approved_by_name, approved_at) "
-            "VALUES ('TEST-CONCURRENCY', 'Test-only wording.', 'Test', clock_timestamp() - interval '1 minute')"
-        )
+        # Uses the loaded wording WA-OPTIN-1; R9 needs a (fictional) legal name,
+        # and opt-ins need Legal approval: recorded for this test only and
+        # reset to PENDING afterwards.
+        cur.execute("UPDATE metadata.organizations SET legal_name = 'Fictional Concurrency Hotels Pvt Ltd' WHERE id = %s", (org,))
+        legal_approve(cur)
         c.commit()
     yield admin, rule
     with psycopg.connect(CONNINFO) as c:
         c.execute("SELECT analytics.delete_portal_alert_rule(%s, %s)", (admin, rule))
-        c.execute("DELETE FROM analytics.alert_whatsapp_consent_statements WHERE version = 'TEST-CONCURRENCY'")
+        c.execute(
+            "UPDATE analytics.alert_whatsapp_consent_statements SET legal_review_status = 'PENDING', "
+            "legal_reviewed_by_name = NULL, legal_reviewed_at = NULL WHERE version = 'WA-OPTIN-1'"
+        )
         c.commit()
 
 
@@ -757,16 +814,25 @@ SIG_DELETE = "analytics.delete_portal_alert_rule(bigint, uuid)"
 def test_rollback_deletes_all_numbers_and_restores_the_323_functions(world):
     cur = world["cur"]
     _, rule, _ = create(cur, world["u"]["admin"], world["site"], world["asset"])
-    statement(cur)
+    cur.execute("UPDATE metadata.organizations SET legal_name = 'Fictional A Hotels Pvt Ltd' WHERE id = %s", (world["org"],))
+    legal_approve(cur)
     assert save(cur, world["u"]["admin"], rule, True, [new(P[0])], 0)[0] == "ok"
     notices: list[str] = []
     cur.connection.add_notice_handler(lambda d: notices.append(d.message_primary))
+    # 331 refuses to roll back while 332 is applied ...
+    cur.execute("SAVEPOINT order_check")
+    with pytest.raises(psycopg.errors.RaiseException, match="migration 332 is applied"):
+        cur.execute(_sql_without_transaction_control(ROLLBACK))
+    cur.execute("ROLLBACK TO SAVEPOINT order_check")
+    # ... so 332 goes first (it deletes the numbers), then 331.
+    cur.execute(_sql_without_transaction_control(ROLLBACK_332))
+    assert any("deleting 1 recipient number(s); switching off WhatsApp on 1 rule(s)" in n for n in notices), notices
     cur.execute(_sql_without_transaction_control(ROLLBACK))
-    assert any("1 WhatsApp settings row(s), 1 recipient number(s)" in n for n in notices), notices
+    assert any("1 WhatsApp settings row(s), 0 recipient number(s), 0 consent-wording version(s)" in n for n in notices), notices
     for table in TABLES:
         cur.execute("SELECT to_regclass(%s)", (table,))
         assert cur.fetchone() == (None,)
-    for sig in (GET, SAVE, SUMMARIES, *INTERNAL):
+    for sig in (GET, SAVE, SAVE_331, SUMMARIES, *INTERNAL):
         cur.execute("SELECT to_regprocedure(%s)", (sig,))
         assert cur.fetchone() == (None,)
     cur.execute("SELECT count(*) FROM pg_constraint WHERE conname = 'alert_rules_whatsapp_retired_chk'")

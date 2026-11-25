@@ -58,6 +58,9 @@ COPY postgres/maintenance/311_recovery_lookup_event_time_bound_rollback.sql /wor
 # Rollback of migration 331 (WhatsApp Phase 1), applied in a rolled-back
 # transaction by app/tests/test_alert_whatsapp_config_db.py.
 COPY postgres/maintenance/331_alert_whatsapp_configuration_rollback.sql /workspace/postgres/maintenance/331_alert_whatsapp_configuration_rollback.sql
+# Rollback of migration 332 (opt-in wording WA-OPTIN-1), run first by the 331
+# rollback test and by app/tests/test_alert_whatsapp_consent_wording_db.py.
+COPY postgres/maintenance/332_alert_whatsapp_consent_wording_rollback.sql /workspace/postgres/maintenance/332_alert_whatsapp_consent_wording_rollback.sql
 COPY scripts/test /workspace/scripts/test
 # Phase 4 routing generator: spec, template, generator, and committed artifact
 # consumed by app/tests/test_routing_generator_contract.py.

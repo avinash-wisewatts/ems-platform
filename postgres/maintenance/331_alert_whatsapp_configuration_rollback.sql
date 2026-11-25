@@ -20,6 +20,16 @@
 
 BEGIN;
 
+-- Migration 332 builds on 331: roll it back first
+-- (postgres/maintenance/332_alert_whatsapp_consent_wording_rollback.sql).
+DO $order$
+BEGIN
+    IF EXISTS (SELECT 1 FROM admin.schema_migrations WHERE migration_id = '332_alert_whatsapp_consent_wording') THEN
+        RAISE EXCEPTION 'Rollback 331 refused: migration 332 is applied; run its rollback first.';
+    END IF;
+END;
+$order$;
+
 DO $report$
 DECLARE
     v_settings   BIGINT := 0;

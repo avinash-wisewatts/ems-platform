@@ -431,7 +431,9 @@ _WHATSAPP_WRITE_RESPONSES: dict[int | str, dict] = {
     403: {"description": "Missing alert.configure, a report automation account, or a cross-site request."},
     409: {"description": "whatsapp_config_stale: the settings were changed since they were read."},
     422: {"description": "A WhatsApp refusal code (invalid or duplicate number, more than 10, consent missing, "
-                         "no approved opt-in wording yet, unknown recipient, enabled without recipients)."},
+                         "no approved opt-in wording yet, Legal review pending, no legal business name, "
+                         "unknown recipient, "
+                         "enabled without recipients)."},
 }
 
 
