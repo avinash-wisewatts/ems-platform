@@ -24,6 +24,16 @@
 
 BEGIN;
 
+-- Migration 333 (WhatsApp delivery) builds on 332: roll it back first
+-- (postgres/maintenance/333_alert_whatsapp_delivery_rollback.sql).
+DO $order$
+BEGIN
+    IF EXISTS (SELECT 1 FROM admin.schema_migrations WHERE migration_id = '333_alert_whatsapp_delivery') THEN
+        RAISE EXCEPTION 'Rollback 332 refused: migration 333 is applied; run its rollback first.';
+    END IF;
+END;
+$order$;
+
 DO $report$
 DECLARE
     v_recipients BIGINT;

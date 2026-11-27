@@ -40,6 +40,7 @@ from src.routers.alerts_api import router as alerts_api_router
 from src.routers.customer_auth import router as customer_auth_router
 from src.routers.report_exports import router as report_exports_router
 from src.routers.site_reports import router as site_reports_router
+from src.routers.whatsapp_webhook import router as whatsapp_webhook_router
 
 settings = get_customer_settings()
 use_core_settings(settings)
@@ -98,6 +99,8 @@ app.include_router(customer_auth_router)
 app.include_router(analytics_api_router)
 # Alerts (ADR-024): rule configuration, Active Alerts, history, acknowledgement.
 app.include_router(alerts_api_router)
+# WhatsApp delivery receipts (ADR-026 A5): signature-verified, 404 unless configured.
+app.include_router(whatsapp_webhook_router)
 # Reports export routes exist only where Reports is enabled (staging-only).
 if settings.reports_enabled:
     app.include_router(report_exports_router)

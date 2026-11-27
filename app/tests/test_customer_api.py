@@ -159,7 +159,14 @@ def test_api_v1_routes_match_the_admin_portal_exactly(customer_module) -> None:
             for r in app.routes if getattr(r, "path", "").startswith("/api/v1/")
         }
 
-    assert api_v1(customer_module.app) == api_v1(admin_app)
+    # The one intended difference: the provider's signature-verified receipt
+    # webhook (ADR-026 A5) exists only on the customer host, the only host the
+    # provider can reach (the staff host is IP-restricted).
+    webhook = {("/api/v1/webhooks/whatsapp", frozenset({"GET"})), ("/api/v1/webhooks/whatsapp", frozenset({"POST"}))}
+    customer = api_v1(customer_module.app)
+    assert webhook <= customer
+    assert not webhook & api_v1(admin_app)
+    assert customer - webhook == api_v1(admin_app)
 
 
 def test_customer_api_loads_without_admin_code_or_secrets() -> None:

@@ -34,6 +34,7 @@ ROOT = Path(__file__).resolve().parents[2]
 MIGRATION = ROOT / "postgres" / "migrations" / "331_alert_whatsapp_configuration.sql"
 ROLLBACK = ROOT / "postgres" / "maintenance" / "331_alert_whatsapp_configuration_rollback.sql"
 ROLLBACK_332 = ROOT / "postgres" / "maintenance" / "332_alert_whatsapp_consent_wording_rollback.sql"
+ROLLBACK_333 = ROOT / "postgres" / "maintenance" / "333_alert_whatsapp_delivery_rollback.sql"
 MIGRATION_323 = ROOT / "postgres" / "migrations" / "323_alert_rule_write_functions.sql"
 
 # Fictional numbers only (North American 555-0100..0199 is reserved for fiction).
@@ -584,7 +585,10 @@ def test_summaries_carry_no_numbers(wa):
     save(cur, admin, wa["rule"], True, [new(P[0]), new(P[1])], 0)
     rows = summaries(cur, admin, wa["site"])
     assert (("ok", wa["rule"], True, 2) in rows) and (("ok", wa["rule2"], False, 0) in rows)
-    assert not any("555" in str(v) for row in rows for v in row)
+    # Ids are random UUIDs and may contain any digits: check every other value
+    # for the numbers' own digits (was "555", which a random UUID can contain).
+    assert not any(phone.lstrip("+") in str(v) or phone[-7:] in str(v)
+                   for row in rows for v in row if not isinstance(v, uuid.UUID) for phone in P[:2])
 
 
 def test_inactive_admin_is_refused(wa):
@@ -824,7 +828,8 @@ def test_rollback_deletes_all_numbers_and_restores_the_323_functions(world):
     with pytest.raises(psycopg.errors.RaiseException, match="migration 332 is applied"):
         cur.execute(_sql_without_transaction_control(ROLLBACK))
     cur.execute("ROLLBACK TO SAVEPOINT order_check")
-    # ... so 332 goes first (it deletes the numbers), then 331.
+    # ... so 333 (delivery) and 332 go first (332 deletes the numbers), then 331.
+    cur.execute(_sql_without_transaction_control(ROLLBACK_333))
     cur.execute(_sql_without_transaction_control(ROLLBACK_332))
     assert any("deleting 1 recipient number(s); switching off WhatsApp on 1 rule(s)" in n for n in notices), notices
     cur.execute(_sql_without_transaction_control(ROLLBACK))

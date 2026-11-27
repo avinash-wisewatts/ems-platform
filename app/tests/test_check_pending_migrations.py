@@ -165,7 +165,7 @@ def test_a_staging_only_migration_already_in_the_production_ledger_is_refused_up
 
 def test_staging_applies_staging_only_migrations(tmp_path):
     code, out = _run(tmp_path, environment="staging", ledger_ids=_ids_through("308_"),
-                     expected="309,310,312,311,313,314,315,316,317,318,319,320,321,322,323,324,325,326,327,328,329,330,331,332")
+                     expected="309,310,312,311,313,314,315,316,317,318,319,320,321,322,323,324,325,326,327,328,329,330,331,332,333")
     assert code == 0, out
 
 
@@ -203,6 +203,7 @@ def test_scope_file_contract():
         "331_alert_whatsapp_configuration": "staging|test",
         # WhatsApp opt-in wording WA-OPTIN-1 (R9, D21): staging/test only.
         "332_alert_whatsapp_consent_wording": "staging|test",
+        "333_alert_whatsapp_delivery": "staging|test",
     }
     manifest_ids = set(_ids_through("~never~"))
     assert set(scoped) <= manifest_ids

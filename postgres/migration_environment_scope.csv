@@ -10,3 +10,4 @@ migration_id,environments,reason
 330_site_report_retrospective_baseline_and_portal_generation,staging|test,Create report (ADR-025) is not approved for production
 331_alert_whatsapp_configuration,staging|test,WhatsApp Phase 1 is staging-only: production waits for ADR-024 in production (D11) and ADR-026 Decided (D13)
 332_alert_whatsapp_consent_wording,staging|test,WhatsApp Phase 1 is staging-only: production waits for ADR-024 in production (D11) and ADR-026 Decided (D13)
+333_alert_whatsapp_delivery,staging|test,WhatsApp delivery (ADR-026 Phase 2) is staging-only: production waits for ADR-024 in production (D11) and ADR-026 Decided (D13)

@@ -317,6 +317,61 @@ services:
       start_period: 60s
 
 
+  whatsapp-sender:
+    # WhatsApp alert delivery (ADR-026 A4): claims queued deliveries
+    # (migration 333) and sends one Meta Cloud API template message per
+    # recipient, with retries inside the 60-minute window. The SAME immutable
+    # application image as admin-portal (different command). Profile
+    # `whatsapp`: started only where a deploy names it explicitly (no
+    # workflow does yet -- separate approval, D12); production never starts it.
+    #
+    # Idles unless app/whatsapp.env supplies every provider setting and
+    # EMS_WHATSAPP_SENDING_ENABLED=true; the database kill switch, Legal-
+    # approved consent and the recipient allowlist are enforced on top.
+    # Database: app/.env (ems_app). Provider secrets: app/whatsapp.env only
+    # (app/whatsapp.env.example). No ports: it serves nothing.
+    profiles: ["whatsapp"]
+    image: ${APP_IMAGE:-ems-platform-prod-app:local}
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+
+    container_name: ems-whatsapp-sender
+
+    restart: unless-stopped
+
+    command: ["python", "-m", "src.whatsapp_worker_main"]
+
+    env_file:
+      - ./app/.env
+      - path: ./app/whatsapp.env
+        required: false
+
+    environment:
+      EMS_WHATSAPP_WORKER_HEARTBEAT_FILE: /tmp/whatsapp-sender.heartbeat
+
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+
+    mem_limit: 200m
+    mem_reservation: 80m
+    cpus: 0.5
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import os,time; p='/tmp/whatsapp-sender.heartbeat'; raise SystemExit(0 if os.path.exists(p) and time.time() - os.path.getmtime(p) < 300 else 1)"
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+
   ems-web:
     # EMS Customer Web App -- the static React bundle served by nginx from
     # its own container, so it is deployed, restarted and rolled back

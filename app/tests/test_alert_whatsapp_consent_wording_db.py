@@ -29,6 +29,7 @@ from tests.test_alert_whatsapp_config_db import (  # noqa: F401  (wa is a fixtur
     MIGRATION as MIGRATION_331,
     P,
     ROLLBACK_332,
+    ROLLBACK_333,
     ROOT,
     _function_body,
     _sql_without_transaction_control,
@@ -372,6 +373,7 @@ def test_rollback_deletes_the_numbers_and_restores_the_331_functions(wa):
     assert save(cur, admin, rule, True, [new(P[0]), new(P[1])], 0) == ("ok", 1)
     notices: list[str] = []
     cur.connection.add_notice_handler(lambda d: notices.append(d.message_primary))
+    cur.execute(_sql_without_transaction_control(ROLLBACK_333))  # 333 builds on 332
     cur.execute(_sql_without_transaction_control(ROLLBACK_332))
     assert any("deleting 2 recipient number(s); switching off WhatsApp on 1 rule(s)" in n for n in notices), notices
 
@@ -431,6 +433,7 @@ def test_rollback_deletes_the_numbers_and_restores_the_331_functions(wa):
 def test_migration_refuses_recipients_recorded_without_a_business_name(wa):
     """Only reachable if a recipient were stored under 331 rules: refuse, never invent a name."""
     cur, admin, rule = wa["cur"], wa["u"]["admin"], wa["rule"]
+    cur.execute(_sql_without_transaction_control(ROLLBACK_333))  # 333 builds on 332
     cur.execute(_sql_without_transaction_control(ROLLBACK_332))
     cur.execute(
         "INSERT INTO analytics.alert_whatsapp_consent_statements (version, statement_text, approved_by_name, approved_at) "
