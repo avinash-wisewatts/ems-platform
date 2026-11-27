@@ -499,6 +499,10 @@ services:
       EMS_EDGE_TLS: ${EMS_EDGE_TLS:-internal}
       # Staff host certificate mode; internal unless a staff hostname is in use.
       EMS_STAFF_EDGE_TLS: ${EMS_STAFF_EDGE_TLS:-internal}
+      # Provider webhook hostname (ADR-026 A5): only the WhatsApp receipt
+      # endpoint is routed there; webhook.invalid / internal while unused.
+      EMS_WEBHOOK_HOST: ${EMS_WEBHOOK_HOST:-webhook.invalid}
+      EMS_WEBHOOK_EDGE_TLS: ${EMS_WEBHOOK_EDGE_TLS:-internal}
       # HSTS max-age (seconds); short for interim setups.
       EMS_EDGE_HSTS_MAX_AGE: ${EMS_EDGE_HSTS_MAX_AGE:-31536000}
 

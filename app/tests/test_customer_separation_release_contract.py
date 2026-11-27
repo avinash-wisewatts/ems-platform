@@ -174,3 +174,19 @@ def test_deploy_customer_api_workflow_is_customer_api_only_staging_only_and_dige
 def test_hsts_max_age_is_configurable_with_a_one_year_default() -> None:
     assert 'Strict-Transport-Security "max-age={$EMS_EDGE_HSTS_MAX_AGE:31536000}; includeSubDomains"' in _caddyfile()
     assert _services()["edge"]["environment"]["EMS_EDGE_HSTS_MAX_AGE"] == "${EMS_EDGE_HSTS_MAX_AGE:-31536000}"
+
+
+def test_webhook_host_routes_only_the_signed_whatsapp_receipt_endpoint() -> None:
+    """ADR-026 A5: Meta needs a DNS name with a trusted certificate; that host
+    serves exactly the signed webhook path (authenticated in customer-api)."""
+    block = _site_block("EMS_WEBHOOK_HOST")
+    assert set(re.findall(r"reverse_proxy\s+(\S+)", block)) == {"customer-api:8070"}
+    assert re.findall(r"path\s+(\S+)", block) == ["/api/v1/webhooks/whatsapp"]
+    for other in ("admin-portal", "live-telemetry", "ems-web", "grafana", "/auth", "/app", "/api/v1/*", "redir"):
+        assert other not in block, other
+    assert block.rstrip().endswith("handle {\n\t\t\trespond 404\n\t\t}\n\t}")
+    assert "import tls_{$EMS_WEBHOOK_EDGE_TLS:internal}" in block
+    assert "{$EMS_WEBHOOK_HOST:webhook.invalid}" in _caddyfile()
+    env = _services()["edge"]["environment"]
+    assert env["EMS_WEBHOOK_HOST"] == "${EMS_WEBHOOK_HOST:-webhook.invalid}"
+    assert env["EMS_WEBHOOK_EDGE_TLS"] == "${EMS_WEBHOOK_EDGE_TLS:-internal}"
